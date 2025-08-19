@@ -53,6 +53,23 @@ auto compute_program_hash(
 }
 ```
 
+### How the default program hash is computed (when no custom hash is provided)
+
+When an operation does not provide `compute_program_hash(...)`, the framework computes a key as:
+
+`hash_objects_with_default_seed(type_hash<device_operation_t>, operation_attributes, tensor_args)`
+
+What this implies:
+- **Operation type included**: `type_hash<device_operation_t>` ensures different ops never collide even with identical attributes/args.
+- **Structured hashing**: `operation_attributes` and `tensor_args` are hashed via `tt::stl` reflection/hash utilities. Standard containers (vector, array, pair, tuple, optional, variant) are hashed element-wise; enums as integral; arithmetic types by value.
+- **Determinism requirement**: The hash is deterministic only if all members iterate in a deterministic order. Avoid `unordered_*` in attributes/args or convert them to sorted vectors before hashing. Do not include raw pointers/addresses.
+- **Scope of inclusion**: Only fields present in `operation_attributes` and `tensor_args` participate. If these structs contain per-invocation scalars that are intended to be set via `override_runtime_arguments`, the default hash will over-key. Conversely, if they omit fields that affect codegen (dtype, tile size, grid, sharding), the default hash will under-key.
+- **Seed**: A fixed default seed is used to keep keys stable across runs of the same build; do not rely on process randomness.
+
+Guidance:
+- If your op’s compiled structure depends on data not represented (or represented non-deterministically) in `operation_attributes`/`tensor_args`, implement a custom `compute_program_hash` that serializes exactly those determinants in a stable order.
+- Move pure runtime-only values (written by `override_runtime_arguments`) out of hashable attributes to prevent cache fragmentation.
+
 Mesh workload hash adds tensor coordinates (excerpt from `ttnn/api/ttnn/mesh_device_operation_adapter.hpp`):
 
 ```cpp
