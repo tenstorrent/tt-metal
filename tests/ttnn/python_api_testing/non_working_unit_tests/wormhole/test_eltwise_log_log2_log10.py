@@ -15,7 +15,7 @@ from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 def run_log_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
 
-    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100).to(torch.bfloat16)
+    x = torch.Tensor(size=input_shape[0]).uniform_(1, 100).to(torch.bfloat16)
 
     try:
         # get ref result
@@ -28,6 +28,7 @@ def run_log_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config,
             layout=dlayout,
             input_mem_config=in_mem_config,
             output_mem_config=output_mem_config,
+            pad_value=1.0,
         )
 
     except Exception as e:
@@ -42,7 +43,7 @@ def run_log_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config,
 def run_log2_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
 
-    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100).to(torch.bfloat16)
+    x = torch.Tensor(size=input_shape[0]).uniform_(1, 100).to(torch.bfloat16)
 
     try:
         # get ref result
@@ -55,6 +56,7 @@ def run_log2_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config
             layout=dlayout,
             input_mem_config=in_mem_config,
             output_mem_config=output_mem_config,
+            pad_value=1.0,
         )
 
     except Exception as e:
@@ -69,7 +71,7 @@ def run_log2_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config
 def run_log10_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_config, data_seed, device):
     torch.manual_seed(data_seed)
 
-    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100).to(torch.bfloat16)
+    x = torch.Tensor(size=input_shape[0]).uniform_(1, 100).to(torch.bfloat16)
 
     try:
         # get ref result
@@ -82,6 +84,7 @@ def run_log10_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_confi
             layout=dlayout,
             input_mem_config=in_mem_config,
             output_mem_config=output_mem_config,
+            pad_value=1.0,
         )
 
     except Exception as e:
@@ -171,6 +174,7 @@ def run_logaddexp2_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_
             layout=dlayout,
             input_mem_config=in_mem_config,
             output_mem_config=output_mem_config,
+            pad_value=1.0,
         )
 
     except Exception as e:
