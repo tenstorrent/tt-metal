@@ -1,12 +1,13 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
-
-#include <string>
 
 #include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+
+#include <cstdint>
+#include <string>
 
 namespace ttnn::operations::moreh::moreh_softmax {
 
@@ -42,6 +43,12 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
+    if (input.dtype() == DataType::FLOAT32 && fp32_dest_acc_en != true) {
+        TT_THROW(
+            "FP32 destination accumulation must be enabled when input tensor has FLOAT32 data type. Please update the "
+            "compute kernel configuration.");
+    }
+
     Program program = Program();
 
     // create circular buffers
@@ -69,7 +76,7 @@ MorehSoftmaxOperation::MorehSoftmaxWLargeFactory::create(
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
 
-    std::vector<uint32_t> reader_ct_args = {};
+    std::vector<uint32_t> reader_ct_args = {static_cast<uint32_t>(input.dtype() == DataType::FLOAT32)};
     TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
     auto reader_kernel_id = CreateReadKernel(
         program,
