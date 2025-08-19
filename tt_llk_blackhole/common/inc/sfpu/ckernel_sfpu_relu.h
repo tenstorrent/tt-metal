@@ -13,6 +13,9 @@ namespace ckernel
 namespace sfpu
 {
 
+template <typename T>
+constexpr bool is_supported_relu_type_v = std::is_same_v<T, float> || std::is_same_v<T, uint32_t>;
+
 template <bool APPROXIMATION_MODE>
 inline void _calculate_lrelu_(const int iterations, uint slope)
 {
@@ -51,33 +54,100 @@ sfpi_inline sfpi::vFloat _relu_max_body_(sfpi::vFloat val, sfpi::vFloat threshol
     return result;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_max_(const int iterations, uint uint_threshold)
+template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _relu_max_impl_(const int iterations, VecType threshold)
 {
-    sfpi::vFloat threshold = sfpi::s2vFloat16(uint_threshold, sfpi::s2vFloat16::fp16a);
     for (int d = 0; d < iterations; d++)
     {
-        sfpi::vFloat a   = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = _relu_max_body_(a, threshold);
+        VecType result = sfpi::dst_reg[0];
+        v_if (result > threshold)
+        {
+            result = threshold;
+        }
+        v_endif;
+        v_if (result < 0)
+        {
+            result = 0;
+        }
+        v_endif;
+        sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_min_(const int iterations, uint uint_threshold)
+// Wrappers
+template <typename VectorType, bool APPROXIMATION_MODE, int ITERATIONS, typename T>
+inline void _relu_max_(T threshold)
 {
-    sfpi::vFloat threshold = sfpi::s2vFloat16(uint_threshold, sfpi::s2vFloat16::fp16a);
+    static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
+
+    VectorType v_threshold;
+    if constexpr (std::is_same_v<T, float>)
+    {
+        v_threshold = threshold;
+    }
+    else if constexpr (std::is_same_v<T, uint32_t>)
+    {
+        if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
+        {
+            v_threshold = static_cast<int>(Converter::as_float(threshold));
+        }
+        else
+        {
+            v_threshold = Converter::as_float(threshold);
+        }
+    }
+    else
+    {
+        static_assert(std::is_same_v<T, float> || std::is_same_v<T, uint32_t>, "Threshold type must be float or uint32_t");
+    }
+
+    _relu_max_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
+}
+
+template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _relu_min_impl_(const int iterations, VecType threshold)
+{
     for (int d = 0; d < iterations; d++)
     {
-        sfpi::vFloat a = sfpi::dst_reg[0];
+        VecType a = sfpi::dst_reg[0];
         v_if (a < threshold)
         {
-            a = 0.0f;
+            sfpi::dst_reg[0] = threshold;
         }
         v_endif;
-        sfpi::dst_reg[0] = a;
         sfpi::dst_reg++;
     }
+}
+
+// Wrappers
+template <typename VectorType, bool APPROXIMATION_MODE, int ITERATIONS, typename T>
+inline void _relu_min_(T threshold)
+{
+    static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
+
+    VectorType v_threshold;
+    if constexpr (std::is_same_v<T, float>)
+    {
+        v_threshold = threshold;
+    }
+    else if constexpr (std::is_same_v<T, uint32_t>)
+    {
+        if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
+        {
+            v_threshold = static_cast<int>(threshold);
+        }
+        else
+        {
+            v_threshold = Converter::as_float(threshold);
+        }
+    }
+    else
+    {
+        static_assert(std::is_same_v<T, float> || std::is_same_v<T, uint32_t>, "Threshold type must be float or uint32_t");
+    }
+
+    _relu_min_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
 }
 
 } // namespace sfpu

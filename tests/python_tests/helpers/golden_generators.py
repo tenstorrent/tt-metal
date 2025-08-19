@@ -650,6 +650,8 @@ class UnarySFPUGolden:
             MathOperation.Exp2: self._exp2,
             MathOperation.Hardsigmoid: self._hardsigmoid,
             MathOperation.Threshold: self._threshold,
+            MathOperation.ReluMax: self._relu_max,
+            MathOperation.ReluMin: self._relu_min,
         }
         self.data_format = None
         self.dest_acc = DestAccumulation.No
@@ -843,6 +845,22 @@ class UnarySFPUGolden:
             else torch.tensor(x, dtype=format_dict[self.data_format])
         )
         return torch.nn.functional.threshold(input_tensor, t, v).item()
+
+    def _relu_max(self, x, threshold=5):
+        input_tensor = (
+            x
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(x, dtype=format_dict[self.data_format])
+        )
+        return torch.relu(torch.min(input_tensor, torch.tensor(threshold))).item()
+
+    def _relu_min(self, x, threshold=5):
+        input_tensor = (
+            x
+            if isinstance(x, torch.Tensor)
+            else torch.tensor(x, dtype=format_dict[self.data_format])
+        )
+        return torch.max(input_tensor, torch.tensor(threshold)).item()
 
 
 @register_golden

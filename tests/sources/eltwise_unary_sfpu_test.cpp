@@ -141,6 +141,12 @@ void call_sfpu_operation(SfpuType operation, uint32_t math_format)
         case SfpuType::threshold:
             ckernel::sfpu::_calculate_threshold_<APPROX_MODE, iterations>(5.0f, 10.0f);
             break;
+        case SfpuType::relu_max:
+            ckernel::sfpu::_relu_max_<sfpi::vFloat, APPROX_MODE, iterations>(5.0f);
+            break;
+        case SfpuType::relu_min:
+            ckernel::sfpu::_relu_min_<sfpi::vFloat, APPROX_MODE, iterations>(5.0f);
+            break;
         default:
             return;
     }
