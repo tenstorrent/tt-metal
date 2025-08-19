@@ -130,34 +130,6 @@ void verify_socket_configs(
     EXPECT_EQ(recv_config.upstream_bytes_acked_addr % l1_alignment, 0);
 }
 
-void test_broadcast_single_device_socket(
-    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md0,
-    std::size_t socket_fifo_size,
-    std::size_t page_size,
-    std::size_t data_size,
-    bool use_cbs) {
-    auto sender_logical_coord = CoreCoord(0, 0);
-    auto recv_logical_coord_0 = CoreCoord(0, 1);
-    auto recv_logical_coord_1 = CoreCoord(0, 2);
-
-    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-
-    SocketConnection socket_connection = {
-        .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
-        .receiver_core = {MeshCoordinate(0, 0), recv_logical_coord},
-    };
-
-    SocketMemoryConfig socket_mem_config = {
-        .socket_storage_type = BufferType::L1,
-        .fifo_size = socket_fifo_size,
-    };
-
-    SocketConfig socket_config = {
-        .socket_connection_config = {socket_connection},
-        .socket_mem_config = socket_mem_config,
-    };
-}
-
 void test_single_connection_single_device_socket(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& md0,
     std::size_t socket_fifo_size,

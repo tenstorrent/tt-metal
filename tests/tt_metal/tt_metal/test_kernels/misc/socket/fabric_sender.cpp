@@ -37,6 +37,9 @@ void kernel_main() {
     constexpr uint32_t local_l1_buffer_addr = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t data_size = get_compile_time_arg_val(3);
+    
+    DPRINT << "fabric_sender: Starting kernel with socket_config_addr=" << socket_config_addr 
+           << ", data_size=" << data_size << ", page_size=" << page_size << ENDL();
     // Setup Fabric Headers and Connections
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
@@ -53,18 +56,31 @@ void kernel_main() {
     // Create Socket Interface
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(sender_socket, page_size);
+    
+    DPRINT << "fabric_sender: Socket interface created, num_downstreams=" << sender_socket.num_downstreams << ENDL();
 
     uint32_t data_addr = local_l1_buffer_addr;
 
     uint32_t outstanding_data_size = data_size;
+    uint32_t pages_sent = 0;
+
+    DPRINT << "fabric_sender: Starting data transfer, total_pages=" << (data_size / page_size) << ENDL();
 
     // Sends 1 page at a time and does handshake with receiver, can be optimized
     // to notify receiver after writing larger chunks
     while (outstanding_data_size) {
+        pages_sent++;
+        DPRINT << "fabric_sender: Sending page " << pages_sent << ", outstanding_data=" << outstanding_data_size << ENDL();
         socket_reserve_pages(sender_socket, 1);
         for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
             sender_downstream_encoding* downstream_enc = reinterpret_cast<sender_downstream_encoding*>(
                 sender_socket.downstream_enc_addr + i * align_up(sizeof(sender_downstream_encoding)));
+            
+            DPRINT << "fabric_sender: Broadcasting to downstream " << i << " at node id ("
+                   << downstream_enc->downstream_mesh_id << "," << downstream_enc->downstream_chip_id << ")"
+                   << " at noc(" 
+                   << downstream_enc->downstream_noc_x << "," << downstream_enc->downstream_noc_y << ")" << ENDL();
+            
             // Write Data over Fabric
             uint64_t receiver_noc_coord_addr =
                 get_noc_addr(downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, 0);
@@ -82,8 +98,14 @@ void kernel_main() {
 
         fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
     }
+    
+    DPRINT << "fabric_sender: All pages sent (" << pages_sent << "), waiting for barrier" << ENDL();
     socket_barrier(sender_socket);
+    
+    DPRINT << "fabric_sender: Barrier complete, updating socket config and closing connection" << ENDL();
     // Write updated socket configs to the L1 config buffer (were cached on stack during kernel execution)
     update_socket_config(sender_socket);
     fabric_connection.close();
+    
+    DPRINT << "fabric_sender: Kernel completed successfully" << ENDL();
 }
