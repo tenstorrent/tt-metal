@@ -42,6 +42,7 @@ class TtLlamaImageAttention(LightweightModule):
         self.compute_kernel_config_hifi2 = configuration.compute_kernel_config_hifi2
         self.compute_kernel_config_hifi4 = configuration.compute_kernel_config_hifi4
         self.compute_kernel_config_sdpa = configuration.compute_kernel_config_sdpa
+        self.sdpa_cfg = configuration.sdpa_cfg if hasattr(configuration, "sdpa_cfg") else None
         self.configuration = configuration
 
         self.model_config = configuration.get_model_config()
@@ -55,6 +56,11 @@ class TtLlamaImageAttention(LightweightModule):
         wk_str = f"{state_dict_prefix}wk.weight"
         wv_str = f"{state_dict_prefix}wv.weight"
         wo_str = f"{state_dict_prefix}wo.weight"
+
+        bq_str = f"{state_dict_prefix}wq.bias"
+        bk_str = f"{state_dict_prefix}wk.bias"
+        bv_str = f"{state_dict_prefix}wv.bias"
+        bo_str = f"{state_dict_prefix}wo.bias"
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % configuration.num_devices == 0
@@ -79,13 +85,35 @@ class TtLlamaImageAttention(LightweightModule):
                     weight = weight.transpose(-1, -2)
             return weight
 
+        def pad_bias(bias):
+            bias = bias.view(1, -1)
+            padded_head_dim = nearest_32(self.head_dim)
+            padding_size = padded_head_dim - self.head_dim
+            if padding_size > 0:
+                bias = bias.reshape(1, self.n_heads, self.head_dim)
+                padding = torch.zeros(1, self.n_heads, padding_size, dtype=bias.dtype)
+                bias = torch.cat([bias, padding], dim=-1)
+                bias = bias.reshape(self.n_heads * padded_head_dim)
+            return bias
+
         wq_padded = pad_head_dim(self.state_dict[wq_str])
         wk_padded = pad_head_dim(self.state_dict[wk_str])
         wv_padded = pad_head_dim(self.state_dict[wv_str])
         wo_padded = pad_head_dim(self.state_dict[wo_str], heads_out=False)
+
+        bq_padded = pad_bias(self.state_dict[bq_str]) if self.state_dict.get(bq_str) is not None else None
+        bk_padded = pad_bias(self.state_dict[bk_str]) if self.state_dict.get(bk_str) is not None else None
+        bv_padded = pad_bias(self.state_dict[bv_str]) if self.state_dict.get(bv_str) is not None else None
+        bo_padded = self.state_dict[bo_str] if self.state_dict.get(bo_str) is not None else None
+
         wq_chunked, wk_chunked, wv_chunked = (
             torch.chunk(w, configuration.num_devices) for w in [wq_padded, wk_padded, wv_padded]
         )
+
+        if bq_padded is not None:
+            bq_chunked, bk_chunked, bv_chunked = (
+                torch.chunk(b, configuration.num_devices) for b in [bq_padded, bk_padded, bv_padded]
+            )
 
         self.wqkv = ttnn.as_tensor(
             torch.concat(
@@ -121,6 +149,32 @@ class TtLlamaImageAttention(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             cache_file_name=cache_name("wqkv_sharded"),
         )
+        if bq_padded is not None:
+            self.wqkv_bias = ttnn.as_tensor(
+                torch.concat(
+                    [
+                        torch.concat(
+                            [bq_chunked[i], bk_chunked[i], bv_chunked[i]],
+                            dim=-1,
+                        )
+                        for i in range(configuration.num_devices)
+                    ],
+                    dim=-1,
+                ),
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                dtype=self.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name("wqkv_bias_sharded"),
+            )
+            self.wqkv_bias = ttnn.reshape(
+                self.wqkv_bias,
+                (1, 1, 1, self.wqkv_bias.shape[-1]),
+                (1, 1, self.wqkv_bias.shape[-2], self.wqkv_bias.shape[-1]),
+            )
+        else:
+            self.wqkv_bias = None
 
         self.wo = ttnn.as_tensor(
             torch.transpose(
@@ -136,6 +190,18 @@ class TtLlamaImageAttention(LightweightModule):
             cache_file_name=cache_name("wo_sharded"),
         )
 
+        if bo_padded is not None:
+            self.bo = ttnn.as_tensor(
+                bo_padded,
+                device=self.mesh_device,
+                dtype=self.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name("bo_sharded"),
+            )
+        else:
+            self.bo = None
+
         self.scale = self.head_dim**-0.5
 
     def forward(self, x_11SH, mask=None):
@@ -150,6 +216,7 @@ class TtLlamaImageAttention(LightweightModule):
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
+            bias=self.wqkv_bias,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi4,
@@ -173,12 +240,13 @@ class TtLlamaImageAttention(LightweightModule):
 
         ttnn.deallocate(xqkv_fused)
         # TODO: get this from model_config
-        sdpa_cfg = ttnn.SDPAProgramConfig(
+        sdpa_cfg = self.sdpa_cfg or ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             q_chunk_size=32 * num_chunks,
             k_chunk_size=32 * num_chunks,
             exp_approx_mode=False,
         )
+
         attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_1QSD,
             k_heads_1KSD,
@@ -210,6 +278,7 @@ class TtLlamaImageAttention(LightweightModule):
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
+            bias=self.bo,
             compute_kernel_config=self.compute_kernel_config_hifi4,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
