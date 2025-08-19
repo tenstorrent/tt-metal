@@ -62,6 +62,7 @@ jobs:
     with:
       tracy: ${{ inputs.tracy }}
       build-wheel: ${{ inputs.build-wheel }}
+      skip-tt-train: false
   test-dispatch:
     needs: build-artifact
     timeout-minutes: 1440
