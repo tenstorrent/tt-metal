@@ -206,93 +206,73 @@ auto override_runtime_arguments_callback = [reader_kernel_id, cores](
     - Keep per-kernel helper functions that push args in one place, reused by both paths.
     - Add targeted tests that launch the same cached program with varied runtime-only values to catch mis-ordered args.
 
-### Your task
+### Focused task: review override runtime args and write a failing program-cache test
 
-Review code (or a diff) for potential program cache issues.
+What to do:
+- Identify issues in the `override_runtime_arguments` section of an OP’s program factory.
+- Write a targeted test that exposes the issue by exercising the program cache hit path.
 
-Focus on:
-- Correctness of cache keys (collisions and overkeying)
-- Determinism and stability of hashing
-- Cache usage patterns on hit/miss paths
-- Runtime argument overrides and shared state safety
-- Invalidation/clearing behavior and lifecycle
+How to review the override section:
+- Trace every runtime-only value used by kernels (buffer base addresses, per-core offsets/strides, sizes, scalar params like seeds or indices) and ensure they are updated on cache hits.
+- Cross-check the order of runtime args in override against their order during program creation. Indices must match.
+- For sharded tensors, verify per-core iteration covers the same cores/ranges as in `create(...)` and uses the correct `shared_variables` entry.
+- Confirm that only non-hashed properties are updated at runtime; hashed properties should not change between runs that hit the same cache entry.
 
-### Checklist
+Test recipe (two-run cache test):
+1) First run: build cache and validate correctness
+   - Allocate inputs/outputs with a given shape/dtype/layout.
+   - Call the OP once to seed the program cache. Optionally assert that `device.num_program_cache_entries()` increased by 1.
+   - Compute a golden reference and assert PCC passes and the call completes (no hang).
+2) Second run: hit cache and trigger override path
+   - Reallocate new input/output tensors with the same hashed properties so the same cache entry is used, but with different runtime-only values: new buffer addresses; and optionally different runtime scalars (e.g., seed, offsets) that should be overridden.
+   - Call the OP again and expect failure that reveals the bug: PCC mismatch or a hang.
 
-- **Hash contents**
-  - Include every attribute/shape/sharding/tile/layout/dtype/compile-time flag that changes codegen, grid, buffer sizes, or kernel selection.
-  - Exclude values that should not fragment the cache (pure runtime scalars written via `override_runtime_arguments`, tensor contents if not shaping codegen).
-  - Avoid unstable inputs: pointers/addresses, unordered container iteration order, nondeterministic containers, float rounding mismatches, and environment variables unless they change codegen.
-  - For mesh ops, ensure sharding/coordinates are included only where programs differ per range; confirm use of `compute_mesh_workload_hash` is appropriate.
+Example reference test names: see `test_group_attn_matmul_with_program_cache` in `tests/tt_eager/python_api_testing/unit_testing/misc/test_attn_matmul.py`.
 
-- **Consistency with program creation**
-  - Match `select_program_factory` branches with what the hash includes; any branch that affects kernels/CBs/grid must be in the hash.
-  - Ensure optional inputs/options used in `create(...)` are represented in the hash if they change compiled structure.
+Starter pytest template (fill in OP specifics):
 
-- **Runtime overrides and shared state**
-  - On cache hit, verify `override_runtime_arguments` updates all per-invocation device arguments.
-  - `shared_variables_t` should contain only state safe to reuse across hits and across ranges for mesh workloads.
-  - For mesh workloads, confirm proxying uses the correct `shared_variables` per coordinate range.
+```python
+import pytest, torch, ttnn
+from models.utility_functions import comp_pcc
 
-- **Cache usage/controls**
-  - On miss, if `cache_misses_allowed()` is false, ensure a throw occurs; no silent fallbacks.
-  - Respect `ProgramCache::is_enabled()`; avoid reading/inserting when disabled.
-  - Verify `program_factory_index` aligns with the selected variant on cache hit.
+@pytest.mark.timeout(60)
+def test_<op_name>_program_cache_override_rtargs(device):
+    torch.manual_seed(0)
 
-- **Invalidation/lifecycle**
-  - Device reconfiguration/fabric changes should call `disable_and_clear_program_cache()` or `clear_program_cache()`.
-  - Review TODOs about stale entries (e.g., program command sequence caching) for risk of stale reuse after manager removal or config changes.
+    # 1) First run compiles and seeds the cache
+    a1 = torch.randn(<shape>).bfloat16()
+    b1 = torch.randn(<shape_b>).bfloat16()
+    tt_a1 = ttnn.Tensor(a1, <in0_dtype>).to(ttnn.TILE_LAYOUT).to(device, <mem_config>)
+    tt_b1 = ttnn.Tensor(b1, <in1_dtype>).to(ttnn.TILE_LAYOUT).to(device, <mem_config>)
 
-- **Performance anti-patterns**
-  - Over-keying that explodes unique hashes for equivalent binaries (e.g., including runtime literal scalars).
-  - Under-keying that causes reuse with mismatched kernel args, CB sizes, or grid topology.
+    num_cache_start = device.num_program_cache_entries()
+    out1 = ttnn.experimental.<op_name>(tt_a1, tt_b1, <other_attrs>)
+    num_cache_end = device.num_program_cache_entries()
+    assert num_cache_end == num_cache_start + 1, "Expected one new program cache entry on first run"
 
-- **Thread safety**
-  - For global/static caches, check locking, wait/notify, and double-insert paths.
-  - Watch for races between existence checks and insertions.
+    # Validate correctness
+    out1_host = out1.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    golden1 = <compute_golden_from>(a1, b1)
+    ok, pcc = comp_pcc(out1_host, golden1)
+    assert ok, f"First run PCC failed: {pcc}"
 
-### Red flags to identify
+    # 2) Second run hits cache and triggers override path
+    # Reallocate inputs to ensure different buffer addresses; keep hashed props identical
+    a2 = torch.randn(<shape>).bfloat16()
+    b2 = torch.randn(<shape_b>).bfloat16()
+    tt_a2 = ttnn.Tensor(a2, <in0_dtype>).to(ttnn.TILE_LAYOUT).to(device, <mem_config>)
+    tt_b2 = ttnn.Tensor(b2, <in1_dtype>).to(ttnn.TILE_LAYOUT).to(device, <mem_config>)
 
-- Custom `compute_program_hash` missing fields present in `create(...)` or `select_program_factory(...)` that change compiled structure.
-- Hash includes raw pointers/addresses or iterates unordered containers without defined order.
-- Cache-hit path missing `override_runtime_arguments` or using incorrect/shared `shared_variables` across incompatible invocations.
-- Mesh workload overrides mismatch by range (wrong `shared_variables` for a coordinate range).
-- Cache used when disabled, or entries inserted while disabled.
-- Misses silently accepted when `.cache_misses_allowed() == false`.
-- Cache not cleared after device reconfiguration/fabric changes.
-- Any change to kernel selection/config not reflected in hash (dtype, tile size, tensor rank/shape divisibility, sharding mode, compute kernel config, quantization flags).
-- Inclusion of per-invocation scalars in the hash that are set at runtime.
-- TODOs noting stale caches that could cause correctness bugs.
+    # Optionally vary a runtime-only scalar that must be overridden (e.g., seed/offset)
+    out2 = ttnn.experimental.<op_name>(tt_a2, tt_b2, <same_other_attrs_but_runtime_value_changed>)
 
-### Files/areas to search first
+    # Expect a failure that reveals the bug on cache hit
+    out2_host = out2.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    golden2 = <compute_golden_from>(a2, b2)
+    ok, pcc = comp_pcc(out2_host, golden2)
+    assert not ok, "Second run unexpectedly succeeded; override runtime args likely incomplete"
+```
 
-- `ttnn/cpp/**/device/*_device_operation*.{hpp,cpp}` and `*_program_factory.cpp` for `compute_program_hash`, `select_program_factory`, `create`, `override_runtime_arguments`.
-- `ttnn/api/ttnn/device_operation.hpp` for default hashing path.
-- `ttnn/api/ttnn/mesh_device_operation_adapter.hpp` for mesh hash behavior.
-- `tt_metal/api/tt-metalium/program_cache.hpp` for cache behavior and flags.
-- `tt_metal/impl/device/device.cpp` for enable/clear/disable-and-clear.
-- `tt_metal/impl/program/program.cpp` around program command sequence caching, prefetcher cache, and any TODOs on stale entries.
-- `tt_metal/detail/kernel_cache.hpp` and `tt_metal/impl/dispatch/ringbuffer_cache.*` for related caches and eviction logic.
-
-### Report format (use per finding)
-
-- **Title**: short summary
-- **Location**: file:line(s)
-- **Severity**: High/Medium/Low
-- **Type**: Collision risk | Cache fragmentation | Stale reuse | Correctness | Perf | Thread safety
-- **Why it’s a problem**: concise rationale tied to this repo’s patterns
-- **Evidence**: brief code quotes or logic description
-- **Suggested fix**: minimal change to make it correct
-- **Hash impact**: under-keyed/over-keyed; what to add/remove from the hash
-- **Test hook**: a quick scenario that would have caught it
-
-### Optional quick queries to run
-
-- Find all overrides: search for `compute_program_hash(` and compare each to its `create` and `select_program_factory`.
-- Verify all `override_runtime_arguments` sites are invoked on the cache-hit path.
-- Check for hashing of `unordered_*` contents without deterministic ordering.
-- Look for `set_cache_misses_allowed(false)` and confirm miss handling throws.
-
----
-
-Do you want this prompt applied to a specific PR or subtree and the findings summarized here?
+Sharded variant hints:
+- Convert tensors with `ttnn.interleaved_to_sharded(...)` to force per-core addresses and offsets to change between runs.
+- In the second run, keep sharding config the same (so the hash matches) but reallocate tensors or vary runtime-only scalars to exercise per-core override logic.
