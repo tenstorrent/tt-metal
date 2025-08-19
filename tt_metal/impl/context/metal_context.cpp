@@ -833,10 +833,16 @@ void MetalContext::generate_logical_to_translated_map(chip_id_t device_id) {
     logical_row_to_translated_row_[device_id].reserve(tensix_grid_size.y);
 
     for (uint32_t x = 0; x < tensix_grid_size.x; x++) {
-        logical_col_to_translated_col_[device_id].push_back(soc_desc.translate_coord_to({tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED).x);
+        logical_col_to_translated_col_[device_id].push_back(
+            soc_desc
+                .translate_coord_to({tt_xy_pair{x, 0}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
+                .x);
     }
     for (uint32_t y = 0; y < tensix_grid_size.y; y++) {
-        logical_row_to_translated_row_[device_id].push_back(soc_desc.translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED).y);
+        logical_row_to_translated_row_[device_id].push_back(
+            soc_desc
+                .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
+                .y);
     }
 }
 
@@ -878,13 +884,16 @@ void MetalContext::initialize_device_bank_to_noc_tables(
         l1_offset_addr);
 }
 
-void MetalContext::initialize_logical_to_translated_tables(chip_id_t device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core) {
+void MetalContext::initialize_logical_to_translated_tables(
+    chip_id_t device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core) {
     // Generate logical to translated map for DRAM and L1 banks
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     const uint32_t logical_col_to_translated_col_sz_in_bytes = sizeof(logical_col_to_translated_col_[device_id]);
     const uint32_t logical_row_to_translated_row_sz_in_bytes = sizeof(logical_row_to_translated_row_[device_id]);
-    const uint64_t logical_to_translated_map_addr = hal_->get_dev_addr(core_type, HalL1MemAddrType::LOGICAL_TO_TRANSLATED_SCRATCH);
-    const uint32_t logical_to_translated_map_size = hal_->get_dev_size(core_type, HalL1MemAddrType::LOGICAL_TO_TRANSLATED_SCRATCH);
+    const uint64_t logical_to_translated_map_addr =
+        hal_->get_dev_addr(core_type, HalL1MemAddrType::LOGICAL_TO_TRANSLATED_SCRATCH);
+    const uint32_t logical_to_translated_map_size =
+        hal_->get_dev_size(core_type, HalL1MemAddrType::LOGICAL_TO_TRANSLATED_SCRATCH);
 
     TT_ASSERT(
         (logical_col_to_translated_col_sz_in_bytes + logical_row_to_translated_row_sz_in_bytes) <=
