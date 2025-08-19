@@ -102,6 +102,10 @@ private:
                 bool_metric_values_[idx] = new_value;
                 delta->bool_metric_ids.push_back(id);
                 delta->bool_metric_values.push_back(new_value);
+                // Add current timestamp
+                uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                delta->bool_metric_timestamps.push_back(timestamp);
             }
         }
 
@@ -118,6 +122,10 @@ private:
                 uint_metric_values_[idx] = new_value;
                 delta->uint_metric_ids.push_back(id);
                 delta->uint_metric_values.push_back(new_value);
+                // Add current timestamp
+                uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                delta->uint_metric_timestamps.push_back(timestamp);
             }
         }
 
@@ -135,12 +143,20 @@ private:
                 snapshot->bool_metric_ids.push_back(id);
                 snapshot->bool_metric_names.push_back(bool_metric_names_[i]);
                 snapshot->bool_metric_values.push_back(bool_metric_values_[i]);
+                // Add current timestamp for initial snapshot
+                uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                snapshot->bool_metric_timestamps.push_back(timestamp);
             }
             for (size_t i = 0; i < uint_metric_names_.size(); i++) {
                 size_t id = uint_metric_ids_[i];
                 snapshot->uint_metric_ids.push_back(id);
                 snapshot->uint_metric_names.push_back(uint_metric_names_[i]);
                 snapshot->uint_metric_values.push_back(uint_metric_values_[i]);
+                // Add current timestamp for initial snapshot
+                uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::system_clock::now().time_since_epoch()).count();
+                snapshot->uint_metric_timestamps.push_back(timestamp);
             }
 
             for (auto& subscriber : subscribers_) {

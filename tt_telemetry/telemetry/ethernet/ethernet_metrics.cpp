@@ -2,6 +2,7 @@
 
 #include <telemetry/ethernet/ethernet_metrics.hpp>
 #include <telemetry/ethernet/ethernet_helpers.hpp>
+#include <chrono>
 
 
 /**************************************************************************************************
@@ -21,6 +22,8 @@ void EthernetEndpointUpMetric::update(const tt::Cluster &cluster) {
     bool is_up_old = value_;
     changed_since_transmission_ = is_up_now != is_up_old;
     value_ = is_up_now;
+    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 
@@ -54,6 +57,8 @@ void EthernetCRCErrorCountMetric::update(const tt::Cluster &cluster) {
     uint32_t crc_error_val = 0;
     cluster.read_core(&crc_error_val, sizeof(uint32_t), virtual_eth_core_.value(), crc_addr_);
     value_ = uint64_t(crc_error_val);
+    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 
@@ -83,6 +88,8 @@ void EthernetRetrainCountMetric::update(const tt::Cluster &cluster) {
     if (data.size() >= 1) {
         value_ = uint64_t(data[0]);
     }
+    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 
@@ -118,6 +125,8 @@ void EthernetCorrectedCodewordCountMetric::update(const tt::Cluster &cluster) {
     cluster.read_core(&hi, sizeof(uint32_t), virtual_eth_core_.value(), corr_addr_ + 0);
     cluster.read_core(&lo, sizeof(uint32_t), virtual_eth_core_.value(), corr_addr_ + 4);
     value_ = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 
@@ -153,4 +162,6 @@ void EthernetUncorrectedCodewordCountMetric::update(const tt::Cluster &cluster) 
     cluster.read_core(&hi, sizeof(uint32_t), virtual_eth_core_.value(), uncorr_addr_ + 0);
     cluster.read_core(&lo, sizeof(uint32_t), virtual_eth_core_.value(), uncorr_addr_ + 4);
     value_ = (static_cast<uint64_t>(hi) << 32) | static_cast<uint64_t>(lo);
+    timestamp_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
 }

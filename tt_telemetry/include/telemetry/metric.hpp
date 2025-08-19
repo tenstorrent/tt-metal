@@ -7,6 +7,7 @@
  */
 
  #include <vector>
+ #include <chrono>
 
  #include <llrt/tt_cluster.hpp>
 
@@ -37,8 +38,13 @@ public:
     virtual ~Metric() {
     }
 
+    uint64_t timestamp() const {
+        return timestamp_;
+    }
+
 protected:
     bool changed_since_transmission_ = false;
+    uint64_t timestamp_ = 0;  // Unix timestamp in milliseconds, 0 = never set
 };
 
 class BoolMetric: public Metric {

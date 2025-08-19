@@ -114,6 +114,7 @@ static void send_initial_snapshot(
         snapshot->bool_metric_ids.push_back(id);
         snapshot->bool_metric_names.push_back(path);
         snapshot->bool_metric_values.push_back(bool_metrics[i]->value());
+        snapshot->bool_metric_timestamps.push_back(bool_metrics[i]->timestamp());
     }
 
     for (size_t i = 0; i < uint_metrics.size(); i++) {
@@ -122,6 +123,7 @@ static void send_initial_snapshot(
         snapshot->uint_metric_ids.push_back(id);
         snapshot->uint_metric_names.push_back(path);
         snapshot->uint_metric_values.push_back(uint_metrics[i]->value());
+        snapshot->uint_metric_timestamps.push_back(uint_metrics[i]->timestamp());
     }
 
     for (auto &subscriber: subscribers) {
@@ -142,6 +144,7 @@ static void send_delta(
         }
         snapshot->bool_metric_ids.push_back(bool_metrics[i]->id);
         snapshot->bool_metric_values.push_back(bool_metrics[i]->value());
+        snapshot->bool_metric_timestamps.push_back(bool_metrics[i]->timestamp());
         bool_metrics[i]->mark_transmitted();
     }
 
@@ -151,6 +154,7 @@ static void send_delta(
         }
         snapshot->uint_metric_ids.push_back(uint_metrics[i]->id);
         snapshot->uint_metric_values.push_back(uint_metrics[i]->value());
+        snapshot->uint_metric_timestamps.push_back(uint_metrics[i]->timestamp());
         uint_metrics[i]->mark_transmitted();
     }
 
