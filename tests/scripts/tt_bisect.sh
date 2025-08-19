@@ -103,18 +103,32 @@ while [[ "$found" = "false" ]]; do
    rm -rf /tmp/ccache
 
    mkdir -p /tmp/ccache
-
    ccache -z
 
-   # before calling build_metal.sh
-   export CMAKE_ARGS="$CMAKE_ARGS -DCPM_SOURCE_CACHE=/work/.cpmcache -DCPM_USE_LOCAL_PACKAGES=OFF -DCPM_GIT_TAG_SEARCH=OFF"
+   cmake -S . -B build_Debug -G Ninja \
+      -DCMAKE_BUILD_TYPE=Debug \
+      -DCMAKE_INSTALL_PREFIX=build_Debug \
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF \
+      -DTT_UNITY_BUILDS=ON \
+      -DTT_ENABLE_LIGHT_METAL_TRACE=ON \
+      -DTT_METAL_BUILD_TESTS=ON \
+      -DTTNN_BUILD_TESTS=ON \
+      -DBUILD_PROGRAMMING_EXAMPLES=ON \
+      -DBUILD_TT_TRAIN=ON \
+      -DWITH_PYTHON_BINDINGS=ON \
+      -DPython3_EXECUTABLE=/opt/venv/bin/python3 \
+      -DPython3_INCLUDE_DIR=/usr/include/python3.10 \
+      -DPython3_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython3.10.so \
+      -DENABLE_DISTRIBUTED=ON \
+      -DENABLE_FAKE_KERNELS_TARGET=OFF \
+      -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake \
+      # --- CPM determinism + pin tokenizers-cpp to known-good SHA:
+      -DCPM_SOURCE_CACHE=/work/.cpmcache \
+      -DCPM_USE_LOCAL_PACKAGES=OFF \
+      -DCPM_GIT_TAG_SEARCH=OFF \
+      -Dtokenizers-cpp_GIT_TAG=c0caed993d2e1030645ce1d7959dd358ff29dc9b
 
-   # If the dependency name in CPM is "tokenizers-cpp", most CPM packages accept a *_GIT_TAG override:
-   export CMAKE_ARGS="$CMAKE_ARGS -Dtokenizers-cpp_GIT_TAG=c0caed993d2e1030645ce1d7959dd358ff29dc9b"
-   # (If the exact variable differs, check the CPMAddPackage block; it will be <NAME>_GIT_TAG)
-
-
-   ./build_metal.sh --build-all --debug || build_rc=$?
+   cmake --build build_Debug --target install -j"$(nproc)"
    echo "::endgroup::"
 
    if [[ $build_rc -ne 0 ]]; then
