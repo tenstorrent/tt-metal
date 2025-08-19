@@ -24,6 +24,7 @@ class MochiTransformerBlock:
         init=False,
         ccl_manager=None,
         parallel_config=None,
+        is_fsdp=False,
     ):
         self.context_pre_only = context_pre_only
         self.ff_inner_dim = (4 * dim * 2) // 3
@@ -34,6 +35,8 @@ class MochiTransformerBlock:
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
+
+        fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
         rms_zero_kwargs = {
             "embedding_dim": dim,
@@ -51,6 +54,8 @@ class MochiTransformerBlock:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             init=init,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
         self.norm1_norm = RMSNorm(**rms_zero_kwargs)
 
@@ -62,6 +67,8 @@ class MochiTransformerBlock:
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 init=init,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                ccl_manager=ccl_manager,
             )
         else:
             self.norm1_context_linear = ColParallelLinear(
@@ -71,6 +78,8 @@ class MochiTransformerBlock:
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 init=init,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                ccl_manager=ccl_manager,
             )
         self.norm1_context_norm = RMSNorm(**rms_zero_kwargs)
 
@@ -89,6 +98,7 @@ class MochiTransformerBlock:
             init=init,
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
+            is_fsdp=is_fsdp,
         )
 
         self.norm2_norm = RMSNorm(**rms_zero_kwargs)
@@ -106,6 +116,7 @@ class MochiTransformerBlock:
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             ccl_manager=ccl_manager,
             init=init,
+            fsdp_mesh_axis=fsdp_mesh_axis,
         )
 
         self.ff_context = None
@@ -119,6 +130,7 @@ class MochiTransformerBlock:
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 ccl_manager=ccl_manager,
                 init=init,
+                fsdp_mesh_axis=fsdp_mesh_axis,
             )
 
         self.norm4_norm = RMSNorm(**rms_zero_kwargs)

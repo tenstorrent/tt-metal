@@ -27,6 +27,7 @@ class MochiAttention:
         init=False,
         ccl_manager=None,
         parallel_config=None,
+        is_fsdp=False,
     ):
         self.inner_dim = out_dim if out_dim is not None else head_dim * heads
         self.out_dim = out_dim if out_dim is not None else query_dim
@@ -43,6 +44,8 @@ class MochiAttention:
         self.parallel_config = parallel_config
 
         self.n_local_heads = self.heads // self.parallel_config.tensor_parallel.factor
+
+        fsdp_mesh_axis = self.parallel_config.sequence_parallel.mesh_axis if is_fsdp else None
 
         rms_kwargs = {
             "embedding_dim": head_dim,
@@ -66,6 +69,8 @@ class MochiAttention:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             init=init,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         assert self.context_pre_only is not None, "context_pre_only should be a boolean"
@@ -77,6 +82,8 @@ class MochiAttention:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             init=init,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         self.to_out = ColParallelLinear(
@@ -86,6 +93,8 @@ class MochiAttention:
             mesh_device=mesh_device,
             mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             init=init,
+            fsdp_mesh_axis=fsdp_mesh_axis,
+            ccl_manager=ccl_manager,
         )
 
         if not self.context_pre_only:
@@ -96,6 +105,8 @@ class MochiAttention:
                 mesh_device=mesh_device,
                 mesh_axis=parallel_config.tensor_parallel.mesh_axis,
                 init=init,
+                fsdp_mesh_axis=fsdp_mesh_axis,
+                ccl_manager=ccl_manager,
             )
 
         full_grid = self.mesh_device.compute_with_storage_grid_size()
