@@ -232,6 +232,15 @@ class NanoExabox1x8FabricFixture : public Fixture {
     }
 };
 
+// Generic Fixture for Nano-Exabox systems using Fabric (each T3K is initialized as a 1x8 Mesh)
+template <typename Fixture>
+class ExaboxFabricFixture : public Fixture {
+    std::string get_path_to_mesh_graph_desc() override {
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_exabox_8x4_mesh_graph_descriptor.yaml";
+    }
+    
+};
+
 // Dedicated Fabric and Distributed Test Fixtures fir Multi-Host + Multi-Mesh Tests
 using IntermeshSplit2x2FabricFixture = Split2x2FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceSplit2x2Fixture = Split2x2FabricFixture<MultiMeshDeviceFabricFixture>;
