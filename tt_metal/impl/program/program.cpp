@@ -435,7 +435,6 @@ KernelGroup::KernelGroup(
     const detail::ProgramImpl& program,
     uint32_t programmable_core_type_index,
     kernel_id_array_t kernel_ids,
-    bool /*erisc_is_idle*/,
     uint32_t local_cb_mask,
     uint32_t min_remote_cb_start_index,
     const CoreRangeSet& new_ranges) :
@@ -562,8 +561,6 @@ struct KernelGroupIntHasher {
 
 void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_index) {
     if (core_to_kernel_group_index_table_[programmable_core_type_index].size() == 0) {
-        bool erisc_is_idle = false;
-
         // Get the extent of the kernels in x, y
         CoreCoord base = {std::numeric_limits<decltype(base.x)>::max(), std::numeric_limits<decltype(base.y)>::max()};
         grid_extent_[programmable_core_type_index] = {0, 0};
@@ -578,7 +575,6 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 if (core.y < base.y)
                     base.y = core.y;
             }
-            erisc_is_idle = kernel->is_idle_eth();
         }
         grid_extent_[programmable_core_type_index].x++;
         grid_extent_[programmable_core_type_index].y++;
@@ -713,7 +709,6 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 *this,
                 programmable_core_type_index,
                 kg_to_cores.first.kernel_ids,
-                erisc_is_idle,
                 local_cb_mask,
                 min_remote_cb_start_index,
                 kg_to_cores.second));
