@@ -36,6 +36,7 @@
 #include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
 #include "ttnn/operations/ccl/ccl_pybind.hpp"
 #include "ttnn/operations/conv/conv_pybind.hpp"
+#include "ttnn/operations/debug/debug_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
@@ -119,6 +120,9 @@ void py_module(py::module& module) {
 
     auto m_ccl = module.def_submodule("ccl", "collective communication operations");
     ccl::py_module(m_ccl);
+
+    auto m_debug = module.def_submodule("debug", "debug operations");
+    debug::py_module(m_debug);
 
     auto m_creation = module.def_submodule("creation", "creation operations");
     creation::py_module(m_creation);
