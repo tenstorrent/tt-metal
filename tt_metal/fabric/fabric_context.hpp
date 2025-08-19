@@ -91,8 +91,6 @@ private:
     std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_router_config_ = {};
     std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2> dateline_upstream_adjcent_router_config_ =
         {};
-    std::array<std::unique_ptr<tt::tt_fabric::FabricEriscDatamoverConfig>, 2>
-        dateline_upstream_adjcent_upstream_router_config_ = {};
 
     // Tensix config for fabric mux configuration (same for all devices)
     std::unique_ptr<tt::tt_fabric::FabricTensixDatamoverConfig> tensix_config_;
