@@ -128,8 +128,10 @@ class TransformerBlock(LightweightModule):
                     sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                     sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                     ccl_topology=self.args.ccl_topology(),
+                    tt_ccl=self.tt_ccl,
                 ),
                 args,
+                tt_ccl=self.tt_ccl,
                 TG=args.is_galaxy,
             )
         else:
@@ -152,8 +154,10 @@ class TransformerBlock(LightweightModule):
                     sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
                     sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
                     ccl_topology=self.args.ccl_topology(),
+                    tt_ccl=self.tt_ccl,
                 ),
                 args,
+                tt_ccl=self.tt_ccl,
                 TG=args.is_galaxy,
             )
         else:
