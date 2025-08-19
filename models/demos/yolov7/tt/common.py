@@ -57,15 +57,13 @@ class TtYOLOv7Conv2D:
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat16,
+            weights_dtype=ttnn.bfloat16 if self.use_1d_systolic_array else ttnn.bfloat8_b,
             activation=self.activation,
             shard_layout=self.shard_layout,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             enable_split_reader=self.enable_split_reader,
-            enable_act_double_buffer=True
-            if self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
-            else self.enable_act_double_buffer,
-            enable_weights_double_buffer=True if self.shard_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED else False,
+            enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             deallocate_activation=self.deallocate_activation,
         )
         compute_config = ttnn.init_device_compute_kernel_config(
@@ -112,3 +110,76 @@ class TtYOLOv7Conv2D:
             )
             output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
         return output_tensor
+
+
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.ShardTensorToMesh(device, dim=0)
+        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+
+
+def sharded_concat(
+    input_tensors,
+    num_cores=56,
+    dim=3,
+    shard_strategy=ttnn.ShardStrategy.HEIGHT,
+    shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+):
+    max_cores = 0
+    max_id = 0
+    for i, tensor in enumerate(input_tensors):
+        cores = tensor.memory_config().shard_spec.grid.num_cores()
+        if cores > max_cores:
+            max_cores = cores
+            max_id = i
+    id = max_id
+
+    shard_grid = input_tensors[id].memory_config().shard_spec.grid
+    num_cores = shard_grid.num_cores()
+
+    in_shard_width = input_tensors[id].shape[-1]
+    shard_height = (input_tensors[id].shape[2] + num_cores - 1) // num_cores
+    shard_height = ((shard_height + 31) // 32) * 32
+    print("Shard height:", shard_height)
+
+    input_sharded_memory_config = ttnn.create_sharded_memory_config_(
+        (shard_height, in_shard_width),
+        core_grid=shard_grid,
+        strategy=shard_strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    out_shard_width = 0
+    for i in range(len(input_tensors)):
+        out_shard_width += input_tensors[i].shape[-1]
+
+        if input_tensors[i].shape[-1] != in_shard_width:
+            print(f"Input tensor {i} does not have the correct memory config, converting...")
+            temp_input_shared_memory_config = ttnn.create_sharded_memory_config_(
+                (shard_height, input_tensors[i].shape[-1]),
+                core_grid=shard_grid,
+                strategy=shard_strategy,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            input_tensors[i] = ttnn.to_memory_config(input_tensors[i], temp_input_shared_memory_config)
+        else:
+            # If the input tensor already has the correct memory config, we can skip this step
+            input_tensors[i] = ttnn.to_memory_config(input_tensors[i], input_sharded_memory_config)
+        print(input_tensors[i].shape, input_tensors[i].memory_config().shard_spec.grid, input_tensors[i].layout)
+
+    output_sharded_memory_config = ttnn.create_sharded_memory_config_(
+        (shard_height, out_shard_width),
+        core_grid=shard_grid,
+        strategy=shard_strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    output = ttnn.concat(input_tensors, dim, memory_config=output_sharded_memory_config)
+    return output
