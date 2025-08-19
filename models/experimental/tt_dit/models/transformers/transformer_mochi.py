@@ -224,7 +224,9 @@ class MochiTransformerBlock:
                     mod_spatial_11BZ.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
@@ -251,7 +253,9 @@ class MochiTransformerBlock:
                     mod_prompt_11BZ.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
@@ -305,7 +309,9 @@ class MochiTransformerBlock:
                     spatial_ff_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
@@ -345,7 +351,9 @@ class MochiTransformerBlock:
                         prompt_ff_1BLP.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                     ),
                     dim=3,
-                    multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                    multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                        self.parallel_config.tensor_parallel.mesh_axis
+                    ),
                     num_links=self.ccl_manager.num_links,
                     topology=self.ccl_manager.topology,
                     cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
@@ -605,7 +613,9 @@ class MochiTransformer3DModel:
                 spatial_1BND.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
             ),
             dim=2,
-            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                self.parallel_config.sequence_parallel.mesh_axis
+            ),
             num_links=self.ccl_manager.num_links,
             topology=self.ccl_manager.topology,
             cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
@@ -675,7 +685,9 @@ class MochiTransformer3DModel:
                 spatial_norm_fractured_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
             ),
             dim=3,
-            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                self.parallel_config.tensor_parallel.mesh_axis
+            ),
             num_links=self.ccl_manager.num_links,
             topology=self.ccl_manager.topology,
             cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,

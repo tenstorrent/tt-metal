@@ -185,7 +185,7 @@ class ColParallelLinear:
                     unsqueezed_weight.shape, 2, self.fsdp_mesh_axis
                 ),
                 dim=2,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.fsdp_mesh_axis),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.fsdp_mesh_axis,
@@ -314,7 +314,7 @@ class RowParallelLinear:
                     unsqueezed_weight.shape, 3, self.fsdp_mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.fsdp_mesh_axis),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.fsdp_mesh_axis,
@@ -343,7 +343,7 @@ class RowParallelLinear:
                     output.shape, dim=3, mesh_axis=self.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(self.mesh_axis),
                 num_links=self.ccl_manager.num_links,
                 memory_config=ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
                 topology=self.ccl_manager.topology,
