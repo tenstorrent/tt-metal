@@ -13,13 +13,37 @@ fabric_config:
 
 # Test definitions (required)
 tests:
-  - name: "all_to_all_test"
+  # - name: "all_to_all_test"
+  #   num_iterations: 1
+  #   memory_config:
+  #     fifo_size: [1024, 2048]
+  #     page_size: [256, 512]
+  #     data_size: 4096
+  #     num_transactions: 15
+  #   pattern_expansions:
+  #     - type: "all_to_all_devices"
+  #       core_coord: [0, 0]
+  - name: "broadcast_test"
     num_iterations: 1
     memory_config:
       fifo_size: [1024, 2048]
       page_size: [256, 512]
       data_size: 4096
       num_transactions: 15
-    pattern_expansions:
-      - type: "all_to_all_devices"
-        core_coord: [0, 0]
+    sockets:
+      - sender_rank: 0
+        receiver_rank: 1
+        connections:
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [0, 0]
+              core_coord: [1, 1]
+          - sender:
+              mesh_coord: [0, 0]
+              core_coord: [0, 0]
+            receiver:
+              mesh_coord: [1, 0]
+              core_coord: [1, 1]
+        

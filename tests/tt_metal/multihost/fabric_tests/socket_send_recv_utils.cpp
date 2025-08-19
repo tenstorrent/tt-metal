@@ -16,6 +16,7 @@
 #include <algorithm>
 
 #include "tests/tt_metal/multihost/fabric_tests/socket_send_recv_utils.hpp"
+#include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests::multihost {
@@ -104,8 +105,16 @@ bool test_socket_send_recv(
     }
     const auto reserved_packet_header_CB_index = tt::CB::c_in0;
 
+    log_info(tt::LogTest, "Starting socket send/recv test with {} transactions, data_size={}, page_size={}", 
+             num_txns, data_size, page_size);
+    log_info(tt::LogTest, "Socket has {} connections, sender_rank={}, recv_rank={}", 
+             socket.get_config().socket_connection_config.size(), *sender_rank, *recv_rank);
+
     for (int i = 0; i < num_txns; i++) {
+        log_debug(tt::LogTest, "Starting transaction {}/{}", i + 1, num_txns);
         if (distributed_context->rank() == sender_rank) {
+            log_info(tt::LogTest, "Found sender id={}", mesh_device_->get_devices()[0]->id());
+            log_info(tt::LogTest, "Rank {} acting as sender for transaction {}", *distributed_context->rank(), i + 1);
             auto sender_data_shard_params = ShardSpecBuffer(
                 sender_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {sender_core_range_set.num_cores(), 1});
 
@@ -118,8 +127,14 @@ bool test_socket_send_recv(
 
             auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device_.get());
             auto sender_mesh_workload = CreateMeshWorkload();
-
+            std::unordered_set<MeshCoreCoord> mesh_core_coords;
+            log_info(tt::LogTest, "Processing {} socket connections for sender", socket.get_config().socket_connection_config.size());
+            
             for (const auto& connection : socket.get_config().socket_connection_config) {
+                if (mesh_core_coords.find(connection.sender_core) != mesh_core_coords.end()) {
+                    continue;
+                }
+                mesh_core_coords.insert(connection.sender_core);    
                 auto sender_core = connection.sender_core.core_coord;
                 WriteShard(
                     mesh_device_->mesh_command_queue(),
@@ -165,9 +180,12 @@ bool test_socket_send_recv(
                     MeshCoordinateRange(connection.sender_core.device_coord));
             }
             // Run workload performing Data Movement over the socket
+            log_info(tt::LogTest, "Enqueueing sender mesh workload with {} unique sender cores", mesh_core_coords.size());
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), sender_mesh_workload, false);
             Finish(mesh_device_->mesh_command_queue());
+            log_info(tt::LogTest, "Sender workload completed for transaction {}", i + 1);
         } else if (distributed_context->rank() == recv_rank) {
+            log_info(tt::LogTest, "Rank {} acting as receiver for transaction {}", *distributed_context->rank(), i + 1);
             auto recv_data_shard_params = ShardSpecBuffer(
                 recv_core_range, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {recv_core_range_set.num_cores(), 1});
 
@@ -181,7 +199,12 @@ bool test_socket_send_recv(
             auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device_.get());
 
             auto recv_mesh_workload = CreateMeshWorkload();
+            log_info(tt::LogTest, "Creating {} receiver kernels", socket.get_config().socket_connection_config.size());
+            
             for (const auto& connection : socket.get_config().socket_connection_config) {
+                log_debug(tt::LogTest, "Creating receiver kernel for core [{},{}] coord ({},{})", 
+                         connection.receiver_core.device_coord.row, connection.receiver_core.device_coord.col,
+                         connection.receiver_core.core_coord.x, connection.receiver_core.core_coord.y);
                 auto recv_core = connection.receiver_core.core_coord;
                 auto sender_fabric_node_id =
                     socket.get_fabric_node_id(SocketEndpoint::SENDER, connection.sender_core.device_coord);
@@ -190,7 +213,8 @@ bool test_socket_send_recv(
                 auto recv_program = CreateProgram();
 
                 auto recv_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
-
+                auto output_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
+                
                 KernelHandle recv_kernel = CreateKernel(
                     recv_program,
                     "tests/tt_metal/tt_metal/test_kernels/misc/socket/fabric_receiver_worker.cpp",
@@ -216,8 +240,10 @@ bool test_socket_send_recv(
                     MeshCoordinateRange(connection.receiver_core.device_coord));
             }
             // Run receiver workload using the created socket
+            log_info(tt::LogTest, "Enqueueing receiver mesh workload");
             EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), recv_mesh_workload, false);
             auto& core_to_core_id = recv_data_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+            log_info(tt::LogTest, "Receiver workload completed, starting data validation");
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 std::vector<uint32_t> recv_data_readback;
                 ReadShard(
@@ -232,6 +258,7 @@ bool test_socket_send_recv(
                 is_data_match &= (src_vec_per_core == recv_data_readback_per_core);
                 EXPECT_TRUE(is_data_match);
             }
+            log_info(tt::LogTest, "Data validation completed for transaction {}, match={}", i + 1, is_data_match);
         }
         // Increment the source vector for the next iteration
         // This is to ensure that the data is different for each transaction
