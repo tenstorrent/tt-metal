@@ -75,6 +75,7 @@ fi
 
 ./create_venv.sh
 source python_env/bin/activate
+pip install -r models/tt_transformers/requirements.txt
 
 
 echo "Current location: `pwd`"
