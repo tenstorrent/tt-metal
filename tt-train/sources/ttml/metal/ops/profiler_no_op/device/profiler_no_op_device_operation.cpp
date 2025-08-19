@@ -106,7 +106,7 @@ ttsl::hash::hash_t ProfilerNoopOperation::compute_program_hash(
     const auto& input_logical_shape = input_tensor.logical_shape();
     auto program_factory = select_program_factory(args, tensor_args);
     return tt::tt_metal::operation::hash_operation<ProfilerNoopOperation>(
-        args, program_factory.index(), input_tensor.dtype(), input_logical_shape);
+        program_factory.index(), input_tensor.dtype(), input_logical_shape);
 }
 
 std::tuple<operation_attributes_t, tensor_args_t> ProfilerNoopOperation::invoke(
