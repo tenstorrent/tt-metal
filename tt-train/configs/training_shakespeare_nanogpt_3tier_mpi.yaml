@@ -26,7 +26,8 @@ training_config:
 
 multihost_config:
   enabled: true
-  num_workers: 2
+  num_workers: 3
+  socket_type: mpi
 
 eval_config:
   repetition_penalty: 1.0
