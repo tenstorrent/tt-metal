@@ -383,13 +383,13 @@ ttnn::Tensor ExecutePad::invoke(
 ttnn::Tensor ExecutePad::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& padding,
+    const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
     ttnn::SmallVector<PadSpecDim> padding_impl;
     std::transform(padding.begin(), padding.end(), std::back_inserter(padding_impl), [](auto& p) {
-        return PadSpecDim(p.first, p.second);
+        return PadSpecDim(p[0], p[1]);
     });
 
     return ExecutePad::invoke(queue_id, input_tensor, padding_impl, value, use_multicore, memory_config_arg);
