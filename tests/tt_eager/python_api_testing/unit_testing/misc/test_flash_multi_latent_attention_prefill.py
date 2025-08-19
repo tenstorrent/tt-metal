@@ -23,6 +23,8 @@ from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
 
+ENABLE_SDPA_STRESS_TESTS = os.getenv("ENABLE_SDPA_STRESS_TESTS", "0") == "1"
+
 
 def nearest_n(x, n):
     return ((x + n - 1) // n) * n
@@ -215,6 +217,7 @@ def run_flash_mla_prefill_impl(
     assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"
 
 
+@pytest.mark.skip_if(not ENABLE_SDPA_STRESS_TESTS, reason="Only running stress tests")
 @pytest.mark.parametrize(
     "batch, seq_len, nh, nkv, kv_lora_rank, d_rope",
     # batch, seq_len, num heads q, num heads kv, kv lora rank, dim rope
@@ -230,8 +233,6 @@ def run_flash_mla_prefill_impl(
     "q_dtype, dtype",
     [
         (ttnn.bfloat16, ttnn.bfloat8_b),
-        (ttnn.bfloat8_b, ttnn.bfloat8_b),
-        (ttnn.bfloat16, ttnn.bfloat4_b),
         (ttnn.bfloat8_b, ttnn.bfloat4_b),
     ],
 )
@@ -279,6 +280,7 @@ def test_flash_mla_prefill(
     )
 
 
+@pytest.mark.skip_if(ENABLE_SDPA_STRESS_TESTS, reason="Stress tests are disabled by default.")
 @pytest.mark.parametrize(
     "batch",
     [

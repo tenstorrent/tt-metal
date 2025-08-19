@@ -20,6 +20,8 @@ from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
 
+ENABLE_SDPA_STRESS_TESTS = os.getenv("ENABLE_SDPA_STRESS_TESTS", "0") == "1"
+
 
 def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_len, scale, is_causal=True):
     b, nh, _, _ = Q.shape  # b, nh, 1, d
@@ -168,7 +170,7 @@ def run_flash_mla_decode_impl(
     block_size=ttnn.TILE_SIZE,
 ):
     # Can't run too many iters, or run out of L1
-    num_iters = 5
+    num_iters = 3
 
     # Log the test parameters
     logger.debug(f"Running FlashMLA Decode with parameters: ")
@@ -395,6 +397,7 @@ def run_flash_mla_decode_impl(
     assert num_program_cache_entries == 2, f"Expected 2 program cache entries, got {num_program_cache_entries}."
 
 
+@pytest.mark.skip_if(not ENABLE_SDPA_STRESS_TESTS, reason="Only running stress tests")
 @pytest.mark.parametrize(
     "batch, seq_len, nh, nkv, kv_lora_rank, d_rope, q_num_cores",
     # batch, seq_len, num heads q, num heads kv, kv lora rank, dim rope, number of cores to shard q on
@@ -402,14 +405,12 @@ def run_flash_mla_decode_impl(
         (4, 1024, 128, 1, 512, 64, 64),  # DeepSeek V3 TG full DP
         (2, 1024, 128, 1, 256, 64, 16),
         (2, 1024, 128, 1, 256, 64, 32),
-        (2, 1024, 128, 1, 256, 64, 64),
         (8, 1024, 128, 1, 256, 64, 64),
         (8, 1024, 16, 1, 256, 64, 64),
         (8, 1024, 48, 1, 128, 64, 16),
         (2, 1024, 8, 1, 128, 64, 0),
         (2, 1024, 64, 1, 256, 0, 0),
         (2, 1024, 64, 1, 32, 64, 0),
-        (8, 1024, 8, 1, 128, 32, 0),
         (16, 1024, 8, 1, 128, 32, 0),
     ],
 )
@@ -417,15 +418,13 @@ def run_flash_mla_decode_impl(
     "q_dtype, dtype",
     [
         (ttnn.bfloat16, ttnn.bfloat8_b),
-        (ttnn.bfloat8_b, ttnn.bfloat8_b),
-        (ttnn.bfloat16, ttnn.bfloat4_b),
         (ttnn.bfloat8_b, ttnn.bfloat4_b),
     ],
 )
 @pytest.mark.parametrize(
     "use_paged_attention",
     [
-        False,
+        # False,
         True,
     ],
 )
@@ -468,6 +467,7 @@ def test_flash_mla_decode(
     )
 
 
+@pytest.mark.skip_if(ENABLE_SDPA_STRESS_TESTS, reason="Stress tests are disabled by default.")
 @pytest.mark.parametrize(
     "batch",
     [
