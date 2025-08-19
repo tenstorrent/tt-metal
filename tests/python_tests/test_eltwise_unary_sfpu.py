@@ -59,6 +59,8 @@ from helpers.utils import passed_test
         MathOperation.Exp2,
         MathOperation.Hardsigmoid,
         MathOperation.Threshold,
+        MathOperation.ReluMax,
+        MathOperation.ReluMin,
     ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
 )
