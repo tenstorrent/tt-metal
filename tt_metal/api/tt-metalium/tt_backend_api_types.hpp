@@ -4,14 +4,12 @@
 
 #pragma once
 
-#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
 #include <functional>
 #include <stdexcept>
 #include <string>
-#include <vector>
 
 #include <fmt/base.h>
 #include <umd/device/types/arch.h>
@@ -142,33 +140,6 @@ std::string get_string(ARCH arch);
 std::string get_string_lowercase(ARCH arch);
 std::string get_alias(ARCH arch);
 ARCH get_arch_from_string(const std::string& arch_str);
-
-enum RISCV : uint8_t {
-    BRISC = 0,
-    NCRISC = 1,
-    TRISC0 = 2,
-    TRISC1 = 3,
-    TRISC2 = 4,
-    ERISC = 5,
-    ERISC1 = 6,
-    COMPUTE = 7,  // Encompasses TRISC0, TRISC1, and TRISC2
-    MAX = 8,
-};
-
-inline std::ostream& operator<<(std::ostream& os, const RISCV& riscv) {
-    switch (riscv) {
-        case RISCV::BRISC: os << "BRISC"; break;
-        case RISCV::NCRISC: os << "NCRISC"; break;
-        case RISCV::TRISC0: os << "TRISC0"; break;
-        case RISCV::TRISC1: os << "TRISC1"; break;
-        case RISCV::TRISC2: os << "TRISC2"; break;
-        case RISCV::ERISC: os << "ERISC"; break;
-        case RISCV::ERISC1: os << "ERISC1"; break;
-        case RISCV::COMPUTE: os << "COMPUTE"; break;
-        default: throw std::invalid_argument("Unknown format");
-    }
-    return os;
-}
 
 }  // namespace tt
 
