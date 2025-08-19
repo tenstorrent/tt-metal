@@ -674,6 +674,8 @@ int main(int argc, char **argv) {
                 "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
                 device_config.mesh_shape));
         }
+    } else if (device_config.enable_tp || device_config.enable_ddp) {
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     }
 
     initialize_device(device_config.mesh_shape, device_config.device_ids);
@@ -925,6 +927,14 @@ int main(int argc, char **argv) {
             loss = gradient_accumulator_helper.scale(loss);
             float loss_float = get_loss_value(loss);
             ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
+
+            if (device_config.enable_tp) {
+                auto ones_grad = ttnn::ones_like(loss->get_value());
+                ones_grad = ttnn::multiply(
+                    ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
+                loss->set_grad(ones_grad);
+            }
+
             loss->backward();
             ttml::autograd::ctx().reset_graph();
 
