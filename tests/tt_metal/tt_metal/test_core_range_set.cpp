@@ -14,14 +14,12 @@
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/semaphore.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstring>
 #include <exception>
 #include <map>
 #include <memory>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -62,7 +60,7 @@ void check_program_is_mapped_to_correct_cores(
                     auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
                     TT_FATAL(kernel->is_on_logical_core(logical_core), "Error");
                     // Check that compute kernel compile time args are mapped to the correct cores
-                    if (kernel->processor() == tt::RISCV::COMPUTE) {
+                    if (kernel->get_kernel_processor_class() == tt_metal::HalProcessorClassType::COMPUTE) {
                         auto kernel_compile_time_args = kernel->compile_time_args();
                         TT_FATAL(kernel_compile_time_args == compute_kernel_args, "Error");
                     }
