@@ -17,15 +17,15 @@ constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(1);
 tt_l1_ptr uint32_t* const test_results = reinterpret_cast<tt_l1_ptr uint32_t*>(test_results_addr_arg);
 constexpr uint32_t notification_mailbox_address = get_compile_time_arg_val(2);
 uint32_t target_address = get_compile_time_arg_val(3);
-constexpr uint32_t packet_payload_size_bytes = get_compile_time_arg_val(4);
-constexpr NocSendType noc_send_type = static_cast<NocSendType>(get_compile_time_arg_val(5));
-constexpr uint32_t num_send_dir = get_compile_time_arg_val(6);
-constexpr bool with_state = get_compile_time_arg_val(7) == 1;
-constexpr bool is_chip_multicast = get_compile_time_arg_val(8) == 1;
+constexpr NocSendType noc_send_type = static_cast<NocSendType>(get_compile_time_arg_val(4));
+constexpr uint32_t num_send_dir = get_compile_time_arg_val(5);
+constexpr bool with_state = get_compile_time_arg_val(6) == 1;
+constexpr bool is_chip_multicast = get_compile_time_arg_val(7) == 1;
 
 void kernel_main() {
     size_t rt_arg_idx = 0;
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint16_t packet_payload_size_bytes = static_cast<uint16_t>(get_arg_val<uint32_t>(rt_arg_idx++));
     uint32_t num_packets = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t time_seed = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t noc_x_start = get_arg_val<uint32_t>(rt_arg_idx++);
@@ -42,7 +42,8 @@ void kernel_main() {
     uint64_t start_timestamp = get_timestamp();
 
     if constexpr (with_state) {
-        set_state<packet_payload_size_bytes, num_send_dir, is_chip_multicast, noc_send_type>(route_id, hop_info);
+        set_state<num_send_dir, is_chip_multicast, noc_send_type>(
+            route_id, hop_info, static_cast<uint16_t>(packet_payload_size_bytes));
     }
 
     for (uint32_t i = 0; i < num_packets; i++) {
@@ -97,6 +98,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
+                            packet_payload_size_bytes,
                             tt::tt_fabric::NocUnicastScatterCommandHeader{
                                 {get_noc_addr(noc_x_start, noc_y_start, target_address),
                                  get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},
@@ -128,6 +130,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
+                            packet_payload_size_bytes,
                             tt::tt_fabric::NocUnicastCommandHeader{
                                 get_noc_addr(noc_x_start, noc_y_start, target_address)});
                     } else {
@@ -165,6 +168,7 @@ void kernel_main() {
                             connections,
                             route_id,
                             source_l1_buffer_address,
+                            packet_payload_size_bytes,
                             tt::tt_fabric::NocUnicastScatterCommandHeader{
                                 {get_noc_addr(noc_x_start, noc_y_start, target_address),
                                  get_noc_addr(noc_x_start, noc_y_start, target_address + first_chunk_size)},

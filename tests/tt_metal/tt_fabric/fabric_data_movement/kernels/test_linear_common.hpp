@@ -35,14 +35,14 @@ HopInfo<num_send_dir> get_hop_info_from_args(size_t& rt_arg_idx) {
     return hop_info;
 }
 
-// Set-state helper that accepts DynamicMask templates
-template <uint32_t packet_size, uint8_t num_send_dir, bool is_chip_multicast, tt::tt_fabric::NocSendType noc_send_type>
-void set_state(uint8_t route_id, HopInfo<num_send_dir>& hop_info) {
+// Set-state helper: field selection via template; packet size is runtime argument when applicable
+template <uint8_t num_send_dir, bool is_chip_multicast, tt::tt_fabric::NocSendType noc_send_type>
+void set_state(uint8_t route_id, HopInfo<num_send_dir>& hop_info, uint16_t packet_size) {
     if constexpr (is_chip_multicast) {
         switch (noc_send_type) {
             case NOC_UNICAST_WRITE: {
-                fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize, packet_size>(
-                    route_id, hop_info.mcast.start_distance, hop_info.mcast.range, nullptr);
+                fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+                    route_id, hop_info.mcast.start_distance, hop_info.mcast.range, packet_size, nullptr);
             } break;
             case NOC_UNICAST_INLINE_WRITE: {
                 fabric_multicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::Value>(
@@ -55,14 +55,14 @@ void set_state(uint8_t route_id, HopInfo<num_send_dir>& hop_info) {
             } break;
             case NOC_UNICAST_SCATTER_WRITE: {
                 fabric_multicast_noc_scatter_write_set_state<
-                    UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes,
-                    packet_size>(
+                    UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
                     route_id,
                     hop_info.mcast.start_distance,
                     hop_info.mcast.range,
+                    packet_size,
                     tt::tt_fabric::NocUnicastScatterCommandHeader{
                         {0, 0},  // ignore
-                        packet_size / 2});
+                        static_cast<uint16_t>(packet_size / 2)});
             } break;
             case NOC_UNICAST_ATOMIC_INC: {
                 fabric_multicast_noc_unicast_atomic_inc_set_state<
@@ -80,11 +80,11 @@ void set_state(uint8_t route_id, HopInfo<num_send_dir>& hop_info) {
             case NOC_FUSED_UNICAST_ATOMIC_INC: {
                 fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<
                     UnicastFusedAtomicIncUpdateMask::PayloadSize | UnicastFusedAtomicIncUpdateMask::Wrap |
-                        UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush,
-                    packet_size>(
+                    UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
                     route_id,
                     hop_info.mcast.start_distance,
                     hop_info.mcast.range,
+                    packet_size,
                     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                         0,  // ignore
                         0,  // ignore
@@ -99,8 +99,8 @@ void set_state(uint8_t route_id, HopInfo<num_send_dir>& hop_info) {
     } else {
         switch (noc_send_type) {
             case NOC_UNICAST_WRITE: {
-                fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize, packet_size>(
-                    route_id, hop_info.ucast.num_hops, nullptr);
+                fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+                    route_id, hop_info.ucast.num_hops, packet_size, nullptr);
             } break;
             case NOC_UNICAST_INLINE_WRITE: {
                 fabric_unicast_noc_unicast_inline_write_set_state<UnicastInlineWriteUpdateMask::Value>(
@@ -112,13 +112,13 @@ void set_state(uint8_t route_id, HopInfo<num_send_dir>& hop_info) {
             } break;
             case NOC_UNICAST_SCATTER_WRITE: {
                 fabric_unicast_noc_scatter_write_set_state<
-                    UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes,
-                    packet_size>(
+                    UnicastScatterWriteUpdateMask::PayloadSize | UnicastScatterWriteUpdateMask::ChunkSizes>(
                     route_id,
                     hop_info.ucast.num_hops,
+                    packet_size,
                     tt::tt_fabric::NocUnicastScatterCommandHeader{
                         {0, 0},  // ignore
-                        packet_size / 2});
+                        static_cast<uint16_t>(packet_size / 2)});
             } break;
             case NOC_UNICAST_ATOMIC_INC: {
                 fabric_unicast_noc_unicast_atomic_inc_set_state<
@@ -135,10 +135,10 @@ void set_state(uint8_t route_id, HopInfo<num_send_dir>& hop_info) {
             case NOC_FUSED_UNICAST_ATOMIC_INC: {
                 fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<
                     UnicastFusedAtomicIncUpdateMask::PayloadSize | UnicastFusedAtomicIncUpdateMask::Wrap |
-                        UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush,
-                    packet_size>(
+                    UnicastFusedAtomicIncUpdateMask::Val | UnicastFusedAtomicIncUpdateMask::Flush>(
                     route_id,
                     hop_info.ucast.num_hops,
+                    packet_size,
                     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
                         0,  // ignore
                         0,  // ignore

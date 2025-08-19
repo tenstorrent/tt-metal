@@ -2153,7 +2153,6 @@ void FabricUnicastCommon(
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
-        worker_mem_map.packet_payload_size_bytes,
         noc_send_type,
         static_cast<uint32_t>(dir_configs.size()),
         with_state,
@@ -2179,6 +2178,7 @@ void FabricUnicastCommon(
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
+        worker_mem_map.packet_payload_size_bytes,
         num_packets,
         time_seed,
         receiver_virtual_core.x,
@@ -2243,6 +2243,7 @@ void FabricUnicastCommon(
             .defines = defines});
 
     std::vector<uint32_t> receiver_runtime_args = {
+        worker_mem_map.packet_payload_size_bytes,
         num_packets,
         time_seed,
     };
@@ -2357,7 +2358,6 @@ void FabricMulticastCommon(
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.notification_mailbox_address,
         worker_mem_map.target_address,
-        worker_mem_map.packet_payload_size_bytes,
         noc_send_type,
         static_cast<uint32_t>(dir_configs.size()),
         with_state,
@@ -2366,6 +2366,7 @@ void FabricMulticastCommon(
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
+        worker_mem_map.packet_payload_size_bytes,
         num_packets,
         time_seed,
         receiver_virtual_core.x,
@@ -2438,7 +2439,7 @@ void FabricMulticastCommon(
 
     // Build and launch receiver programs for all destination devices in all configured directions
     std::vector<std::pair<tt::tt_metal::IDevice*, tt_metal::Program>> receiver_programs;
-    std::vector<uint32_t> receiver_runtime_args = {num_packets, time_seed};
+    std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
     for (auto& [dir, start_distance, range] : dir_configs) {
         for (auto physical_end_device_id : physical_end_device_ids_by_dir[dir]) {
             auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
