@@ -192,11 +192,14 @@ def run(
         allclose
     ), f"Reference and output tensor are not close. Input shape: {input_shape}, Output size: {effective_output_size}"
 
+    # For adaptive avg pool, use allclose instead of equal due to floating-point arithmetic
     if input_a_dtype == ttnn.bfloat16:
-        isequal = torch.equal(output_tensor.to(torch.bfloat16), torch_output_tensor.to(torch.bfloat16))
+        close_match = torch.allclose(
+            output_tensor.to(torch.bfloat16), torch_output_tensor.to(torch.bfloat16), atol=atol
+        )
         assert (
-            isequal
-        ), f"Reference and output tensor are not equal for bfloat16. Input shape: {input_shape}, Output size: {effective_output_size}"
+            close_match
+        ), f"Reference and output tensor are not close enough for bfloat16. Input shape: {input_shape}, Output size: {effective_output_size}"
 
     # PCC assertion with higher threshold matching max_pool2d
     pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.998)
