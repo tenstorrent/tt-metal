@@ -1,0 +1,395 @@
+
+================================================================================
+                        TT-METAL OPERATOR TEST ANALYSIS REPORT
+================================================================================
+Generated: 2025-08-18 19:35:37
+Analysis of: 46 operators with 680 total tests
+================================================================================
+
+📊 EXECUTIVE SUMMARY
+================================================================================
+Total Operators Tested:     46
+Total Tests Executed:       680
+Tests Passed:               432 (63.5%)
+Tests Failed:               248 (36.5%)
+Memory-Related Failures:    37
+Overall Success Rate:       63.5%
+
+
+================================================================================
+📋 DETAILED OPERATOR ANALYSIS
+================================================================================
+Format: Operator | Total Tests | Passed | Failed | Memory Errors | Status
+
+add                  |  14 |  14 |   0 |   1 | ✅ PASS 🧠1
+addmm                |  54 |   0 |  54 |   1 | ❌ FAIL 🧠1
+bmm                  |   0 |   0 |   0 |   0 | ✅ PASS
+cat                  |  16 |  16 |   0 |   1 | ✅ PASS 🧠1
+clamp                |   2 |   0 |   2 |   0 | ❌ FAIL
+clampmin             |  20 |   0 |  20 |   1 | ❌ FAIL 🧠1
+clone                |  16 |  16 |   0 |   1 | ✅ PASS 🧠1
+concat               |  16 |  16 |   0 |   1 | ✅ PASS 🧠1
+copy                 |   6 |   0 |   6 |   0 | ❌ FAIL
+div                  |  18 |  18 |   0 |   1 | ✅ PASS 🧠1
+dropout              |  24 |   0 |  24 |   1 | ❌ FAIL 🧠1
+expand               |   0 |   0 |   0 |   1 | ✅ PASS 🧠1
+gelu                 |  22 |  22 |   0 |   0 | ✅ PASS
+geluactivation       |  14 |  14 |   0 |   1 | ✅ PASS 🧠1
+hardtanh             |  14 |  14 |   0 |   1 | ✅ PASS 🧠1
+identity             |  16 |   0 |  16 |   1 | ❌ FAIL 🧠1
+leakyrelu            |   0 |   0 |   0 |   1 | ✅ PASS 🧠1
+linalgvectornorm     |  20 |   0 |  20 |   1 | ❌ FAIL 🧠1
+linear               |  84 |  84 |   0 |   1 | ✅ PASS 🧠1
+log                  |   2 |   2 |   0 |   0 | ✅ PASS
+maxpool2d            |   0 |   0 |   0 |   1 | ✅ PASS 🧠1
+mean                 |   2 |   2 |   0 |   0 | ✅ PASS
+mish                 |  16 |  16 |   0 |   1 | ✅ PASS 🧠1
+mm                   |  20 |   0 |  20 |   0 | ❌ FAIL
+mul                  |  14 |  14 |   0 |   1 | ✅ PASS 🧠1
+native_batch_norm    |   0 |   0 |   0 |   1 | ✅ PASS 🧠1
+ones                 |  20 |  20 |   0 |   1 | ✅ PASS 🧠1
+permute              |  16 |  16 |   0 |   1 | ✅ PASS 🧠1
+relu                 |  16 |  16 |   0 |   1 | ✅ PASS 🧠1
+sigmoid              |  24 |  24 |   0 |   1 | ✅ PASS 🧠1
+silu                 |  16 |  16 |   0 |   1 | ✅ PASS 🧠1
+silu_inplace         |  20 |   0 |  20 |   1 | ❌ FAIL 🧠1
+softmax              |  10 |   0 |  10 |   1 | ❌ FAIL 🧠1
+softplus             |  16 |  16 |   0 |   1 | ✅ PASS 🧠1
+split                |  14 |   6 |   8 |   1 | ❌ FAIL 🧠1
+split_with_sizes     |  10 |   0 |  10 |   1 | ❌ FAIL 🧠1
+splitwithsizes       |   0 |   0 |   0 |   1 | ✅ PASS 🧠1
+stack                |   0 |   0 |   0 |   0 | ✅ PASS
+sub                  |  14 |  14 |   0 |   1 | ✅ PASS 🧠1
+tanh                 |  16 |  16 |   0 |   1 | ✅ PASS 🧠1
+topk                 |   2 |   0 |   2 |   0 | ❌ FAIL
+transpose            |  16 |  16 |   0 |   1 | ✅ PASS 🧠1
+unsafeview           |  16 |   4 |  12 |   1 | ❌ FAIL 🧠1
+unsqueeze            |  16 |  16 |   0 |   1 | ✅ PASS 🧠1
+upsample_nearest2d   |  12 |   0 |  12 |   1 | ❌ FAIL 🧠1
+view                 |  16 |   4 |  12 |   1 | ❌ FAIL 🧠1
+
+================================================================================
+🧠 MEMORY ISSUES ANALYSIS
+================================================================================
+Operators with Memory Problems: 37
+
+
+Operator: add
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: addmm
+Memory Errors: 1
+Input Shapes Tested:
+  Shape: [27, 256] → Estimated Memory: 13.5KB
+  Shape: [27, 256] → Estimated Memory: 13.5KB
+  Shape: [80, 512] → Estimated Memory: 80.0KB
+  Shape: [80, 512] → Estimated Memory: 80.0KB
+  Shape: [1000, 256] → Estimated Memory: 500.0KB
+Key Errors:
+  • critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height ...
+  • critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height ...
+  • critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height ...
+
+Operator: cat
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: clampmin
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: clone
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: concat
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: div
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: dropout
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+Key Errors:
+  • AttributeError: module 'ttnn' has no attribute 'dropout'
+  • AttributeError: module 'ttnn' has no attribute 'dropout'
+  • AttributeError: module 'ttnn' has no attribute 'dropout'
+
+Operator: expand
+Memory Errors: 1
+Input Shapes Tested:
+  Shape: [1, 136, 240, 768] → Estimated Memory: 47.8MB
+  Shape: [1, 68, 120, 768] → Estimated Memory: 12.0MB
+  Shape: [1, 136, 120, 1152] → Estimated Memory: 35.9MB
+  Shape: [1, 136, 240, 384] → Estimated Memory: 23.9MB
+  Shape: [1, 68, 120, 768] → Estimated Memory: 12.0MB
+
+Operator: geluactivation
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: hardtanh
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: identity
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+Key Errors:
+  • AttributeError(
+  • AttributeError: 'Identity' object has no attribute 'shape'
+  • AttributeError(
+
+Operator: leakyrelu
+Memory Errors: 1
+Input Shapes Tested:
+  Shape: [1, 136, 240, 768] → Estimated Memory: 47.8MB
+  Shape: [1, 68, 120, 768] → Estimated Memory: 12.0MB
+  Shape: [1, 136, 120, 1152] → Estimated Memory: 35.9MB
+  Shape: [1, 136, 240, 384] → Estimated Memory: 23.9MB
+  Shape: [1, 68, 120, 768] → Estimated Memory: 12.0MB
+
+Operator: linalgvectornorm
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+Key Errors:
+  • AttributeError: module 'ttnn' has no attribute 'norm'
+  • AttributeError: module 'ttnn' has no attribute 'norm'
+  • AttributeError: module 'ttnn' has no attribute 'norm'
+
+Operator: linear
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: maxpool2d
+Memory Errors: 1
+Input Shapes Tested:
+  Shape: [1, 136, 240, 768] → Estimated Memory: 47.8MB
+  Shape: [1, 68, 120, 768] → Estimated Memory: 12.0MB
+  Shape: [1, 136, 120, 1152] → Estimated Memory: 35.9MB
+  Shape: [1, 136, 240, 384] → Estimated Memory: 23.9MB
+  Shape: [1, 68, 120, 768] → Estimated Memory: 12.0MB
+
+Operator: mish
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: mul
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: native_batch_norm
+Memory Errors: 1
+Input Shapes Tested:
+  Shape: [1, 136, 240, 768] → Estimated Memory: 47.8MB
+  Shape: [768] → Estimated Memory: 1.5KB
+  Shape: [768] → Estimated Memory: 1.5KB
+  Shape: [1, 68, 120, 768] → Estimated Memory: 12.0MB
+  Shape: [768] → Estimated Memory: 1.5KB
+
+Operator: ones
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: permute
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: relu
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: sigmoid
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: silu_inplace
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+Key Errors:
+  • AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?
+  • AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?
+  • AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?
+
+Operator: silu
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: softmax
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+Key Errors:
+  • TypeError: softmax() received an invalid combination of arguments - got (Tensor), but expected one o...
+  • TypeError: softmax() received an invalid combination of arguments - got (Tensor), but expected one o...
+  • TypeError: softmax() received an invalid combination of arguments - got (Tensor), but expected one o...
+
+Operator: softplus
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: split
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+Key Errors:
+  • AssertionError: PCC check failed for split output: list(expected_pytorch_result.shape)=[1, 768, 136,...
+  • AssertionError: PCC check failed for split output: list(expected_pytorch_result.shape)=[1, 1152, 136...
+  • AssertionError: PCC check failed for split output: list(expected_pytorch_result.shape)=[1, 768, 68, ...
+
+Operator: split_with_sizes
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: splitwithsizes
+Memory Errors: 1
+Input Shapes Tested:
+  Shape: [1, 136, 240, 768] → Estimated Memory: 47.8MB
+  Shape: [1, 68, 120, 768] → Estimated Memory: 12.0MB
+  Shape: [1, 136, 120, 1152] → Estimated Memory: 35.9MB
+  Shape: [1, 136, 240, 384] → Estimated Memory: 23.9MB
+  Shape: [1, 68, 120, 768] → Estimated Memory: 12.0MB
+
+Operator: sub
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: tanh
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: transpose
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: unsafeview
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: unsqueeze
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: upsample_nearest2d
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+Operator: view
+Memory Errors: 1
+Input Shapes Tested:
+  No shape information available
+
+================================================================================
+❌ FAILED OPERATORS ANALYSIS
+================================================================================
+Top Failed Operators (by failure count):
+
+
+addmm                | Failed: 54/54 (100.0%) | Memory: 1 | Errors: memory: 1, timeout: 1, dimension_mismatch: 1
+
+dropout              | Failed: 24/24 (100.0%) | Memory: 1 | Errors: memory: 1, timeout: 1, attribute_error: 1
+
+clampmin             | Failed: 20/20 (100.0%) | Memory: 1 | Errors: memory: 1, timeout: 1
+
+linalgvectornorm     | Failed: 20/20 (100.0%) | Memory: 1 | Errors: memory: 1, timeout: 1, attribute_error: 1
+
+mm                   | Failed: 20/20 (100.0%) | Memory: 0 | Errors: timeout: 1, dimension_mismatch: 1
+
+silu_inplace         | Failed: 20/20 (100.0%) | Memory: 1 | Errors: memory: 1, timeout: 1, attribute_error: 1
+
+identity             | Failed: 16/16 (100.0%) | Memory: 1 | Errors: memory: 1, timeout: 1, attribute_error: 1
+
+unsafeview           | Failed: 12/16 ( 75.0%) | Memory: 1 | Errors: memory: 1, timeout: 1
+
+upsample_nearest2d   | Failed: 12/12 (100.0%) | Memory: 1 | Errors: memory: 1, timeout: 1
+
+view                 | Failed: 12/16 ( 75.0%) | Memory: 1 | Errors: memory: 1, timeout: 1
+
+softmax              | Failed: 10/10 (100.0%) | Memory: 1 | Errors: memory: 1, timeout: 1, type_error: 1
+
+split_with_sizes     | Failed: 10/10 (100.0%) | Memory: 1 | Errors: memory: 1, timeout: 1
+
+split                | Failed:  8/14 ( 57.1%) | Memory: 1 | Errors: memory: 1, timeout: 1
+
+copy                 | Failed:  6/ 6 (100.0%) | Memory: 0 | Errors: timeout: 1, attribute_error: 1
+
+clamp                | Failed:  2/ 2 (100.0%) | Memory: 0 | Errors: timeout: 1
+
+
+================================================================================
+📏 INPUT SIZE ANALYSIS
+================================================================================
+
+Most Common Input Shapes:
+  [1, 68, 120, 768]              | Used 16 times | ~12.0MB
+  [1, 136, 240, 384]             | Used 15 times | ~23.9MB
+  [768]                          | Used 12 times | ~1.5KB
+  [1, 136, 240, 768]             | Used 10 times | ~47.8MB
+  [1, 136, 120, 1152]            | Used 10 times | ~35.9MB
+  [1, 34, 60, 1152]              | Used 10 times | ~4.5MB
+  [1, 272, 480, 192]             | Used 10 times | ~47.8MB
+  [1000, 1024]                   | Used  8 times | ~2.0MB
+  [64000, 128]                   | Used  8 times | ~15.6MB
+  [16000, 256]                   | Used  8 times | ~7.8MB
+
+================================================================================
+🔍 ERROR PATTERN ANALYSIS
+================================================================================
+
+Error Type Distribution:
+  timeout              |  46 occurrences ( 18.5% of failures)
+  memory               |  37 occurrences ( 14.9% of failures)
+  attribute_error      |   5 occurrences (  2.0% of failures)
+  type_error           |   3 occurrences (  1.2% of failures)
+  dimension_mismatch   |   2 occurrences (  0.8% of failures)
+  collection           |   1 occurrences (  0.4% of failures)
+  syntax_error         |   1 occurrences (  0.4% of failures)
+
+================================================================================
+💡 RECOMMENDATIONS
+================================================================================
+
+1. 🧠 Memory Issues: 37 operators have memory-related failures. Consider optimizing tensor sizes or implementing memory-efficient variants.
+2. ❌ Priority Fixes: Focus on addmm, dropout, clampmin, linalgvectornorm, mm - these operators have the most failures.
+3. 🐛 Syntax Errors: Some test files have syntax issues that prevent execution. Review test file structure.
+
+================================================================================
+📁 DETAILED RESULTS
+================================================================================
+Individual test results are available in the ssinghal/test_results/ directory.
+For specific operator analysis, examine the corresponding *_results.txt file.
+
+Report generated by TT-Metal Test Analyzer
+================================================================================

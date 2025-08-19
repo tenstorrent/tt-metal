@@ -7,17 +7,37 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 @pytest.mark.parametrize(
     "input_shape",
     [
-        # YOLOv12x ultra-high resolution (2176x3840) softmax attention shapes
-        [1, 12, 8160, 8160],   # Full attention matrix: [batch, heads, seq, seq]
-        [1, 12, 32640, 384],   # Large attention: [batch, heads, seq, features]
-        [1, 8, 4080, 4080],    # Half attention matrix: [batch, heads, half_seq, half_seq]
-        [12, 8160, 8160],      # Multi-head attention scores: [heads, seq, seq]
-        [12, 32640, 32],       # Attention over features: [heads, seq, head_dim]
-        [1, 1152, 68120],      # Channel attention: [batch, channels, spatial]
-        [8, 2040, 96],         # Medium attention: [heads, quarter_seq, features]
-        [16, 1020, 48],        # High-head attention: [heads, eighth_seq, head_dim]
-        [4, 16320, 128],       # Low-head attention: [heads, double_seq, features]
-        [24, 680, 32],         # Many-head attention: [heads, small_seq, head_dim]
+        # Original + 8K YOLOv12x ultra-high resolution shapes
+        [1, 12, 8160, 8160],
+        [1, 12, 32640, 384],
+        [1, 8, 4080, 4080],
+        [12, 8160, 8160],
+        [12, 32640, 32],
+        [1, 1152, 68120],
+        [8, 2040, 96],
+        [16, 1020, 48],
+        [4, 16320, 128],
+        [24, 680, 32],
+        [1, 3, 4320, 7680],  # 8K feature (189.8MB)
+        [1, 96, 2160, 3840],  # 8K feature (1518.8MB)
+        [1, 96, 1080, 1920],  # 8K feature (379.7MB)
+        [1, 192, 1080, 1920],  # 8K feature (759.4MB)
+        [1, 192, 540, 960],  # 8K feature (189.8MB)
+        [1, 384, 540, 960],  # 8K feature (379.7MB)
+        [1, 384, 270, 480],  # 8K feature (94.9MB)
+        [1, 768, 270, 480],  # 8K feature (189.8MB)
+        [1, 768, 135, 240],  # 8K feature (47.5MB)
+        [1, 1536, 135, 240],  # 8K feature (94.9MB)
+        [1, 96, 2160, 1920],  # 8K feature (759.4MB)
+        [1, 192, 1080, 960],  # 8K feature (379.7MB)
+        [1, 384, 540, 480],  # 8K feature (189.8MB)
+        [1, 768, 270, 240],  # 8K feature (94.9MB)
+        [1, 1152, 135, 120],  # 8K feature (35.6MB)
+        [1, 384, 135, 240],  # 8K feature (23.7MB)
+        [1, 768, 67, 120],  # 8K feature (11.8MB)
+        [1, 1152, 33, 60],  # 8K feature (4.4MB)
+        [1, 96, 540, 960],  # 8K feature (94.9MB)
+        [1, 192, 270, 480],  # 8K feature (47.5MB)
     ],
 )
 def test_softmax(device, input_shape):

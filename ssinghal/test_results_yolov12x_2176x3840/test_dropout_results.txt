@@ -1,0 +1,1215 @@
+2025-08-18 19:11:20.204 | DEBUG    | ttnn:<module>:83 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2025-08-18 19:11:20.310 | info     |   SiliconDriver | Opened PCI device 0; KMD version: 2.3.0; API: 2; IOMMU: disabled (pci_device.cpp:197)
+2025-08-18 19:11:20.322 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:192)
+2025-08-18 19:11:20.322 | info     |   SiliconDriver | Opened PCI device 0; KMD version: 2.3.0; API: 2; IOMMU: disabled (pci_device.cpp:197)
+2025-08-18 19:11:20.334 | info     |   SiliconDriver | Opened PCI device 0; KMD version: 2.3.0; API: 2; IOMMU: disabled (pci_device.cpp:197)
+2025-08-18 19:11:20.346 | info     |   SiliconDriver | Harvesting mask for chip 0 is 0x18 (NOC0: 0x18, simulated harvesting mask: 0x0). (cluster.cpp:295)
+2025-08-18 19:11:20.362 | info     |   SiliconDriver | Opened PCI device 0; KMD version: 2.3.0; API: 2; IOMMU: disabled (pci_device.cpp:197)
+2025-08-18 19:11:20.379 | warning  |   SiliconDriver | init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:04:00.0) (cpuset_lib.cpp:578)
+2025-08-18 19:11:20.379 | warning  |   SiliconDriver | Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:04:00.0) (cpuset_lib.cpp:182)
+2025-08-18 19:11:20.379 | warning  |   SiliconDriver | bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind. (cpuset_lib.cpp:463)
+2025-08-18 19:11:20.379 | warning  |   SiliconDriver | ---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893). (sysmem_manager.cpp:198)
+2025-08-18 19:11:20.379 | warning  |   SiliconDriver | bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind. (cpuset_lib.cpp:463)
+2025-08-18 19:11:20.379 | warning  |   SiliconDriver | ---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 1). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893). (sysmem_manager.cpp:198)
+2025-08-18 19:11:20.379 | info     |   SiliconDriver | Harvesting mask for chip 1 is 0x82 (NOC0: 0x82, simulated harvesting mask: 0x0). (cluster.cpp:295)
+2025-08-18 19:11:20.398 | info     |   SiliconDriver | Opening local chip ids/pci ids: {0}/[0] and remote chip ids {1} (cluster.cpp:157)
+2025-08-18 19:11:20.399 | info     |   SiliconDriver | All devices in cluster running firmware version: 18.5.0 (cluster.cpp:138)
+2025-08-18 19:11:20.399 | info     |   SiliconDriver | Software version 6.0.0, Ethernet FW version 6.15.0 (Device 0) (cluster.cpp:935)
+2025-08-18 19:11:20.400 | info     |   SiliconDriver | Software version 6.0.0, Ethernet FW version 6.15.0 (Device 1) (cluster.cpp:935)
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-7.2.2, pluggy-1.6.0 -- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 4.0.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ubuntu/work/yolov12-high-res-tests/tt-metal, configfile: pytest.ini
+plugins: timeout-2.2.0, anyio-4.10.0, github-actions-annotate-failures-0.3.0, dash-2.15.0, xdist-3.6.1, benchmark-4.0.0, split-0.8.2
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 17 items
+
+ssinghal/tests/test_dropout.py::test_dropout[input_shape0] FAILED
+ssinghal/tests/test_dropout.py::test_dropout[input_shape1] 2025-08-18 19:11:22.746 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+FAILED
+ssinghal/tests/test_dropout.py::test_dropout[input_shape2] 2025-08-18 19:11:22.846 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+FAILED
+ssinghal/tests/test_dropout.py::test_dropout[input_shape3] 2025-08-18 19:11:22.932 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+FAILED
+ssinghal/tests/test_dropout.py::test_dropout[input_shape4] 2025-08-18 19:11:23.016 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+FAILED
+ssinghal/tests/test_dropout.py::test_dropout[input_shape5] 2025-08-18 19:11:23.101 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+2025-08-18 19:11:32.971 | critical |          Always | Out of Memory: Not enough space to allocate 4194304000 B L1 buffer across 64 banks, where each bank needs to store 65536000 B (assert.hpp:107)
+SKIPPED (OOM: [1, 1, 64000, 1000] - TT_THROW @ /home/ubuntu/work/yolov12-high-res-tests/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:141: tt::exception
+info:
+Out of Memory: Not enough space to allocate 4194304000 B L1 buffer across 64 banks, where each bank needs to store 65536000 B
+backtrace:
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/libtt_metal.so(+0x2d16a5) [0x7f0ece58b6a5]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, CoreRangeSet const&, std::optional<unsigned int>)
+ --- tt::tt_metal::Allocator::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::Buffer::allocate_impl()
+ --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::Tensor tt::tt_metal::tensor_impl::to_device_mesh_tensor<bfloat16>(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/_ttnncpp.so(_ZN2tt8tt_metal11tensor_impl8dispatchIZNS1_29to_device_mesh_tensor_wrapperIJRKNS0_6TensorERPNS0_11distributed10MeshDeviceERKNS0_12MemoryConfigERN4ttsl10StrongTypeIhN4ttnn10QueueIdTagEEEEEEDaDpOT_EUlTyDpOT0_E_JS6_SA_SD_SJ_EEEDaNS0_8DataTypeEOT_SP_+0x39) [0x7f0ecef57839]
+ --- tt::tt_metal::tensor_ops::tensor_to_device(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- tt::tt_metal::Tensor tt::tt_metal::Tensor::from_span<bfloat16>(std::span<bfloat16 const, 18446744073709551615ul>, tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>, bfloat16)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5edc63) [0x7f0ecffd6c63]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb344) [0x7f0ecffd4344]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb041) [0x7f0ecffd4041]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x517f47) [0x7f0ecff00f47]
+ --- python_env/bin/python(+0x18ae52) [0x556392f25e52]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(+0x198bfb) [0x556392f33bfb]
+ --- python_env/bin/python(_PyObject_Call+0x118) [0x556392f34768]
+ --- python_env/bin/python(+0x19526b) [0x556392f3026b]
+ --- python_env/bin/python(+0x181b1b) [0x556392f1cb1b]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x51099b) [0x7f0ecfef999b]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x807) [0x556392f10a77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(PyObject_Call+0xbb) [0x556392f3455b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac])
+ssinghal/tests/test_dropout.py::test_dropout[input_shape6] 2025-08-18 19:11:33.467 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+2025-08-18 19:11:36.031 | critical |          Always | Out of Memory: Not enough space to allocate 1048576000 B L1 buffer across 64 banks, where each bank needs to store 16384000 B (assert.hpp:107)
+SKIPPED (OOM: [1, 2, 16000, 1000] - TT_THROW @ /home/ubuntu/work/yolov12-high-res-tests/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:141: tt::exception
+info:
+Out of Memory: Not enough space to allocate 1048576000 B L1 buffer across 64 banks, where each bank needs to store 16384000 B
+backtrace:
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/libtt_metal.so(+0x2d16a5) [0x7f0ece58b6a5]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, CoreRangeSet const&, std::optional<unsigned int>)
+ --- tt::tt_metal::Allocator::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::Buffer::allocate_impl()
+ --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::Tensor tt::tt_metal::tensor_impl::to_device_mesh_tensor<bfloat16>(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/_ttnncpp.so(_ZN2tt8tt_metal11tensor_impl8dispatchIZNS1_29to_device_mesh_tensor_wrapperIJRKNS0_6TensorERPNS0_11distributed10MeshDeviceERKNS0_12MemoryConfigERN4ttsl10StrongTypeIhN4ttnn10QueueIdTagEEEEEEDaDpOT_EUlTyDpOT0_E_JS6_SA_SD_SJ_EEEDaNS0_8DataTypeEOT_SP_+0x39) [0x7f0ecef57839]
+ --- tt::tt_metal::tensor_ops::tensor_to_device(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- tt::tt_metal::Tensor tt::tt_metal::Tensor::from_span<bfloat16>(std::span<bfloat16 const, 18446744073709551615ul>, tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>, bfloat16)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5edc63) [0x7f0ecffd6c63]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb344) [0x7f0ecffd4344]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb041) [0x7f0ecffd4041]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x517f47) [0x7f0ecff00f47]
+ --- python_env/bin/python(+0x18ae52) [0x556392f25e52]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(+0x198bfb) [0x556392f33bfb]
+ --- python_env/bin/python(_PyObject_Call+0x118) [0x556392f34768]
+ --- python_env/bin/python(+0x19526b) [0x556392f3026b]
+ --- python_env/bin/python(+0x181b1b) [0x556392f1cb1b]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x51099b) [0x7f0ecfef999b]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x807) [0x556392f10a77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(PyObject_Call+0xbb) [0x556392f3455b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac])
+ssinghal/tests/test_dropout.py::test_dropout[input_shape7] 2025-08-18 19:11:36.154 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+2025-08-18 19:11:36.998 | critical |          Always | Out of Memory: Not enough space to allocate 262144000 B L1 buffer across 64 banks, where each bank needs to store 4096000 B (assert.hpp:107)
+SKIPPED (OOM: [1, 5, 4000, 1000] - TT_THROW @ /home/ubuntu/work/yolov12-high-res-tests/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:141: tt::exception
+info:
+Out of Memory: Not enough space to allocate 262144000 B L1 buffer across 64 banks, where each bank needs to store 4096000 B
+backtrace:
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/libtt_metal.so(+0x2d16a5) [0x7f0ece58b6a5]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, CoreRangeSet const&, std::optional<unsigned int>)
+ --- tt::tt_metal::Allocator::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::Buffer::allocate_impl()
+ --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::Tensor tt::tt_metal::tensor_impl::to_device_mesh_tensor<bfloat16>(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/_ttnncpp.so(_ZN2tt8tt_metal11tensor_impl8dispatchIZNS1_29to_device_mesh_tensor_wrapperIJRKNS0_6TensorERPNS0_11distributed10MeshDeviceERKNS0_12MemoryConfigERN4ttsl10StrongTypeIhN4ttnn10QueueIdTagEEEEEEDaDpOT_EUlTyDpOT0_E_JS6_SA_SD_SJ_EEEDaNS0_8DataTypeEOT_SP_+0x39) [0x7f0ecef57839]
+ --- tt::tt_metal::tensor_ops::tensor_to_device(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- tt::tt_metal::Tensor tt::tt_metal::Tensor::from_span<bfloat16>(std::span<bfloat16 const, 18446744073709551615ul>, tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>, bfloat16)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5edc63) [0x7f0ecffd6c63]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb344) [0x7f0ecffd4344]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb041) [0x7f0ecffd4041]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x517f47) [0x7f0ecff00f47]
+ --- python_env/bin/python(+0x18ae52) [0x556392f25e52]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(+0x198bfb) [0x556392f33bfb]
+ --- python_env/bin/python(_PyObject_Call+0x118) [0x556392f34768]
+ --- python_env/bin/python(+0x19526b) [0x556392f3026b]
+ --- python_env/bin/python(+0x181b1b) [0x556392f1cb1b]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x51099b) [0x7f0ecfef999b]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x807) [0x556392f10a77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(PyObject_Call+0xbb) [0x556392f3455b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac])
+ssinghal/tests/test_dropout.py::test_dropout[input_shape8] 2025-08-18 19:11:37.077 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+FAILED
+ssinghal/tests/test_dropout.py::test_dropout[input_shape9] 2025-08-18 19:11:37.421 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+2025-08-18 19:11:38.186 | critical |          Always | Out of Memory: Not enough space to allocate 267739136 B L1 buffer across 64 banks, where each bank needs to store 4184064 B (assert.hpp:107)
+SKIPPED (OOM: [1334, 4, 49, 49] - TT_THROW @ /home/ubuntu/work/yolov12-high-res-tests/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:141: tt::exception
+info:
+Out of Memory: Not enough space to allocate 267739136 B L1 buffer across 64 banks, where each bank needs to store 4184064 B
+backtrace:
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/libtt_metal.so(+0x2d16a5) [0x7f0ece58b6a5]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, CoreRangeSet const&, std::optional<unsigned int>)
+ --- tt::tt_metal::Allocator::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::Buffer::allocate_impl()
+ --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::Tensor tt::tt_metal::tensor_impl::to_device_mesh_tensor<bfloat16>(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/_ttnncpp.so(_ZN2tt8tt_metal11tensor_impl8dispatchIZNS1_29to_device_mesh_tensor_wrapperIJRKNS0_6TensorERPNS0_11distributed10MeshDeviceERKNS0_12MemoryConfigERN4ttsl10StrongTypeIhN4ttnn10QueueIdTagEEEEEEDaDpOT_EUlTyDpOT0_E_JS6_SA_SD_SJ_EEEDaNS0_8DataTypeEOT_SP_+0x39) [0x7f0ecef57839]
+ --- tt::tt_metal::tensor_ops::tensor_to_device(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- tt::tt_metal::Tensor tt::tt_metal::Tensor::from_span<bfloat16>(std::span<bfloat16 const, 18446744073709551615ul>, tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>, bfloat16)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5edc63) [0x7f0ecffd6c63]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb344) [0x7f0ecffd4344]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb041) [0x7f0ecffd4041]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x517f47) [0x7f0ecff00f47]
+ --- python_env/bin/python(+0x18ae52) [0x556392f25e52]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(+0x198bfb) [0x556392f33bfb]
+ --- python_env/bin/python(_PyObject_Call+0x118) [0x556392f34768]
+ --- python_env/bin/python(+0x19526b) [0x556392f3026b]
+ --- python_env/bin/python(+0x181b1b) [0x556392f1cb1b]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x51099b) [0x7f0ecfef999b]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x807) [0x556392f10a77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(PyObject_Call+0xbb) [0x556392f3455b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac])
+ssinghal/tests/test_dropout.py::test_dropout[input_shape10] 2025-08-18 19:11:38.228 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+FAILED
+ssinghal/tests/test_dropout.py::test_dropout[input_shape11] 2025-08-18 19:11:38.736 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+FAILED
+ssinghal/tests/test_dropout.py::test_dropout[input_shape12] 2025-08-18 19:11:38.880 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+FAILED
+ssinghal/tests/test_dropout.py::test_dropout[input_shape13] 2025-08-18 19:11:39.029 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+2025-08-18 19:11:39.862 | critical |          Always | Out of Memory: Not enough space to allocate 262144000 B L1 buffer across 64 banks, where each bank needs to store 4096000 B (assert.hpp:107)
+SKIPPED (OOM: [1000, 4, 64, 64] - TT_THROW @ /home/ubuntu/work/yolov12-high-res-tests/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:141: tt::exception
+info:
+Out of Memory: Not enough space to allocate 262144000 B L1 buffer across 64 banks, where each bank needs to store 4096000 B
+backtrace:
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/libtt_metal.so(+0x2d16a5) [0x7f0ece58b6a5]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, CoreRangeSet const&, std::optional<unsigned int>)
+ --- tt::tt_metal::Allocator::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::Buffer::allocate_impl()
+ --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::Tensor tt::tt_metal::tensor_impl::to_device_mesh_tensor<bfloat16>(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/_ttnncpp.so(_ZN2tt8tt_metal11tensor_impl8dispatchIZNS1_29to_device_mesh_tensor_wrapperIJRKNS0_6TensorERPNS0_11distributed10MeshDeviceERKNS0_12MemoryConfigERN4ttsl10StrongTypeIhN4ttnn10QueueIdTagEEEEEEDaDpOT_EUlTyDpOT0_E_JS6_SA_SD_SJ_EEEDaNS0_8DataTypeEOT_SP_+0x39) [0x7f0ecef57839]
+ --- tt::tt_metal::tensor_ops::tensor_to_device(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- tt::tt_metal::Tensor tt::tt_metal::Tensor::from_span<bfloat16>(std::span<bfloat16 const, 18446744073709551615ul>, tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>, bfloat16)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5edc63) [0x7f0ecffd6c63]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb344) [0x7f0ecffd4344]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb041) [0x7f0ecffd4041]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x517f47) [0x7f0ecff00f47]
+ --- python_env/bin/python(+0x18ae52) [0x556392f25e52]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(+0x198bfb) [0x556392f33bfb]
+ --- python_env/bin/python(_PyObject_Call+0x118) [0x556392f34768]
+ --- python_env/bin/python(+0x19526b) [0x556392f3026b]
+ --- python_env/bin/python(+0x181b1b) [0x556392f1cb1b]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x51099b) [0x7f0ecfef999b]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x807) [0x556392f10a77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(PyObject_Call+0xbb) [0x556392f3455b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac])
+ssinghal/tests/test_dropout.py::test_dropout[input_shape14] 2025-08-18 19:11:39.904 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+FAILED
+ssinghal/tests/test_dropout.py::test_dropout[input_shape15] 2025-08-18 19:11:40.248 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+FAILED
+ssinghal/tests/test_dropout.py::test_dropout[input_shape16] 2025-08-18 19:11:40.416 | warning  |          Always | Closing and re-initializing MetalContext with same parameters due to force_reinit flag. (metal_context.cpp:77)
+FAILED
+
+=================================== FAILURES ===================================
+__________________________ test_dropout[input_shape0] __________________________
+ssinghal/tests/test_dropout.py:62: in test_dropout
+    raise e
+ssinghal/tests/test_dropout.py:43: in test_dropout
+    ttnn_output = ttnn.dropout(ttnn_input)
+E   AttributeError: module 'ttnn' has no attribute 'dropout'
+__________________________ test_dropout[input_shape1] __________________________
+ssinghal/tests/test_dropout.py:62: in test_dropout
+    raise e
+ssinghal/tests/test_dropout.py:43: in test_dropout
+    ttnn_output = ttnn.dropout(ttnn_input)
+E   AttributeError: module 'ttnn' has no attribute 'dropout'
+__________________________ test_dropout[input_shape2] __________________________
+ssinghal/tests/test_dropout.py:62: in test_dropout
+    raise e
+ssinghal/tests/test_dropout.py:43: in test_dropout
+    ttnn_output = ttnn.dropout(ttnn_input)
+E   AttributeError: module 'ttnn' has no attribute 'dropout'
+__________________________ test_dropout[input_shape3] __________________________
+ssinghal/tests/test_dropout.py:62: in test_dropout
+    raise e
+ssinghal/tests/test_dropout.py:43: in test_dropout
+    ttnn_output = ttnn.dropout(ttnn_input)
+E   AttributeError: module 'ttnn' has no attribute 'dropout'
+__________________________ test_dropout[input_shape4] __________________________
+ssinghal/tests/test_dropout.py:62: in test_dropout
+    raise e
+ssinghal/tests/test_dropout.py:43: in test_dropout
+    ttnn_output = ttnn.dropout(ttnn_input)
+E   AttributeError: module 'ttnn' has no attribute 'dropout'
+__________________________ test_dropout[input_shape8] __________________________
+ssinghal/tests/test_dropout.py:62: in test_dropout
+    raise e
+ssinghal/tests/test_dropout.py:43: in test_dropout
+    ttnn_output = ttnn.dropout(ttnn_input)
+E   AttributeError: module 'ttnn' has no attribute 'dropout'
+_________________________ test_dropout[input_shape10] __________________________
+ssinghal/tests/test_dropout.py:62: in test_dropout
+    raise e
+ssinghal/tests/test_dropout.py:43: in test_dropout
+    ttnn_output = ttnn.dropout(ttnn_input)
+E   AttributeError: module 'ttnn' has no attribute 'dropout'
+_________________________ test_dropout[input_shape11] __________________________
+ssinghal/tests/test_dropout.py:62: in test_dropout
+    raise e
+ssinghal/tests/test_dropout.py:43: in test_dropout
+    ttnn_output = ttnn.dropout(ttnn_input)
+E   AttributeError: module 'ttnn' has no attribute 'dropout'
+_________________________ test_dropout[input_shape12] __________________________
+ssinghal/tests/test_dropout.py:62: in test_dropout
+    raise e
+ssinghal/tests/test_dropout.py:43: in test_dropout
+    ttnn_output = ttnn.dropout(ttnn_input)
+E   AttributeError: module 'ttnn' has no attribute 'dropout'
+_________________________ test_dropout[input_shape14] __________________________
+ssinghal/tests/test_dropout.py:62: in test_dropout
+    raise e
+ssinghal/tests/test_dropout.py:43: in test_dropout
+    ttnn_output = ttnn.dropout(ttnn_input)
+E   AttributeError: module 'ttnn' has no attribute 'dropout'
+_________________________ test_dropout[input_shape15] __________________________
+ssinghal/tests/test_dropout.py:62: in test_dropout
+    raise e
+ssinghal/tests/test_dropout.py:43: in test_dropout
+    ttnn_output = ttnn.dropout(ttnn_input)
+E   AttributeError: module 'ttnn' has no attribute 'dropout'
+_________________________ test_dropout[input_shape16] __________________________
+ssinghal/tests/test_dropout.py:62: in test_dropout
+    raise e
+ssinghal/tests/test_dropout.py:43: in test_dropout
+    ttnn_output = ttnn.dropout(ttnn_input)
+E   AttributeError: module 'ttnn' has no attribute 'dropout'
+- generated xml file: /home/ubuntu/work/yolov12-high-res-tests/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+10.29s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape5]
+2.62s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape6]
+2.16s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape0]
+0.82s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape7]
+0.81s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape13]
+0.74s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape9]
+0.26s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape8]
+0.25s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape14]
+0.24s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape10]
+0.10s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape8]
+0.08s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape15]
+0.08s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape12]
+0.07s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape1]
+0.07s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape6]
+0.07s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape15]
+0.07s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape2]
+0.07s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape5]
+0.07s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape7]
+0.07s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape16]
+0.07s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape3]
+0.07s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape4]
+0.07s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape10]
+0.07s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape9]
+0.07s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape11]
+0.06s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape13]
+0.06s setup    ssinghal/tests/test_dropout.py::test_dropout[input_shape14]
+0.06s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape11]
+0.05s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape12]
+0.05s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape0]
+0.04s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape16]
+0.01s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape1]
+0.01s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape0]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape5]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape12]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape14]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape15]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape13]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape16]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape6]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape8]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape11]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape7]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape9]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape10]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape1]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape4]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape2]
+0.00s teardown ssinghal/tests/test_dropout.py::test_dropout[input_shape3]
+0.00s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape2]
+0.00s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape4]
+0.00s call     ssinghal/tests/test_dropout.py::test_dropout[input_shape3]
+=========================== short test summary info ============================
+SKIPPED [1] ssinghal/tests/test_dropout.py:55: OOM: [1, 1, 64000, 1000] - TT_THROW @ /home/ubuntu/work/yolov12-high-res-tests/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:141: tt::exception
+info:
+Out of Memory: Not enough space to allocate 4194304000 B L1 buffer across 64 banks, where each bank needs to store 65536000 B
+backtrace:
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/libtt_metal.so(+0x2d16a5) [0x7f0ece58b6a5]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, CoreRangeSet const&, std::optional<unsigned int>)
+ --- tt::tt_metal::Allocator::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::Buffer::allocate_impl()
+ --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::Tensor tt::tt_metal::tensor_impl::to_device_mesh_tensor<bfloat16>(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/_ttnncpp.so(_ZN2tt8tt_metal11tensor_impl8dispatchIZNS1_29to_device_mesh_tensor_wrapperIJRKNS0_6TensorERPNS0_11distributed10MeshDeviceERKNS0_12MemoryConfigERN4ttsl10StrongTypeIhN4ttnn10QueueIdTagEEEEEEDaDpOT_EUlTyDpOT0_E_JS6_SA_SD_SJ_EEEDaNS0_8DataTypeEOT_SP_+0x39) [0x7f0ecef57839]
+ --- tt::tt_metal::tensor_ops::tensor_to_device(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- tt::tt_metal::Tensor tt::tt_metal::Tensor::from_span<bfloat16>(std::span<bfloat16 const, 18446744073709551615ul>, tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>, bfloat16)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5edc63) [0x7f0ecffd6c63]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb344) [0x7f0ecffd4344]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb041) [0x7f0ecffd4041]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x517f47) [0x7f0ecff00f47]
+ --- python_env/bin/python(+0x18ae52) [0x556392f25e52]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(+0x198bfb) [0x556392f33bfb]
+ --- python_env/bin/python(_PyObject_Call+0x118) [0x556392f34768]
+ --- python_env/bin/python(+0x19526b) [0x556392f3026b]
+ --- python_env/bin/python(+0x181b1b) [0x556392f1cb1b]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x51099b) [0x7f0ecfef999b]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x807) [0x556392f10a77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(PyObject_Call+0xbb) [0x556392f3455b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+SKIPPED [1] ssinghal/tests/test_dropout.py:55: OOM: [1, 2, 16000, 1000] - TT_THROW @ /home/ubuntu/work/yolov12-high-res-tests/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:141: tt::exception
+info:
+Out of Memory: Not enough space to allocate 1048576000 B L1 buffer across 64 banks, where each bank needs to store 16384000 B
+backtrace:
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/libtt_metal.so(+0x2d16a5) [0x7f0ece58b6a5]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, CoreRangeSet const&, std::optional<unsigned int>)
+ --- tt::tt_metal::Allocator::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::Buffer::allocate_impl()
+ --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::Tensor tt::tt_metal::tensor_impl::to_device_mesh_tensor<bfloat16>(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/_ttnncpp.so(_ZN2tt8tt_metal11tensor_impl8dispatchIZNS1_29to_device_mesh_tensor_wrapperIJRKNS0_6TensorERPNS0_11distributed10MeshDeviceERKNS0_12MemoryConfigERN4ttsl10StrongTypeIhN4ttnn10QueueIdTagEEEEEEDaDpOT_EUlTyDpOT0_E_JS6_SA_SD_SJ_EEEDaNS0_8DataTypeEOT_SP_+0x39) [0x7f0ecef57839]
+ --- tt::tt_metal::tensor_ops::tensor_to_device(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- tt::tt_metal::Tensor tt::tt_metal::Tensor::from_span<bfloat16>(std::span<bfloat16 const, 18446744073709551615ul>, tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>, bfloat16)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5edc63) [0x7f0ecffd6c63]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb344) [0x7f0ecffd4344]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb041) [0x7f0ecffd4041]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x517f47) [0x7f0ecff00f47]
+ --- python_env/bin/python(+0x18ae52) [0x556392f25e52]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(+0x198bfb) [0x556392f33bfb]
+ --- python_env/bin/python(_PyObject_Call+0x118) [0x556392f34768]
+ --- python_env/bin/python(+0x19526b) [0x556392f3026b]
+ --- python_env/bin/python(+0x181b1b) [0x556392f1cb1b]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x51099b) [0x7f0ecfef999b]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x807) [0x556392f10a77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(PyObject_Call+0xbb) [0x556392f3455b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+SKIPPED [1] ssinghal/tests/test_dropout.py:55: OOM: [1, 5, 4000, 1000] - TT_THROW @ /home/ubuntu/work/yolov12-high-res-tests/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:141: tt::exception
+info:
+Out of Memory: Not enough space to allocate 262144000 B L1 buffer across 64 banks, where each bank needs to store 4096000 B
+backtrace:
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/libtt_metal.so(+0x2d16a5) [0x7f0ece58b6a5]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, CoreRangeSet const&, std::optional<unsigned int>)
+ --- tt::tt_metal::Allocator::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::Buffer::allocate_impl()
+ --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::Tensor tt::tt_metal::tensor_impl::to_device_mesh_tensor<bfloat16>(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/_ttnncpp.so(_ZN2tt8tt_metal11tensor_impl8dispatchIZNS1_29to_device_mesh_tensor_wrapperIJRKNS0_6TensorERPNS0_11distributed10MeshDeviceERKNS0_12MemoryConfigERN4ttsl10StrongTypeIhN4ttnn10QueueIdTagEEEEEEDaDpOT_EUlTyDpOT0_E_JS6_SA_SD_SJ_EEEDaNS0_8DataTypeEOT_SP_+0x39) [0x7f0ecef57839]
+ --- tt::tt_metal::tensor_ops::tensor_to_device(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- tt::tt_metal::Tensor tt::tt_metal::Tensor::from_span<bfloat16>(std::span<bfloat16 const, 18446744073709551615ul>, tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>, bfloat16)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5edc63) [0x7f0ecffd6c63]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb344) [0x7f0ecffd4344]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb041) [0x7f0ecffd4041]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x517f47) [0x7f0ecff00f47]
+ --- python_env/bin/python(+0x18ae52) [0x556392f25e52]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(+0x198bfb) [0x556392f33bfb]
+ --- python_env/bin/python(_PyObject_Call+0x118) [0x556392f34768]
+ --- python_env/bin/python(+0x19526b) [0x556392f3026b]
+ --- python_env/bin/python(+0x181b1b) [0x556392f1cb1b]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x51099b) [0x7f0ecfef999b]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x807) [0x556392f10a77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(PyObject_Call+0xbb) [0x556392f3455b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+SKIPPED [1] ssinghal/tests/test_dropout.py:55: OOM: [1334, 4, 49, 49] - TT_THROW @ /home/ubuntu/work/yolov12-high-res-tests/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:141: tt::exception
+info:
+Out of Memory: Not enough space to allocate 267739136 B L1 buffer across 64 banks, where each bank needs to store 4184064 B
+backtrace:
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/libtt_metal.so(+0x2d16a5) [0x7f0ece58b6a5]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, CoreRangeSet const&, std::optional<unsigned int>)
+ --- tt::tt_metal::Allocator::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::Buffer::allocate_impl()
+ --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::Tensor tt::tt_metal::tensor_impl::to_device_mesh_tensor<bfloat16>(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/_ttnncpp.so(_ZN2tt8tt_metal11tensor_impl8dispatchIZNS1_29to_device_mesh_tensor_wrapperIJRKNS0_6TensorERPNS0_11distributed10MeshDeviceERKNS0_12MemoryConfigERN4ttsl10StrongTypeIhN4ttnn10QueueIdTagEEEEEEDaDpOT_EUlTyDpOT0_E_JS6_SA_SD_SJ_EEEDaNS0_8DataTypeEOT_SP_+0x39) [0x7f0ecef57839]
+ --- tt::tt_metal::tensor_ops::tensor_to_device(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- tt::tt_metal::Tensor tt::tt_metal::Tensor::from_span<bfloat16>(std::span<bfloat16 const, 18446744073709551615ul>, tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>, bfloat16)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5edc63) [0x7f0ecffd6c63]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb344) [0x7f0ecffd4344]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb041) [0x7f0ecffd4041]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x517f47) [0x7f0ecff00f47]
+ --- python_env/bin/python(+0x18ae52) [0x556392f25e52]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(+0x198bfb) [0x556392f33bfb]
+ --- python_env/bin/python(_PyObject_Call+0x118) [0x556392f34768]
+ --- python_env/bin/python(+0x19526b) [0x556392f3026b]
+ --- python_env/bin/python(+0x181b1b) [0x556392f1cb1b]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x51099b) [0x7f0ecfef999b]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x807) [0x556392f10a77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(PyObject_Call+0xbb) [0x556392f3455b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+SKIPPED [1] ssinghal/tests/test_dropout.py:55: OOM: [1000, 4, 64, 64] - TT_THROW @ /home/ubuntu/work/yolov12-high-res-tests/tt-metal/tt_metal/impl/allocator/bank_manager.cpp:141: tt::exception
+info:
+Out of Memory: Not enough space to allocate 262144000 B L1 buffer across 64 banks, where each bank needs to store 4096000 B
+backtrace:
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/libtt_metal.so(+0x2d16a5) [0x7f0ece58b6a5]
+ --- tt::tt_metal::BankManager::allocate_buffer(unsigned long, unsigned long, bool, CoreRangeSet const&, std::optional<unsigned int>)
+ --- tt::tt_metal::Allocator::allocate_buffer(tt::tt_metal::Buffer*)
+ --- tt::tt_metal::Buffer::allocate_impl()
+ --- tt::tt_metal::Buffer::create(tt::tt_metal::IDevice*, unsigned long, unsigned long, tt::tt_metal::BufferType, tt::tt_metal::BufferShardingArgs const&, std::optional<bool>, std::optional<ttsl::StrongType<unsigned char, tt::tt_metal::SubDeviceIdTag> >)
+ --- tt::tt_metal::distributed::MeshBuffer::create(std::variant<tt::tt_metal::distributed::ReplicatedBufferConfig, tt::tt_metal::distributed::ShardedBufferConfig> const&, tt::tt_metal::distributed::DeviceLocalBufferConfig const&, tt::tt_metal::distributed::MeshDevice*, std::optional<unsigned long>)
+ --- tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::TensorSpec const&)
+ --- tt::tt_metal::Tensor tt::tt_metal::tensor_impl::to_device_mesh_tensor<bfloat16>(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/build_Release/lib/_ttnncpp.so(_ZN2tt8tt_metal11tensor_impl8dispatchIZNS1_29to_device_mesh_tensor_wrapperIJRKNS0_6TensorERPNS0_11distributed10MeshDeviceERKNS0_12MemoryConfigERN4ttsl10StrongTypeIhN4ttnn10QueueIdTagEEEEEEDaDpOT_EUlTyDpOT0_E_JS6_SA_SD_SJ_EEEDaNS0_8DataTypeEOT_SP_+0x39) [0x7f0ecef57839]
+ --- tt::tt_metal::tensor_ops::tensor_to_device(tt::tt_metal::Tensor const&, tt::tt_metal::distributed::MeshDevice*, tt::tt_metal::MemoryConfig const&, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>)
+ --- tt::tt_metal::Tensor tt::tt_metal::Tensor::from_span<bfloat16>(std::span<bfloat16 const, 18446744073709551615ul>, tt::tt_metal::TensorSpec const&, tt::tt_metal::distributed::MeshDevice*, ttsl::StrongType<unsigned char, ttnn::QueueIdTag>, bfloat16)
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5edc63) [0x7f0ecffd6c63]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb344) [0x7f0ecffd4344]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x5eb041) [0x7f0ecffd4041]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x517f47) [0x7f0ecff00f47]
+ --- python_env/bin/python(+0x18ae52) [0x556392f25e52]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(+0x198bfb) [0x556392f33bfb]
+ --- python_env/bin/python(_PyObject_Call+0x118) [0x556392f34768]
+ --- python_env/bin/python(+0x19526b) [0x556392f3026b]
+ --- python_env/bin/python(+0x181b1b) [0x556392f1cb1b]
+ --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x51099b) [0x7f0ecfef999b]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(PyObject_Call+0x122) [0x556392f345c2]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x807) [0x556392f10a77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(PyObject_Call+0xbb) [0x556392f3455b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x556392f10930]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x556392f11bf7]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x556392f12ceb]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(+0x198921) [0x556392f33921]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x556392f158a3]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+ --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x556392f1b9fd]
+ --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x556392f30a2c]
+ --- python_env/bin/python(+0x29d854) [0x556393038854]
+ --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x556392f1c77b]
+ --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x556392f16b77]
+ --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x556392f266ac]
+FAILED ssinghal/tests/test_dropout.py::test_dropout[input_shape0] - Attribute...
+FAILED ssinghal/tests/test_dropout.py::test_dropout[input_shape1] - Attribute...
+FAILED ssinghal/tests/test_dropout.py::test_dropout[input_shape2] - Attribute...
+FAILED ssinghal/tests/test_dropout.py::test_dropout[input_shape3] - Attribute...
+FAILED ssinghal/tests/test_dropout.py::test_dropout[input_shape4] - Attribute...
+FAILED ssinghal/tests/test_dropout.py::test_dropout[input_shape8] - Attribute...
+FAILED ssinghal/tests/test_dropout.py::test_dropout[input_shape10] - Attribut...
+FAILED ssinghal/tests/test_dropout.py::test_dropout[input_shape11] - Attribut...
+FAILED ssinghal/tests/test_dropout.py::test_dropout[input_shape12] - Attribut...
+FAILED ssinghal/tests/test_dropout.py::test_dropout[input_shape14] - Attribut...
+FAILED ssinghal/tests/test_dropout.py::test_dropout[input_shape15] - Attribut...
+FAILED ssinghal/tests/test_dropout.py::test_dropout[input_shape16] - Attribut...
+======================== 12 failed, 5 skipped in 20.09s ========================
+2025-08-18 19:11:40.980 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:406)

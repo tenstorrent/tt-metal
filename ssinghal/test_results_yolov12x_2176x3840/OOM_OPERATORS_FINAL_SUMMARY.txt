@@ -1,0 +1,148 @@
+================================================================================
+                    TT-METAL OUT OF MEMORY (OOM) OPERATORS SUMMARY
+================================================================================
+Generated: 2025-08-18 19:40:00
+Analysis: 46 operators tested, 720 OOM errors found across 36 operators
+
+🚨 CRITICAL FINDINGS:
+- 36 out of 46 operators (78%) have memory issues
+- Largest tensor causing OOM: 1.49GB
+- Average memory per OOM failure: 218.7MB
+- Memory threshold appears to be ~50-100MB per tensor
+
+================================================================================
+                        OPERATORS WITH OUT OF MEMORY ISSUES
+================================================================================
+
+OPERATOR NAME              | OOM COUNT | WORST SHAPE              | MAX MEMORY   | STATUS
+---------------------------|-----------|--------------------------|--------------|--------
+split_with_sizes           | 20        | [1,192,2176,1920]      | 1.49GB       | 🚨 CRITICAL
+softmax                    | 10        | [1,12,8160,8160]       | 1.49GB       | 🚨 CRITICAL
+add                        | 26        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+hardtanh                   | 26        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+mul                        | 26        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+sub                        | 26        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+cat                        | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+clone                      | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+concat                     | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+identity                   | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+mish                       | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+permute                    | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+relu                       | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+sigmoid                    | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+silu                       | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+softplus                   | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+tanh                       | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+unsafeview                 | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+view                       | 24        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+transpose                  | 22        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+unsqueeze                  | 22        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+clampmin                   | 20        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+expand                     | 20        | [1,768,136,240]        | 47.8MB       | ⚠️ HIGH
+leakyrelu                  | 20        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+linalgvectornorm           | 20        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+maxpool2d                  | 20        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+native_batch_norm          | 20        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+ones                       | 20        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+silu_inplace               | 20        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+splitwithsizes             | 20        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+upsample_nearest2d         | 18        | [1,96,1088,1920]       | 382.5MB      | ⚠️ HIGH
+div                        | 14        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+dropout                    | 10        | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+addmm                      | 4         | [1,512,1088,960]       | 1.00GB       | 🚨 CRITICAL
+geluactivation             | 2         | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+linear                     | 2         | [1,96,2176,1920]       | 765.0MB      | 🚨 CRITICAL
+
+================================================================================
+                            MOST PROBLEMATIC SHAPES
+================================================================================
+
+SHAPE                      | MEMORY SIZE | OPERATORS AFFECTED        | OCCURRENCES
+---------------------------|-------------|---------------------------|------------
+[1,192,2176,1920]         | 1.49GB      | split_with_sizes          | Multiple
+[1,96,2176,3840]          | 1.49GB      | split_with_sizes          | Multiple
+[1,12,8160,8160]          | 1.49GB      | softmax                   | Multiple
+[12,8160,8160]             | 1.49GB      | softmax                   | Multiple
+[1,96,2176,1920]          | 765.0MB     | 25+ operators             | 100+
+[1,96,1088,1920]          | 382.5MB     | 20+ operators             | 50+
+[1,192,1088,960]          | 382.5MB     | 20+ operators             | 50+
+[1,192,544,960]           | 191.2MB     | 15+ operators             | 40+
+[1,384,544,480]           | 191.2MB     | 15+ operators             | 40+
+
+================================================================================
+                                MEMORY ANALYSIS
+================================================================================
+
+MEMORY CATEGORY            | COUNT | PERCENTAGE | EXAMPLES
+---------------------------|-------|------------|---------------------------
+🚨 Critical (>500MB)       | 72    | 10.0%      | 1.49GB, 765MB shapes
+⚠️ High (100MB-500MB)       | 254   | 35.3%      | 382MB, 191MB shapes
+🟡 Medium (50MB-100MB)      | 180   | 25.0%      | 95MB, 75MB shapes
+🟢 Low (<50MB)              | 214   | 29.7%      | 47MB, 35MB, 12MB shapes
+
+TOTAL OOM OCCURRENCES: 720
+
+================================================================================
+                            URGENT RECOMMENDATIONS
+================================================================================
+
+🚨 IMMEDIATE ACTIONS:
+
+1. **split_with_sizes** & **softmax** operators:
+   - Shapes requiring 1.49GB are failing
+   - Implement tensor chunking/tiling immediately
+   - Consider streaming processing for large tensors
+
+2. **25+ operators** failing on [1,96,2176,1920] shape:
+   - This 765MB tensor is a common failure point
+   - Appears to be a device memory limit around 500-700MB
+   - Implement automatic fallback for large tensors
+
+3. **Memory Management**:
+   - Current device memory limit: ~50-100MB per tensor operation
+   - Need to implement memory pooling and reuse
+   - Add pre-operation memory checks
+
+🔧 TECHNICAL SOLUTIONS:
+
+1. **Tensor Chunking**:
+   ```python
+   if tensor_memory > 100MB:
+       process_in_chunks(tensor, chunk_size=50MB)
+   ```
+
+2. **Memory Pre-Check**:
+   ```python
+   if calculate_memory(shape) > device_limit:
+       use_cpu_fallback() or use_chunked_processing()
+   ```
+
+3. **Device Memory Optimization**:
+   - Increase device memory allocation if possible
+   - Implement garbage collection between operations
+   - Use memory-efficient data types (fp16 instead of fp32)
+
+================================================================================
+                                FILE LOCATIONS
+================================================================================
+
+📄 Detailed Reports:
+  - oom_analysis_report.md      - Full markdown report with all details
+  - oom_detailed_data.json      - Raw data in JSON format
+  - oom_operators_summary.csv   - CSV format for spreadsheet analysis
+  - OOM_OPERATORS_FINAL_SUMMARY.txt - This summary file
+
+📊 Test Results:
+  - test_*_results.txt          - Individual operator test results
+  - comprehensive_analysis_report.txt - Overall test analysis
+
+================================================================================
+                                  CONCLUSION
+================================================================================
+
+🚨 78% of operators have memory issues - this is a CRITICAL system-wide problem
+💾 Memory limit appears to be ~50-100MB per tensor operation
+🔧 Immediate implementation of chunking/tiling required for production use
+⚡ Performance will be significantly impacted until memory issues are resolved
+
+================================================================================

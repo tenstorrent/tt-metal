@@ -1,0 +1,4241 @@
+[
+  {
+    "operator": "add",
+    "file_path": "ssinghal/test_results/test_add_results.txt",
+    "total_tests": 14,
+    "passed_tests": 14,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "addmm",
+    "file_path": "ssinghal/test_results/test_addmm_results.txt",
+    "total_tests": 54,
+    "passed_tests": 0,
+    "failed_tests": 54,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [
+      [
+        27,
+        256
+      ],
+      [
+        27,
+        256
+      ],
+      [
+        80,
+        512
+      ],
+      [
+        80,
+        512
+      ],
+      [
+        1000,
+        256
+      ],
+      [
+        1000,
+        256
+      ],
+      [
+        1000,
+        1024
+      ],
+      [
+        1000,
+        1024
+      ],
+      [
+        21000,
+        256
+      ],
+      [
+        21000,
+        256
+      ],
+      [
+        300,
+        256
+      ],
+      [
+        300,
+        256
+      ],
+      [
+        300,
+        4
+      ],
+      [
+        300,
+        4
+      ],
+      [
+        300,
+        512
+      ],
+      [
+        300,
+        512
+      ],
+      [
+        300,
+        1024
+      ],
+      [
+        300,
+        1024
+      ],
+      [
+        1000,
+        32
+      ],
+      [
+        1000,
+        32
+      ],
+      [
+        64000,
+        32
+      ],
+      [
+        64000,
+        32
+      ],
+      [
+        1000,
+        64
+      ],
+      [
+        1000,
+        64
+      ],
+      [
+        16000,
+        64
+      ],
+      [
+        16000,
+        64
+      ],
+      [
+        1000,
+        160
+      ],
+      [
+        1000,
+        160
+      ],
+      [
+        4000,
+        160
+      ],
+      [
+        4000,
+        160
+      ],
+      [
+        65366,
+        128
+      ],
+      [
+        65366,
+        128
+      ],
+      [
+        64000,
+        128
+      ],
+      [
+        64000,
+        128
+      ],
+      [
+        16905,
+        256
+      ],
+      [
+        16905,
+        256
+      ],
+      [
+        16000,
+        256
+      ],
+      [
+        16000,
+        256
+      ],
+      [
+        4704,
+        512
+      ],
+      [
+        4704,
+        512
+      ],
+      [
+        4000,
+        512
+      ],
+      [
+        4000,
+        512
+      ],
+      [
+        4000,
+        2048
+      ],
+      [
+        4000,
+        2048
+      ],
+      [
+        1176,
+        1024
+      ],
+      [
+        1176,
+        1024
+      ],
+      [
+        1000,
+        4096
+      ],
+      [
+        1000,
+        4096
+      ],
+      [
+        16640,
+        256
+      ],
+      [
+        16640,
+        256
+      ],
+      [
+        4480,
+        512
+      ],
+      [
+        4480,
+        512
+      ],
+      [
+        1280,
+        1024
+      ],
+      [
+        1280,
+        1024
+      ],
+      [
+        27,
+        256
+      ],
+      [
+        27,
+        256
+      ],
+      [
+        80,
+        512
+      ],
+      [
+        80,
+        512
+      ],
+      [
+        1000,
+        256
+      ],
+      [
+        1000,
+        256
+      ],
+      [
+        1000,
+        1024
+      ],
+      [
+        1000,
+        1024
+      ],
+      [
+        21000,
+        256
+      ],
+      [
+        21000,
+        256
+      ],
+      [
+        300,
+        256
+      ],
+      [
+        300,
+        256
+      ],
+      [
+        300,
+        4
+      ],
+      [
+        300,
+        4
+      ],
+      [
+        300,
+        512
+      ],
+      [
+        300,
+        512
+      ],
+      [
+        300,
+        1024
+      ],
+      [
+        300,
+        1024
+      ],
+      [
+        1000,
+        32
+      ],
+      [
+        1000,
+        32
+      ],
+      [
+        64000,
+        32
+      ],
+      [
+        64000,
+        32
+      ],
+      [
+        1000,
+        64
+      ],
+      [
+        1000,
+        64
+      ],
+      [
+        16000,
+        64
+      ],
+      [
+        16000,
+        64
+      ],
+      [
+        1000,
+        160
+      ],
+      [
+        1000,
+        160
+      ],
+      [
+        4000,
+        160
+      ],
+      [
+        4000,
+        160
+      ],
+      [
+        65366,
+        128
+      ],
+      [
+        65366,
+        128
+      ],
+      [
+        64000,
+        128
+      ],
+      [
+        64000,
+        128
+      ],
+      [
+        16905,
+        256
+      ],
+      [
+        16905,
+        256
+      ],
+      [
+        16000,
+        256
+      ],
+      [
+        16000,
+        256
+      ],
+      [
+        4704,
+        512
+      ],
+      [
+        4704,
+        512
+      ],
+      [
+        4000,
+        512
+      ],
+      [
+        4000,
+        512
+      ],
+      [
+        4000,
+        2048
+      ],
+      [
+        4000,
+        2048
+      ],
+      [
+        1176,
+        1024
+      ],
+      [
+        1176,
+        1024
+      ],
+      [
+        1000,
+        4096
+      ],
+      [
+        1000,
+        4096
+      ],
+      [
+        16640,
+        256
+      ],
+      [
+        16640,
+        256
+      ],
+      [
+        4480,
+        512
+      ],
+      [
+        4480,
+        512
+      ],
+      [
+        1280,
+        1024
+      ],
+      [
+        1280,
+        1024
+      ]
+    ],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1,
+      "dimension_mismatch": 1
+    },
+    "memory_usage_estimates": [
+      {
+        "shape": [
+          27,
+          256
+        ],
+        "estimated_memory": "13.5KB"
+      },
+      {
+        "shape": [
+          27,
+          256
+        ],
+        "estimated_memory": "13.5KB"
+      },
+      {
+        "shape": [
+          80,
+          512
+        ],
+        "estimated_memory": "80.0KB"
+      },
+      {
+        "shape": [
+          80,
+          512
+        ],
+        "estimated_memory": "80.0KB"
+      },
+      {
+        "shape": [
+          1000,
+          256
+        ],
+        "estimated_memory": "500.0KB"
+      },
+      {
+        "shape": [
+          1000,
+          256
+        ],
+        "estimated_memory": "500.0KB"
+      },
+      {
+        "shape": [
+          1000,
+          1024
+        ],
+        "estimated_memory": "2.0MB"
+      },
+      {
+        "shape": [
+          1000,
+          1024
+        ],
+        "estimated_memory": "2.0MB"
+      },
+      {
+        "shape": [
+          21000,
+          256
+        ],
+        "estimated_memory": "10.3MB"
+      },
+      {
+        "shape": [
+          21000,
+          256
+        ],
+        "estimated_memory": "10.3MB"
+      },
+      {
+        "shape": [
+          300,
+          256
+        ],
+        "estimated_memory": "150.0KB"
+      },
+      {
+        "shape": [
+          300,
+          256
+        ],
+        "estimated_memory": "150.0KB"
+      },
+      {
+        "shape": [
+          300,
+          4
+        ],
+        "estimated_memory": "2.3KB"
+      },
+      {
+        "shape": [
+          300,
+          4
+        ],
+        "estimated_memory": "2.3KB"
+      },
+      {
+        "shape": [
+          300,
+          512
+        ],
+        "estimated_memory": "300.0KB"
+      },
+      {
+        "shape": [
+          300,
+          512
+        ],
+        "estimated_memory": "300.0KB"
+      },
+      {
+        "shape": [
+          300,
+          1024
+        ],
+        "estimated_memory": "600.0KB"
+      },
+      {
+        "shape": [
+          300,
+          1024
+        ],
+        "estimated_memory": "600.0KB"
+      },
+      {
+        "shape": [
+          1000,
+          32
+        ],
+        "estimated_memory": "62.5KB"
+      },
+      {
+        "shape": [
+          1000,
+          32
+        ],
+        "estimated_memory": "62.5KB"
+      },
+      {
+        "shape": [
+          64000,
+          32
+        ],
+        "estimated_memory": "3.9MB"
+      },
+      {
+        "shape": [
+          64000,
+          32
+        ],
+        "estimated_memory": "3.9MB"
+      },
+      {
+        "shape": [
+          1000,
+          64
+        ],
+        "estimated_memory": "125.0KB"
+      },
+      {
+        "shape": [
+          1000,
+          64
+        ],
+        "estimated_memory": "125.0KB"
+      },
+      {
+        "shape": [
+          16000,
+          64
+        ],
+        "estimated_memory": "2.0MB"
+      },
+      {
+        "shape": [
+          16000,
+          64
+        ],
+        "estimated_memory": "2.0MB"
+      },
+      {
+        "shape": [
+          1000,
+          160
+        ],
+        "estimated_memory": "312.5KB"
+      },
+      {
+        "shape": [
+          1000,
+          160
+        ],
+        "estimated_memory": "312.5KB"
+      },
+      {
+        "shape": [
+          4000,
+          160
+        ],
+        "estimated_memory": "1.2MB"
+      },
+      {
+        "shape": [
+          4000,
+          160
+        ],
+        "estimated_memory": "1.2MB"
+      },
+      {
+        "shape": [
+          65366,
+          128
+        ],
+        "estimated_memory": "16.0MB"
+      },
+      {
+        "shape": [
+          65366,
+          128
+        ],
+        "estimated_memory": "16.0MB"
+      },
+      {
+        "shape": [
+          64000,
+          128
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          64000,
+          128
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          16905,
+          256
+        ],
+        "estimated_memory": "8.3MB"
+      },
+      {
+        "shape": [
+          16905,
+          256
+        ],
+        "estimated_memory": "8.3MB"
+      },
+      {
+        "shape": [
+          16000,
+          256
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          16000,
+          256
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          4704,
+          512
+        ],
+        "estimated_memory": "4.6MB"
+      },
+      {
+        "shape": [
+          4704,
+          512
+        ],
+        "estimated_memory": "4.6MB"
+      },
+      {
+        "shape": [
+          4000,
+          512
+        ],
+        "estimated_memory": "3.9MB"
+      },
+      {
+        "shape": [
+          4000,
+          512
+        ],
+        "estimated_memory": "3.9MB"
+      },
+      {
+        "shape": [
+          4000,
+          2048
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          4000,
+          2048
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          1176,
+          1024
+        ],
+        "estimated_memory": "2.3MB"
+      },
+      {
+        "shape": [
+          1176,
+          1024
+        ],
+        "estimated_memory": "2.3MB"
+      },
+      {
+        "shape": [
+          1000,
+          4096
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          1000,
+          4096
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          16640,
+          256
+        ],
+        "estimated_memory": "8.1MB"
+      },
+      {
+        "shape": [
+          16640,
+          256
+        ],
+        "estimated_memory": "8.1MB"
+      },
+      {
+        "shape": [
+          4480,
+          512
+        ],
+        "estimated_memory": "4.4MB"
+      },
+      {
+        "shape": [
+          4480,
+          512
+        ],
+        "estimated_memory": "4.4MB"
+      },
+      {
+        "shape": [
+          1280,
+          1024
+        ],
+        "estimated_memory": "2.5MB"
+      },
+      {
+        "shape": [
+          1280,
+          1024
+        ],
+        "estimated_memory": "2.5MB"
+      },
+      {
+        "shape": [
+          27,
+          256
+        ],
+        "estimated_memory": "13.5KB"
+      },
+      {
+        "shape": [
+          27,
+          256
+        ],
+        "estimated_memory": "13.5KB"
+      },
+      {
+        "shape": [
+          80,
+          512
+        ],
+        "estimated_memory": "80.0KB"
+      },
+      {
+        "shape": [
+          80,
+          512
+        ],
+        "estimated_memory": "80.0KB"
+      },
+      {
+        "shape": [
+          1000,
+          256
+        ],
+        "estimated_memory": "500.0KB"
+      },
+      {
+        "shape": [
+          1000,
+          256
+        ],
+        "estimated_memory": "500.0KB"
+      },
+      {
+        "shape": [
+          1000,
+          1024
+        ],
+        "estimated_memory": "2.0MB"
+      },
+      {
+        "shape": [
+          1000,
+          1024
+        ],
+        "estimated_memory": "2.0MB"
+      },
+      {
+        "shape": [
+          21000,
+          256
+        ],
+        "estimated_memory": "10.3MB"
+      },
+      {
+        "shape": [
+          21000,
+          256
+        ],
+        "estimated_memory": "10.3MB"
+      },
+      {
+        "shape": [
+          300,
+          256
+        ],
+        "estimated_memory": "150.0KB"
+      },
+      {
+        "shape": [
+          300,
+          256
+        ],
+        "estimated_memory": "150.0KB"
+      },
+      {
+        "shape": [
+          300,
+          4
+        ],
+        "estimated_memory": "2.3KB"
+      },
+      {
+        "shape": [
+          300,
+          4
+        ],
+        "estimated_memory": "2.3KB"
+      },
+      {
+        "shape": [
+          300,
+          512
+        ],
+        "estimated_memory": "300.0KB"
+      },
+      {
+        "shape": [
+          300,
+          512
+        ],
+        "estimated_memory": "300.0KB"
+      },
+      {
+        "shape": [
+          300,
+          1024
+        ],
+        "estimated_memory": "600.0KB"
+      },
+      {
+        "shape": [
+          300,
+          1024
+        ],
+        "estimated_memory": "600.0KB"
+      },
+      {
+        "shape": [
+          1000,
+          32
+        ],
+        "estimated_memory": "62.5KB"
+      },
+      {
+        "shape": [
+          1000,
+          32
+        ],
+        "estimated_memory": "62.5KB"
+      },
+      {
+        "shape": [
+          64000,
+          32
+        ],
+        "estimated_memory": "3.9MB"
+      },
+      {
+        "shape": [
+          64000,
+          32
+        ],
+        "estimated_memory": "3.9MB"
+      },
+      {
+        "shape": [
+          1000,
+          64
+        ],
+        "estimated_memory": "125.0KB"
+      },
+      {
+        "shape": [
+          1000,
+          64
+        ],
+        "estimated_memory": "125.0KB"
+      },
+      {
+        "shape": [
+          16000,
+          64
+        ],
+        "estimated_memory": "2.0MB"
+      },
+      {
+        "shape": [
+          16000,
+          64
+        ],
+        "estimated_memory": "2.0MB"
+      },
+      {
+        "shape": [
+          1000,
+          160
+        ],
+        "estimated_memory": "312.5KB"
+      },
+      {
+        "shape": [
+          1000,
+          160
+        ],
+        "estimated_memory": "312.5KB"
+      },
+      {
+        "shape": [
+          4000,
+          160
+        ],
+        "estimated_memory": "1.2MB"
+      },
+      {
+        "shape": [
+          4000,
+          160
+        ],
+        "estimated_memory": "1.2MB"
+      },
+      {
+        "shape": [
+          65366,
+          128
+        ],
+        "estimated_memory": "16.0MB"
+      },
+      {
+        "shape": [
+          65366,
+          128
+        ],
+        "estimated_memory": "16.0MB"
+      },
+      {
+        "shape": [
+          64000,
+          128
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          64000,
+          128
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          16905,
+          256
+        ],
+        "estimated_memory": "8.3MB"
+      },
+      {
+        "shape": [
+          16905,
+          256
+        ],
+        "estimated_memory": "8.3MB"
+      },
+      {
+        "shape": [
+          16000,
+          256
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          16000,
+          256
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          4704,
+          512
+        ],
+        "estimated_memory": "4.6MB"
+      },
+      {
+        "shape": [
+          4704,
+          512
+        ],
+        "estimated_memory": "4.6MB"
+      },
+      {
+        "shape": [
+          4000,
+          512
+        ],
+        "estimated_memory": "3.9MB"
+      },
+      {
+        "shape": [
+          4000,
+          512
+        ],
+        "estimated_memory": "3.9MB"
+      },
+      {
+        "shape": [
+          4000,
+          2048
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          4000,
+          2048
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          1176,
+          1024
+        ],
+        "estimated_memory": "2.3MB"
+      },
+      {
+        "shape": [
+          1176,
+          1024
+        ],
+        "estimated_memory": "2.3MB"
+      },
+      {
+        "shape": [
+          1000,
+          4096
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          1000,
+          4096
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          16640,
+          256
+        ],
+        "estimated_memory": "8.1MB"
+      },
+      {
+        "shape": [
+          16640,
+          256
+        ],
+        "estimated_memory": "8.1MB"
+      },
+      {
+        "shape": [
+          4480,
+          512
+        ],
+        "estimated_memory": "4.4MB"
+      },
+      {
+        "shape": [
+          4480,
+          512
+        ],
+        "estimated_memory": "4.4MB"
+      },
+      {
+        "shape": [
+          1280,
+          1024
+        ],
+        "estimated_memory": "2.5MB"
+      },
+      {
+        "shape": [
+          1280,
+          1024
+        ],
+        "estimated_memory": "2.5MB"
+      }
+    ],
+    "specific_errors": [
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (256 != 27). The shape of first tensor was Shape([27, 256]) and the shape of second tensor was Shape([27, 256])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (512 != 80). The shape of first tensor was Shape([80, 512]) and the shape of second tensor was Shape([80, 512])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (256 != 1000). The shape of first tensor was Shape([1000, 256]) and the shape of second tensor was Shape([1000, 256])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (1024 != 1000). The shape of first tensor was Shape([1000, 1024]) and the shape of second tensor was Shape([1000, 1024])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (256 != 21000). The shape of first tensor was Shape([21000, 256]) and the shape of second tensor was Shape([21000, 256])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (256 != 300). The shape of first tensor was Shape([300, 256]) and the shape of second tensor was Shape([300, 256])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (4 != 300). The shape of first tensor was Shape([300, 4]) and the shape of second tensor was Shape([300, 4])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (512 != 300). The shape of first tensor was Shape([300, 512]) and the shape of second tensor was Shape([300, 512])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (1024 != 300). The shape of first tensor was Shape([300, 1024]) and the shape of second tensor was Shape([300, 1024])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (32 != 1000). The shape of first tensor was Shape([1000, 32]) and the shape of second tensor was Shape([1000, 32])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (32 != 64000). The shape of first tensor was Shape([64000, 32]) and the shape of second tensor was Shape([64000, 32])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (64 != 1000). The shape of first tensor was Shape([1000, 64]) and the shape of second tensor was Shape([1000, 64])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (64 != 16000). The shape of first tensor was Shape([16000, 64]) and the shape of second tensor was Shape([16000, 64])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (160 != 1000). The shape of first tensor was Shape([1000, 160]) and the shape of second tensor was Shape([1000, 160])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (160 != 4000). The shape of first tensor was Shape([4000, 160]) and the shape of second tensor was Shape([4000, 160])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (128 != 65366). The shape of first tensor was Shape([65366, 128]) and the shape of second tensor was Shape([65366, 128])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (128 != 64000). The shape of first tensor was Shape([64000, 128]) and the shape of second tensor was Shape([64000, 128])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (256 != 16905). The shape of first tensor was Shape([16905, 256]) and the shape of second tensor was Shape([16905, 256])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (256 != 16000). The shape of first tensor was Shape([16000, 256]) and the shape of second tensor was Shape([16000, 256])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (512 != 4704). The shape of first tensor was Shape([4704, 512]) and the shape of second tensor was Shape([4704, 512])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (512 != 4000). The shape of first tensor was Shape([4000, 512]) and the shape of second tensor was Shape([4000, 512])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (2048 != 4000). The shape of first tensor was Shape([4000, 2048]) and the shape of second tensor was Shape([4000, 2048])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (1024 != 1176). The shape of first tensor was Shape([1176, 1024]) and the shape of second tensor was Shape([1176, 1024])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (4096 != 1000). The shape of first tensor was Shape([1000, 4096]) and the shape of second tensor was Shape([1000, 4096])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (256 != 16640). The shape of first tensor was Shape([16640, 256]) and the shape of second tensor was Shape([16640, 256])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (512 != 4480). The shape of first tensor was Shape([4480, 512]) and the shape of second tensor was Shape([4480, 512])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (1024 != 1280). The shape of first tensor was Shape([1280, 1024]) and the shape of second tensor was Shape([1280, 1024])) (assert.hpp:107)"
+    ],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "bmm",
+    "file_path": "ssinghal/test_results/test_bmm_results.txt",
+    "total_tests": 0,
+    "passed_tests": 0,
+    "failed_tests": 0,
+    "memory_errors": 0,
+    "timeout_errors": 1,
+    "collection_errors": 1,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "timeout": 1,
+      "collection": 1,
+      "type_error": 1,
+      "syntax_error": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [
+      "ERROR ssinghal/tests/test_bmm.py - TypeError: list indices must be integers o...",
+      "TypeError: list indices must be integers or slices, not tuple",
+      "TypeError: list indices must be integers o..."
+    ],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "cat",
+    "file_path": "ssinghal/test_results/test_cat_results.txt",
+    "total_tests": 16,
+    "passed_tests": 16,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "clamp",
+    "file_path": "ssinghal/test_results/test_clamp_results.txt",
+    "total_tests": 2,
+    "passed_tests": 0,
+    "failed_tests": 2,
+    "memory_errors": 0,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "clampmin",
+    "file_path": "ssinghal/test_results/test_clampmin_results.txt",
+    "total_tests": 20,
+    "passed_tests": 0,
+    "failed_tests": 20,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "clone",
+    "file_path": "ssinghal/test_results/test_clone_results.txt",
+    "total_tests": 16,
+    "passed_tests": 16,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "concat",
+    "file_path": "ssinghal/test_results/test_concat_results.txt",
+    "total_tests": 16,
+    "passed_tests": 16,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "copy",
+    "file_path": "ssinghal/test_results/test_copy_results.txt",
+    "total_tests": 6,
+    "passed_tests": 0,
+    "failed_tests": 6,
+    "memory_errors": 0,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "timeout": 1,
+      "attribute_error": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [
+      "AttributeError(f\"module '{__name__}' has no attribute '{name}'\")",
+      "AttributeError: module 'torch' has no attribute 'copy_'",
+      "AttributeError(f\"module '{__name__}' has no attribute '{name}'\")",
+      "AttributeError: module 'torch' has no attribute 'copy_'",
+      "AttributeError(f\"module '{__name__}' has no attribute '{name}'\")",
+      "AttributeError: module 'torch' has no attribute 'copy_'",
+      "AttributeError:...",
+      "AttributeError:...",
+      "AttributeError:..."
+    ],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "div",
+    "file_path": "ssinghal/test_results/test_div_results.txt",
+    "total_tests": 18,
+    "passed_tests": 18,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "dropout",
+    "file_path": "ssinghal/test_results/test_dropout_results.txt",
+    "total_tests": 24,
+    "passed_tests": 0,
+    "failed_tests": 24,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1,
+      "attribute_error": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [
+      "AttributeError: module 'ttnn' has no attribute 'dropout'",
+      "AttributeError: module 'ttnn' has no attribute 'dropout'",
+      "AttributeError: module 'ttnn' has no attribute 'dropout'",
+      "AttributeError: module 'ttnn' has no attribute 'dropout'",
+      "AttributeError: module 'ttnn' has no attribute 'dropout'",
+      "AttributeError: module 'ttnn' has no attribute 'dropout'",
+      "AttributeError: module 'ttnn' has no attribute 'dropout'",
+      "AttributeError: module 'ttnn' has no attribute 'dropout'",
+      "AttributeError: module 'ttnn' has no attribute 'dropout'",
+      "AttributeError: module 'ttnn' has no attribute 'dropout'",
+      "AttributeError: module 'ttnn' has no attribute 'dropout'",
+      "AttributeError: module 'ttnn' has no attribute 'dropout'"
+    ],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "expand",
+    "file_path": "ssinghal/test_results/test_expand_results.txt",
+    "total_tests": 0,
+    "passed_tests": 0,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [
+      [
+        1,
+        136,
+        240,
+        768
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        1,
+        136,
+        120,
+        1152
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        1,
+        34,
+        60,
+        1152
+      ],
+      [
+        1,
+        32640,
+        384
+      ],
+      [
+        1,
+        8160,
+        768
+      ],
+      [
+        1,
+        272,
+        480,
+        192
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        1,
+        136,
+        240,
+        768
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        1,
+        136,
+        120,
+        1152
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        1,
+        34,
+        60,
+        1152
+      ],
+      [
+        1,
+        32640,
+        384
+      ],
+      [
+        1,
+        8160,
+        768
+      ],
+      [
+        1,
+        272,
+        480,
+        192
+      ]
+    ],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          768
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          120,
+          1152
+        ],
+        "estimated_memory": "35.9MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          34,
+          60,
+          1152
+        ],
+        "estimated_memory": "4.5MB"
+      },
+      {
+        "shape": [
+          1,
+          32640,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          8160,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          272,
+          480,
+          192
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          768
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          120,
+          1152
+        ],
+        "estimated_memory": "35.9MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          34,
+          60,
+          1152
+        ],
+        "estimated_memory": "4.5MB"
+      },
+      {
+        "shape": [
+          1,
+          32640,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          8160,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          272,
+          480,
+          192
+        ],
+        "estimated_memory": "47.8MB"
+      }
+    ],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "gelu",
+    "file_path": "ssinghal/test_results/test_gelu_results.txt",
+    "total_tests": 22,
+    "passed_tests": 22,
+    "failed_tests": 0,
+    "memory_errors": 0,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "geluactivation",
+    "file_path": "ssinghal/test_results/test_geluactivation_results.txt",
+    "total_tests": 14,
+    "passed_tests": 14,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "hardtanh",
+    "file_path": "ssinghal/test_results/test_hardtanh_results.txt",
+    "total_tests": 14,
+    "passed_tests": 14,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "identity",
+    "file_path": "ssinghal/test_results/test_identity_results.txt",
+    "total_tests": 16,
+    "passed_tests": 0,
+    "failed_tests": 16,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1,
+      "attribute_error": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [
+      "AttributeError(",
+      "AttributeError: 'Identity' object has no attribute 'shape'",
+      "AttributeError(",
+      "AttributeError: 'Identity' object has no attribute 'shape'",
+      "AttributeError(",
+      "AttributeError: 'Identity' object has no attribute 'shape'",
+      "AttributeError(",
+      "AttributeError: 'Identity' object has no attribute 'shape'",
+      "AttributeError(",
+      "AttributeError: 'Identity' object has no attribute 'shape'",
+      "AttributeError(",
+      "AttributeError: 'Identity' object has no attribute 'shape'",
+      "AttributeError(",
+      "AttributeError: 'Identity' object has no attribute 'shape'",
+      "AttributeError(",
+      "AttributeError: 'Identity' object has no attribute 'shape'"
+    ],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "leakyrelu",
+    "file_path": "ssinghal/test_results/test_leakyrelu_results.txt",
+    "total_tests": 0,
+    "passed_tests": 0,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [
+      [
+        1,
+        136,
+        240,
+        768
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        1,
+        136,
+        120,
+        1152
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        1,
+        34,
+        60,
+        1152
+      ],
+      [
+        1,
+        32640,
+        384
+      ],
+      [
+        1,
+        8160,
+        768
+      ],
+      [
+        1,
+        272,
+        480,
+        192
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        1,
+        136,
+        240,
+        768
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        1,
+        136,
+        120,
+        1152
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        1,
+        34,
+        60,
+        1152
+      ],
+      [
+        1,
+        32640,
+        384
+      ],
+      [
+        1,
+        8160,
+        768
+      ],
+      [
+        1,
+        272,
+        480,
+        192
+      ]
+    ],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          768
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          120,
+          1152
+        ],
+        "estimated_memory": "35.9MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          34,
+          60,
+          1152
+        ],
+        "estimated_memory": "4.5MB"
+      },
+      {
+        "shape": [
+          1,
+          32640,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          8160,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          272,
+          480,
+          192
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          768
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          120,
+          1152
+        ],
+        "estimated_memory": "35.9MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          34,
+          60,
+          1152
+        ],
+        "estimated_memory": "4.5MB"
+      },
+      {
+        "shape": [
+          1,
+          32640,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          8160,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          272,
+          480,
+          192
+        ],
+        "estimated_memory": "47.8MB"
+      }
+    ],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "linalgvectornorm",
+    "file_path": "ssinghal/test_results/test_linalgvectornorm_results.txt",
+    "total_tests": 20,
+    "passed_tests": 0,
+    "failed_tests": 20,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1,
+      "attribute_error": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [
+      "AttributeError: module 'ttnn' has no attribute 'norm'",
+      "AttributeError: module 'ttnn' has no attribute 'norm'",
+      "AttributeError: module 'ttnn' has no attribute 'norm'",
+      "AttributeError: module 'ttnn' has no attribute 'norm'",
+      "AttributeError: module 'ttnn' has no attribute 'norm'",
+      "AttributeError: module 'ttnn' has no attribute 'norm'",
+      "AttributeError: module 'ttnn' has no attribute 'norm'",
+      "AttributeError: module 'ttnn' has no attribute 'norm'",
+      "AttributeError: module 'ttnn' has no attribute 'norm'",
+      "AttributeError: module 'ttnn' has no attribute 'norm'"
+    ],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "linear",
+    "file_path": "ssinghal/test_results/test_linear_results.txt",
+    "total_tests": 84,
+    "passed_tests": 84,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "log",
+    "file_path": "ssinghal/test_results/test_log_results.txt",
+    "total_tests": 2,
+    "passed_tests": 2,
+    "failed_tests": 0,
+    "memory_errors": 0,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "maxpool2d",
+    "file_path": "ssinghal/test_results/test_maxpool2d_results.txt",
+    "total_tests": 0,
+    "passed_tests": 0,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [
+      [
+        1,
+        136,
+        240,
+        768
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        1,
+        136,
+        120,
+        1152
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        1,
+        34,
+        60,
+        1152
+      ],
+      [
+        1,
+        32640,
+        384
+      ],
+      [
+        1,
+        8160,
+        768
+      ],
+      [
+        1,
+        272,
+        480,
+        192
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        1,
+        136,
+        240,
+        768
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        1,
+        136,
+        120,
+        1152
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        1,
+        34,
+        60,
+        1152
+      ],
+      [
+        1,
+        32640,
+        384
+      ],
+      [
+        1,
+        8160,
+        768
+      ],
+      [
+        1,
+        272,
+        480,
+        192
+      ]
+    ],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          768
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          120,
+          1152
+        ],
+        "estimated_memory": "35.9MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          34,
+          60,
+          1152
+        ],
+        "estimated_memory": "4.5MB"
+      },
+      {
+        "shape": [
+          1,
+          32640,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          8160,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          272,
+          480,
+          192
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          768
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          120,
+          1152
+        ],
+        "estimated_memory": "35.9MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          34,
+          60,
+          1152
+        ],
+        "estimated_memory": "4.5MB"
+      },
+      {
+        "shape": [
+          1,
+          32640,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          8160,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          272,
+          480,
+          192
+        ],
+        "estimated_memory": "47.8MB"
+      }
+    ],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "mean",
+    "file_path": "ssinghal/test_results/test_mean_results.txt",
+    "total_tests": 2,
+    "passed_tests": 2,
+    "failed_tests": 0,
+    "memory_errors": 0,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "mish",
+    "file_path": "ssinghal/test_results/test_mish_results.txt",
+    "total_tests": 16,
+    "passed_tests": 16,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "mm",
+    "file_path": "ssinghal/test_results/test_mm_results.txt",
+    "total_tests": 20,
+    "passed_tests": 0,
+    "failed_tests": 20,
+    "memory_errors": 0,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [
+      [
+        64000,
+        128
+      ],
+      [
+        64000,
+        128
+      ],
+      [
+        16000,
+        256
+      ],
+      [
+        16000,
+        256
+      ],
+      [
+        4000,
+        640
+      ],
+      [
+        4000,
+        640
+      ],
+      [
+        1000,
+        1024
+      ],
+      [
+        1000,
+        1024
+      ],
+      [
+        16000,
+        512
+      ],
+      [
+        16000,
+        512
+      ],
+      [
+        4000,
+        1024
+      ],
+      [
+        4000,
+        1024
+      ],
+      [
+        1000,
+        2048
+      ],
+      [
+        1000,
+        2048
+      ],
+      [
+        16640,
+        256
+      ],
+      [
+        16640,
+        256
+      ],
+      [
+        4480,
+        512
+      ],
+      [
+        4480,
+        512
+      ],
+      [
+        1280,
+        1024
+      ],
+      [
+        1280,
+        1024
+      ],
+      [
+        64000,
+        128
+      ],
+      [
+        64000,
+        128
+      ],
+      [
+        16000,
+        256
+      ],
+      [
+        16000,
+        256
+      ],
+      [
+        4000,
+        640
+      ],
+      [
+        4000,
+        640
+      ],
+      [
+        1000,
+        1024
+      ],
+      [
+        1000,
+        1024
+      ],
+      [
+        16000,
+        512
+      ],
+      [
+        16000,
+        512
+      ],
+      [
+        4000,
+        1024
+      ],
+      [
+        4000,
+        1024
+      ],
+      [
+        1000,
+        2048
+      ],
+      [
+        1000,
+        2048
+      ],
+      [
+        16640,
+        256
+      ],
+      [
+        16640,
+        256
+      ],
+      [
+        4480,
+        512
+      ],
+      [
+        4480,
+        512
+      ],
+      [
+        1280,
+        1024
+      ],
+      [
+        1280,
+        1024
+      ]
+    ],
+    "error_types": {
+      "timeout": 1,
+      "dimension_mismatch": 1
+    },
+    "memory_usage_estimates": [
+      {
+        "shape": [
+          64000,
+          128
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          64000,
+          128
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          16000,
+          256
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          16000,
+          256
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          4000,
+          640
+        ],
+        "estimated_memory": "4.9MB"
+      },
+      {
+        "shape": [
+          4000,
+          640
+        ],
+        "estimated_memory": "4.9MB"
+      },
+      {
+        "shape": [
+          1000,
+          1024
+        ],
+        "estimated_memory": "2.0MB"
+      },
+      {
+        "shape": [
+          1000,
+          1024
+        ],
+        "estimated_memory": "2.0MB"
+      },
+      {
+        "shape": [
+          16000,
+          512
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          16000,
+          512
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          4000,
+          1024
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          4000,
+          1024
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          1000,
+          2048
+        ],
+        "estimated_memory": "3.9MB"
+      },
+      {
+        "shape": [
+          1000,
+          2048
+        ],
+        "estimated_memory": "3.9MB"
+      },
+      {
+        "shape": [
+          16640,
+          256
+        ],
+        "estimated_memory": "8.1MB"
+      },
+      {
+        "shape": [
+          16640,
+          256
+        ],
+        "estimated_memory": "8.1MB"
+      },
+      {
+        "shape": [
+          4480,
+          512
+        ],
+        "estimated_memory": "4.4MB"
+      },
+      {
+        "shape": [
+          4480,
+          512
+        ],
+        "estimated_memory": "4.4MB"
+      },
+      {
+        "shape": [
+          1280,
+          1024
+        ],
+        "estimated_memory": "2.5MB"
+      },
+      {
+        "shape": [
+          1280,
+          1024
+        ],
+        "estimated_memory": "2.5MB"
+      },
+      {
+        "shape": [
+          64000,
+          128
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          64000,
+          128
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          16000,
+          256
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          16000,
+          256
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          4000,
+          640
+        ],
+        "estimated_memory": "4.9MB"
+      },
+      {
+        "shape": [
+          4000,
+          640
+        ],
+        "estimated_memory": "4.9MB"
+      },
+      {
+        "shape": [
+          1000,
+          1024
+        ],
+        "estimated_memory": "2.0MB"
+      },
+      {
+        "shape": [
+          1000,
+          1024
+        ],
+        "estimated_memory": "2.0MB"
+      },
+      {
+        "shape": [
+          16000,
+          512
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          16000,
+          512
+        ],
+        "estimated_memory": "15.6MB"
+      },
+      {
+        "shape": [
+          4000,
+          1024
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          4000,
+          1024
+        ],
+        "estimated_memory": "7.8MB"
+      },
+      {
+        "shape": [
+          1000,
+          2048
+        ],
+        "estimated_memory": "3.9MB"
+      },
+      {
+        "shape": [
+          1000,
+          2048
+        ],
+        "estimated_memory": "3.9MB"
+      },
+      {
+        "shape": [
+          16640,
+          256
+        ],
+        "estimated_memory": "8.1MB"
+      },
+      {
+        "shape": [
+          16640,
+          256
+        ],
+        "estimated_memory": "8.1MB"
+      },
+      {
+        "shape": [
+          4480,
+          512
+        ],
+        "estimated_memory": "4.4MB"
+      },
+      {
+        "shape": [
+          4480,
+          512
+        ],
+        "estimated_memory": "4.4MB"
+      },
+      {
+        "shape": [
+          1280,
+          1024
+        ],
+        "estimated_memory": "2.5MB"
+      },
+      {
+        "shape": [
+          1280,
+          1024
+        ],
+        "estimated_memory": "2.5MB"
+      }
+    ],
+    "specific_errors": [
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (128 != 64000). The shape of first tensor was Shape([64000, 128]) and the shape of second tensor was Shape([64000, 128])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (256 != 16000). The shape of first tensor was Shape([16000, 256]) and the shape of second tensor was Shape([16000, 256])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (640 != 4000). The shape of first tensor was Shape([4000, 640]) and the shape of second tensor was Shape([4000, 640])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (1024 != 1000). The shape of first tensor was Shape([1000, 1024]) and the shape of second tensor was Shape([1000, 1024])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (512 != 16000). The shape of first tensor was Shape([16000, 512]) and the shape of second tensor was Shape([16000, 512])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (1024 != 4000). The shape of first tensor was Shape([4000, 1024]) and the shape of second tensor was Shape([4000, 1024])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (2048 != 1000). The shape of first tensor was Shape([1000, 2048]) and the shape of second tensor was Shape([1000, 2048])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (256 != 16640). The shape of first tensor was Shape([16640, 256]) and the shape of second tensor was Shape([16640, 256])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (512 != 4480). The shape of first tensor was Shape([4480, 512]) and the shape of second tensor was Shape([4480, 512])) (assert.hpp:107)",
+      "critical |          Always | ttnn.matmul: The width of the first tensor must be equal to the height of the second tensor (1024 != 1280). The shape of first tensor was Shape([1280, 1024]) and the shape of second tensor was Shape([1280, 1024])) (assert.hpp:107)"
+    ],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "mul",
+    "file_path": "ssinghal/test_results/test_mul_results.txt",
+    "total_tests": 14,
+    "passed_tests": 14,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "native_batch_norm",
+    "file_path": "ssinghal/test_results/test_native_batch_norm_results.txt",
+    "total_tests": 0,
+    "passed_tests": 0,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [
+      [
+        1,
+        136,
+        240,
+        768
+      ],
+      [
+        768
+      ],
+      [
+        768
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        768
+      ],
+      [
+        768
+      ],
+      [
+        1,
+        136,
+        120,
+        1152
+      ],
+      [
+        1152
+      ],
+      [
+        1152
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        384
+      ],
+      [
+        384
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        768
+      ],
+      [
+        768
+      ],
+      [
+        1,
+        34,
+        60,
+        1152
+      ],
+      [
+        1152
+      ],
+      [
+        1152
+      ],
+      [
+        1,
+        272,
+        480,
+        192
+      ],
+      [
+        192
+      ],
+      [
+        192
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        384
+      ],
+      [
+        384
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        768
+      ],
+      [
+        768
+      ],
+      [
+        1,
+        136,
+        240,
+        768
+      ],
+      [
+        768
+      ],
+      [
+        768
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        768
+      ],
+      [
+        768
+      ],
+      [
+        1,
+        136,
+        120,
+        1152
+      ],
+      [
+        1152
+      ],
+      [
+        1152
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        384
+      ],
+      [
+        384
+      ],
+      [
+        1,
+        34,
+        60,
+        1152
+      ],
+      [
+        1152
+      ],
+      [
+        1152
+      ],
+      [
+        1,
+        272,
+        480,
+        192
+      ],
+      [
+        192
+      ],
+      [
+        192
+      ]
+    ],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          768
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          768
+        ],
+        "estimated_memory": "1.5KB"
+      },
+      {
+        "shape": [
+          768
+        ],
+        "estimated_memory": "1.5KB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          768
+        ],
+        "estimated_memory": "1.5KB"
+      },
+      {
+        "shape": [
+          768
+        ],
+        "estimated_memory": "1.5KB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          120,
+          1152
+        ],
+        "estimated_memory": "35.9MB"
+      },
+      {
+        "shape": [
+          1152
+        ],
+        "estimated_memory": "2.2KB"
+      },
+      {
+        "shape": [
+          1152
+        ],
+        "estimated_memory": "2.2KB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          384
+        ],
+        "estimated_memory": "768B"
+      },
+      {
+        "shape": [
+          384
+        ],
+        "estimated_memory": "768B"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          768
+        ],
+        "estimated_memory": "1.5KB"
+      },
+      {
+        "shape": [
+          768
+        ],
+        "estimated_memory": "1.5KB"
+      },
+      {
+        "shape": [
+          1,
+          34,
+          60,
+          1152
+        ],
+        "estimated_memory": "4.5MB"
+      },
+      {
+        "shape": [
+          1152
+        ],
+        "estimated_memory": "2.2KB"
+      },
+      {
+        "shape": [
+          1152
+        ],
+        "estimated_memory": "2.2KB"
+      },
+      {
+        "shape": [
+          1,
+          272,
+          480,
+          192
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          192
+        ],
+        "estimated_memory": "384B"
+      },
+      {
+        "shape": [
+          192
+        ],
+        "estimated_memory": "384B"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          384
+        ],
+        "estimated_memory": "768B"
+      },
+      {
+        "shape": [
+          384
+        ],
+        "estimated_memory": "768B"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          768
+        ],
+        "estimated_memory": "1.5KB"
+      },
+      {
+        "shape": [
+          768
+        ],
+        "estimated_memory": "1.5KB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          768
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          768
+        ],
+        "estimated_memory": "1.5KB"
+      },
+      {
+        "shape": [
+          768
+        ],
+        "estimated_memory": "1.5KB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          768
+        ],
+        "estimated_memory": "1.5KB"
+      },
+      {
+        "shape": [
+          768
+        ],
+        "estimated_memory": "1.5KB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          120,
+          1152
+        ],
+        "estimated_memory": "35.9MB"
+      },
+      {
+        "shape": [
+          1152
+        ],
+        "estimated_memory": "2.2KB"
+      },
+      {
+        "shape": [
+          1152
+        ],
+        "estimated_memory": "2.2KB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          384
+        ],
+        "estimated_memory": "768B"
+      },
+      {
+        "shape": [
+          384
+        ],
+        "estimated_memory": "768B"
+      },
+      {
+        "shape": [
+          1,
+          34,
+          60,
+          1152
+        ],
+        "estimated_memory": "4.5MB"
+      },
+      {
+        "shape": [
+          1152
+        ],
+        "estimated_memory": "2.2KB"
+      },
+      {
+        "shape": [
+          1152
+        ],
+        "estimated_memory": "2.2KB"
+      },
+      {
+        "shape": [
+          1,
+          272,
+          480,
+          192
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          192
+        ],
+        "estimated_memory": "384B"
+      },
+      {
+        "shape": [
+          192
+        ],
+        "estimated_memory": "384B"
+      }
+    ],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "ones",
+    "file_path": "ssinghal/test_results/test_ones_results.txt",
+    "total_tests": 20,
+    "passed_tests": 20,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "permute",
+    "file_path": "ssinghal/test_results/test_permute_results.txt",
+    "total_tests": 16,
+    "passed_tests": 16,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "relu",
+    "file_path": "ssinghal/test_results/test_relu_results.txt",
+    "total_tests": 16,
+    "passed_tests": 16,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "sigmoid",
+    "file_path": "ssinghal/test_results/test_sigmoid_results.txt",
+    "total_tests": 24,
+    "passed_tests": 24,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "silu_inplace",
+    "file_path": "ssinghal/test_results/test_silu_inplace_results.txt",
+    "total_tests": 20,
+    "passed_tests": 0,
+    "failed_tests": 20,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1,
+      "attribute_error": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [
+      "AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?",
+      "AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?",
+      "AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?",
+      "AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?",
+      "AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?",
+      "AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?",
+      "AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?",
+      "AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?",
+      "AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?",
+      "AttributeError: 'Tensor' object has no attribute 'silu_'. Did you mean: 'fill_'?"
+    ],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "silu",
+    "file_path": "ssinghal/test_results/test_silu_results.txt",
+    "total_tests": 16,
+    "passed_tests": 16,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "softmax",
+    "file_path": "ssinghal/test_results/test_softmax_results.txt",
+    "total_tests": 10,
+    "passed_tests": 0,
+    "failed_tests": 10,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1,
+      "type_error": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [
+      "TypeError: softmax() received an invalid combination of arguments - got (Tensor), but expected one of:",
+      "TypeError: softmax() received an invalid combination of arguments - got (Tensor), but expected one of:",
+      "TypeError: softmax() received an invalid combination of arguments - got (Tensor), but expected one of:",
+      "TypeError: softmax() received an invalid combination of arguments - got (Tensor), but expected one of:",
+      "TypeError: softmax() received an invalid combination of arguments - got (Tensor), but expected one of:",
+      "TypeError...",
+      "TypeError...",
+      "TypeError...",
+      "TypeError...",
+      "TypeError..."
+    ],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "softplus",
+    "file_path": "ssinghal/test_results/test_softplus_results.txt",
+    "total_tests": 16,
+    "passed_tests": 16,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "split",
+    "file_path": "ssinghal/test_results/test_split_results.txt",
+    "total_tests": 14,
+    "passed_tests": 6,
+    "failed_tests": 8,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [
+      "AssertionError: PCC check failed for split output: list(expected_pytorch_result.shape)=[1, 768, 136, 240] vs list(actual_pytorch_result.shape)=[1, 136, 240, 768]",
+      "AssertionError: PCC check failed for split output: list(expected_pytorch_result.shape)=[1, 1152, 136, 120] vs list(actual_pytorch_result.shape)=[1, 136, 120, 1152]",
+      "AssertionError: PCC check failed for split output: list(expected_pytorch_result.shape)=[1, 768, 68, 120] vs list(actual_pytorch_result.shape)=[1, 68, 120, 768]"
+    ],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "split_with_sizes",
+    "file_path": "ssinghal/test_results/test_split_with_sizes_results.txt",
+    "total_tests": 10,
+    "passed_tests": 0,
+    "failed_tests": 10,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "splitwithsizes",
+    "file_path": "ssinghal/test_results/test_splitwithsizes_results.txt",
+    "total_tests": 0,
+    "passed_tests": 0,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [
+      [
+        1,
+        136,
+        240,
+        768
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        1,
+        136,
+        120,
+        1152
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        1,
+        34,
+        60,
+        1152
+      ],
+      [
+        1,
+        32640,
+        384
+      ],
+      [
+        1,
+        8160,
+        768
+      ],
+      [
+        1,
+        272,
+        480,
+        192
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        1,
+        136,
+        240,
+        768
+      ],
+      [
+        1,
+        68,
+        120,
+        768
+      ],
+      [
+        1,
+        136,
+        120,
+        1152
+      ],
+      [
+        1,
+        136,
+        240,
+        384
+      ],
+      [
+        1,
+        34,
+        60,
+        1152
+      ],
+      [
+        1,
+        32640,
+        384
+      ],
+      [
+        1,
+        8160,
+        768
+      ],
+      [
+        1,
+        272,
+        480,
+        192
+      ]
+    ],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          768
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          120,
+          1152
+        ],
+        "estimated_memory": "35.9MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          34,
+          60,
+          1152
+        ],
+        "estimated_memory": "4.5MB"
+      },
+      {
+        "shape": [
+          1,
+          32640,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          8160,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          272,
+          480,
+          192
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          768
+        ],
+        "estimated_memory": "47.8MB"
+      },
+      {
+        "shape": [
+          1,
+          68,
+          120,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          120,
+          1152
+        ],
+        "estimated_memory": "35.9MB"
+      },
+      {
+        "shape": [
+          1,
+          136,
+          240,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          34,
+          60,
+          1152
+        ],
+        "estimated_memory": "4.5MB"
+      },
+      {
+        "shape": [
+          1,
+          32640,
+          384
+        ],
+        "estimated_memory": "23.9MB"
+      },
+      {
+        "shape": [
+          1,
+          8160,
+          768
+        ],
+        "estimated_memory": "12.0MB"
+      },
+      {
+        "shape": [
+          1,
+          272,
+          480,
+          192
+        ],
+        "estimated_memory": "47.8MB"
+      }
+    ],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "stack",
+    "file_path": "ssinghal/test_results/test_stack_results.txt",
+    "total_tests": 0,
+    "passed_tests": 0,
+    "failed_tests": 0,
+    "memory_errors": 0,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [
+      [
+        1,
+        300,
+        80
+      ],
+      [
+        1,
+        300,
+        80
+      ],
+      [
+        1,
+        300,
+        80
+      ],
+      [
+        1,
+        300,
+        80
+      ]
+    ],
+    "error_types": {
+      "timeout": 1
+    },
+    "memory_usage_estimates": [
+      {
+        "shape": [
+          1,
+          300,
+          80
+        ],
+        "estimated_memory": "46.9KB"
+      },
+      {
+        "shape": [
+          1,
+          300,
+          80
+        ],
+        "estimated_memory": "46.9KB"
+      },
+      {
+        "shape": [
+          1,
+          300,
+          80
+        ],
+        "estimated_memory": "46.9KB"
+      },
+      {
+        "shape": [
+          1,
+          300,
+          80
+        ],
+        "estimated_memory": "46.9KB"
+      }
+    ],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "sub",
+    "file_path": "ssinghal/test_results/test_sub_results.txt",
+    "total_tests": 14,
+    "passed_tests": 14,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "tanh",
+    "file_path": "ssinghal/test_results/test_tanh_results.txt",
+    "total_tests": 16,
+    "passed_tests": 16,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "topk",
+    "file_path": "ssinghal/test_results/test_topk_results.txt",
+    "total_tests": 2,
+    "passed_tests": 0,
+    "failed_tests": 2,
+    "memory_errors": 0,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "timeout": 1,
+      "type_error": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [
+      "TypeError: topk() missing 1 required positional arguments: \"k\"",
+      "TypeError: topk..."
+    ],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "transpose",
+    "file_path": "ssinghal/test_results/test_transpose_results.txt",
+    "total_tests": 16,
+    "passed_tests": 16,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "unsafeview",
+    "file_path": "ssinghal/test_results/test_unsafeview_results.txt",
+    "total_tests": 16,
+    "passed_tests": 4,
+    "failed_tests": 12,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "unsqueeze",
+    "file_path": "ssinghal/test_results/test_unsqueeze_results.txt",
+    "total_tests": 16,
+    "passed_tests": 16,
+    "failed_tests": 0,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "file_path": "ssinghal/test_results/test_upsample_nearest2d_results.txt",
+    "total_tests": 12,
+    "passed_tests": 0,
+    "failed_tests": 12,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  },
+  {
+    "operator": "view",
+    "file_path": "ssinghal/test_results/test_view_results.txt",
+    "total_tests": 16,
+    "passed_tests": 4,
+    "failed_tests": 12,
+    "memory_errors": 1,
+    "timeout_errors": 1,
+    "collection_errors": 0,
+    "other_errors": 0,
+    "input_shapes": [],
+    "error_types": {
+      "memory": 1,
+      "timeout": 1
+    },
+    "memory_usage_estimates": [],
+    "specific_errors": [],
+    "test_duration": 300.0
+  }
+]

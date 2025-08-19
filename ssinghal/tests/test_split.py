@@ -8,27 +8,31 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
     "input_shape,split_size,dim",
     [
         # YOLOv12x ultra-high resolution (2176x3840) split operations from graph.py
-        ([1, 192, 1088, 1920], 96, 1),    # C3k2 layer: split 192 channels into 2x96
-        ([1, 384, 544, 960], 192, 1),     # C3k2 layer: split 384 channels into 2x192
-        ([1, 768, 272, 480], 384, 1),     # C3k2 layer: split 768 channels into 2x384
-        ([1, 4, 171360], 2, 1),           # Detection head: split 4 channels into 2x2
-        
+        ([1, 192, 1088, 1920], 96, 1),  # C3k2 layer: split 192 channels into 2x96
+        ([1, 384, 544, 960], 192, 1),  # C3k2 layer: split 384 channels into 2x192
+        ([1, 768, 272, 480], 384, 1),  # C3k2 layer: split 768 channels into 2x384
+        ([1, 4, 171360], 2, 1),  # Detection head: split 4 channels into 2x2
         # Additional YOLOv12x feature map split patterns
-        ([1, 96, 2176, 3840], 48, 1),     # Ultra-high-res feature maps
-        ([1, 192, 1088, 1920], 96, 1),    # High-res feature maps
-        ([1, 384, 544, 960], 192, 1),     # Medium-res feature maps
-        ([1, 768, 136, 240], 384, 1),     # Lower-res feature maps
-        ([1, 1152, 136, 120], 576, 1),    # Attention feature maps
-        
+        ([1, 96, 2176, 3840], 48, 1),  # Ultra-high-res feature maps
+        ([1, 192, 1088, 1920], 96, 1),  # High-res feature maps
+        ([1, 384, 544, 960], 192, 1),  # Medium-res feature maps
+        ([1, 768, 136, 240], 384, 1),  # Lower-res feature maps
+        ([1, 1152, 136, 120], 576, 1),  # Attention feature maps
         # Flattened attention and detection head splits
-        ([1, 32640, 384], 16320, 1),      # Large flattened attention split
-        ([1, 8160, 768], 4080, 1),        # Medium flattened feature split
-        ([1, 2040, 512], 1020, 1),        # Smaller feature split
-        
+        ([1, 32640, 384], 16320, 1),  # Large flattened attention split
+        ([1, 8160, 768], 4080, 1),  # Medium flattened feature split
+        ([1, 2040, 512], 1020, 1),  # Smaller feature split
         # Various split dimensions for robustness
-        ([1, 3, 2176, 3840], 1, 1),       # Split input channels
-        ([1, 96, 1088, 1920], 24, 1),     # Quarter channel splits
-        ([1, 768, 68, 120], 256, 1),      # Third channel splits
+        ([1, 3, 2176, 3840], 1, 1),  # Split input channels
+        ([1, 96, 1088, 1920], 24, 1),  # Quarter channel splits
+        ([1, 768, 68, 120], 256, 1),  # Third channel splits
+        # 8K YOLOv12x ultra-high resolution split operations
+        ([1, 3, 4320, 7680], 1, 1),  # Split 8K input channels
+        ([1, 96, 2160, 3840], 48, 1),  # Split 8K first conv channels
+        ([1, 192, 1080, 1920], 96, 1),  # Split 8K second conv channels
+        ([1, 384, 540, 960], 192, 1),  # Split 8K third conv channels
+        ([1, 768, 270, 480], 384, 1),  # Split 8K fourth conv channels
+        ([1, 1536, 135, 240], 768, 1),  # Split 8K fifth conv channels
     ],
 )
 def test_split(device, input_shape, split_size, dim):

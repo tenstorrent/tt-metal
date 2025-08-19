@@ -1,0 +1,8612 @@
+[
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      1152,
+      136,
+      120
+    ],
+    "memory_bytes": 37601280,
+    "memory_readable": "35.9MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      1152,
+      136,
+      120
+    ],
+    "memory_bytes": 37601280,
+    "memory_readable": "35.9MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "add",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_add_results.txt"
+  },
+  {
+    "operator": "addmm",
+    "shape": [
+      64000,
+      512
+    ],
+    "memory_bytes": 65536000,
+    "memory_readable": "62.5MB",
+    "file_source": "ssinghal/test_results/test_addmm_results.txt"
+  },
+  {
+    "operator": "addmm",
+    "shape": [
+      16000,
+      1024
+    ],
+    "memory_bytes": 32768000,
+    "memory_readable": "31.2MB",
+    "file_source": "ssinghal/test_results/test_addmm_results.txt"
+  },
+  {
+    "operator": "addmm",
+    "shape": [
+      64000,
+      512
+    ],
+    "memory_bytes": 65536000,
+    "memory_readable": "62.5MB",
+    "file_source": "ssinghal/test_results/test_addmm_results.txt"
+  },
+  {
+    "operator": "addmm",
+    "shape": [
+      16000,
+      1024
+    ],
+    "memory_bytes": 32768000,
+    "memory_readable": "31.2MB",
+    "file_source": "ssinghal/test_results/test_addmm_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "cat",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_cat_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clampmin",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_clampmin_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "clone",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_clone_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "concat",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_concat_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      1,
+      1152,
+      136,
+      120
+    ],
+    "memory_bytes": 37601280,
+    "memory_readable": "35.9MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      12,
+      32640,
+      96
+    ],
+    "memory_bytes": 75202560,
+    "memory_readable": "71.7MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      1,
+      1152,
+      136,
+      120
+    ],
+    "memory_bytes": 37601280,
+    "memory_readable": "35.9MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "div",
+    "shape": [
+      12,
+      32640,
+      96
+    ],
+    "memory_bytes": 75202560,
+    "memory_readable": "71.7MB",
+    "file_source": "ssinghal/test_results/test_div_results.txt"
+  },
+  {
+    "operator": "dropout",
+    "shape": [
+      1,
+      1,
+      64000,
+      1000
+    ],
+    "memory_bytes": 128000000,
+    "memory_readable": "122.1MB",
+    "file_source": "ssinghal/test_results/test_dropout_results.txt"
+  },
+  {
+    "operator": "dropout",
+    "shape": [
+      1,
+      2,
+      16000,
+      1000
+    ],
+    "memory_bytes": 64000000,
+    "memory_readable": "61.0MB",
+    "file_source": "ssinghal/test_results/test_dropout_results.txt"
+  },
+  {
+    "operator": "dropout",
+    "shape": [
+      1,
+      5,
+      4000,
+      1000
+    ],
+    "memory_bytes": 40000000,
+    "memory_readable": "38.1MB",
+    "file_source": "ssinghal/test_results/test_dropout_results.txt"
+  },
+  {
+    "operator": "dropout",
+    "shape": [
+      1334,
+      4,
+      49,
+      49
+    ],
+    "memory_bytes": 25623472,
+    "memory_readable": "24.4MB",
+    "file_source": "ssinghal/test_results/test_dropout_results.txt"
+  },
+  {
+    "operator": "dropout",
+    "shape": [
+      1000,
+      4,
+      64,
+      64
+    ],
+    "memory_bytes": 32768000,
+    "memory_readable": "31.2MB",
+    "file_source": "ssinghal/test_results/test_dropout_results.txt"
+  },
+  {
+    "operator": "dropout",
+    "shape": [
+      1,
+      1,
+      64000,
+      1000
+    ],
+    "memory_bytes": 128000000,
+    "memory_readable": "122.1MB",
+    "file_source": "ssinghal/test_results/test_dropout_results.txt"
+  },
+  {
+    "operator": "dropout",
+    "shape": [
+      1,
+      2,
+      16000,
+      1000
+    ],
+    "memory_bytes": 64000000,
+    "memory_readable": "61.0MB",
+    "file_source": "ssinghal/test_results/test_dropout_results.txt"
+  },
+  {
+    "operator": "dropout",
+    "shape": [
+      1,
+      5,
+      4000,
+      1000
+    ],
+    "memory_bytes": 40000000,
+    "memory_readable": "38.1MB",
+    "file_source": "ssinghal/test_results/test_dropout_results.txt"
+  },
+  {
+    "operator": "dropout",
+    "shape": [
+      1334,
+      4,
+      49,
+      49
+    ],
+    "memory_bytes": 25623472,
+    "memory_readable": "24.4MB",
+    "file_source": "ssinghal/test_results/test_dropout_results.txt"
+  },
+  {
+    "operator": "dropout",
+    "shape": [
+      1000,
+      4,
+      64,
+      64
+    ],
+    "memory_bytes": 32768000,
+    "memory_readable": "31.2MB",
+    "file_source": "ssinghal/test_results/test_dropout_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "expand",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_expand_results.txt"
+  },
+  {
+    "operator": "geluactivation",
+    "shape": [
+      1,
+      64000,
+      512
+    ],
+    "memory_bytes": 65536000,
+    "memory_readable": "62.5MB",
+    "file_source": "ssinghal/test_results/test_geluactivation_results.txt"
+  },
+  {
+    "operator": "geluactivation",
+    "shape": [
+      1,
+      64000,
+      512
+    ],
+    "memory_bytes": 65536000,
+    "memory_readable": "62.5MB",
+    "file_source": "ssinghal/test_results/test_geluactivation_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      1152,
+      136,
+      120
+    ],
+    "memory_bytes": 37601280,
+    "memory_readable": "35.9MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      1152,
+      136,
+      120
+    ],
+    "memory_bytes": 37601280,
+    "memory_readable": "35.9MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "hardtanh",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_hardtanh_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "identity",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_identity_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "leakyrelu",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_leakyrelu_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linalgvectornorm",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_linalgvectornorm_results.txt"
+  },
+  {
+    "operator": "linear",
+    "shape": [
+      1,
+      8000
+    ],
+    "memory_bytes": 16000,
+    "memory_readable": "15.6KB",
+    "file_source": "ssinghal/test_results/test_linear_results.txt"
+  },
+  {
+    "operator": "linear",
+    "shape": [
+      1,
+      8000
+    ],
+    "memory_bytes": 16000,
+    "memory_readable": "15.6KB",
+    "file_source": "ssinghal/test_results/test_linear_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "maxpool2d",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_maxpool2d_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mish",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_mish_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      1152,
+      136,
+      120
+    ],
+    "memory_bytes": 37601280,
+    "memory_readable": "35.9MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      1152,
+      136,
+      120
+    ],
+    "memory_bytes": 37601280,
+    "memory_readable": "35.9MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "mul",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_mul_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "native_batch_norm",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_native_batch_norm_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "ones",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_ones_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "permute",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_permute_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "relu",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_relu_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "sigmoid",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_sigmoid_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu_inplace",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_silu_inplace_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "silu",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_silu_results.txt"
+  },
+  {
+    "operator": "softmax",
+    "shape": [
+      1,
+      12,
+      8160,
+      8160
+    ],
+    "memory_bytes": 1598054400,
+    "memory_readable": "1.49GB",
+    "file_source": "ssinghal/test_results/test_softmax_results.txt"
+  },
+  {
+    "operator": "softmax",
+    "shape": [
+      1,
+      12,
+      32640,
+      384
+    ],
+    "memory_bytes": 300810240,
+    "memory_readable": "286.9MB",
+    "file_source": "ssinghal/test_results/test_softmax_results.txt"
+  },
+  {
+    "operator": "softmax",
+    "shape": [
+      1,
+      8,
+      4080,
+      4080
+    ],
+    "memory_bytes": 266342400,
+    "memory_readable": "254.0MB",
+    "file_source": "ssinghal/test_results/test_softmax_results.txt"
+  },
+  {
+    "operator": "softmax",
+    "shape": [
+      12,
+      8160,
+      8160
+    ],
+    "memory_bytes": 1598054400,
+    "memory_readable": "1.49GB",
+    "file_source": "ssinghal/test_results/test_softmax_results.txt"
+  },
+  {
+    "operator": "softmax",
+    "shape": [
+      1,
+      1152,
+      68120
+    ],
+    "memory_bytes": 156948480,
+    "memory_readable": "149.7MB",
+    "file_source": "ssinghal/test_results/test_softmax_results.txt"
+  },
+  {
+    "operator": "softmax",
+    "shape": [
+      1,
+      12,
+      8160,
+      8160
+    ],
+    "memory_bytes": 1598054400,
+    "memory_readable": "1.49GB",
+    "file_source": "ssinghal/test_results/test_softmax_results.txt"
+  },
+  {
+    "operator": "softmax",
+    "shape": [
+      1,
+      12,
+      32640,
+      384
+    ],
+    "memory_bytes": 300810240,
+    "memory_readable": "286.9MB",
+    "file_source": "ssinghal/test_results/test_softmax_results.txt"
+  },
+  {
+    "operator": "softmax",
+    "shape": [
+      1,
+      8,
+      4080,
+      4080
+    ],
+    "memory_bytes": 266342400,
+    "memory_readable": "254.0MB",
+    "file_source": "ssinghal/test_results/test_softmax_results.txt"
+  },
+  {
+    "operator": "softmax",
+    "shape": [
+      12,
+      8160,
+      8160
+    ],
+    "memory_bytes": 1598054400,
+    "memory_readable": "1.49GB",
+    "file_source": "ssinghal/test_results/test_softmax_results.txt"
+  },
+  {
+    "operator": "softmax",
+    "shape": [
+      1,
+      1152,
+      68120
+    ],
+    "memory_bytes": 156948480,
+    "memory_readable": "149.7MB",
+    "file_source": "ssinghal/test_results/test_softmax_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "softplus",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_softplus_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      192,
+      2176,
+      1920
+    ],
+    "memory_bytes": 1604321280,
+    "memory_readable": "1.49GB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      384,
+      1088,
+      960
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      768,
+      544,
+      480
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      1152,
+      272,
+      240
+    ],
+    "memory_bytes": 150405120,
+    "memory_readable": "143.4MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      96,
+      2176,
+      3840
+    ],
+    "memory_bytes": 1604321280,
+    "memory_readable": "1.49GB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      192,
+      1088,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      384,
+      544,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      192,
+      2176,
+      1920
+    ],
+    "memory_bytes": 1604321280,
+    "memory_readable": "1.49GB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      384,
+      1088,
+      960
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      768,
+      544,
+      480
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      1152,
+      272,
+      240
+    ],
+    "memory_bytes": 150405120,
+    "memory_readable": "143.4MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      96,
+      2176,
+      3840
+    ],
+    "memory_bytes": 1604321280,
+    "memory_readable": "1.49GB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      192,
+      1088,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "split_with_sizes",
+    "shape": [
+      1,
+      384,
+      544,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_split_with_sizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "splitwithsizes",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_splitwithsizes_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      1152,
+      136,
+      120
+    ],
+    "memory_bytes": 37601280,
+    "memory_readable": "35.9MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      1152,
+      136,
+      120
+    ],
+    "memory_bytes": 37601280,
+    "memory_readable": "35.9MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "sub",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_sub_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "tanh",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_tanh_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      12,
+      32640,
+      768
+    ],
+    "memory_bytes": 601620480,
+    "memory_readable": "573.8MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      96,
+      8160,
+      384
+    ],
+    "memory_bytes": 601620480,
+    "memory_readable": "573.8MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      12,
+      32640,
+      768
+    ],
+    "memory_bytes": 601620480,
+    "memory_readable": "573.8MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "transpose",
+    "shape": [
+      96,
+      8160,
+      384
+    ],
+    "memory_bytes": 601620480,
+    "memory_readable": "573.8MB",
+    "file_source": "ssinghal/test_results/test_transpose_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsafeview",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_unsafeview_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "unsqueeze",
+    "shape": [
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_unsqueeze_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      384,
+      136,
+      240
+    ],
+    "memory_bytes": 25067520,
+    "memory_readable": "23.9MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      384,
+      68,
+      120
+    ],
+    "memory_bytes": 6266880,
+    "memory_readable": "6.0MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      192,
+      136,
+      240
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      96,
+      544,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      192,
+      272,
+      240
+    ],
+    "memory_bytes": 25067520,
+    "memory_readable": "23.9MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      384,
+      136,
+      240
+    ],
+    "memory_bytes": 25067520,
+    "memory_readable": "23.9MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      384,
+      68,
+      120
+    ],
+    "memory_bytes": 6266880,
+    "memory_readable": "6.0MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      192,
+      136,
+      240
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      96,
+      544,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "upsample_nearest2d",
+    "shape": [
+      1,
+      192,
+      272,
+      240
+    ],
+    "memory_bytes": 25067520,
+    "memory_readable": "23.9MB",
+    "file_source": "ssinghal/test_results/test_upsample_nearest2d_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      3,
+      2176,
+      3840
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      96,
+      1088,
+      1920
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      192,
+      544,
+      960
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      384,
+      272,
+      480
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      768,
+      136,
+      240
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      96,
+      2176,
+      1920
+    ],
+    "memory_bytes": 802160640,
+    "memory_readable": "765.0MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      192,
+      1088,
+      960
+    ],
+    "memory_bytes": 401080320,
+    "memory_readable": "382.5MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      384,
+      544,
+      480
+    ],
+    "memory_bytes": 200540160,
+    "memory_readable": "191.2MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      768,
+      272,
+      240
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      3,
+      1088,
+      1920
+    ],
+    "memory_bytes": 12533760,
+    "memory_readable": "12.0MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      96,
+      544,
+      960
+    ],
+    "memory_bytes": 100270080,
+    "memory_readable": "95.6MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  },
+  {
+    "operator": "view",
+    "shape": [
+      1,
+      192,
+      272,
+      480
+    ],
+    "memory_bytes": 50135040,
+    "memory_readable": "47.8MB",
+    "file_source": "ssinghal/test_results/test_view_results.txt"
+  }
+]

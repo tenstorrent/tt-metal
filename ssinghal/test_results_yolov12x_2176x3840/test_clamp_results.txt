@@ -1,0 +1,151 @@
+2025-08-18 19:08:49.031 | DEBUG    | ttnn:<module>:83 - Initial ttnn.CONFIG:
+Config{cache_path=/home/ubuntu/.cache/ttnn,model_cache_path=/home/ubuntu/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,std::nullopt}
+2025-08-18 19:08:49.141 | info     |   SiliconDriver | Opened PCI device 0; KMD version: 2.3.0; API: 2; IOMMU: disabled (pci_device.cpp:197)
+2025-08-18 19:08:49.153 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:192)
+2025-08-18 19:08:49.153 | info     |   SiliconDriver | Opened PCI device 0; KMD version: 2.3.0; API: 2; IOMMU: disabled (pci_device.cpp:197)
+2025-08-18 19:08:49.165 | info     |   SiliconDriver | Opened PCI device 0; KMD version: 2.3.0; API: 2; IOMMU: disabled (pci_device.cpp:197)
+2025-08-18 19:08:49.177 | info     |   SiliconDriver | Harvesting mask for chip 0 is 0x18 (NOC0: 0x18, simulated harvesting mask: 0x0). (cluster.cpp:295)
+2025-08-18 19:08:49.193 | info     |   SiliconDriver | Opened PCI device 0; KMD version: 2.3.0; API: 2; IOMMU: disabled (pci_device.cpp:197)
+2025-08-18 19:08:49.210 | warning  |   SiliconDriver | init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:04:00.0) (cpuset_lib.cpp:578)
+2025-08-18 19:08:49.211 | warning  |   SiliconDriver | Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:04:00.0) (cpuset_lib.cpp:182)
+2025-08-18 19:08:49.211 | warning  |   SiliconDriver | bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind. (cpuset_lib.cpp:463)
+2025-08-18 19:08:49.211 | warning  |   SiliconDriver | ---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893). (sysmem_manager.cpp:198)
+2025-08-18 19:08:49.211 | warning  |   SiliconDriver | bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind. (cpuset_lib.cpp:463)
+2025-08-18 19:08:49.211 | warning  |   SiliconDriver | ---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 1). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893). (sysmem_manager.cpp:198)
+2025-08-18 19:08:49.211 | info     |   SiliconDriver | Harvesting mask for chip 1 is 0x82 (NOC0: 0x82, simulated harvesting mask: 0x0). (cluster.cpp:295)
+2025-08-18 19:08:49.230 | info     |   SiliconDriver | Opening local chip ids/pci ids: {0}/[0] and remote chip ids {1} (cluster.cpp:157)
+2025-08-18 19:08:49.231 | info     |   SiliconDriver | All devices in cluster running firmware version: 18.5.0 (cluster.cpp:138)
+2025-08-18 19:08:49.231 | info     |   SiliconDriver | Software version 6.0.0, Ethernet FW version 6.15.0 (Device 0) (cluster.cpp:935)
+2025-08-18 19:08:49.232 | info     |   SiliconDriver | Software version 6.0.0, Ethernet FW version 6.15.0 (Device 1) (cluster.cpp:935)
+============================= test session starts ==============================
+platform linux -- Python 3.10.12, pytest-7.2.2, pluggy-1.6.0 -- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 4.0.0 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /home/ubuntu/work/yolov12-high-res-tests/tt-metal, configfile: pytest.ini
+plugins: timeout-2.2.0, anyio-4.10.0, github-actions-annotate-failures-0.3.0, dash-2.15.0, xdist-3.6.1, benchmark-4.0.0, split-0.8.2
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 1 item
+
+ssinghal/tests/test_clamp.py::test_clamp[input_shape0] 2025-08-18 19:08:51.453 | critical |          Always | Only one of 'min' or 'max' can be None. Please provide one value (assert.hpp:107)
+FAILED
+
+=================================== FAILURES ===================================
+___________________________ test_clamp[input_shape0] ___________________________
+ssinghal/tests/test_clamp.py:36: in test_clamp
+    raise e
+ssinghal/tests/test_clamp.py:22: in test_clamp
+    ttnn_output = ttnn.clip(ttnn_input)
+ttnn/ttnn/decorators.py:334: in __call__
+    return self.function(*function_args, **function_kwargs)
+E   RuntimeError: TT_FATAL @ /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_composite_op.cpp:343: (max.has_value() || min.has_value())
+E   info:
+E   Only one of 'min' or 'max' can be None. Please provide one value
+E   backtrace:
+E    --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x64a0a8) [0x7fafe821b0a8]
+E    --- ttnn::operations::unary::ExecuteUnaryCompositeClamp::invoke(tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor>, std::optional<tt::tt_metal::Tensor>, std::optional<tt::tt_metal::MemoryConfig> const&)
+E    --- ttnn::operations::unary::ExecuteUnaryCompositeClip::invoke(tt::tt_metal::Tensor const&, std::optional<tt::tt_metal::Tensor>, std::optional<tt::tt_metal::Tensor>, std::optional<tt::tt_metal::MemoryConfig> const&)
+E    --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0xb9fb2b) [0x7fafe8770b2b]
+E    --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0xb9f787) [0x7fafe8770787]
+E    --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0xae4314) [0x7fafe86b5314]
+E    --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0xae4138) [0x7fafe86b5138]
+E    --- /home/ubuntu/work/yolov12-high-res-tests/tt-metal/ttnn/ttnn/_ttnn.so(+0x517b15) [0x7fafe80e8b15]
+E    --- python_env/bin/python(+0x18ae52) [0x55f03932de52]
+E    --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x55f03932477b]
+E    --- python_env/bin/python(+0x198d50) [0x55f03933bd50]
+E    --- python_env/bin/python(+0x29d87f) [0x55f03944087f]
+E    --- python_env/bin/python(PyObject_Call+0xbb) [0x55f03933c55b]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x55f03931aceb]
+E    --- python_env/bin/python(_PyObject_FastCallDictTstate+0xc4) [0x55f039323954]
+E    --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x55f039338a2c]
+E    --- python_env/bin/python(+0x29d854) [0x55f039440854]
+E    --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x55f03932477b]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5f39) [0x55f03931e1a9]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(PyObject_Call+0x122) [0x55f03933c5c2]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x55f03931aceb]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x55f03931aceb]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x55f03931d8a3]
+E    --- python_env/bin/python(+0x198921) [0x55f03933b921]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x55f03931d8a3]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x55f0393239fd]
+E    --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x55f039338a2c]
+E    --- python_env/bin/python(+0x29d854) [0x55f039440854]
+E    --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x55f03932477b]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x55f03931eb77]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x807) [0x55f039318a77]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x55f03931aceb]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x55f03931d8a3]
+E    --- python_env/bin/python(+0x198921) [0x55f03933b921]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x55f03931d8a3]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x55f0393239fd]
+E    --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x55f039338a2c]
+E    --- python_env/bin/python(+0x29d854) [0x55f039440854]
+E    --- python_env/bin/python(PyObject_Call+0xbb) [0x55f03933c55b]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x55f03931aceb]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x55f039318930]
+E    --- python_env/bin/python(+0x198921) [0x55f03933b921]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x55f039319bf7]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x55f03931aceb]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x55f039318930]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x1987) [0x55f039319bf7]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x55f03931aceb]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x55f03931d8a3]
+E    --- python_env/bin/python(+0x198921) [0x55f03933b921]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x55f03931d8a3]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x55f0393239fd]
+E    --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x55f039338a2c]
+E    --- python_env/bin/python(+0x29d854) [0x55f039440854]
+E    --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x55f03932477b]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x55f03931eb77]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x55f03931aceb]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x55f03931d8a3]
+E    --- python_env/bin/python(+0x198921) [0x55f03933b921]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x55f03931d8a3]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x55f0393239fd]
+E    --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x55f039338a2c]
+E    --- python_env/bin/python(+0x29d854) [0x55f039440854]
+E    --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x55f03932477b]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6907) [0x55f03931eb77]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x55f039318930]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x6c0) [0x55f039318930]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x2a7b) [0x55f03931aceb]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x55f03931d8a3]
+E    --- python_env/bin/python(+0x198921) [0x55f03933b921]
+E    --- python_env/bin/python(_PyEval_EvalFrameDefault+0x5633) [0x55f03931d8a3]
+E    --- python_env/bin/python(_PyFunction_Vectorcall+0x7c) [0x55f03932e6ac]
+E    --- python_env/bin/python(_PyObject_FastCallDictTstate+0x16d) [0x55f0393239fd]
+E    --- python_env/bin/python(_PyObject_Call_Prepend+0x5c) [0x55f039338a2c]
+E    --- python_env/bin/python(+0x29d854) [0x55f039440854]
+E    --- python_env/bin/python(_PyObject_MakeTpCall+0x25b) [0x55f03932477b]
+- generated xml file: /home/ubuntu/work/yolov12-high-res-tests/tt-metal/generated/test_reports/most_recent_tests.xml -
+============================== slowest durations ===============================
+2.15s setup    ssinghal/tests/test_clamp.py::test_clamp[input_shape0]
+0.00s call     ssinghal/tests/test_clamp.py::test_clamp[input_shape0]
+0.00s teardown ssinghal/tests/test_clamp.py::test_clamp[input_shape0]
+=========================== short test summary info ============================
+FAILED ssinghal/tests/test_clamp.py::test_clamp[input_shape0] - RuntimeError:...
+============================== 1 failed in 2.33s ===============================
+2025-08-18 19:08:52.073 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:406)

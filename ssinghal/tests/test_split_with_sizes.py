@@ -8,21 +8,29 @@ from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
     "input_shape_and_sizes",
     [
         # YOLOv12x ultra-high resolution (2176x3840) split operations
-        ([1, 96, 1088, 1920], [48, 48]),      # Split channels after conv
-        ([1, 192, 544, 960], [96, 96]),       # Split channels after conv  
-        ([1, 384, 272, 480], [192, 192]),     # Split channels after conv
-        ([1, 768, 136, 240], [384, 384]),     # Split channels after conv
-        ([1, 1152, 68, 120], [576, 576]),     # Split channels after conv
-        ([1, 192, 2176, 1920], [96, 96]),     # Ultra-high-res splits
-        ([1, 384, 1088, 960], [192, 192]),    # High-res feature map splits
-        ([1, 768, 544, 480], [384, 384]),     # Medium-res feature map splits
-        ([1, 1152, 272, 240], [576, 576]),    # Lower-res feature map splits
-        ([1, 384, 136, 240], [192, 192]),     # Detection head splits
-        ([1, 768, 68, 120], [384, 384]),      # Detection head splits
-        ([1, 1152, 34, 60], [576, 576]),      # Detection head splits
-        ([1, 96, 2176, 3840], [48, 48]),      # Ultra-high-res splits
-        ([1, 192, 1088, 1920], [96, 96]),     # High-res channel splits
-        ([1, 384, 544, 960], [192, 192]),     # Medium-res channel splits
+        ([1, 96, 1088, 1920], [48, 48]),  # Split channels after conv
+        ([1, 192, 544, 960], [96, 96]),  # Split channels after conv
+        ([1, 384, 272, 480], [192, 192]),  # Split channels after conv
+        ([1, 768, 136, 240], [384, 384]),  # Split channels after conv
+        ([1, 1152, 68, 120], [576, 576]),  # Split channels after conv
+        ([1, 192, 2176, 1920], [96, 96]),  # Ultra-high-res splits
+        ([1, 384, 1088, 960], [192, 192]),  # High-res feature map splits
+        ([1, 768, 544, 480], [384, 384]),  # Medium-res feature map splits
+        ([1, 1152, 272, 240], [576, 576]),  # Lower-res feature map splits
+        ([1, 384, 136, 240], [192, 192]),  # Detection head splits
+        ([1, 768, 68, 120], [384, 384]),  # Detection head splits
+        ([1, 1152, 34, 60], [576, 576]),  # Detection head splits
+        ([1, 96, 2176, 3840], [48, 48]),  # Ultra-high-res splits
+        ([1, 192, 1088, 1920], [96, 96]),  # High-res channel splits
+        ([1, 384, 544, 960], [192, 192]),  # Medium-res channel splits
+        # 8K YOLOv12x ultra-high resolution split operations
+        ([1, 96, 2160, 3840], [48, 48]),  # 8K first conv splits
+        ([1, 192, 1080, 1920], [96, 96]),  # 8K second conv splits
+        ([1, 384, 540, 960], [192, 192]),  # 8K third conv splits
+        ([1, 768, 270, 480], [384, 384]),  # 8K fourth conv splits
+        ([1, 1536, 135, 240], [768, 768]),  # 8K fifth conv splits
+        ([1, 1152, 135, 120], [576, 576]),  # 8K attention splits
+        ([1, 768, 67, 120], [384, 384]),  # 8K detection splits
     ],
 )
 def test_split_with_sizes(device, input_shape_and_sizes):
