@@ -96,7 +96,6 @@ def test_attention_inference(
         model_args.rope_theta,
         model_args.rope_scaling,
     )
-
     transformation_mats = rope_setup.get_both_trans_mats()
 
     page_table_tt = None
