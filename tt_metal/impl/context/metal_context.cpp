@@ -229,8 +229,6 @@ MetalContext& MetalContext::instance() {
     return inst.get();
 }
 
-std::unique_ptr<Cluster> MetalContext::default_cluster_ = nullptr;
-
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
@@ -238,23 +236,10 @@ MetalContext::MetalContext() {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     }
 
-    bool is_base_routing_fw_enabled = false;
-    if (default_cluster_) {
-        is_base_routing_fw_enabled =
-            Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_, default_cluster_->get_cluster_desc()));
-    } else {
-        is_base_routing_fw_enabled =
-            Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
-    }
-
+    bool is_base_routing_fw_enabled =
+        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
-
-    if (default_cluster_) {
-        cluster_ = std::move(this->default_cluster_);
-    } else {
-        cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
-    }
-
+    cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
 
     // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on

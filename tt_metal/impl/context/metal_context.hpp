@@ -47,11 +47,7 @@ public:
     MetalContext(MetalContext&& other) noexcept = delete;
     static MetalContext& instance();
 
-    static std::unique_ptr<Cluster> default_cluster_;
-    static void set_default_cluster(std::unique_ptr<Cluster> cluster) { default_cluster_ = std::move(cluster); }
-
     Cluster& get_cluster();
-    void set_cluster(std::unique_ptr<Cluster> cluster) {this->cluster_ = std::move(cluster);}
     llrt::RunTimeOptions& rtoptions();
     const Cluster& get_cluster() const;
     const llrt::RunTimeOptions& rtoptions() const;

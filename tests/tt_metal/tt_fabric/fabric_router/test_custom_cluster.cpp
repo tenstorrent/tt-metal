@@ -31,13 +31,7 @@ protected:
 
 TEST_F(ClusterFixture, TestCustomCluster) {
     std::unique_ptr<tt_ClusterDescriptor> cluster_desc =
-        tt_ClusterDescriptor::create_from_yaml("./tg_cluster_desc.yaml");
-
-   tt::llrt::RunTimeOptions rtoptions;
-   tt::tt_metal::Hal hal(tt::ARCH::WORMHOLE_B0, true);
-
-   auto cluster = std::make_unique<tt::Cluster>(cluster_desc.get(), rtoptions, hal);
-   tt::tt_metal::MetalContext::set_default_cluster(std::move(cluster));
+        tt_ClusterDescriptor::create_from_yaml("./t3k_cluster_desc.yaml");
 
     uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
     tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
@@ -45,16 +39,14 @@ TEST_F(ClusterFixture, TestCustomCluster) {
 
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        //"tests/tt_metal/tt_fabric/custom_mesh_descriptors/custom_2x2_mesh_graph_descriptor.yaml";
-        "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/custom_2x2_mesh_graph_descriptor.yaml";
+        //"tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
 
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
 
     control_plane->initialize_fabric_context(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
 
     control_plane->configure_routing_tables_for_fabric_ethernet_channels(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-
-    control_plane->write_routing_tables_to_file("routing_tables_new.txt");
 }
 
 }  // namespace mock_cluster_tests

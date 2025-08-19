@@ -25,8 +25,17 @@ enum class CoreType;
 
 namespace tt {
 
-namespace llrt {
+/**
+ * @brief Specifies the target devices on which the graph can be run.
+ */
+enum class TargetDevice : std::uint8_t {
+    Silicon = 0,
+    Simulator = 1,
+    Mock = 2,
+    Invalid = 0xFF,
+};
 
+namespace llrt {
 // TODO: This should come from the HAL
 enum DebugHartFlags : unsigned int {
     RISCV_NC = 1,
@@ -205,6 +214,13 @@ class RunTimeOptions {
 
     // Enable fabric performance telemetry
     bool enable_fabric_telemetry = false;
+
+    // Mock cluster initialization using a provided cluster descriptor
+    bool mock_enabled = false;
+    std::string mock_cluster_desc_path;
+
+    // Consolidated target device selection
+    tt::TargetDevice runtime_target_device_ = tt::TargetDevice::Silicon;
 
 public:
     RunTimeOptions();
@@ -486,6 +502,13 @@ public:
     // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
     inline bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
     inline void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
+
+    // Mock cluster accessors
+    inline bool get_mock_enabled() const { return mock_enabled; }
+    inline const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
+
+    // Target device accessor
+    inline tt::TargetDevice get_target_device() const { return runtime_target_device_; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

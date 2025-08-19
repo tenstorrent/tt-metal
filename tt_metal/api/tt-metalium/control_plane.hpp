@@ -54,7 +54,6 @@ public:
     // Printing functions
     void print_routing_tables() const;
     // Write IntraMesh and InterMesh routing tables to a file in a pretty, aligned format
-    void write_routing_tables_to_file(const std::string& file_path) const;
     void print_ethernet_channels() const;
     void print_active_ethernet_connections() const;
     void print_all_ethernet_connections() const;

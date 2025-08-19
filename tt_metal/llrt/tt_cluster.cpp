@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_cluster.hpp"
+#include "llrt/rtoptions.hpp"
 
 #include <core_coord.hpp>
 #include "dev_msgs.h"
@@ -11,8 +12,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
-#include <filesystem>
-#include <initializer_list>
 #include <iostream>
 #include <map>
 #include <memory>
@@ -23,21 +22,18 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
-#include <vector>
 
 #include "control_plane.hpp"
-#include "device_pool.hpp"
-#include "hostdevcommon/fabric_common.h"
 #include "fabric_types.hpp"
-#include "fmt/base.h"
-#include "fmt/ranges.h"
+// #include "fmt/base.h" // Unused include
+// #include "fmt/ranges.h" // Unused include
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
+// #include "tt_metal/fabric/fabric_host_utils.hpp" // Unused include
 #include "tt_metal/llrt/tlb_config.hpp"
 #include <umd/device/cluster.h>
 #include <umd/device/hugepage.h>
@@ -208,33 +204,19 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rt
 
     this->set_tunnels_from_mmio_device();
 
-    this->assert_risc_reset();
-}
-
-Cluster::Cluster(tt_ClusterDescriptor* cluster_desc, llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
-    ZoneScoped;
-
-    this->target_type_ = TargetDevice::Mock;
-    this->arch_ = cluster_desc->get_arch(0);
-
-    this->initialize_device_drivers_mock(cluster_desc);
-
-    this->disable_ethernet_cores_with_retrain();
-
-    this->initialize_ethernet_cores_router_mode();
-
-    this->initialize_ethernet_sockets();
-
-    this->set_tunnels_from_mmio_device();
+    if (this->target_type_ != TargetDevice::Mock)
+        this->assert_risc_reset();
 }
 
 void Cluster::detect_arch_and_target() {
-    this->target_type_ = (rtoptions_.get_simulator_enabled()) ? TargetDevice::Simulator : TargetDevice::Silicon;
+    this->target_type_ = rtoptions_.get_target_device();
 
     this->arch_ = tt_metal::get_platform_architecture(rtoptions_);
 
     TT_FATAL(
-        this->target_type_ == TargetDevice::Silicon or this->target_type_ == TargetDevice::Simulator,
+        this->target_type_ == TargetDevice::Silicon ||
+        this->target_type_ == TargetDevice::Simulator ||
+        this->target_type_ == TargetDevice::Mock,
         "Target type={} is not supported",
         this->target_type_);
 }
@@ -307,40 +289,7 @@ void Cluster::initialize_device_drivers() {
     this->generate_virtual_to_profiler_flat_id_mapping();
 }
 
-void Cluster::initialize_device_drivers_mock(tt_ClusterDescriptor* cluster_desc) {
-    this->open_driver_mock(cluster_desc);
-    this->generate_cluster_descriptor();
-    this->get_metal_desc_from_tt_desc();
-    this->validate_harvesting_masks();
-
-    for (const auto& [mmio_device_id, controlled_devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
-        this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
-    }
-
-    tt_device_params default_params;
-    this->start_driver(default_params);
-    this->generate_virtual_to_umd_coord_mapping();
-    this->generate_virtual_to_profiler_flat_id_mapping();
-}
-
-void Cluster::open_driver_mock(tt_ClusterDescriptor* cluster_desc) {
-    std::unique_ptr<tt::umd::Cluster> device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
-        .chip_type = tt::umd::ChipType::MOCK,
-        .sdesc_path = get_soc_description_file(this->arch_, this->target_type_),
-        .cluster_descriptor = cluster_desc,
-    });
-
-    barrier_address_params barrier_params;
-    barrier_params.tensix_l1_barrier_base =
-        hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::TENSIX, tt_metal::HalL1MemAddrType::BARRIER);
-    barrier_params.dram_barrier_base = hal_.get_dev_addr(tt_metal::HalDramMemAddrType::BARRIER);
-
-    barrier_params.eth_l1_barrier_base =
-        hal_.get_dev_addr(tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::BARRIER);
-    device_driver->set_barrier_address_params(barrier_params);
-
-    this->driver_ = std::move(device_driver);
-}
+// Removed separate mock initialization functions; unified above
 
 void Cluster::assert_risc_reset() {
     this->driver_->assert_risc_reset();
@@ -403,6 +352,21 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
             .chip_type = tt::umd::ChipType::SIMULATION,
             .target_devices = {0},
             .simulator_directory = rtoptions_.get_simulator_path(),
+        });
+    } else if (this->target_type_ == TargetDevice::Mock) {
+        // If a cluster descriptor was not provided via constructor, and mock is enabled via rtoptions,
+        // load it from the YAML path and pass it into UMD for mock initialization.
+        std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc;
+        tt_ClusterDescriptor* desc_ptr = this->ctor_cluster_desc_arg_;
+        if (desc_ptr == nullptr && rtoptions_.get_mock_enabled()) {
+            mock_cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
+            TT_FATAL(mock_cluster_desc != nullptr, "Failed to load mock cluster descriptor from {}", rtoptions_.get_mock_cluster_desc_path());
+            desc_ptr = mock_cluster_desc.get();
+        }
+        device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
+            .chip_type = tt::umd::ChipType::MOCK,
+            .sdesc_path = get_soc_description_file(this->arch_, this->target_type_),
+            .cluster_descriptor = desc_ptr,
         });
     }
 
