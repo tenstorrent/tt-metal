@@ -162,7 +162,6 @@ AllToAllCombineDeviceOperation::invoke(
             .num_links = num_links,
             .topology = topology,
             .locally_reduced = locally_reduced,
-            .subdevice_id = std::move(subdevice_id),
             .worker_core_range_set = worker_core_range_set,
         },
         tensor_args_t{
