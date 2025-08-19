@@ -111,8 +111,14 @@ bool use_composite_all_gather(
     auto input_memory_config = input_tensor.memory_config();
     auto output_memory_config = memory_config.value_or(input_memory_config);
 
-    if (input_memory_config.memory_layout() != output_memory_config.memory_layout() && semaphore_size < 2) {
+    // Remove once deepseek is routed to minimal instead of command processor
+    if (input_memory_config.memory_layout() != output_memory_config.memory_layout() && semaphore_size == 1) {
         return true;
+    }
+
+    // Route to command processor
+    if (semaphore_size == 1) {
+        return false;
     }
 
     // Use composite for row-major tensors
@@ -219,7 +225,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    bool composite_all_gather_case = (input_tensor, dim, multi_device_global_semaphore.size(), memory_config);
+    bool composite_all_gather_case =
+        use_composite_all_gather(input_tensor, dim, multi_device_global_semaphore.size(), memory_config);
     bool all_gather_async_llama_sharded_case =
         use_all_gather_async_llama_sharded(input_tensor, memory_config.value_or(input_tensor.memory_config()));
     if (composite_all_gather_case && !all_gather_async_llama_sharded_case) {
