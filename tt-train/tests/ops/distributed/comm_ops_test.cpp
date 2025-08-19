@@ -256,12 +256,12 @@ TEST_F(N300CommOpsTest, TestAllGatherNotFullyTiled) {
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
-        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)),
+        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) * 2.F,
         grad_xtensor[0],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)),
+        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)) * 2.F,
         grad_xtensor[1],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
@@ -311,12 +311,12 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
-        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)),
+        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) * 2.F,
         grad_xtensor[0],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)),
+        xt::view(grad_data, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)) * 2.F,
         grad_xtensor[1],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
@@ -339,10 +339,10 @@ TEST_F(N300CommOpsTest, TestScatterNotFullyTiled) {
 
     // check forward
     auto xtensors_back = ttml::core::to_xtensor<float>(scattered_tensor->get_value(), ttml::core::IdentityComposer{});
-    EXPECT_TRUE(
-        xt::allclose(xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)), xtensors_back[0]));
-    EXPECT_TRUE(
-        xt::allclose(xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)), xtensors_back[1]));
+    EXPECT_TRUE(xt::allclose(
+        xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) * 2.F, xtensors_back[0]));
+    EXPECT_TRUE(xt::allclose(
+        xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)) * 2.F, xtensors_back[1]));
 
     // check backward
     xt::xarray<float> grad_data = xt::empty<float>(xtensor.shape());
@@ -401,12 +401,12 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
     // check forward
     auto xtensors_back = ttml::core::to_xtensor<float>(scattered_tensor->get_value(), ttml::core::IdentityComposer{});
     EXPECT_TRUE(xt::allclose(
-        xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)),
+        xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) * 2.F,
         xtensors_back[0],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)),
+        xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size)) * 2.F,
         xtensors_back[1],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));

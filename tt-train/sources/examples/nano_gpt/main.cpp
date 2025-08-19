@@ -656,9 +656,9 @@ int main(int argc, char **argv) {
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
     if (device_config.enable_tp || device_config.enable_ddp) {
-	    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     }
-	    initialize_device(device_config.mesh_shape, device_config.device_ids);
+    initialize_device(device_config.mesh_shape, device_config.device_ids);
 
     auto *device = &ttml::autograd::ctx().get_device();
 
@@ -909,6 +909,13 @@ int main(int argc, char **argv) {
             float loss_float = get_loss_value(loss);
 
             ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
+
+            if (device_config.enable_tp) {
+                auto ones_grad = ttnn::ones_like(loss->get_value());
+                ones_grad = ttnn::multiply(
+                    ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
+                loss->set_grad(ones_grad);
+            }
 
             loss->backward();
             ttml::autograd::ctx().reset_graph();

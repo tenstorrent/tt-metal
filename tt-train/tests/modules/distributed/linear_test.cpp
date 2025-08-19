@@ -460,6 +460,10 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
+
+    auto ones_grad = ttnn::ones_like(output->get_value());
+    ones_grad = ttnn::multiply(ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
+    output->set_grad(ones_grad);
     output->backward();
 
     auto row_parallel_output_xtensor =
@@ -535,6 +539,10 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
+
+    auto ones_grad = ttnn::ones_like(output->get_value());
+    ones_grad = ttnn::multiply(ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
+    output->set_grad(ones_grad);
     output->backward();
 
     auto column_parallel_output_xtensor =
@@ -609,6 +617,10 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
         ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, ttnn::Layout::TILE, mapper.get());
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
+
+    auto ones_grad = ttnn::ones_like(output->get_value());
+    ones_grad = ttnn::multiply(ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
+    output->set_grad(ones_grad);
     output->backward();
 
     auto column_parallel_output_xtensor =
