@@ -6,6 +6,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
+#include <ttnn/distributed/create_socket.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <wandbcpp.hpp>
 
@@ -390,6 +391,7 @@ struct TrainingConfig {
     // mpi config
     bool enable_mpi = false;
     uint32_t num_mh_workers = 0U;
+    SocketType socket_type = SocketType::MPI;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -428,6 +430,15 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     if (auto multihost_config = yaml_config["multihost_config"]) {
         config.enable_mpi = multihost_config["enabled"].as<bool>(false);
         config.num_mh_workers = multihost_config["num_workers"].as<uint32_t>(0U);
+
+        auto socket_type_str = multihost_config["socket_type"].as<std::string>("mpi");
+        if (socket_type_str == "mpi") {
+            config.socket_type = SocketType::MPI;
+        } else if (socket_type_str == "fabric") {
+            config.socket_type = SocketType::FABRIC;
+        } else {
+            throw std::runtime_error("Unknown socket type: " + socket_type_str);
+        }
     }
     return config;
 }
@@ -510,8 +521,8 @@ int main(int argc, char **argv) {
         auto &ctx = ttml::autograd::ctx();
         ctx.initialize_distributed_context(argc, argv);
 
-        auto &distributed_ctx = ctx.get_distributed_context();
-        fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx.size(), *distributed_ctx.rank());
+        auto distributed_ctx = ctx.get_distributed_context();
+        fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx->size(), *distributed_ctx->rank());
 
         // disable wandb for now in case of mpi example
         enable_wandb = false;
@@ -529,6 +540,7 @@ int main(int argc, char **argv) {
         fmt::print("MPI config:\n");
         fmt::print("  enable_mpi: {}\n", config.enable_mpi);
         fmt::print("  num_mh_workers: {}\n", config.num_mh_workers);
+        fmt::print("  socket_type: {}\n", config.socket_type == SocketType::MPI ? "MPI" : "FABRIC");
     }
 
     if (enable_wandb) {
@@ -603,7 +615,7 @@ int main(int argc, char **argv) {
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
     if (config.enable_mpi) {
-        int rank = *ttml::autograd::ctx().get_distributed_context().rank();
+        int rank = *ttml::autograd::ctx().get_distributed_context()->rank();
         auto seed = config.seed + static_cast<uint32_t>(rank);
         ttml::autograd::ctx().set_seed(seed);
     }
@@ -655,11 +667,18 @@ int main(int argc, char **argv) {
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
-    if (device_config.enable_tp || device_config.enable_ddp) {
+    if (config.socket_type == SocketType::FABRIC) {
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
+            throw std::runtime_error(fmt::format(
+                "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
+                device_config.mesh_shape));
+        }
+    } else if (device_config.enable_tp || device_config.enable_ddp) {
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
     }
-    initialize_device(device_config.mesh_shape, device_config.device_ids);
 
+    initialize_device(device_config.mesh_shape, device_config.device_ids);
     auto *device = &ttml::autograd::ctx().get_device();
 
     struct CachedHostData {
@@ -835,7 +854,8 @@ int main(int argc, char **argv) {
     auto select_optimizer =
         [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (config.enable_mpi) {
-            return std::make_unique<RemoteOptimizer>(get_model_parameters(model), config.num_mh_workers);
+            return std::make_unique<RemoteOptimizer>(
+                get_model_parameters(model), config.num_mh_workers, config.socket_type);
         } else if (use_moreh_adamw) {
             return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
         } else {
@@ -906,7 +926,6 @@ int main(int argc, char **argv) {
             auto loss = ttml::ops::cross_entropy_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
             float loss_float = get_loss_value(loss);
-
             ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
 
             if (device_config.enable_tp) {
@@ -925,7 +944,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (!device_config.enable_tp) {
+                if (!device_config.enable_tp && !config.enable_mpi) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
 
@@ -939,7 +958,7 @@ int main(int argc, char **argv) {
                 scheduler->step();
                 auto global_step = optimizer->get_steps();
                 if (config.enable_mpi) {
-                    fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context().rank());
+                    fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context()->rank());
                 }
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
@@ -1002,9 +1021,9 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
-        auto &distributed_ctx = ctx.get_distributed_context();
-        distributed_ctx.barrier();
-        fmt::print("Rank {}: Finalizing MPI context\n", *distributed_ctx.rank());
+        auto distributed_ctx = ctx.get_distributed_context();
+        distributed_ctx->barrier();
+        fmt::print("Rank {}: Finalizing MPI context\n", distributed_ctx->rank());
     }
 
     if (enable_wandb) {
