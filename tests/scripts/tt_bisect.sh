@@ -105,7 +105,7 @@ while [[ "$found" = "false" ]]; do
    mkdir -p /tmp/ccache
    ccache -z
 
-   mkdir -p /work/.cpmcache
+   mkdir -p ./.cpmcache
 
 
    cmake -S . -B build_Debug -G Ninja \
@@ -126,7 +126,7 @@ while [[ "$found" = "false" ]]; do
       -DENABLE_FAKE_KERNELS_TARGET=OFF \
       -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake \
       # --- CPM determinism + pin tokenizers-cpp to known-good SHA:
-      -DCPM_SOURCE_CACHE=/work/.cpmcache \
+      -DCPM_SOURCE_CACHE= ./.cpmcache \
       -DCPM_USE_LOCAL_PACKAGES=OFF \
       -DCPM_GIT_TAG_SEARCH=OFF \
       -Dtokenizers-cpp_GIT_TAG=c0caed993d2e1030645ce1d7959dd358ff29dc9b
