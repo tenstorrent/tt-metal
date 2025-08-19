@@ -315,5 +315,100 @@ Tensor AvgPool2DOp::invoke(
         reallocate_halo_output);
 }
 
+Tensor AdaptiveAvgPool2DOp::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 2> output_size,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme,
+    bool in_place_halo) {
+    // Calculate adaptive kernel size and stride
+    uint32_t output_h = output_size[0];
+    uint32_t output_w = output_size[1];
+
+    // Adaptive pooling kernel size calculation: ceil(input_size / output_size)
+    uint32_t kernel_h = (input_h + output_h - 1) / output_h;  // ceil division
+    uint32_t kernel_w = (input_w + output_w - 1) / output_w;  // ceil division
+
+    // Adaptive pooling stride calculation: floor(input_size / output_size)
+    uint32_t stride_h = input_h / output_h;
+    uint32_t stride_w = input_w / output_w;
+
+    std::array<uint32_t, 2> adaptive_kernel_size = {kernel_h, kernel_w};
+    std::array<uint32_t, 2> adaptive_stride = {stride_h, stride_w};
+    std::array<uint32_t, 2> adaptive_padding = {0, 0};  // No padding for adaptive pooling
+
+    return pool2d_invoke(
+        queue_id,
+        input_tensor,
+        Pool2DType::AVG_POOL2D,
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        adaptive_kernel_size,
+        adaptive_stride,
+        adaptive_padding,
+        std::nullopt,  // dilation
+        false,         // ceil_mode = false
+        true,          // count_include_pad
+        std::nullopt,  // divisor_override
+        memory_config,
+        applied_shard_scheme,
+        in_place_halo);
+}
+
+Tensor AdaptiveMaxPool2DOp::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 2> output_size,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme,
+    bool in_place_halo) {
+    // Calculate adaptive kernel size and stride
+    uint32_t output_h = output_size[0];
+    uint32_t output_w = output_size[1];
+
+    // Adaptive pooling kernel size calculation: ceil(input_size / output_size)
+    uint32_t kernel_h = (input_h + output_h - 1) / output_h;  // ceil division
+    uint32_t kernel_w = (input_w + output_w - 1) / output_w;  // ceil division
+
+    // Adaptive pooling stride calculation: floor(input_size / output_size)
+    uint32_t stride_h = input_h / output_h;
+    uint32_t stride_w = input_w / output_w;
+
+    std::array<uint32_t, 2> adaptive_kernel_size = {kernel_h, kernel_w};
+    std::array<uint32_t, 2> adaptive_stride = {stride_h, stride_w};
+    std::array<uint32_t, 2> adaptive_padding = {0, 0};  // No padding for adaptive pooling
+    std::array<uint32_t, 2> dilation = {1, 1};
+
+    return pool2d_invoke(
+        queue_id,
+        input_tensor,
+        Pool2DType::MAX_POOL2D,
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        adaptive_kernel_size,
+        adaptive_stride,
+        adaptive_padding,
+        dilation,
+        false,         // ceil_mode = false
+        true,          // count_include_pad
+        std::nullopt,  // divisor_override
+        memory_config,
+        applied_shard_scheme,
+        in_place_halo);
+}
+
 }  // namespace operations::pool
 }  // namespace ttnn
