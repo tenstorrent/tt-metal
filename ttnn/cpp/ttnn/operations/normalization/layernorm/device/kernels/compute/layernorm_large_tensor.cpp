@@ -20,8 +20,6 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "layernorm_compute_utils.hpp"
 #include "compute_kernel_api/transpose_wh.h"
-#include "dprint_pages.h"
-#include "dprint_tensix.h"
 
 namespace NAMESPACE {
 
@@ -62,7 +60,7 @@ void MAIN {
     // that will be done
     if constexpr (fuse_pre_add) {
         // Init for x = in + b
-        binary_op_init_common(cb_in, cb_inb, rms_norm ? cb_xmm : tt::CBIndex::c_23);
+        binary_op_init_common(cb_in, cb_inb, rms_norm ? cb_xmm : cb_interm_pre_add);
         pack_reconfig_data_format(cb_interm_pre_add);
     } else {
         // Init for transpose (layernorm) or square (rms)
@@ -91,6 +89,10 @@ void MAIN {
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             // Wait for block of input
             cb_wait_front(cb_in, blk);
+            if (fuse_pre_add) {
+                cb_wait_front(cb_inb, blk);
+                cb_reserve_back(cb_interm_pre_add, blk);
+            }
 
             if constexpr (layernorm) {
                 // Layernorm: Calculate E[x] and Var[x] using Welford's algorithm
@@ -98,29 +100,19 @@ void MAIN {
                 for (uint32_t j = 0; j < blk; j++) {
                     if constexpr (fuse_pre_add) {
                         // Fuse in = in + b in dst0
-                        copy_tile_to_dst_init_short(cb_in, dst0);
+                        copy_tile_to_dst_init_short(cb_in);
                         copy_tile(cb_in, j, dst0);
-                        if (wt == Wt - blk && j == blk - 1) {
-                            dprint_tensix_dest_reg(dst0);
-                        }
 
-                        cb_wait_front(cb_inb, 1);
-                        reconfig_data_format_srca(cb_in, cb_inb);
                         binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
-                        binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, dst0, dst0);
-                        if (wt == Wt - 1 && j == blk - 1) {
-                            dprint_tensix_dest_reg(dst0);
-                        }
-                        cb_pop_front(cb_inb, 1);
+                        binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, dst0);
 
                         // Welford's needs transposed input tile,
                         // and transpose_wh_dest is currently buggy,
                         // so we need to use the interm CB
                         tile_regs_commit();
-                        cb_reserve_back(cb_interm_pre_add, onetile);
                         pack_tile(dst0, cb_interm_pre_add);
                         cb_push_back(cb_interm_pre_add, onetile);
-                        cb_wait_front(cb_interm_pre_add, onetile);
+                        cb_wait_front(cb_interm_pre_add, j + 1);
                         tile_regs_release();
                         tile_regs_acquire();
                         tile_regs_wait();
@@ -128,12 +120,9 @@ void MAIN {
 
                     // Transpose
                     constexpr auto cb_result_or_input = fuse_pre_add ? cb_interm_pre_add : cb_in;
-                    reconfig_data_format(cb_result_or_input, cb_result_or_input);
+                    reconfig_data_format_srca(cb_result_or_input);
                     transpose_wh_init_short(cb_result_or_input);
-                    transpose_wh_tile(cb_result_or_input, fuse_pre_add ? 0 : j, dst0);
-                    if constexpr (fuse_pre_add) {
-                        cb_pop_front(cb_interm_pre_add, onetile);
-                    }
+                    transpose_wh_tile(cb_result_or_input, j, dst0);
 
                     // Accumulate mean and variance
                     welford_init();
@@ -151,7 +140,6 @@ void MAIN {
 
                 if constexpr (fuse_pre_add) {
                     // Fuse in = in + b
-                    reconfig_data_format_srca(cb_in, cb_inb);
                     cb_wait_front(cb_inb, blk);
                     for (uint32_t j = 0; j < blk; j++) {
                         binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
@@ -198,6 +186,10 @@ void MAIN {
             }
 
             cb_pop_front(cb_in, blk);
+            if (fuse_pre_add) {
+                cb_pop_front(cb_inb, blk);
+                cb_pop_front(cb_interm_pre_add, blk);
+            }
         }
 
         if constexpr (layernorm) {
