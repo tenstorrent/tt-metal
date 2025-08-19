@@ -411,8 +411,8 @@ private:
     bool enable_handshake_ = false;
     bool enable_context_switch_ = false;
     bool enable_interrupts_ = false;
-    std::array<bool, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced_;
-    std::array<bool, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced_;
+    std::array<bool, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced_{};
+    std::array<bool, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced_{};
 };
 
 struct SenderWorkerAdapterSpec {

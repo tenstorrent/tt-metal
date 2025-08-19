@@ -18,7 +18,7 @@ namespace fabric_router_tests {
 
 class ControlPlaneFixture : public ::testing::Test {
    protected:
-       tt::ARCH arch_;
+       tt::ARCH arch_{tt::ARCH::Invalid};
        void SetUp() override {
            auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
            if (not slow_dispatch) {

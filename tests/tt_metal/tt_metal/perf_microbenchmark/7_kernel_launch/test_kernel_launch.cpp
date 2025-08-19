@@ -184,8 +184,8 @@ int main(int argc, char** argv) {
                     CoreCoord core = {(std::size_t)j, (std::size_t)i};
                     int core_index = i * num_cores_c + j;
 
-                    std::array<uint32_t, 255> reader_runtime_args;
-                    std::array<uint32_t, 255> writer_runtime_args;
+                    std::array<uint32_t, 255> reader_runtime_args{};
+                    std::array<uint32_t, 255> writer_runtime_args{};
                     for (uint32_t k = 0; k < 255; ++k) {
                         reader_runtime_args[k] = core_index + k;
                         writer_runtime_args[k] = core_index + k;
