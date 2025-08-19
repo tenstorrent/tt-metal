@@ -67,12 +67,7 @@ target_link_libraries(test_system_health PRIVATE TT::SystemHealth::Smoke)
 add_library(test_fabric_smoke OBJECT)
 add_library(TT::Metalium::Test::Fabric::Smoke ALIAS test_fabric_smoke)
 
-target_sources(
-    test_fabric_smoke
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_smoke.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/common/utils.cpp
-)
+target_sources(test_fabric_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_smoke.cpp)
 
 target_include_directories(
     test_fabric_smoke
