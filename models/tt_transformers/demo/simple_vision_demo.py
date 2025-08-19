@@ -81,7 +81,7 @@ def create_multimodal_model(
         checkpoint = tt_model_args.load_state_dict()
     print(f"Loaded checkpoint for {tt_model_args.base_model_name} with {checkpoint.keys()} keys")
 
-    if tt_model_args.base_model_name == "gemma-3-4b":
+    if "gemma-3" in tt_model_args.base_model_name:
         model = TtGemmaModel(
             mesh_device=mesh_device,
             state_dict=checkpoint,

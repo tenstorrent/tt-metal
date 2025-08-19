@@ -147,7 +147,7 @@ class Transformer(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        tokens_embd = self.embd(tokens, self.embed_scale)
+        tokens_embd = self.embd(tokens)
 
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 

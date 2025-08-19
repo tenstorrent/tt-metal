@@ -68,8 +68,8 @@ class TtGemmaModel(Transformer):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        self.embed_scale = self.args.dim**0.5
-        tokens_embd = self.embd(tokens, self.embed_scale)
+        # self.embed_scale = self.args.dim**0.5
+        tokens_embd = self.embd(tokens)
 
         vision_output = self.compute_vision_token(**kwargs)
         tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
