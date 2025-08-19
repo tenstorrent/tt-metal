@@ -248,46 +248,13 @@ class LlamaRotaryEmbedding(ScaledRotaryEmbedding):
         return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
-class LinearRotaryEmbedding(RotaryEmbedding):
-    def __init__(
-        self,
-        dim: int,
-        max_position_embeddings: int,
-        base: float,
-        factor: float,
-        original_max_position_embeddings: int,
-        device: Optional[Any] = None,
-    ) -> None:
-        self.base = base
-        self.orig_context_len = original_max_position_embeddings
-        self.scaling_factor = factor
-        super().__init__(dim, max_position_embeddings, base, device)
-
-    def apply_scaling(self, freqs: torch.Tensor) -> torch.Tensor:
-        freqs = freqs / self.scaling_factor
-        return freqs
-
-    def _set_cos_sin_cache(self, seq_len: int, device: Any, dtype: torch.dtype) -> None:
-        self.max_seq_len_cached = seq_len
-        freqs = 1.0 / (self.base ** (torch.arange(0, self.dim, 2)[: (self.dim // 2)].float() / self.dim))
-        t = torch.arange(seq_len * 2.0)
-        freqs = self.apply_scaling(freqs)
-        freqs = torch.outer(t, freqs).float()
-        cos = torch.cos(freqs)
-        sin = torch.sin(freqs)
-        cos, sin = gather_cos_sin(torch.arange(seq_len), cos, sin)
-
-        self.register_buffer("cos_cached", cos.to(dtype), persistent=False)
-        self.register_buffer("sin_cached", sin.to(dtype), persistent=False)
-
-
 def rotary_embedding_factory(
     dim: int,
     max_position_embeddings: int,
     base: float,
     rope_scaling: Optional[RopeScaling] = None,
     device: Optional[Any] = None,
-) -> Union[RotaryEmbedding, YarnRotaryEmbedding, LlamaRotaryEmbedding, LinearRotaryEmbedding]:
+) -> Union[RotaryEmbedding, ScaledRotaryEmbedding]:
     if rope_scaling is None:
         return RotaryEmbedding(dim, max_position_embeddings, base, device)
     else:
@@ -297,8 +264,6 @@ def rotary_embedding_factory(
             rotary_embedding = LlamaRotaryEmbedding
         elif rope_scaling.rope_type.value == "yarn":
             rotary_embedding = YarnRotaryEmbedding
-        elif rope_scaling.rope_type.value == "linear":
-            rotary_embedding = LinearRotaryEmbedding
         else:
             raise ValueError(f"Invalid rope_scaling: {rope_scaling}")
         return rotary_embedding(
