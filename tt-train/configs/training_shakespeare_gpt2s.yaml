@@ -13,7 +13,7 @@ training_config:
   use_kahan_summation: false
   gradient_accumulation_steps: 1
   tokenizer_type: bpe
-  tokenizer_path: "/tmp/.huggingface/models--gpt2/snapshots/607a30d783dfa663caf39e06633721c8d4cfcd7e/tokenizer.json"
+  tokenizer_path: "data/gpt2-tokenizer.json"
 
   transformer_config:
     runner_type: memory_efficient

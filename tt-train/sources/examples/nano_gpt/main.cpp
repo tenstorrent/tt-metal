@@ -485,13 +485,13 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespeare_gpt2s.yaml";
+    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespeare_nanogpt.yaml";
 
     std::string run_name = "";
-    bool is_eval = true;
+    bool is_eval = false;
     bool add_time_to_name = true;
     bool enable_wandb = false;
-    std::string safetensors_path = "/tmp/.huggingface/models--gpt2/snapshots/607a30d783dfa663caf39e06633721c8d4cfcd7e";
+    std::string safetensors_path = "";
     std::string save_and_exit_path = "";
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
