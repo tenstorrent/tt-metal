@@ -17,6 +17,9 @@ target_sources(
         upsample/device/upsample_program_factory_multicore_sharded.cpp
         upsample/device/upsample_program_factory_multicore_interleaved.cpp
         upsample/upsample.cpp
+        upsample3d/device/upsample3d_op.cpp
+        upsample3d/device/upsample3d_program_factory_multicore_interleaved.cpp
+        upsample3d/upsample3d.cpp
 )
 
 target_include_directories(ttnn_op_pool PRIVATE ${FixmeOpIncDirs})
