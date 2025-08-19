@@ -45,7 +45,7 @@ class LayerNorm:
         bias=True,
         mesh_device=None,
         init=False,
-        use_row_major_workaround=False,
+        use_row_major_workaround=False,  # Issue #20789
     ):
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
@@ -55,22 +55,23 @@ class LayerNorm:
         self.use_row_major_workaround = use_row_major_workaround
         self.weight = None
         self.bias = None
-        if norm_elementwise_affine and init:
+        # When using the row-major workaround, ensure that dummy weight/bias are created
+        if norm_elementwise_affine and init or use_row_major_workaround:
             if use_row_major_workaround:
                 self.weight = bf16_tensor(
-                    torch.randn(1, embedding_dim).reshape(-1, 32), device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
+                    torch.ones(1, embedding_dim).reshape(-1, 32), device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
                 )
             else:
-                self.weight = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
+                self.weight = bf16_tensor(torch.ones(1, embedding_dim), device=self.mesh_device)
             if bias:
                 if use_row_major_workaround:
                     self.bias = bf16_tensor(
-                        torch.randn(1, embedding_dim).reshape(-1, 32),
+                        torch.zeros(1, embedding_dim).reshape(-1, 32),
                         device=self.mesh_device,
                         layout=ttnn.ROW_MAJOR_LAYOUT,
                     )
                 else:
-                    self.bias = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
+                    self.bias = bf16_tensor(torch.zeros(1, embedding_dim), device=self.mesh_device)
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
