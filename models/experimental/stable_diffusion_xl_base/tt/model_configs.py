@@ -1038,6 +1038,12 @@ class ModelOptimisations:
                 return self.conv_configs["ABH_64_NO_ADB_DRAM"]  # should be 128, OOM in demo
             elif "decoder.conv_out" == conv_path:
                 return self.conv_configs["ABH_512_NO_ADB_DRAM"]
+            elif (
+                "decoder.mid_block.resnet" in conv_path
+                or "decoder.up_blocks.0.resnet" in conv_path
+                and not "upsampler" in conv_path
+            ):
+                return self.conv_configs["ABH_128_NO_ADB_BS"]
             else:
                 return self.conv_configs["DEFAULT_DRAM"]
 
