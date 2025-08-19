@@ -21,22 +21,18 @@ from tests.tt_eager.python_api_testing.sweep_tests.model_tests import (
 )
 
 
-def setup_ttnn_tensor(x, device, layout, input_mem_config, dtype, pad_value=None):
+def setup_ttnn_tensor(x, device, layout, input_mem_config, dtype):
     # Check if input is scalar -> Then return scalar
     if len(x.shape) == 1 and x.shape[0] == 1:
         return x.item()
 
-    kwargs = {
-        "dtype": dtype,
-        "layout": layout,
-        "device": device if input_mem_config is not None else None,
-        "memory_config": input_mem_config,
-    }
-
-    if pad_value is not None:
-        kwargs["pad_value"] = pad_value
-
-    input_tensor = ttnn.from_torch(x, **kwargs)
+    input_tensor = ttnn.from_torch(
+        x,
+        dtype=dtype,
+        layout=layout,
+        device=device if input_mem_config is not None else None,
+        memory_config=input_mem_config,
+    )
 
     return input_tensor
 
@@ -390,8 +386,7 @@ def eltwise_log(
     output_mem_config,
     **kwargs,
 ):
-    pad_value = kwargs.get("pad_value", None)
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0], pad_value=pad_value)
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.log(t0, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1)
@@ -407,8 +402,7 @@ def eltwise_log10(
     output_mem_config,
     **kwargs,
 ):
-    pad_value = kwargs.get("pad_value", None)
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0], pad_value=pad_value)
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.log10(t0, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1)
@@ -440,8 +434,7 @@ def eltwise_log2(
     output_mem_config,
     **kwargs,
 ):
-    pad_value = kwargs.get("pad_value", None)
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0], pad_value=pad_value)
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.log2(t0, memory_config=output_mem_config)
 
     return ttnn_tensor_to_torch(t1)
@@ -2624,9 +2617,8 @@ def logaddexp2(
     output_mem_config,
     **kwargs,
 ):
-    pad_value = kwargs.get("pad_value", None)
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0], pad_value=pad_value)
-    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1], pad_value=pad_value)
+    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
+    t1 = setup_ttnn_tensor(y, device, layout[1], input_mem_config[1], dtype[1])
 
     t2 = ttnn.logaddexp2(t0, t1, memory_config=output_mem_config)
 
