@@ -57,7 +57,9 @@ public:
     }
 
     static void DoSetUpTestSuite(
-        tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt) {
+        tt_fabric::FabricConfig fabric_config,
+        std::optional<uint8_t> num_routing_planes = std::nullopt,
+        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED) {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
             log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
@@ -73,7 +75,10 @@ public:
             ids.push_back(id);
         }
         tt::tt_fabric::SetFabricConfig(
-            fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, num_routing_planes);
+            fabric_config,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+            num_routing_planes,
+            fabric_tensix_config);
         devices_map_ = tt::tt_metal::detail::CreateDevices(ids);
         for (auto& [id, device] : devices_map_) {
             devices_.push_back(device);
@@ -113,6 +118,15 @@ public:
 class Fabric1DFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+class Fabric1DTensixFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() {
+        BaseFabricFixture::DoSetUpTestSuite(
+            tt::tt_fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_fabric::FabricTensixConfig::MUX);
+    }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
 };
 
@@ -212,6 +226,27 @@ void RunTestChipMCast1D(
     bool enable_fabric_tracing = false);
 
 void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info);
+
+enum NocSendType : uint8_t {
+    NOC_UNICAST_WRITE = 0,
+    NOC_UNICAST_INLINE_WRITE = 1,
+    NOC_UNICAST_ATOMIC_INC = 2,
+    NOC_FUSED_UNICAST_ATOMIC_INC = 3,
+    NOC_UNICAST_SCATTER_WRITE = 4,
+    NOC_MULTICAST_WRITE = 5,       // mcast has bug
+    NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
+    NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
+};
+
+void FabricUnicastCommon(
+    BaseFabricFixture* fixture,
+    NocSendType noc_send_type,
+    const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs);
+
+void FabricMulticastCommon(
+    BaseFabricFixture* fixture,
+    NocSendType noc_send_type,
+    const std::vector<std::tuple<RoutingDirection, uint32_t /*start_distance*/, uint32_t /*range*/>>& dir_configs);
 
 void RunEDMConnectionStressTest(
     BaseFabricFixture* fixture,
