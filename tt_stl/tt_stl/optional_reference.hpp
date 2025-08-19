@@ -9,6 +9,37 @@
 
 namespace ttsl {
 
+// `optional_reference` is a trivially copyable wrapper around a pointer to a value.
+// This is useful for creating functions that accept optional parameters without the overhead of copying values.
+// The main use case is to allow convenient and efficient passing of optional values to functions:
+// 1. `optional_reference<T>` binds to `T&`, `optional<T>&`
+// 2. `optional_reference<const T>` binds to `const T&`, `const optional<T>&`, and temporaries.
+//
+// Be aware retaining `optional_reference<T>` is dangerous, as the ownership of the value is not guaranteed!
+// Copy the value if you need to retain it.
+//
+//
+// Example usage:
+//
+// void process_config(optional_reference<const Config> config) {
+//     if (config) {
+//         apply_settings(config->get_settings());
+//     } else {
+//         apply_default_settings();
+//     }
+// }
+//
+// // Can be called with various types:
+// Config my_config;
+// process_config(my_config);                    // Pass a reference
+// process_config(Config());                     // Pass a temporary
+//
+// std::optional<Config> maybe_config = load_config();
+// process_config(maybe_config);                 // Pass an optional
+// process_config(load_config());                // Pass a temporary optional
+//
+// process_config(std::nullopt);                 // Pass nullopt
+//
 template <typename T>
 class optional_reference {
 public:
