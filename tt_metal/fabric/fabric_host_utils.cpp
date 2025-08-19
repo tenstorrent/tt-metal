@@ -364,6 +364,14 @@ std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(
     } else if (topology_info.ns_size == 1 && topology_info.ew_size == 1) {
         // Single chip mesh
         first_chip = 0;
+    } else if (cluster.get_board_type(0) == BoardType::UBB) {
+        if (!graph_sorter.has_value()) {
+            // Default behavior: sort adjacency map by Ethernet coordinates
+            std::tie(adj_map, first_chip) = sort_adjacency_map_by_ubb_id(topology_info);
+        } else {
+            // User provided a sorting function. This is primarily done for testing.
+            std::tie(adj_map, first_chip) = graph_sorter.value()(topology_info);
+        }
     } else {
         first_chip = std::min_element(topology_info.adjacency_map.begin(), topology_info.adjacency_map.end())->first;
     }
