@@ -95,7 +95,7 @@ def test_all_gather_nightly(
         pytest.skip("Ring configuration requires more than 2 devices")
     if (p150_mesh_device.shape[0] != num_devices) and (all_gather_topology == ttnn.Topology.Ring):
         pytest.skip("Ring configuration requires the entire row or column so it loops around")
-    if ttnn.get_num_devices() < num_devices:
+    if p150_mesh_device.shape[0] < num_devices:
         pytest.skip("Test requires more devices than are available on this platform")
     submesh_device = p150_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0

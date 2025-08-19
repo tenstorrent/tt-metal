@@ -77,7 +77,7 @@ def run_dm_tests(profile, verbose, gtest_filter, plot, report, arch_name):
 def profile_dm_tests(verbose=False, gtest_filter=None):
     if verbose:
         logger.info(f"Profiling Kernels...")
-    cmd = f"TT_METAL_SLOW_DISPATCH_MODE=1 TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_data_movement"
+    cmd = f"TT_METAL_DEVICE_PROFILER=1 {os.environ['TT_METAL_HOME']}/build/test/tt_metal/unit_tests_data_movement"
 
     if gtest_filter:
         cmd += f' --gtest_filter="*{gtest_filter}*"'
