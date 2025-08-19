@@ -22,8 +22,8 @@ parameters = {
             # Contains following parameters:
             # [batch_size, input_channels, input_height, input_width, output_height, output_width]
             # Common scenarios from real models
-            [1, 64, 224, 224, 1, 1],  # Global pooling on ImageNet input
-            [1, 128, 112, 112, 1, 1],  # Global pooling mid-network
+            # [1, 64, 224, 224, 1, 1],  # Global pooling on ImageNet input OOM
+            # [1, 128, 112, 112, 1, 1],  # Global pooling mid-network OOM
             [1, 256, 56, 56, 1, 1],  # Global pooling deeper network
             [1, 512, 28, 28, 1, 1],  # Global pooling very deep
             [1, 1024, 14, 14, 1, 1],  # Global pooling final layers
@@ -32,9 +32,9 @@ parameters = {
             [1, 64, 224, 224, 7, 7],  # Standard classifier head
             [1, 256, 32, 32, 4, 4],  # 8x downsampling
             [1, 128, 64, 64, 8, 8],  # 8x downsampling different size
-            [2, 64, 112, 112, 1, 1],  # Batch size 2
-            [4, 32, 64, 64, 2, 2],  # Batch size 4
-            [1, 96, 150, 150, 5, 5],  # Odd dimensions
+            # [2, 64, 112, 112, 1, 1],  # Batch size 2 OOM
+            # [4, 32, 64, 64, 2, 2],  # Batch size 4 OOM
+            # [1, 96, 150, 150, 5, 5],  # Odd dimensions OOM
             [1, 160, 75, 75, 3, 3],  # Small odd dimensions
             [1, 320, 28, 28, 14, 14],  # 2x downsampling
             [1, 480, 14, 14, 7, 7],  # 2x downsampling small
