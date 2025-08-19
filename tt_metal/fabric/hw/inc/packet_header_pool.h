@@ -95,6 +95,14 @@ public:
             packet_headers++;
         }
     }
+
+    FORCE_INLINE static uint8_t get_num_headers(uint8_t route_id) {
+        ASSERT(route_id < route_id_);
+        if (route_id >= route_id_) {
+            return 0;
+        }
+        return header_table[route_id].second;
+    }
 };
 
 uint32_t PacketHeaderPool::current_offset_ = PacketHeaderPool::risc_pool_start;
