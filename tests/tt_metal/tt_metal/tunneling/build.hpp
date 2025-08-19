@@ -6,7 +6,6 @@
 
 #include <string>
 #include <vector>
-#include <memory>
 #include "tt_cluster.hpp"
 
 namespace lite_fabric {

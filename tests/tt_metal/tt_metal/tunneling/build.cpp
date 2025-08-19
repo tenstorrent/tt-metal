@@ -6,6 +6,7 @@
 #include "build.hpp"
 
 #include <filesystem>
+#include <sstream>
 #include <tt-logger/tt-logger.hpp>
 #include <vector>
 #include <string>
@@ -176,7 +177,30 @@ int LinkLiteFabric(
     std::string link_cmd = link_oss.str();
     log_info(tt::LogMetal, "Link LiteFabric command:\n{}", link_cmd);
 
-    return system(link_cmd.c_str());
+    int link_result = system(link_cmd.c_str());
+    if (link_result != 0) {
+        return link_result;
+    }
+
+    // Create flat binary from ELF for direct device loading
+    std::string bin_path = elf_out.string();
+    bin_path.replace(bin_path.find(".elf"), 4, ".bin");
+
+    std::ostringstream objcopy_oss;
+    objcopy_oss << "riscv32-tt-elf-objcopy -O binary ";
+    objcopy_oss << elf_out.string() << " " << bin_path;
+
+    std::string objcopy_cmd = objcopy_oss.str();
+    log_info(tt::LogMetal, "Create flat binary command:\n{}", objcopy_cmd);
+
+    int objcopy_result = system(objcopy_cmd.c_str());
+    if (objcopy_result != 0) {
+        log_error(tt::LogMetal, "Failed to create flat binary from ELF");
+        return objcopy_result;
+    }
+
+    log_info(tt::LogMetal, "Flat binary created: {}", bin_path);
+    return 0;
 }
 
 }  // namespace lite_fabric
