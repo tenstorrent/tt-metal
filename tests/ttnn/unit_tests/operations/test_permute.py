@@ -26,53 +26,37 @@ def random_torch_tensor(dtype, shape):
         return torch.rand(shape, dtype=torch.bfloat16)
 
 
-# @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65), (1, 6, 256, 20, 50), (6, 20, 50, 1, 256)])
-# @pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1), (1, 3, 4, 0, 2), (3, 0, 4, 1, 2)])
-# @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
-
-
-# @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65)])
-# @pytest.mark.parametrize("shape", [(3, 33, 3, 3, 33)])
-# @pytest.mark.parametrize("shape", [(3, 33, 3, 2, 33)]) # Most efficient so far
-# @pytest.mark.parametrize("shape", [(3, 33, 2, 2, 33)])
-@pytest.mark.parametrize("shape", [(1, 33, 1, 1, 31)])
-@pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1)])
-@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65), (1, 6, 256, 20, 50), (6, 20, 50, 1, 256)])
+@pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1), (1, 3, 4, 0, 2), (3, 0, 4, 1, 2)])
+@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 @pytest.mark.parametrize(
     "dtype",
     [
-        #        ttnn.bfloat16,
-        #        ttnn.float32,
+        ttnn.bfloat16,
+        ttnn.float32,
         ttnn.int32,
     ],
 )
 def test_permute_5d_blocked(device, shape, perm, memory_config, dtype):
     device.disable_and_clear_program_cache()
-    # nop_types_sentence = "UNOPS MNOPS PNOPS"
-    nop_types_sentence = "MNOPS"
+    print("Shape: ", shape, "Perm: ", perm, "Memory config: ", memory_config, "Dtype: ", dtype)
+    nop_types_sentence = "UNOPS MNOPS PNOPS"
     nop_types = nop_types_sentence.split()
 
-    # torch.manual_seed(520)
-    # input_a = random_torch_tensor(dtype, shape)
-    # tlist = torch.arange(33 * 31)
-    # tlist_a = torch.tensor(tlist)
-    # input_a = torch.reshape(tlist_a, shape)
-    input_a = torch.full(shape, 0, dtype=torch.int32)
+    torch.manual_seed(520)
+    input_a = random_torch_tensor(dtype, shape)
     torch_output = torch.permute(input_a, perm)
 
-    # for is_risc in range(2):
-    for is_risc in range(1):
+    for is_risc in range(2):
         print("RISCV ", is_risc)
         os.environ["RISCV"] = str(is_risc)
         for core_nop in nop_types:
             print("NOP TYPE ", core_nop)
-            my_it = 1  # 10
+            my_it = 10
             my_nop = 100
             min_nop = 0
             min_it = my_it
-            # for nops in range(my_nop):
-            # failed with 47 nops in versim
-            for nops in range(47, 48):
+            for nops in range(my_nop):
                 os.environ[core_nop] = str(nops)
                 counter = 0
                 for i in range(my_it):
