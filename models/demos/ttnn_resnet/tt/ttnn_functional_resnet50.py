@@ -690,6 +690,7 @@ class resnet50:
             enable_split_reader=True,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             reshard_if_not_optimal=False,
+            enable_activation_reuse=True,
         )
         self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
