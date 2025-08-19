@@ -50,7 +50,8 @@ struct SystemDescriptor {
 
 uint32_t GetEthChannelMask(chip_id_t device_id);
 
-SystemDescriptor GetSystemDescriptor2Devices(chip_id_t mmio_device_id, chip_id_t connected_device_id);
+SystemDescriptor GetSystemDescriptor2Devices(
+    tt::Cluster& cluster, chip_id_t mmio_device_id, chip_id_t connected_device_id);
 
 uint32_t GetLocalInitAddr(std::shared_ptr<tt::tt_metal::Kernel> kernel);
 
@@ -84,5 +85,7 @@ void LaunchLiteFabric(tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const 
 
 void TerminateLiteFabricWithMetal(tt::Cluster& cluster, const SystemDescriptor& desc);
 void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc);
+
+void DrainLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc);
 
 }  // namespace lite_fabric
