@@ -228,7 +228,6 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
         for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
             UpdateDynamicCircularBufferAddress(program, cb_inputs[idx], *input_tensors[idx].buffer());
         }
-        UpdateDynamicCircularBufferAddress(program, cb_output, *output_tensors[0].buffer());
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

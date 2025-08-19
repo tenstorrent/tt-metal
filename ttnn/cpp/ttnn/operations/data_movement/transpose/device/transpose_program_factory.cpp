@@ -88,7 +88,6 @@ void override_runtime_args_mc_cn(
 
             reader_args[0] = input_buffer->address();
             reader_args[1] = N;
-            reader_args[2] = C;
             reader_args[3] = HtWt;
             reader_args[4] = batch_step;
             reader_args[5] = channel_step;
@@ -284,7 +283,6 @@ void override_runtime_args_mc_hc(
             auto& reader_args = cached_reader_args.at(core.x).at(core.y);
             auto& writer_args = cached_writer_args.at(core.x).at(core.y);
 
-            reader_args[0] = input_buffer->address();
             reader_args[1] = Wt;
             reader_args[2] = H;
             reader_args[3] = Ct;

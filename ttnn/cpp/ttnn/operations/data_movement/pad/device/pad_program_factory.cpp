@@ -159,12 +159,10 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
         {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            runtime_args[1] = dst_buffer->address();
         }
         {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = src_buffer->address();
-            runtime_args[1] = dst_buffer->address();
         }
     };
 
