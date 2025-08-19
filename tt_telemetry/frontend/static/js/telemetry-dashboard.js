@@ -1,6 +1,7 @@
 import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
 import { HierarchicalTelemetryStore } from './hierarchical_telemetry_store.js';
 import './status-grid.js';
+import './metric-sidebar.js';
 
 // MAIN DASHBOARD COMPONENT - Manages navigation and data
 export class TelemetryDashboard extends LitElement {
@@ -63,13 +64,17 @@ export class TelemetryDashboard extends LitElement {
     `;
 
     static properties = {
-        currentPath: { type: Array }
+        currentPath: { type: Array },
+        selectedMetric: { type: Object },
+        sidebarOpen: { type: Boolean }
     };
 
     constructor() {
         super();
 
         this.currentPath = [];
+        this.selectedMetric = null;
+        this.sidebarOpen = false;
         this._eventSource = null;
         this._telemetryStore = new HierarchicalTelemetryStore();
 
@@ -186,8 +191,18 @@ export class TelemetryDashboard extends LitElement {
         // Get children, if any, to drill in deeper
         const childNames = this._telemetryStore.getChildNames(newPath);
         console.log(childNames);
+        
         if (childNames.length > 0) {
+            // This is an intermediate node - drill down
             this.currentPath = [...this.currentPath, metricName]; // descend one level deeper (don't use push, we need to mutate array to trigger state update)
+        } else {
+            // This is a leaf node - open sidebar with details
+            this.selectedMetric = {
+                name: metricName,
+                fullPath: newPath,
+                value: this._telemetryStore.getValue(newPath)
+            };
+            this.sidebarOpen = true;
         }
     }
 
@@ -195,6 +210,11 @@ export class TelemetryDashboard extends LitElement {
         if (this.currentPath.length > 0) {
             this.currentPath = this.currentPath.slice(0, -1);   // remove last
         }
+    }
+
+    _handleSidebarClose() {
+        this.sidebarOpen = false;
+        this.selectedMetric = null;
     }
 
     _getBreadcrumb() {
@@ -241,6 +261,13 @@ export class TelemetryDashboard extends LitElement {
                 .metrics="${this._getCurrentMetrics()}"
                 @grid-box-click="${this._handleGridBoxClick}">
             </status-grid>
+
+            <metric-sidebar
+                ?open="${this.sidebarOpen}"
+                .metricName="${this.selectedMetric?.name || ''}"
+                .metricValue="${this.selectedMetric?.value || null}"
+                @sidebar-close="${this._handleSidebarClose}">
+            </metric-sidebar>
         `;
     }
 }
