@@ -1,0 +1,15 @@
+rank_bindings:
+  - rank: 0
+    mesh_id: 1
+  - rank: 1
+    mesh_id: 0
+  - rank: 2
+    mesh_id: 2
+  - rank: 3
+    mesh_id: 3
+  - rank: 4
+    mesh_id: 4
+
+global_env:
+  TT_METAL_HOME: "/home/ttuser/git/tt-metal-2"
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/nano_exabox_1x8_mesh_graph_descriptor.yaml"

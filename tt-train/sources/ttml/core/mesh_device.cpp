@@ -23,6 +23,10 @@ MeshDevice::MeshDevice(const tt::tt_metal::distributed::MeshShape& shape, const 
     return *m_mesh_device;
 }
 
+[[nodiscard]] std::shared_ptr<ttnn::distributed::MeshDevice> MeshDevice::get_device_ptr() const {
+    return m_mesh_device;
+}
+
 MeshDevice::~MeshDevice() {
     assert(m_mesh_device);
     ttnn::distributed::close_mesh_device(m_mesh_device);
