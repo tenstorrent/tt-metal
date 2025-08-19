@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""
+Convenient wrapper for the Automated Hardware Debugging Tool
+"""
+
+import sys
+import os
+import subprocess
+from pathlib import Path
+
+
+def main():
+    # Get the directory where this script is located
+    script_dir = Path(__file__).parent
+
+    # Path to the actual debugging tool
+    tool_path = script_dir / "automated_hardware_debugger" / "automated_hardware_debugger.py"
+
+    if not tool_path.exists():
+        print(f"❌ Error: Tool not found at {tool_path}")
+        sys.exit(1)
+
+    # Pass all arguments to the actual tool
+    cmd = ["python3", str(tool_path)] + sys.argv[1:]
+
+    try:
+        # Run the tool with the same arguments
+        result = subprocess.run(cmd, cwd=str(script_dir))
+        sys.exit(result.returncode)
+    except KeyboardInterrupt:
+        print("\n⚠️ Interrupted by user")
+        sys.exit(130)
+    except Exception as e:
+        print(f"❌ Error running tool: {e}")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

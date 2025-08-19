@@ -1,0 +1,1348 @@
+commit d7d61eeeecab48be60a6d1965b20e9cad63af460
+Author: Ata Tuzuner <atuzuner@tenstorrent.com>
+Date:   Tue Aug 19 16:27:51 2025 +0000
+
+    Minimizing changes
+
+diff --git a/tests/ttnn/unit_tests/operations/test_permute.py b/tests/ttnn/unit_tests/operations/test_permute.py
+index 731f31136f..145a62948d 100644
+--- a/tests/ttnn/unit_tests/operations/test_permute.py
++++ b/tests/ttnn/unit_tests/operations/test_permute.py
+@@ -26,53 +26,37 @@ def random_torch_tensor(dtype, shape):
+         return torch.rand(shape, dtype=torch.bfloat16)
+
+
+-# @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65), (1, 6, 256, 20, 50), (6, 20, 50, 1, 256)])
+-# @pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1), (1, 3, 4, 0, 2), (3, 0, 4, 1, 2)])
+-# @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+-
+-
+-# @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65)])
+-# @pytest.mark.parametrize("shape", [(3, 33, 3, 3, 33)])
+-# @pytest.mark.parametrize("shape", [(3, 33, 3, 2, 33)]) # Most efficient so far
+-# @pytest.mark.parametrize("shape", [(3, 33, 2, 2, 33)])
+-@pytest.mark.parametrize("shape", [(1, 33, 1, 1, 31)])
+-@pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1)])
+-@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG])
++@pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65), (1, 6, 256, 20, 50), (6, 20, 50, 1, 256)])
++@pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1), (1, 3, 4, 0, 2), (3, 0, 4, 1, 2)])
++@pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
+ @pytest.mark.parametrize(
+     "dtype",
+     [
+-        #        ttnn.bfloat16,
+-        #        ttnn.float32,
++        ttnn.bfloat16,
++        ttnn.float32,
+         ttnn.int32,
+     ],
+ )
+ def test_permute_5d_blocked(device, shape, perm, memory_config, dtype):
+     device.disable_and_clear_program_cache()
+-    # nop_types_sentence = "UNOPS MNOPS PNOPS"
+-    nop_types_sentence = "MNOPS"
++    print("Shape: ", shape, "Perm: ", perm, "Memory config: ", memory_config, "Dtype: ", dtype)
++    nop_types_sentence = "UNOPS MNOPS PNOPS"
+     nop_types = nop_types_sentence.split()
+
+-    # torch.manual_seed(520)
+-    # input_a = random_torch_tensor(dtype, shape)
+-    # tlist = torch.arange(33 * 31)
+-    # tlist_a = torch.tensor(tlist)
+-    # input_a = torch.reshape(tlist_a, shape)
+-    input_a = torch.full(shape, 0, dtype=torch.int32)
++    torch.manual_seed(520)
++    input_a = random_torch_tensor(dtype, shape)
+     torch_output = torch.permute(input_a, perm)
+
+-    # for is_risc in range(2):
+-    for is_risc in range(1):
++    for is_risc in range(2):
+         print("RISCV ", is_risc)
+         os.environ["RISCV"] = str(is_risc)
+         for core_nop in nop_types:
+             print("NOP TYPE ", core_nop)
+-            my_it = 1  # 10
++            my_it = 10
+             my_nop = 100
+             min_nop = 0
+             min_it = my_it
+-            # for nops in range(my_nop):
+-            # failed with 47 nops in versim
+-            for nops in range(47, 48):
++            for nops in range(my_nop):
+                 os.environ[core_nop] = str(nops)
+                 counter = 0
+                 for i in range(my_it):
+
+commit 37b2724fa82b502b5b336c744410f620ab009d29
+Author: Anil Mahmud <amahmud@tenstorrent.com>
+Date:   Sat Aug 16 06:30:09 2025 +0000
+
+    Added perturbation option and reproduced error on simulator at 47 nops
+
+diff --git a/exports.sh b/exports.sh
+index c650ed3530..f3fbae97fa 100644
+--- a/exports.sh
++++ b/exports.sh
+@@ -1,4 +1,6 @@
+ export TT_METAL_ENV=dev
+ export TT_METAL_HOME=`pwd`
+ export PYTHONPATH=$(pwd)
+-export ARCH_NAME=blackhole
++export ARCH_NAME=wormhole_b0
++
++#export TT_METAL_SIMULATOR=/localdev/amahmud/tt-umd-simulators/build/versim-wormhole-b0
+diff --git a/tests/ttnn/unit_tests/operations/test_permute.py b/tests/ttnn/unit_tests/operations/test_permute.py
+index 4272252b3f..731f31136f 100644
+--- a/tests/ttnn/unit_tests/operations/test_permute.py
++++ b/tests/ttnn/unit_tests/operations/test_permute.py
+@@ -2,6 +2,8 @@
+
+ # SPDX-License-Identifier: Apache-2.0
+
++import os
++
+ import pytest
+
+ import torch
+@@ -12,7 +14,7 @@ import itertools
+ from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+ from models.utility_functions import is_blackhole, skip_for_wormhole_b0
+
+-iterations = 10
++iterations = 1
+
+
+ def random_torch_tensor(dtype, shape):
+@@ -31,8 +33,9 @@ def random_torch_tensor(dtype, shape):
+
+ # @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65)])
+ # @pytest.mark.parametrize("shape", [(3, 33, 3, 3, 33)])
++# @pytest.mark.parametrize("shape", [(3, 33, 3, 2, 33)]) # Most efficient so far
+ # @pytest.mark.parametrize("shape", [(3, 33, 2, 2, 33)])
+-@pytest.mark.parametrize("shape", [(3, 33, 3, 2, 33)])
++@pytest.mark.parametrize("shape", [(1, 33, 1, 1, 31)])
+ @pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1)])
+ @pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG])
+ @pytest.mark.parametrize(
+@@ -44,19 +47,54 @@ def random_torch_tensor(dtype, shape):
+     ],
+ )
+ def test_permute_5d_blocked(device, shape, perm, memory_config, dtype):
+-    torch.manual_seed(520)
+-    for i in range(iterations):
+-        input_a = random_torch_tensor(dtype, shape)
+-        torch_output = torch.permute(input_a, perm)
+-
+-        tt_input = ttnn.from_torch(
+-            input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, memory_config=memory_config
+-        )
+-
+-        tt_output = ttnn.permute(tt_input, perm)
+-        tt_output = ttnn.to_torch(tt_output)
+-
+-        assert_equal(torch_output, tt_output)
++    device.disable_and_clear_program_cache()
++    # nop_types_sentence = "UNOPS MNOPS PNOPS"
++    nop_types_sentence = "MNOPS"
++    nop_types = nop_types_sentence.split()
++
++    # torch.manual_seed(520)
++    # input_a = random_torch_tensor(dtype, shape)
++    # tlist = torch.arange(33 * 31)
++    # tlist_a = torch.tensor(tlist)
++    # input_a = torch.reshape(tlist_a, shape)
++    input_a = torch.full(shape, 0, dtype=torch.int32)
++    torch_output = torch.permute(input_a, perm)
++
++    # for is_risc in range(2):
++    for is_risc in range(1):
++        print("RISCV ", is_risc)
++        os.environ["RISCV"] = str(is_risc)
++        for core_nop in nop_types:
++            print("NOP TYPE ", core_nop)
++            my_it = 1  # 10
++            my_nop = 100
++            min_nop = 0
++            min_it = my_it
++            # for nops in range(my_nop):
++            # failed with 47 nops in versim
++            for nops in range(47, 48):
++                os.environ[core_nop] = str(nops)
++                counter = 0
++                for i in range(my_it):
++                    tt_input = ttnn.from_torch(
++                        input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, memory_config=memory_config
++                    )
++
++                    tt_output = ttnn.permute(tt_input, perm)
++                    tt_output = ttnn.to_torch(tt_output)
++
++                    # assert_equal(torch_output, tt_output)
++                    if torch.equal(torch_output, tt_output):
++                        counter = counter + 1
++                    else:
++                        torch.set_printoptions(profile="full", linewidth=1000, sci_mode=True)
++                        print(input_a)
++                        print(tt_output)
++                print("Nops ", nops, " Counter ", counter)
++                if min_it > counter:
++                    min_nop = nops
++                    min_it = counter
++            print("Min nops ", min_nop, " Counter ", min_it)
+
+
+ '''
+diff --git a/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_rm_single_tile_size.cpp b/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_rm_single_tile_size.cpp
+index b950e98bc1..23507021dd 100644
+--- a/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_rm_single_tile_size.cpp
++++ b/ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_rm_single_tile_size.cpp
+@@ -10,7 +10,41 @@
+ #include "compute_kernel_api/untilize.h"
+ #include "compute_kernel_api/pack_untilize.h"
+
++#include "debug/dprint.h"
++#include "debug/dprint_pages.h"
++#include "debug/dprint_tensix.h"
++
+ namespace NAMESPACE {
++
++template <const int n, const int riscv>
++inline void add_nops() {
++    DPRINT << "RISCV " << riscv << " NOPS " << n << ENDL();
++
++    for (int i = 0; i < n; i++) {
++        if constexpr (riscv) {
++            asm("nop");
++        } else {
++            TTI_NOP;
++        }
++    }
++}
++
++template <const int U, const int M, const int P, const int R>
++inline void add_trisc_nops() {
++    DPRINT << "U " << (uint32_t)U << " M " << (uint32_t)M << " P " << (uint32_t)P << ENDL();
++    if constexpr (U) {
++        UNPACK((add_nops<U, R>()));
++    }
++
++    if constexpr (M) {
++        MATH((add_nops<M, R>()));
++    }
++
++    if constexpr (P) {
++        PACK((add_nops<P, R>()));
++    }
++}
++
+ void MAIN {
+     constexpr uint32_t x_block_size = get_compile_time_arg_val(0);
+     constexpr uint32_t w_block_size = get_compile_time_arg_val(1);
+@@ -24,6 +58,7 @@ void MAIN {
+     unary_op_init_common(cb_in, cb_out);
+
+     for (uint32_t n = 0; n < num_blocks; n++) {
++        add_trisc_nops<UNOPS, MNOPS, PNOPS, RISCV>();
+         // tilize input via unpack and then pack
+         tilize_init(cb_in, 1, cb_tilize);
+
+@@ -39,6 +74,7 @@ void MAIN {
+
+         // transpose input
+         cb_wait_front(cb_tilize, 1);
++
+         transpose_wh_init_short(cb_tilize);
+         pack_untilize_dest_init<1>(cb_out);
+
+diff --git a/ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_rm_program_factory.cpp b/ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_rm_program_factory.cpp
+index 94b72c5ed6..d5d54466b1 100644
+--- a/ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_rm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_rm_program_factory.cpp
+@@ -7,6 +7,8 @@
+ #include <tt-metalium/hal.hpp>
+ #include <tt-metalium/tensor_accessor_args.hpp>
+
++#include <iostream>
++
+ namespace ttnn::operations::data_movement {
+
+ namespace detail {
+@@ -285,6 +287,14 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
+         all_cores,
+         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+
++    std::map<std::string, std::string> compute_defines;
++    compute_defines["UNOPS"] = std::to_string(std::getenv("UNOPS") ? std::stoi(std::getenv("UNOPS")) : 0);
++    compute_defines["MNOPS"] = std::to_string(std::getenv("MNOPS") ? std::stoi(std::getenv("MNOPS")) : 0);
++    compute_defines["PNOPS"] = std::to_string(std::getenv("PNOPS") ? std::stoi(std::getenv("PNOPS")) : 0);
++    compute_defines["RISCV"] = std::to_string(std::getenv("RISCV") ? std::stoi(std::getenv("RISCV")) : 0);
++    for (const auto& pair : compute_defines) {
++        // std::cout << "Key: " << pair.first << ", Value: " << pair.second << std::endl;
++    }
+     std::vector<uint32_t> compute_kernel_args = {x_block_size, w_block_size};
+     bool fp32_dest_acc_en = cb_data_format_output == tt::DataFormat::Float32;
+     auto compute_kernel_id = tt::tt_metal::CreateKernel(
+@@ -292,9 +302,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
+         "ttnn/cpp/ttnn/operations/data_movement/permute/device/kernels/compute/transpose_xw_rm_single_tile_size.cpp",
+         all_cores,
+         tt::tt_metal::ComputeConfig{
+-            .fp32_dest_acc_en = fp32_dest_acc_en,
+-            .compile_args = compute_kernel_args,
+-        });
++            .fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args, .defines = compute_defines});
+
+     auto input_shape_view = input_tensor.logical_shape().view();
+
+
+commit ab60b19624b54ba0bf4acf709037853255da081d
+Author: Anil Mahmud <amahmud@tenstorrent.com>
+Date:   Wed Aug 13 22:27:24 2025 +0000
+
+    Reduce test case and repro in slow dispatch mode
+
+diff --git a/exports.sh b/exports.sh
+new file mode 100644
+index 0000000000..c650ed3530
+--- /dev/null
++++ b/exports.sh
+@@ -0,0 +1,4 @@
++export TT_METAL_ENV=dev
++export TT_METAL_HOME=`pwd`
++export PYTHONPATH=$(pwd)
++export ARCH_NAME=blackhole
+diff --git a/tests/ttnn/unit_tests/operations/test_permute.py b/tests/ttnn/unit_tests/operations/test_permute.py
+index 2c96b0c3b2..4272252b3f 100644
+--- a/tests/ttnn/unit_tests/operations/test_permute.py
++++ b/tests/ttnn/unit_tests/operations/test_permute.py
+@@ -9,9 +9,11 @@ import torch
+ import ttnn
+ import itertools
+
+-from tests.ttnn.utils_for_testing import assert_with_pcc
++from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+ from models.utility_functions import is_blackhole, skip_for_wormhole_b0
+
++iterations = 10
++
+
+ def random_torch_tensor(dtype, shape):
+     if dtype == ttnn.int32:
+@@ -22,23 +24,60 @@ def random_torch_tensor(dtype, shape):
+         return torch.rand(shape, dtype=torch.bfloat16)
+
+
++# @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65), (1, 6, 256, 20, 50), (6, 20, 50, 1, 256)])
++# @pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1), (1, 3, 4, 0, 2), (3, 0, 4, 1, 2)])
++# @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
++
++
++# @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65)])
++# @pytest.mark.parametrize("shape", [(3, 33, 3, 3, 33)])
++# @pytest.mark.parametrize("shape", [(3, 33, 2, 2, 33)])
++@pytest.mark.parametrize("shape", [(3, 33, 3, 2, 33)])
++@pytest.mark.parametrize("perm", [(4, 0, 3, 2, 1)])
++@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG])
++@pytest.mark.parametrize(
++    "dtype",
++    [
++        #        ttnn.bfloat16,
++        #        ttnn.float32,
++        ttnn.int32,
++    ],
++)
++def test_permute_5d_blocked(device, shape, perm, memory_config, dtype):
++    torch.manual_seed(520)
++    for i in range(iterations):
++        input_a = random_torch_tensor(dtype, shape)
++        torch_output = torch.permute(input_a, perm)
++
++        tt_input = ttnn.from_torch(
++            input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, memory_config=memory_config
++        )
++
++        tt_output = ttnn.permute(tt_input, perm)
++        tt_output = ttnn.to_torch(tt_output)
++
++        assert_equal(torch_output, tt_output)
++
++
++'''
+ @pytest.mark.parametrize("h", [32])
+ @pytest.mark.parametrize("w", [64])
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute(device, h, w, dtype):
+     torch.manual_seed(2005)
+-    shape = (1, 1, h, w)
+-    torch_input_tensor = random_torch_tensor(dtype, shape)
+-    torch_output_tensor = torch.permute(torch_input_tensor, (0, 1, 3, 2))
++    for i in range(iterations):
++        shape = (1, 1, h, w)
++        torch_input_tensor = random_torch_tensor(dtype, shape)
++        torch_output_tensor = torch.permute(torch_input_tensor, (0, 1, 3, 2))
+
+-    input_tensor = ttnn.from_torch(torch_input_tensor)
+-    input_tensor = ttnn.to_device(input_tensor, device)
+-    output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
+-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+-    output_tensor = ttnn.from_device(output_tensor)
+-    output_tensor = ttnn.to_torch(output_tensor)
++        input_tensor = ttnn.from_torch(torch_input_tensor)
++        input_tensor = ttnn.to_device(input_tensor, device)
++        output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
++        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
++        output_tensor = ttnn.from_device(output_tensor)
++        output_tensor = ttnn.to_torch(output_tensor)
+
+-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
++        assert_equal(torch_output_tensor, output_tensor)
+
+
+ @pytest.mark.parametrize("h", [32])
+@@ -46,18 +85,19 @@ def test_permute(device, h, w, dtype):
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_transpose(device, h, w, dtype):
+     torch.manual_seed(2005)
+-    shape = (1, 1, h, w)
+-    torch_input_tensor = random_torch_tensor(dtype, shape)
+-    torch_output_tensor = torch_input_tensor.transpose(2, 3)
++    for i in range(iterations):
++        shape = (1, 1, h, w)
++        torch_input_tensor = random_torch_tensor(dtype, shape)
++        torch_output_tensor = torch_input_tensor.transpose(2, 3)
+
+-    input_tensor = ttnn.from_torch(torch_input_tensor)
+-    input_tensor = ttnn.to_device(input_tensor, device)
+-    output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
+-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+-    output_tensor = ttnn.from_device(output_tensor)
+-    output_tensor = ttnn.to_torch(output_tensor)
++        input_tensor = ttnn.from_torch(torch_input_tensor)
++        input_tensor = ttnn.to_device(input_tensor, device)
++        output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
++        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
++        output_tensor = ttnn.from_device(output_tensor)
++        output_tensor = ttnn.to_torch(output_tensor)
+
+-    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
++        assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
+
+
+ @pytest.mark.parametrize("h", [32])
+@@ -65,15 +105,16 @@ def test_transpose(device, h, w, dtype):
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w, dtype):
+     torch.manual_seed(2005)
+-    shape = (1, 1, h, w)
+-    torch_input_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_input_tensor)
+-    input_tensor = ttnn.to_device(input_tensor, device)
+-    with pytest.raises(
+-        RuntimeError,
+-        match="The number of dimensions in the tensor input does not match the length of the desired ordering",
+-    ) as exception:
+-        ttnn.permute(input_tensor, (0, 1, 2))
++    for i in range(iterations):
++        shape = (1, 1, h, w)
++        torch_input_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_input_tensor)
++        input_tensor = ttnn.to_device(input_tensor, device)
++        with pytest.raises(
++            RuntimeError,
++            match="The number of dimensions in the tensor input does not match the length of the desired ordering",
++        ) as exception:
++            ttnn.permute(input_tensor, (0, 1, 2))
+
+
+ @pytest.mark.parametrize(
+@@ -83,26 +124,24 @@ def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w, dtype):
+     "dtype",
+     [
+         ttnn.bfloat16,
+-        pytest.param(
+-            ttnn.int32,
+-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+-        ),
++        ttnn.int32,
+     ],
+ )
+ def test_permute_on_less_than_4D(device, perm, dtype):
+     torch.manual_seed(2005)
+-    shape = tuple([32 * (value + 1) for value in perm])
+-    torch_input_tensor = random_torch_tensor(dtype, shape)
+-    torch_output_tensor = torch.permute(torch_input_tensor, perm)
++    for i in range(iterations):
++        shape = tuple([32 * (value + 1) for value in perm])
++        torch_input_tensor = random_torch_tensor(dtype, shape)
++        torch_output_tensor = torch.permute(torch_input_tensor, perm)
+
+-    input_tensor = ttnn.from_torch(torch_input_tensor)
+-    input_tensor = ttnn.to_device(input_tensor, device)
+-    output_tensor = ttnn.permute(input_tensor, perm)
+-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+-    output_tensor = ttnn.from_device(output_tensor)
+-    output_tensor = ttnn.to_torch(output_tensor)
++        input_tensor = ttnn.from_torch(torch_input_tensor)
++        input_tensor = ttnn.to_device(input_tensor, device)
++        output_tensor = ttnn.permute(input_tensor, perm)
++        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
++        output_tensor = ttnn.from_device(output_tensor)
++        output_tensor = ttnn.to_torch(output_tensor)
+
+-    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
++        assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
+
+
+ @pytest.mark.parametrize("b", [1])
+@@ -114,32 +153,34 @@ def test_permute_on_less_than_4D(device, perm, dtype):
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+ def test_permute_for_specific_case(device, b, s, h, w, dtype):
+     torch.manual_seed(2005)
+-    shape = (b, s, h, w)
+-    torch_input_tensor = random_torch_tensor(dtype, shape)
+-    torch_output_tensor = torch.permute(torch_input_tensor, (0, 1, 3, 2))
+-    input_tensor = ttnn.from_torch(torch_input_tensor)
+-    input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+-    input_tensor = ttnn.to_device(input_tensor, device)
+-    output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
+-    output_tensor = ttnn.from_device(output_tensor)
+-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
++    for i in range(iterations):
++        shape = (b, s, h, w)
++        torch_input_tensor = random_torch_tensor(dtype, shape)
++        torch_output_tensor = torch.permute(torch_input_tensor, (0, 1, 3, 2))
++        input_tensor = ttnn.from_torch(torch_input_tensor)
++        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
++        input_tensor = ttnn.to_device(input_tensor, device)
++        output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
++        output_tensor = ttnn.from_device(output_tensor)
++        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
++        output_tensor = ttnn.to_torch(output_tensor)
++        assert torch.allclose(torch_output_tensor, output_tensor, atol=1e-1, rtol=1e-2)
+
+
+ def test_add_after_permute(device):
+     torch.manual_seed(2005)
+-    torch_a = torch.randn(2, 1280, 8, 8)
+-    torch_b = torch.randn(1, 1, 2, 1280)
+-    torch_b_permuted = torch.permute(torch_b, (2, 3, 0, 1))
+-    torch_output = torch_a + torch_b_permuted
++    for i in range(iterations):
++        torch_a = torch.randn(2, 1280, 8, 8)
++        torch_b = torch.randn(1, 1, 2, 1280)
++        torch_b_permuted = torch.permute(torch_b, (2, 3, 0, 1))
++        torch_output = torch_a + torch_b_permuted
+
+-    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+-    b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+-    b = ttnn.permute(b, (2, 3, 0, 1))
+-    output = a + b
+-    output = ttnn.to_torch(output)
+-    assert_with_pcc(torch_output, output, 0.9999)
++        a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
++        b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
++        b = ttnn.permute(b, (2, 3, 0, 1))
++        output = a + b
++        output = ttnn.to_torch(output)
++        assert_with_pcc(torch_output, output, 0.9999)
+
+
+ @pytest.mark.parametrize("h", [32])
+@@ -147,29 +188,31 @@ def test_add_after_permute(device):
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute_negative_dim(device, h, w, dtype):
+     torch.manual_seed(2005)
+-    shape = (1, 1, h, w)
+-    torch_input_tensor = random_torch_tensor(dtype, shape)
+-    torch_output_tensor = torch.permute(torch_input_tensor, (0, -3, -1, -2))
++    for i in range(iterations):
++        shape = (1, 1, h, w)
++        torch_input_tensor = random_torch_tensor(dtype, shape)
++        torch_output_tensor = torch.permute(torch_input_tensor, (0, -3, -1, -2))
+
+-    input_tensor = ttnn.from_torch(torch_input_tensor)
+-    input_tensor = ttnn.to_device(input_tensor, device)
+-    output_tensor = ttnn.permute(input_tensor, (0, -3, -1, -2))
+-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+-    output_tensor = ttnn.from_device(output_tensor)
+-    output_tensor = ttnn.to_torch(output_tensor)
++        input_tensor = ttnn.from_torch(torch_input_tensor)
++        input_tensor = ttnn.to_device(input_tensor, device)
++        output_tensor = ttnn.permute(input_tensor, (0, -3, -1, -2))
++        output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
++        output_tensor = ttnn.from_device(output_tensor)
++        output_tensor = ttnn.to_torch(output_tensor)
+
+-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
++        assert_equal(torch_output_tensor, output_tensor)
+
+
+ def test_permute_bfloat8(device):
+     torch.manual_seed(2005)
+-    input_a = torch.randn(1, 160, 32, 32)
+-    torch_output = torch.permute(input_a, (0, 2, 3, 1))
++    for i in range(iterations):
++        input_a = torch.randn(1, 160, 32, 32)
++        torch_output = torch.permute(input_a, (0, 2, 3, 1))
+
+-    tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+-    tt_output = ttnn.permute(tt_input, (0, 2, 3, 1))
+-    tt_output = ttnn.to_torch(tt_output)
+-    assert_with_pcc(torch_output, tt_output, 0.9999)
++        tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
++        tt_output = ttnn.permute(tt_input, (0, 2, 3, 1))
++        tt_output = ttnn.to_torch(tt_output)
++        assert_with_pcc(torch_output, tt_output, 0.9999)
+
+
+ @pytest.mark.parametrize(
+@@ -179,14 +222,15 @@ def test_permute_bfloat8(device):
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute_5d(device, shape, perm, dtype):
+     torch.manual_seed(2005)
+-    input_a = random_torch_tensor(dtype, shape)
+-    torch_output = torch.permute(input_a, perm)
++    for i in range(iterations):
++        input_a = random_torch_tensor(dtype, shape)
++        torch_output = torch.permute(input_a, perm)
+
+-    tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
++        tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype)
+
+-    tt_output = ttnn.permute(tt_input, perm)
+-    tt_output = ttnn.to_torch(tt_output)
+-    assert_with_pcc(torch_output, tt_output, 0.9999)
++        tt_output = ttnn.permute(tt_input, perm)
++        tt_output = ttnn.to_torch(tt_output)
++        assert_equal(torch_output, tt_output)
+
+
+ @pytest.mark.parametrize("pad_value", [float("-inf"), None])
+@@ -194,13 +238,14 @@ def test_permute_pad_value(device, pad_value):
+     if pad_value is not None and is_blackhole():
+         pytest.skip("Blackhole reduce is needed for the full test to work")
+     torch.manual_seed(2005)
+-    input_a = torch.randn((2, 11, 33, 17), dtype=torch.bfloat16)
+-    torch_output = torch.permute(input_a, (3, 2, 1, 0))
++    for i in range(iterations):
++        input_a = torch.randn((2, 11, 33, 17), dtype=torch.bfloat16)
++        torch_output = torch.permute(input_a, (3, 2, 1, 0))
+
+-    tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+-    tt_output = ttnn.permute(tt_input, (3, 2, 1, 0), pad_value=pad_value)
+-    tt_output = ttnn.to_torch(tt_output)
+-    assert_with_pcc(torch_output, tt_output, 0.9999)
++        tt_input = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
++        tt_output = ttnn.permute(tt_input, (3, 2, 1, 0), pad_value=pad_value)
++        tt_output = ttnn.to_torch(tt_output)
++        assert_equal(torch_output, tt_output)
+
+
+ def generate_permutations(N):
+@@ -220,16 +265,22 @@ def generate_permutations(N):
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+ def test_permute_5d_width(device, shape, perm, memory_config, dtype):
+     torch.manual_seed(2005)
+-    input_a = random_torch_tensor(dtype, shape)
+-    torch_output = torch.permute(input_a, perm)
++    for i in range(iterations):
++        input_a = random_torch_tensor(dtype, shape)
++        torch_output = torch.permute(input_a, perm)
+
+-    tt_input = ttnn.from_torch(
+-        input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, memory_config=memory_config
+-    )
++        tt_input = ttnn.from_torch(
++            input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, memory_config=memory_config
++        )
+
+-    tt_output = ttnn.permute(tt_input, perm)
+-    tt_output = ttnn.to_torch(tt_output)
+-    assert_with_pcc(torch_output, tt_output, 0.9999)
++        tt_output = ttnn.permute(tt_input, perm)
++        tt_output = ttnn.to_torch(tt_output)
++        if dtype == ttnn.float32:
++            # float32 permute internally truncates to tf32 at the moment
++            # https://github.com/tenstorrent/tt-metal/issues/23663
++            assert_with_pcc(torch_output, output_tensor, 0.9999)
++        else:
++            assert_equal(torch_output, tt_output)
+
+
+ @pytest.mark.parametrize("shape", [(3, 65, 3, 3, 65), (1, 6, 256, 20, 50), (6, 20, 50, 1, 256)])
+@@ -240,48 +291,53 @@ def test_permute_5d_width(device, shape, perm, memory_config, dtype):
+     [
+         ttnn.bfloat16,
+         ttnn.float32,
+-        pytest.param(
+-            ttnn.int32,
+-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+-        ),
++        ttnn.int32,
+     ],
+ )
+ def test_permute_5d_blocked(device, shape, perm, memory_config, dtype):
+     torch.manual_seed(520)
+-    input_a = random_torch_tensor(dtype, shape)
+-    torch_output = torch.permute(input_a, perm)
++    for i in range(iterations):
++        input_a = random_torch_tensor(dtype, shape)
++        torch_output = torch.permute(input_a, perm)
+
+-    tt_input = ttnn.from_torch(
+-        input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, memory_config=memory_config
+-    )
++        tt_input = ttnn.from_torch(
++            input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dtype, memory_config=memory_config
++        )
+
+-    tt_output = ttnn.permute(tt_input, perm)
+-    tt_output = ttnn.to_torch(tt_output)
++        tt_output = ttnn.permute(tt_input, perm)
++        tt_output = ttnn.to_torch(tt_output)
+
+-    assert_with_pcc(torch_output, tt_output, 0.9999)
++        if dtype == ttnn.float32:
++            # float32 permute internally truncates to tf32 at the moment
++            # https://github.com/tenstorrent/tt-metal/issues/23663
++            assert_with_pcc(torch_output, tt_output, 0.9999)
++        else:
++            assert_equal(torch_output, tt_output)
+
+
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute_nd(device, dtype):
+     torch.manual_seed(2005)
+-    shape = (1, 3, 16, 16, 16, 16)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+-    output_tensor = ttnn.permute(input_tensor, (0, 2, 4, 3, 5, 1))
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, (0, 2, 4, 3, 5, 1))
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        shape = (1, 3, 16, 16, 16, 16)
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
++        output_tensor = ttnn.permute(input_tensor, (0, 2, 4, 3, 5, 1))
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, (0, 2, 4, 3, 5, 1))
++        assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute_squeeze(device, dtype):
+     torch.manual_seed(2005)
+-    shape = (1, 1, 3)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+-    output_tensor = ttnn.permute(input_tensor, (0, 1, 2))
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    assert_with_pcc(output_tensor, ttnn.to_torch(input_tensor), 0.9999)
++    for i in range(iterations):
++        shape = (1, 1, 3)
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
++        output_tensor = ttnn.permute(input_tensor, (0, 1, 2))
++        output_tensor = ttnn.to_torch(output_tensor)
++        assert_equal(output_tensor, ttnn.to_torch(input_tensor))
+
+
+ @pytest.mark.parametrize("shape", [(1, 49, 768)])
+@@ -293,60 +349,64 @@ def test_permute_squeeze(device, dtype):
+     [
+         ttnn.bfloat16,
+         ttnn.float32,
+-        pytest.param(
+-            ttnn.int32,
+-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+-        ),
++        ttnn.int32,
+     ],
+ )
+ def test_permute_3D(device, shape, perm, layout, memory_config, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=dtype, memory_config=memory_config)
+-    output_tensor = ttnn.permute(input_tensor, perm)
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, perm)
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(
++            torch_tensor, layout=layout, device=device, dtype=dtype, memory_config=memory_config
++        )
++        output_tensor = ttnn.permute(input_tensor, perm)
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, perm)
++        if dtype == ttnn.float32:
++            # float32 permute internally truncates to tf32 at the moment
++            # https://github.com/tenstorrent/tt-metal/issues/23663
++            assert_with_pcc(torch_output, output_tensor, 0.9999)
++        else:
++            assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_nil_volume_permute(device, dtype):
+     torch.manual_seed(2005)
+-    shape = (1, 0, 30, 32)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+-    output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, (0, 1, 3, 2))
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        shape = (1, 0, 30, 32)
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
++        output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, (0, 1, 3, 2))
++        assert torch_output.shape == output_tensor.shape
+
+
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute_5d_tiled_basic(device, dtype):
+     torch.manual_seed(2005)
+-    shape = (10, 10, 10, 100, 100)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+-    output_tensor = ttnn.permute(input_tensor, (2, 1, 0, 3, 4))
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, (2, 1, 0, 3, 4))
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        shape = (10, 10, 10, 100, 100)
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
++        output_tensor = ttnn.permute(input_tensor, (2, 1, 0, 3, 4))
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, (2, 1, 0, 3, 4))
++        assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute_5d_tiled_swap(device, dtype):
+     torch.manual_seed(2005)
+-    shape = (10, 10, 10, 100, 100)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+-    output_tensor = ttnn.permute(input_tensor, (2, 1, 0, 4, 3))
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, (2, 1, 0, 4, 3))
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        shape = (10, 10, 10, 100, 100)
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
++        output_tensor = ttnn.permute(input_tensor, (2, 1, 0, 4, 3))
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, (2, 1, 0, 4, 3))
++        assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize(
+@@ -355,13 +415,13 @@ def test_permute_5d_tiled_swap(device, dtype):
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute_4d_cn(device, shape, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+-    output_tensor = ttnn.permute(input_tensor, (1, 0, 2, 3))
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, (1, 0, 2, 3))
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
++        output_tensor = ttnn.permute(input_tensor, (1, 0, 2, 3))
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, (1, 0, 2, 3))
++        assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize(
+@@ -370,13 +430,13 @@ def test_permute_4d_cn(device, shape, dtype):
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute_4d_wh(device, shape, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+-    output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, (0, 1, 3, 2))
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
++        output_tensor = ttnn.permute(input_tensor, (0, 1, 3, 2))
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, (0, 1, 3, 2))
++        assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize(
+@@ -386,21 +446,18 @@ def test_permute_4d_wh(device, shape, dtype):
+     "dtype",
+     [
+         ttnn.bfloat16,
+-        pytest.param(
+-            ttnn.int32,
+-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+-        ),
++        ttnn.int32,
+     ],
+ )
+ def test_permute_4d_cnwh(device, shape, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+-    output_tensor = ttnn.permute(input_tensor, (1, 0, 3, 2))
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, (1, 0, 3, 2))
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
++        output_tensor = ttnn.permute(input_tensor, (1, 0, 3, 2))
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, (1, 0, 3, 2))
++        assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize("shape", [[2, 2, 2, 2, 2, 2, 32, 32]])
+@@ -409,34 +466,31 @@ def test_permute_4d_cnwh(device, shape, dtype):
+     "dtype",
+     [
+         ttnn.bfloat16,
+-        pytest.param(
+-            ttnn.int32,
+-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+-        ),
++        ttnn.int32,
+     ],
+ )
+ def test_permute_8d_swapped(device, shape, dims, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+-    output_tensor = ttnn.permute(input_tensor, dims)
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, dims)
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
++        output_tensor = ttnn.permute(input_tensor, dims)
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, dims)
++        assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize("shape", [[1, 1, 32, 32]])
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute_identity(device, shape, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+-    output_tensor = ttnn.permute(input_tensor, (0, 1, 2, 3))
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, (0, 1, 2, 3))
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
++        output_tensor = ttnn.permute(input_tensor, (0, 1, 2, 3))
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, (0, 1, 2, 3))
++        assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize("shape", [[2, 2, 67, 67, 65]])
+@@ -444,13 +498,18 @@ def test_permute_identity(device, shape, dtype):
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+ def test_permute_5d_xh_pad(device, shape, perm, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+-    output_tensor = ttnn.permute(input_tensor, perm)
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, perm)
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
++        output_tensor = ttnn.permute(input_tensor, perm)
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, perm)
++        if dtype == ttnn.float32:
++            # float32 permute internally truncates to tf32 at the moment
++            # https://github.com/tenstorrent/tt-metal/issues/23663
++            assert_with_pcc(torch_output, output_tensor, 0.9999)
++        else:
++            assert_equal(torch_output, output_tensor)
+
+
+ def generate_fixed_w_permutations(N):
+@@ -464,13 +523,18 @@ def generate_fixed_w_permutations(N):
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+ def test_permutations_5d_fixed_w(device, shape, perm, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+-    output_tensor = ttnn.permute(input_tensor, perm)
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, perm)
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
++        output_tensor = ttnn.permute(input_tensor, perm)
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, perm)
++        if dtype == ttnn.float32:
++            # float32 permute internally truncates to tf32 at the moment
++            # https://github.com/tenstorrent/tt-metal/issues/23663
++            assert_with_pcc(torch_output, output_tensor, 0.9999)
++        else:
++            assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize("shape", [[1, 9, 91, 7, 9]])
+@@ -478,13 +542,13 @@ def test_permutations_5d_fixed_w(device, shape, perm, dtype):
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute_adversarial(device, shape, perm, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+-    output_tensor = ttnn.permute(input_tensor, perm)
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, perm)
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
++        output_tensor = ttnn.permute(input_tensor, perm)
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, perm)
++        assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize(
+@@ -494,13 +558,13 @@ def test_permute_adversarial(device, shape, perm, dtype):
+ @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+ def test_permute_4d_fixed_w(device, shape, perm, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+-    output_tensor = ttnn.permute(input_tensor, perm)
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, perm)
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
++        output_tensor = ttnn.permute(input_tensor, perm)
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, perm)
++        assert_equal(torch_output, output_tensor)
+
+
+ def generate_fixed_no_dim0_dim1_transpose_permutations(N, dim0, dim1):
+@@ -516,21 +580,26 @@ def generate_fixed_no_dim0_dim1_transpose_permutations(N, dim0, dim1):
+ @pytest.mark.parametrize("pad_value", [35.0, float("-inf"), None])
+ def test_permute_5d_yw_padded(device, shape, perm, dtype, pad_value):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+-    ttnn_output = ttnn.permute(input_tensor, perm, pad_value=pad_value)
+-    output_tensor = ttnn.to_torch(ttnn_output)
+-    torch_output = torch.permute(torch_tensor, perm)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
++        ttnn_output = ttnn.permute(input_tensor, perm, pad_value=pad_value)
++        output_tensor = ttnn.to_torch(ttnn_output)
++        torch_output = torch.permute(torch_tensor, perm)
+
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++        if dtype == ttnn.float32:
++            # float32 permute internally truncates to tf32 at the moment
++            # https://github.com/tenstorrent/tt-metal/issues/23663
++            assert_with_pcc(torch_output, output_tensor, 0.9999)
++        else:
++            assert_equal(torch_output, output_tensor)
+
+-    if pad_value != None:
+-        logical_shape = torch_output.shape
+-        output_padded = ttnn.from_device(ttnn_output).to_torch()
+-        padded_shape = output_padded.shape
+-        num_padded_values = torch.prod(torch.tensor(padded_shape)) - torch.prod(torch.tensor(logical_shape))
+-        assert torch.sum(output_padded == pad_value) == num_padded_values
++        if pad_value != None:
++            logical_shape = torch_output.shape
++            output_padded = ttnn.from_device(ttnn_output).to_torch()
++            padded_shape = output_padded.shape
++            num_padded_values = torch.prod(torch.tensor(padded_shape)) - torch.prod(torch.tensor(logical_shape))
++            assert torch.sum(output_padded == pad_value) == num_padded_values
+
+
+ @pytest.mark.parametrize("shape", [[33, 1, 17, 33, 33]])
+@@ -540,21 +609,23 @@ def test_permute_5d_yw_padded(device, shape, perm, dtype, pad_value):
+     [
+         ttnn.bfloat16,
+         ttnn.float32,
+-        pytest.param(
+-            ttnn.int32,
+-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+-        ),
++        ttnn.int32,
+     ],
+ )
+ def test_permute_5d_yw_permutations(device, shape, perm, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+-    output_tensor = ttnn.permute(input_tensor, perm)
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, perm)
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
++        output_tensor = ttnn.permute(input_tensor, perm)
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, perm)
++        if dtype == ttnn.float32:
++            # float32 permute internally truncates to tf32 at the moment
++            # https://github.com/tenstorrent/tt-metal/issues/23663
++            assert_with_pcc(torch_output, output_tensor, 0.9999)
++        else:
++            assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 128, 128], [32, 32, 32, 32], [96, 96, 96, 96]])
+@@ -563,21 +634,18 @@ def test_permute_5d_yw_permutations(device, shape, perm, dtype):
+     "dtype",
+     [
+         ttnn.bfloat16,
+-        pytest.param(
+-            ttnn.int32,
+-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+-        ),
++        ttnn.int32,
+     ],
+ )
+ def test_permute_4d_yw_permutations(device, shape, perm, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+-    output_tensor = ttnn.permute(input_tensor, perm)
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, perm)
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
++        output_tensor = ttnn.permute(input_tensor, perm)
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, perm)
++        assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 128, 128], [32, 32, 32, 32], [96, 96, 96, 96]])
+@@ -586,21 +654,18 @@ def test_permute_4d_yw_permutations(device, shape, perm, dtype):
+     "dtype",
+     [
+         ttnn.bfloat16,
+-        pytest.param(
+-            ttnn.int32,
+-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+-        ),
++        ttnn.int32,
+     ],
+ )
+ def test_permute_4d_whyx_permutations(device, shape, perm, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+-    output_tensor = ttnn.permute(input_tensor, perm)
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, perm)
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
++        output_tensor = ttnn.permute(input_tensor, perm)
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, perm)
++        assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize("shape", [[1, 1, 32, 32], [1, 1, 128, 128], [32, 32, 32, 32], [96, 96, 96, 96]])
+@@ -609,21 +674,18 @@ def test_permute_4d_whyx_permutations(device, shape, perm, dtype):
+     "dtype",
+     [
+         ttnn.bfloat16,
+-        pytest.param(
+-            ttnn.int32,
+-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+-        ),
++        ttnn.int32,
+     ],
+ )
+ def test_permute_4d_other_permutations(device, shape, perm, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+-    output_tensor = ttnn.permute(input_tensor, perm)
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, perm)
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
++        output_tensor = ttnn.permute(input_tensor, perm)
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, perm)
++        assert_equal(torch_output, output_tensor)
+
+
+ @pytest.mark.parametrize("shape", [[33, 1, 17, 33, 33]])
+@@ -633,18 +695,21 @@ def test_permute_4d_other_permutations(device, shape, perm, dtype):
+     [
+         ttnn.bfloat16,
+         ttnn.float32,
+-        pytest.param(
+-            ttnn.int32,
+-            marks=skip_for_wormhole_b0("possible race condition: https://github.com/tenstorrent/tt-metal/issues/22298"),
+-        ),
++        ttnn.int32,
+     ],
+ )
+ def test_permute_5d_wyh(device, shape, perm, dtype):
+     torch.manual_seed(2005)
+-    torch_tensor = random_torch_tensor(dtype, shape)
+-    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
+-    output_tensor = ttnn.permute(input_tensor, perm, pad_value=0.0)
+-    output_tensor = ttnn.to_torch(output_tensor)
+-    torch_output = torch.permute(torch_tensor, perm)
+-    assert torch_output.shape == output_tensor.shape
+-    assert_with_pcc(torch_output, output_tensor, 0.9999)
++    for i in range(iterations):
++        torch_tensor = random_torch_tensor(dtype, shape)
++        input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, dtype=dtype, device=device)
++        output_tensor = ttnn.permute(input_tensor, perm, pad_value=0.0)
++        output_tensor = ttnn.to_torch(output_tensor)
++        torch_output = torch.permute(torch_tensor, perm)
++        if dtype == ttnn.float32:
++            # float32 permute internally truncates to tf32 at the moment
++            # https://github.com/tenstorrent/tt-metal/issues/23663
++            assert_with_pcc(torch_output, output_tensor, 0.9999)
++        else:
++            assert_equal(torch_output, output_tensor)
++'''
+diff --git a/tt_metal/distributed/sd_mesh_command_queue.cpp b/tt_metal/distributed/sd_mesh_command_queue.cpp
+index b4fc6c7fec..a0423aa1df 100644
+--- a/tt_metal/distributed/sd_mesh_command_queue.cpp
++++ b/tt_metal/distributed/sd_mesh_command_queue.cpp
+@@ -67,8 +67,8 @@ WorkerConfigBufferMgr& SDMeshCommandQueue::get_config_buffer_mgr(uint32_t index)
+ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+     auto lock = lock_api_function_();
+     if (!blocking) {
+-        log_warning(
+-            tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload exection.", __FUNCTION__);
++        // log_warning(
++        //     tt::LogMetal, "Using Slow Dispatch for {}. This leads to blocking workload exection.", __FUNCTION__);
+     }
+     for (auto& [coord_range, program] : mesh_workload.get_programs()) {
+         for (const auto& coord : coord_range) {
+
+commit 0c2f5f66752a40c5d665c44de2a447e7e593e29f
+Author: Anil Mahmud <amahmud@tenstorrent.com>
+Date:   Thu Aug 14 01:17:53 2025 +0000
+
+    Make problematic factories single core
+
+diff --git a/ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_rm_program_factory.cpp b/ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_rm_program_factory.cpp
+index aa10ecb5ad..94b72c5ed6 100644
+--- a/ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_rm_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_rm_program_factory.cpp
+@@ -60,7 +60,8 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
+
+     uint32_t num_rows = input_tensor.physical_volume() / input_tensor.logical_shape()[-1];
+
+-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
++    auto compute_with_storage_grid_size =
++        CoreCoord{1u, 1u};  // input_tensor.device()->compute_with_storage_grid_size();
+     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_rows);
+
+@@ -210,7 +211,8 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
+     uint32_t w_blocks = tt::div_up(W, w_block_size);
+     uint32_t num_blocks_total = (num_rows / X) * x_blocks * w_blocks;
+
+-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
++    auto compute_with_storage_grid_size =
++        CoreCoord{1u, 1u};  // input_tensor.device()->compute_with_storage_grid_size();
+     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks_total);
+
+diff --git a/ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_tiled_program_factory.cpp b/ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_tiled_program_factory.cpp
+index 654a0fc160..78dc4788ae 100644
+--- a/ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_tiled_program_factory.cpp
++++ b/ttnn/cpp/ttnn/operations/data_movement/permute/device/permute_tiled_program_factory.cpp
+@@ -111,7 +111,8 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
+     uint32_t rank = operation_attributes.dims.size();
+     bool swap_hw = operation_attributes.dims[rank - 2] == rank - 1 && operation_attributes.dims[rank - 1] == rank - 2;
+
+-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
++    auto compute_with_storage_grid_size =
++        CoreCoord{1u, 1u};  // input_tensor.device()->compute_with_storage_grid_size();
+     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+
+@@ -304,7 +305,8 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
+     uint32_t padded_num_tensor_tiles =
+         num_output_tiles / (padded_output_shape[rank - 2] / tile_shape[0]);  // only last row of Xt should have padding
+
+-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
++    auto compute_with_storage_grid_size =
++        CoreCoord{1u, 1u};  // input_tensor.device()->compute_with_storage_grid_size();
+     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
+         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_tiles);
+     auto
+@@ -654,7 +656,8 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
+
+     uint32_t num_input_pages_to_read = 2;
+
+-    auto compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
++    auto compute_with_storage_grid_size =
++        CoreCoord{1u, 1u};  // input_tensor.device()->compute_with_storage_grid_size();
+     // CoreCoord compute_with_storage_grid_size = {1u, 1u};
+     auto [num_cores, all_cores, core_group_1, core_group_2, num_blocks_per_core_group_1, num_blocks_per_core_group_2] =
+         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, xw_blocks);
