@@ -56,11 +56,12 @@ void MAIN {
     // Attention-specific parameters
     constexpr bool is_causal = get_compile_time_arg_val(21) == 1;
     constexpr bool use_attention_mask = get_compile_time_arg_val(22) == 1;
-    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
-    constexpr bool tilize_q = get_compile_time_arg_val(24) == 1;
-    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(25);
-    constexpr bool use_half_tile = get_compile_time_arg_val(26);
-    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(27);
+    constexpr bool use_attention_sink = get_compile_time_arg_val(23) == 1;
+    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(24);
+    constexpr bool tilize_q = get_compile_time_arg_val(25) == 1;
+    constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(26);
+    constexpr bool use_half_tile = get_compile_time_arg_val(27);
+    constexpr uint32_t scale_fp32 = get_compile_time_arg_val(28);
 
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
@@ -72,6 +73,7 @@ void MAIN {
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
     constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;
     constexpr uint32_t cb_m_in = tt::CBIndex::c_6;
     constexpr uint32_t cb_l_in = tt::CBIndex::c_7;
@@ -484,6 +486,31 @@ void MAIN {
 
             /* CUR_SUM = 1.0 / CUR_SUM */
             cb_push_back(cb_cur_sum, Sq_chunk_t);
+            reconfig_data_format(cb_cur_sum, cb_cur_sum);
+            pack_reconfig_data_format(cb_cur_sum);
+
+            // Handle attention sink here
+            if constexpr (use_attention_sink) {
+                // m_new
+                max_block<vector_mode>(cb_attention_sink, cb_prev_max, cb_cur_max, Sq_chunk_t);
+
+                // exp(m - m_new)
+                sub_exp_block<scale_fp32, vector_mode>(cb_prev_max, cb_cur_max, cb_exp_max_diff, Sq_chunk_t);
+
+                // l -> l * exp(m - m_new)
+                mul_block_inplace(cb_cur_sum, cb_exp_max_diff, Sq_chunk_t);
+
+                // exp(sink - m_new)
+                sub_exp_block<scale_fp32, vector_mode>(cb_attention_sink, cb_cur_max, cb_exp_max_diff_2, Sq_chunk_t);
+                cb_pop_front(cb_cur_max, Sq_chunk_t);
+
+                // l -> l + exp(sink - m_new)
+                add_block_inplace<true>(cb_cur_sum, cb_exp_max_diff_2, Sq_chunk_t);
+
+                // O -> O * exp(m - m_new)
+                mul_block_bcast_cols_inplace(cb_out_accumulate_im, cb_exp_max_diff, Sq_chunk_t, vDHt);
+            }
+
             reconfig_data_format(cb_cur_sum, cb_cur_sum);
             pack_reconfig_data_format(cb_cur_sum);
             recip_block_inplace<vector_mode>(cb_cur_sum, Sq_chunk_t);
