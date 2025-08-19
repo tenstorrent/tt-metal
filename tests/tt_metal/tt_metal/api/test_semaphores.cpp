@@ -102,14 +102,10 @@ void create_and_read_max_num_semaphores(
     auto& program = workload.get_programs().at(device_range);
     auto device = mesh_device->get_devices()[0];
     std::vector<uint32_t> golden;
-    std::cout << "semaphore addr: " << program.get_sem_base_addr(device, core_range.start_coord, CoreType::WORKER)
-              << std::endl;
     for (uint32_t i = 0; i < tt::tt_metal::NUM_SEMAPHORES; i++) {
         uint32_t initial_value = i;
         auto semaphore_id = tt_metal::CreateSemaphore(program, core_range, initial_value);
-        std::cout << "semaphore_id: " << semaphore_id << std::endl;
         golden.push_back(initial_value);
-        std::cout << "golden: " << golden.at(i) << std::endl;
         ASSERT_TRUE(semaphore_id == i);
     }
     tt_metal::CreateKernel(
@@ -131,10 +127,8 @@ void create_and_read_max_num_semaphores(
                     workload.get_sem_base_addr(mesh_device, logical_core, CoreType::WORKER) +
                     (tt::tt_metal::MetalContext::instance().hal().get_alignment(tt::tt_metal::HalMemType::L1) * i);
                 uint32_t semaphore_size = sizeof(uint32_t);
-                std::cout << "semaphore_addr: " << semaphore_addr << std::endl;
                 tt_metal::detail::ReadFromDeviceL1(device, logical_core, semaphore_addr, semaphore_size, single_val);
                 ASSERT_TRUE(single_val.size() == 1);
-                std::cout << "single_val no: " << i << " is: " << single_val.at(0) << std::endl;
                 res.push_back(single_val.at(0));
             }
             ASSERT_TRUE(res == golden);
