@@ -177,6 +177,10 @@ run_t3000_falcon40b_tests() {
   fi
 }
 
+run_t3000_gemma3-small_tests() {
+  HF_MODEL="google/gemma-3-4b-it" TT_CACHE_PATH="$HF_HOME/tt_cache/gemma-3-4b-it" pytest models/demos/siglip/tests
+}
+
 run_t3000_llama3-small_tests() {
   # Record the start time
   fail=0
