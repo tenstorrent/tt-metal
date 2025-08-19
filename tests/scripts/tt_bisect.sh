@@ -106,6 +106,14 @@ while [[ "$found" = "false" ]]; do
 
    ccache -z
 
+   # before calling build_metal.sh
+   export CMAKE_ARGS="$CMAKE_ARGS -DCPM_SOURCE_CACHE=/work/.cpmcache -DCPM_USE_LOCAL_PACKAGES=OFF -DCPM_GIT_TAG_SEARCH=OFF"
+
+   # If the dependency name in CPM is "tokenizers-cpp", most CPM packages accept a *_GIT_TAG override:
+   export CMAKE_ARGS="$CMAKE_ARGS -Dtokenizers-cpp_GIT_TAG=c0caed993d2e1030645ce1d7959dd358ff29dc9b"
+   # (If the exact variable differs, check the CPMAddPackage block; it will be <NAME>_GIT_TAG)
+
+
    ./build_metal.sh --build-all --debug || build_rc=$?
    echo "::endgroup::"
 
