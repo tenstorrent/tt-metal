@@ -828,7 +828,8 @@ void configure_dispatch_cores(IDevice* device) {
 std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDatamoverAxis> get_fabric_edm_type(
     const tt::tt_fabric::ControlPlane& control_plane,
     const tt::tt_fabric::RoutingDirection direction,
-    tt::tt_fabric::MeshId mesh_id,
+    tt::tt_fabric::MeshId mesh_id0,
+    tt::tt_fabric::MeshId mesh_id1,
     chip_id_t chip0,
     chip_id_t chip1,
     bool wrap_around_mesh) {
@@ -838,11 +839,11 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
     const auto& fabric_context = control_plane.get_fabric_context();
 
     const auto eth_chan_direction = control_plane.routing_direction_to_eth_direction(direction);
-    if (!fabric_context.need_deadlock_avoidance_support(eth_chan_direction)) {
+    if (mesh_id0 != mesh_id1 || !fabric_context.need_deadlock_avoidance_support(eth_chan_direction)) {
         return {fabric_edm_type, fabric_edm_axis};
     }
 
-    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id);
+    auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id0);
     TT_FATAL(physical_mesh_shape.dims() == 2, "Dateline routing only supported for 2D mesh");
 
     auto mesh_num_rows = physical_mesh_shape[0];
@@ -851,7 +852,7 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
     auto smaller_chip_id = std::min(chip0, chip1);
     auto larger_chip_id = std::max(chip0, chip1);
 
-    // Refactor this once mesh_id has row/col control
+    // Refactor this once mesh_id0 has row/col control
     // wrap_around_mesh is used to fold the edm connections on the corner chips of a 2D mesh to form an outer ring of
     // devices on the mesh.
     if (wrap_around_mesh) {
@@ -862,8 +863,6 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstream;
         } else if ((chip1 == 0 || chip1 == mesh_num_columns) && chip0 == chip1 + 1) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-        } else if ((chip0 == 1 || chip0 == mesh_num_columns + 1) && (chip1 == chip0 + 1)) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
         }
         // check if edm is on the longer axis
         if ((mesh_num_rows * mesh_num_columns) >=
@@ -921,14 +920,6 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
         // Row dateline upstream adjacent
         else if (is_dateline_upstream_adjacent_edm_along_row) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
-        }
-        // Column dateline upstream adjacent device upstream
-        else if (is_dateline_upstream_adjacent_upstream_edm_along_column) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
-        }
-        // Row dateline upstream adjacent device upstream
-        else if (is_dateline_upstream_adjacent_upstream_edm_along_row) {
-            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream;
         }
 
         // check if edm is on the longer axis
@@ -991,8 +982,8 @@ void build_tt_fabric_program(
                 fabric_node_id,
                 FabricNodeId{fabric_node_id.mesh_id, fabric_node_id.chip_id + 1},
                 edm_config,
-                false, /* build_in_worker_connection_mode */
-                false, /* is_dateline */
+                false,                                            /* build_in_worker_connection_mode */
+                tt::tt_fabric::FabricEriscDatamoverType::Default, /* fabric_edm_type */
                 eth_direction);
             // Both links used by dispatch on TG Gateway (mmio device)
             // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
@@ -1074,12 +1065,10 @@ void build_tt_fabric_program(
             control_plane,
             direction,
             fabric_node_id.mesh_id,
+            remote_fabric_node_id.mesh_id,
             fabric_node_id.chip_id,
             remote_fabric_node_id.chip_id,
             wrap_around_mesh);
-
-        bool is_dateline = remote_fabric_node_id.mesh_id == fabric_node_id.mesh_id &&
-                           fabric_edm_type == tt::tt_fabric::FabricEriscDatamoverType::Dateline;
 
         const auto& curr_edm_config = fabric_context.get_fabric_router_config(fabric_edm_type, fabric_edm_axis);
 
@@ -1099,7 +1088,7 @@ void build_tt_fabric_program(
                 remote_fabric_node_id,
                 curr_edm_config,
                 false, /* build_in_worker_connection_mode */
-                is_dateline,
+                fabric_edm_type,
                 control_plane.routing_direction_to_eth_direction(direction));
             edm_builders.insert({eth_chan, edm_builder});
 
