@@ -488,8 +488,11 @@ Tensor run_fmod(
     std::cout << "Subtract with A : " << std::endl;
     result.print();
 
-    Tensor final = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
+    Tensor check_inp = ttnn::eq(input_a, input_b, std::nullopt, output_mem_config);
+    Tensor check_den = ttnn::logical_and(check_inp, ttnn::eq(input_b, 0.0), std::nullopt, output_mem_config);
+    Tensor final = ttnn::where(check_den, result, ttnn::where(check_inp, 0.0f, result));
     std::cout << "Replace with 0.0 if A==B : " << std::endl;
+
     final.print();
     return final;
 }
