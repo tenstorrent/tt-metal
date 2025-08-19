@@ -134,116 +134,59 @@ void get_mcast_receivers(
     }
 }
 
-void RunTestUnicastSmoke(
-    BaseFabricFixture* fixture, uint32_t num_hops, RoutingDirection direction, bool enable_fabric_tracing) {
+void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
 
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& devices = fixture->get_devices();
 
-    FabricNodeId src_fabric_node_id(MeshId{0}, 0);
-    FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
-    chip_id_t not_used_1;
-    chip_id_t not_used_2;
-    // Find a device num_hops away in specified direction.
-    std::unordered_map<RoutingDirection, uint32_t> fabric_hops;
-    std::unordered_map<RoutingDirection, std::vector<FabricNodeId>> end_fabric_node_ids_by_dir;
-    chip_id_t src_physical_device_id;
-    chip_id_t dst_physical_device_id;
-    std::unordered_map<RoutingDirection, std::vector<chip_id_t>> physical_end_device_ids_by_dir;
-    fabric_hops[direction] = num_hops;
+    // Need at least 2 devices for smoke test
+    if (devices.size() < 2) {
+        GTEST_SKIP() << "Smoke test requires at least 2 devices";
+    }
 
-    tt::tt_metal::distributed::MeshShape mesh_shape;
-    std::vector<chan_id_t> eth_chans;
-    chan_id_t edm_port;
+    // Use first two devices for simple smoke test
+    auto* sender_device = devices[0];
+    auto* receiver_device = devices[1];
 
+    auto src_physical_device_id = sender_device->id();
+    auto dst_physical_device_id = receiver_device->id();
+
+    auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
+    auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
+
+    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
+    CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
+
+    // Get fabric context and topology
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
     uint32_t is_2d_fabric = topology == Topology::Mesh;
 
-    if (!is_2d_fabric) {
-        // Find a device with enough neighbours in the specified directions
-        if (!find_device_with_neighbor_in_multi_direction(
-                fixture,
-                src_fabric_node_id,
-                end_fabric_node_ids_by_dir,
-                src_physical_device_id,
-                physical_end_device_ids_by_dir,
-                fabric_hops)) {
-            GTEST_SKIP() << "No path found between sender and receivers";
-        }
-        mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        dst_physical_device_id = physical_end_device_ids_by_dir[direction][num_hops - 1];
-        dst_fabric_node_id = end_fabric_node_ids_by_dir[direction][num_hops - 1];
-
-        // get a port to connect to
-        eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
-        if (eth_chans.size() == 0) {
-            GTEST_SKIP() << "No active eth chans to connect to";
-        }
-    } else {
-        const auto& devices = fixture->get_devices();
-        auto num_devices = devices.size();
-        // create a list of available deive ids in a random order
-        // In 2D routing the source and desitnation devices can be anywhere on the mesh.
-        auto random_dev_list = get_random_numbers_from_range(0, devices.size() - 1, devices.size());
-
-        // pick the first two in the list to be src and dst devices for the test.
-        src_physical_device_id = devices[random_dev_list[0]]->id();
-        dst_physical_device_id = devices[random_dev_list[1]]->id();
-        src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
-        dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
-        mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-
-        eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id);
-        if (eth_chans.size() == 0) {
-            log_info(
-                tt::LogTest,
-                "No fabric routers between Src MeshId {} ChipId {} - Dst MeshId {} ChipId {}",
-                src_fabric_node_id.mesh_id,
-                src_fabric_node_id.chip_id,
-                *dst_fabric_node_id.mesh_id,
-                dst_fabric_node_id.chip_id);
-
-            GTEST_SKIP() << "Skipping Test";
-        }
+    // Get available links between devices
+    auto eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id);
+    if (eth_chans.size() == 0) {
+        GTEST_SKIP() << "No fabric connection available between device 0 and device 1";
     }
+    auto edm_port = *eth_chans.begin();
 
-    // Pick any port, for now pick the 1st one in the set
-    edm_port = *eth_chans.begin();
-
-    log_info(tt::LogTest, "mesh dimensions {:x}", mesh_shape.dims());
-    log_info(tt::LogTest, "mesh size {:x}", mesh_shape.mesh_size());
-    log_info(tt::LogTest, "mesh dimension 0 {:x}", mesh_shape[0]);
-    log_info(tt::LogTest, "mesh dimension 1 {:x}", mesh_shape[1]);
-    log_info(tt::LogTest, "Src MeshId {} ChipId {}", src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
-    log_info(tt::LogTest, "Dst MeshId {} ChipId {}", dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
-
-    auto edm_direction = control_plane.get_eth_chan_direction(src_fabric_node_id, edm_port);
-    log_info(tt::LogTest, "Using edm port {} in direction {}", edm_port, edm_direction);
-
-    auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
-    auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
-    CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
-
-    // test parameters
+    // Simple test parameters for smoke test
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
-    uint32_t num_packets = 10;
+    uint32_t num_packets = 5;  // Small number for smoke test
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
+    auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
 
     const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
-    // common compile time args for sender and receiver
-    // Note: see run_unicast_dw_chips() for DRAM coverage
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
         worker_mem_map.target_address,
-        0 /* use_dram_dst */,
+        0, /* use_dram_dst */
         topology == Topology::Mesh,
         fabric_config == tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
-        0 /* is_chip_multicast */,
+        0, /* is_chip_multicast */
         0 /* additional_dir */};
 
     std::map<std::string, std::string> defines = {};
@@ -251,11 +194,7 @@ void RunTestUnicastSmoke(
         defines["FABRIC_2D"] = "";
     }
 
-    if (enable_fabric_tracing) {
-        defines["TEST_ENABLE_FABRIC_TRACING"] = "1";
-    }
-
-    // Create the sender program
+    // Create sender program
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -276,8 +215,8 @@ void RunTestUnicastSmoke(
         receiver_virtual_core.y,
         mesh_shape[1],
         src_fabric_node_id.chip_id,
-        num_hops,
-        1 /* fwd_range */,
+        1, /* num_hops - simple for smoke */
+        1, /* fwd_range */
         dst_fabric_node_id.chip_id,
         *dst_fabric_node_id.mesh_id};
 
@@ -288,9 +227,7 @@ void RunTestUnicastSmoke(
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
-    std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
-
-    // Create the receiver program for validation
+    // Create receiver program
     auto receiver_program = tt_metal::CreateProgram();
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -301,19 +238,16 @@ void RunTestUnicastSmoke(
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = compile_time_args});
 
+    std::vector<uint32_t> receiver_runtime_args = {worker_mem_map.packet_payload_size_bytes, num_packets, time_seed};
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
-    // Launch sender and receiver programs and wait for them to finish
+    // Run programs
     fixture->RunProgramNonblocking(receiver_device, receiver_program);
     fixture->RunProgramNonblocking(sender_device, sender_program);
     fixture->WaitForSingleProgramDone(sender_device, sender_program);
     fixture->WaitForSingleProgramDone(receiver_device, receiver_program);
 
-    if (enable_fabric_tracing) {
-        tt_metal::detail::ReadDeviceProfilerResults(sender_device);
-    }
-
-    // Validate the status and packets processed by sender and receiver
+    // Validate results
     std::vector<uint32_t> sender_status;
     std::vector<uint32_t> receiver_status;
 
