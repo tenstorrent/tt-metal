@@ -345,7 +345,7 @@ private:
 };
 
 struct TensorSyncBundle {
-    const Tensor* tensor;
+    const Tensor* tensor{};
     std::optional<TensorSyncSpec> sync_spec;
 };
 

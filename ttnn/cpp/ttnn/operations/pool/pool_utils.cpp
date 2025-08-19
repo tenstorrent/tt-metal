@@ -247,7 +247,7 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
 
     struct l1_usage_config {
-        uint32_t l1_usage;
+        uint32_t l1_usage{};
         std::optional<ParallelConfig> config;
     };
 

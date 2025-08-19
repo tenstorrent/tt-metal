@@ -16,21 +16,21 @@ struct PageRange {
 
 struct Stride {
     CoreCoord core;
-    uint32_t data;
+    uint32_t data{};
 };
 
 struct PageStride {
     CoreCoord start_core;
-    uint32_t start_data;
-    uint32_t stride_size;  // number of pages per stride
+    uint32_t start_data{};
+    uint32_t stride_size{};  // number of pages per stride
     Stride stride;
-    uint32_t num_strides;
-    bool skip;
+    uint32_t num_strides{};
+    bool skip{};
 };
 
 struct CorePageRange {
     CoreCoord core;
-    PageRange range;
+    PageRange range{};
 };
 
 struct CorePageStride {

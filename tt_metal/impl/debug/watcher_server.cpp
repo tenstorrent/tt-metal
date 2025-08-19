@@ -82,7 +82,7 @@ private:
     inline static std::chrono::time_point start_time = std::chrono::system_clock::now();
     std::mutex watch_mutex_;  // Guards server internal state + logfile + device watcher mailbox
 
-    std::thread* server_thread_;
+    std::thread* server_thread_{};
 
     FILE* logfile_ = nullptr;
     FILE* kernel_file_ = nullptr;

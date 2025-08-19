@@ -75,14 +75,14 @@ struct ReduceScatterWorkerArgBuilder {
     WorkerTransferInfo const worker_transfer_info;
     ttnn::ccl::EriscDataMoverTerminationMode edm_termination_mode;
     uint32_t cb_num_pages_per_packet;
-    uint32_t worker_sender_semaphore_id;
-    uint32_t worker_receiver_semaphore_id;
+    uint32_t worker_sender_semaphore_id{};
+    uint32_t worker_receiver_semaphore_id{};
     uint32_t num_buffers_per_channel;
     std::optional<uint32_t> receiver_worker_partial_ready_semaphore_id;
 
     std::size_t scatter_dim;
-    bool src_is_dram;
-    bool dst_is_dram;
+    bool src_is_dram{};
+    bool dst_is_dram{};
 };
 
 } // namespace reduce_scatter_detail

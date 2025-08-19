@@ -179,49 +179,49 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 // for in1 iff B=1 for in0 (ie. single core)
 struct MatmulMultiCoreReuseProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
+    std::size_t in0_block_w{};
+    std::size_t out_subblock_h{};
+    std::size_t out_subblock_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
 };
 
 struct MatmulMultiCoreReuseMultiCastProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
-    std::size_t out_block_h;
-    std::size_t out_block_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
-    bool transpose_mcast;
+    std::size_t in0_block_w{};
+    std::size_t out_subblock_h{};
+    std::size_t out_subblock_w{};
+    std::size_t out_block_h{};
+    std::size_t out_block_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
+    bool transpose_mcast{};
     std::optional<UnaryWithParam> fused_activation;
     bool fuse_batch = true;
 };
 
 struct MatmulMultiCoreReuseMultiCast1DProgramConfig {
     CoreCoord compute_with_storage_grid_size;
-    std::size_t in0_block_w;
-    std::size_t out_subblock_h;
-    std::size_t out_subblock_w;
-    std::size_t out_block_h;
-    std::size_t out_block_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
-    bool fuse_batch;
+    std::size_t in0_block_w{};
+    std::size_t out_subblock_h{};
+    std::size_t out_subblock_w{};
+    std::size_t out_block_h{};
+    std::size_t out_block_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
+    bool fuse_batch{};
     std::optional<UnaryWithParam> fused_activation;
-    bool mcast_in0;
-    bool gather_in0;
+    bool mcast_in0{};
+    bool gather_in0{};
     CoreRangeSet hop_cores;
-    std::size_t num_global_cb_receivers;
-    bool untilize_out;
+    std::size_t num_global_cb_receivers{};
+    bool untilize_out{};
 };
 
 struct MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig {
-    std::size_t in0_block_w;
-    std::size_t per_core_M;
-    std::size_t per_core_N;
+    std::size_t in0_block_w{};
+    std::size_t per_core_M{};
+    std::size_t per_core_N{};
     std::optional<UnaryWithParam> fused_activation;
 };
 

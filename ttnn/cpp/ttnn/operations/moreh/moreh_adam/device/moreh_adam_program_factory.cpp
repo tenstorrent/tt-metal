@@ -188,7 +188,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
     union {
         float f;
         uint32_t u;
-    } f2u_lr, f2u_beta1, f2u_beta2, f2u_eps, f2u_weight_decay;
+    } f2u_lr{}, f2u_beta1{}, f2u_beta2{}, f2u_eps{}, f2u_weight_decay{};
     f2u_lr.f = lr;
     f2u_beta1.f = beta1;
     f2u_beta2.f = beta2;
@@ -288,7 +288,7 @@ void MorehAdamOperation::ProgramFactory::override_runtime_arguments(
     union {
         float f;
         uint32_t u;
-    } f2u_lr;
+    } f2u_lr{};
 
     f2u_lr.f = operation_attributes.lr;
 

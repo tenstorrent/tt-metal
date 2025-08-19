@@ -43,8 +43,8 @@ struct IntraMeshAdjacencyMap {
     AdjacencyMap adjacency_map;
     std::vector<chip_id_t> corners;  // Should always be size 2 for 1D meshes, 4 for 2D meshes, populated in order of closest to chip 0 by default
     std::vector<chip_id_t> edges;    // Should always be size 2 for 1D meshes, 4 for 2D meshes, populated in order of closest to chip 0 by default
-    std::uint32_t ns_size;  // North-South size (rows)
-    std::uint32_t ew_size;  // East-West size (columns)
+    std::uint32_t ns_size{};         // North-South size (rows)
+    std::uint32_t ew_size{};         // East-West size (columns)
 };
 
 IntraMeshAdjacencyMap build_mesh_adjacency_map(

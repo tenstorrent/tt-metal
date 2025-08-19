@@ -71,13 +71,13 @@ private:
     std::unordered_set<CoreCoord> translated_fabric_or_dispatch_mux_cores_;
 
     // based on the number of channels used, get the number of risc needed per tensix
-    size_t num_used_riscs_per_tensix_;
+    size_t num_used_riscs_per_tensix_{};
 
     // Configuration parameters
-    size_t num_configs_per_core_;
-    size_t num_channels_;
-    size_t num_buffers_per_channel_;
-    size_t buffer_size_bytes_full_size_channel_;
+    size_t num_configs_per_core_{};
+    size_t num_channels_{};
+    size_t num_buffers_per_channel_{};
+    size_t buffer_size_bytes_full_size_channel_{};
 
     // Base L1 addresses for each RISC ID, [risc id] -> [base addr] mapping
     std::unordered_map<size_t, size_t> base_l1_addresses_;
