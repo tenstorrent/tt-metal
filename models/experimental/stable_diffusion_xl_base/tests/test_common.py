@@ -8,6 +8,13 @@ import ttnn
 import torch
 import inspect
 from typing import List, Optional, Union
+
+from ttnn.distributed.distributed import ConcatMeshToTensor
+from models.experimental.stable_diffusion_35_large.tt.clip_encoder import (
+    TtCLIPConfig,
+    TtCLIPTextTransformer,
+    TtCLIPTextTransformerParameters,
+)
 from models.utility_functions import profiler
 
 from tqdm import tqdm
@@ -18,6 +25,366 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 SDXL_L1_SMALL_SIZE = 47000
 SDXL_TRACE_REGION_SIZE = 34000000
 SDXL_CI_WEIGHTS_PATH = "/mnt/MLPerf/tt_dnn-models/hf_home"
+
+
+def create_tt_clip_text_encoders(pipeline, ttnn_device):
+    tt_parameters_text_encoder = TtCLIPTextTransformerParameters.from_torch(
+        pipeline.text_encoder.state_dict(),
+        device=ttnn_device,
+        dtype=ttnn.bfloat16,
+        parallel_manager=None,
+        has_text_projection=False,  # Text encoder 1 does not have text projection
+    )
+    tt_config_text_encoder = TtCLIPConfig(
+        vocab_size=pipeline.text_encoder.config.vocab_size,
+        d_model=pipeline.text_encoder.config.hidden_size,
+        d_ff=pipeline.text_encoder.config.intermediate_size,
+        num_heads=pipeline.text_encoder.config.num_attention_heads,
+        num_layers=pipeline.text_encoder.config.num_hidden_layers,
+        max_position_embeddings=77,
+        layer_norm_eps=pipeline.text_encoder.config.layer_norm_eps,
+        attention_dropout=pipeline.text_encoder.config.attention_dropout,
+        hidden_act=pipeline.text_encoder.config.hidden_act,
+    )
+    tt_text_encoder = TtCLIPTextTransformer(tt_parameters_text_encoder, tt_config_text_encoder)
+
+    # TT text encoder 2 setup
+    tt_parameters_text_encoder_2 = TtCLIPTextTransformerParameters.from_torch(
+        pipeline.text_encoder_2.state_dict(),
+        device=ttnn_device,
+        dtype=ttnn.bfloat16,
+        parallel_manager=None,
+        has_text_projection=True,  # Text encoder 2 has text projection
+    )
+
+    tt_config_text_encoder_2 = TtCLIPConfig(
+        vocab_size=pipeline.text_encoder_2.config.vocab_size,
+        d_model=pipeline.text_encoder_2.config.hidden_size,
+        d_ff=pipeline.text_encoder_2.config.intermediate_size,
+        num_heads=pipeline.text_encoder_2.config.num_attention_heads,
+        num_layers=pipeline.text_encoder_2.config.num_hidden_layers,
+        max_position_embeddings=77,
+        layer_norm_eps=pipeline.text_encoder_2.config.layer_norm_eps,
+        attention_dropout=pipeline.text_encoder_2.config.attention_dropout,
+        hidden_act=pipeline.text_encoder_2.config.hidden_act,
+    )
+    tt_text_encoder_2 = TtCLIPTextTransformer(tt_parameters_text_encoder_2, tt_config_text_encoder_2)
+
+    return tt_text_encoder, tt_text_encoder_2
+
+
+def warmup_tt_text_encoders(tt_text_encoder, tt_text_encoder_2, tokenizer, tokenizer_2, ttnn_device, batch_size):
+    logger.info("Performing warmup run on encoding, to make use of program caching in actual inference...")
+    dummy_prompt = ["abc"] * batch_size
+    dummy_ids = tokenizer(
+        dummy_prompt,
+        padding="max_length",
+        max_length=tokenizer.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    ).input_ids
+    dummy_ids_2 = tokenizer(
+        dummy_prompt,
+        padding="max_length",
+        max_length=tokenizer_2.model_max_length,
+        truncation=True,
+        return_tensors="pt",
+    ).input_ids
+
+    tt_tokens_1 = ttnn.from_torch(
+        dummy_ids,
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=ttnn_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+    )
+    tt_tokens_2 = ttnn.from_torch(
+        dummy_ids_2,
+        dtype=ttnn.uint32,
+        layout=ttnn.TILE_LAYOUT,
+        device=ttnn_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+    )
+
+    _, _ = tt_text_encoder(tt_tokens_1, ttnn_device, parallel_manager=None)
+    _, _ = tt_text_encoder_2(tt_tokens_2, ttnn_device, parallel_manager=None)
+    ttnn.synchronize_device(ttnn_device)
+
+
+# encode_prompt function, adapted from sdxl pipeline to work with on device tt text encoders
+# batch size (lenght of prompts) must be equal to number of devices
+def batch_encode_prompt_on_device(
+    pipeline,
+    tt_text_encoder,
+    tt_text_encoder_2,
+    ttnn_device,
+    prompt: str,
+    prompt_2: Optional[str] = None,
+    device: Optional[torch.device] = None,
+    num_images_per_prompt: int = 1,
+    do_classifier_free_guidance: bool = True,
+    negative_prompt: Optional[str] = None,
+    negative_prompt_2: Optional[str] = None,
+    prompt_embeds: Optional[torch.Tensor] = None,
+    negative_prompt_embeds: Optional[torch.Tensor] = None,
+    pooled_prompt_embeds: Optional[torch.Tensor] = None,
+    negative_pooled_prompt_embeds: Optional[torch.Tensor] = None,
+    lora_scale: Optional[float] = None,
+    clip_skip: Optional[int] = None,
+):
+    r"""
+    Encodes the prompt into text encoder hidden states.
+
+    Args:
+        prompt (`str` or `List[str]`, *optional*):
+            prompt to be encoded
+        prompt_2 (`str` or `List[str]`, *optional*):
+            The prompt or prompts to be sent to the `tokenizer_2` and `text_encoder_2`. If not defined, `prompt` is
+            used in both text-encoders
+        device: (`torch.device`):
+            torch device
+        num_images_per_prompt (`int`):
+            number of images that should be generated per prompt
+        do_classifier_free_guidance (`bool`):
+            whether to use classifier free guidance or not
+        negative_prompt (`str` or `List[str]`, *optional*):
+            The prompt or prompts not to guide the image generation. If not defined, one has to pass
+            `negative_prompt_embeds` instead. Ignored when not using guidance (i.e., ignored if `guidance_scale` is
+            less than `1`).
+        negative_prompt_2 (`str` or `List[str]`, *optional*):
+            The prompt or prompts not to guide the image generation to be sent to `tokenizer_2` and
+            `text_encoder_2`. If not defined, `negative_prompt` is used in both text-encoders
+        prompt_embeds (`torch.Tensor`, *optional*):
+            Pre-generated text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting. If not
+            provided, text embeddings will be generated from `prompt` input argument.
+        negative_prompt_embeds (`torch.Tensor`, *optional*):
+            Pre-generated negative text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
+            weighting. If not provided, negative_prompt_embeds will be generated from `negative_prompt` input
+            argument.
+        pooled_prompt_embeds (`torch.Tensor`, *optional*):
+            Pre-generated pooled text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt weighting.
+            If not provided, pooled text embeddings will be generated from `prompt` input argument.
+        negative_pooled_prompt_embeds (`torch.Tensor`, *optional*):
+            Pre-generated negative pooled text embeddings. Can be used to easily tweak text inputs, *e.g.* prompt
+            weighting. If not provided, pooled negative_prompt_embeds will be generated from `negative_prompt`
+            input argument.
+        lora_scale (`float`, *optional*):
+            A lora scale that will be applied to all LoRA layers of the text encoder if LoRA layers are loaded.
+        clip_skip (`int`, *optional*):
+            Number of layers to be skipped from CLIP while computing the prompt embeddings. A value of 1 means that
+            the output of the pre-final layer will be used for computing the prompt embeddings.
+    """
+    prompt = [prompt] if isinstance(prompt, str) else prompt
+
+    num_devices = ttnn_device.get_num_devices()
+    assert len(prompt) == num_devices, "Prompt length must be equal to number of devices"
+    assert prompt_2 is None, "Prompt 2 is not supported currently"
+    assert negative_prompt is None, "Negative prompt is not tested currently with on device text encoders"
+    assert lora_scale is None, "Lora scale is not supported currently with on device text encoders"
+    assert clip_skip is None, "Clip skip is not supported currently with on device text encoders"
+    assert prompt_embeds is None, "Prompt embeds is not supported currently with on device text encoders"
+    assert (
+        negative_prompt_embeds is None
+    ), "Negative prompt embeds is not supported currently with on device text encoders"
+    assert (
+        do_classifier_free_guidance is True
+    ), "Non - Classifier free guidance is not supported currently with on device text encoders"
+
+    if prompt is not None:
+        batch_size = len(prompt)
+    else:
+        batch_size = prompt_embeds.shape[0]
+
+    # Define tokenizers and text encoders
+    tokenizers = (
+        [pipeline.tokenizer, pipeline.tokenizer_2] if pipeline.tokenizer is not None else [pipeline.tokenizer_2]
+    )
+    text_encoders = [tt_text_encoder, tt_text_encoder_2] if tt_text_encoder is not None else [tt_text_encoder_2]
+
+    if prompt_embeds is None:
+        prompt_2 = prompt_2 or prompt
+        prompt_2 = [prompt_2] if isinstance(prompt_2, str) else prompt_2
+
+        # textual inversion: process multi-vector tokens if necessary
+        prompt_embeds_list = []
+        prompts = [prompt, prompt_2]
+
+        for ind, (prompt, tokenizer, text_encoder) in enumerate(zip(prompts, tokenizers, text_encoders)):
+            text_inputs = tokenizer(
+                prompt,
+                padding="max_length",
+                max_length=tokenizer.model_max_length,
+                truncation=True,
+                return_tensors="pt",
+            )
+
+            text_input_ids = text_inputs.input_ids
+            untruncated_ids = tokenizer(prompt, padding="longest", return_tensors="pt").input_ids
+
+            if untruncated_ids.shape[-1] >= text_input_ids.shape[-1] and not torch.equal(
+                text_input_ids, untruncated_ids
+            ):
+                removed_text = tokenizer.batch_decode(untruncated_ids[:, tokenizer.model_max_length - 1 : -1])
+                logger.warning(
+                    "The following part of your input was truncated because CLIP can only handle sequences up to"
+                    f" {tokenizer.model_max_length} tokens: {removed_text}"
+                )
+
+            tt_tokens = ttnn.from_torch(
+                text_input_ids,
+                dtype=ttnn.uint32,
+                layout=ttnn.TILE_LAYOUT,
+                device=ttnn_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+            )
+
+            tt_sequence_output, tt_pooled_output = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
+
+            tt_sequence_output_torch = ttnn.to_torch(
+                tt_sequence_output.hidden_states[-2],
+                mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
+            ).to(torch.float32)
+            tt_pooled_output_torch = ttnn.to_torch(
+                tt_pooled_output, mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0)
+            ).to(torch.float32)
+
+            # We are only ALWAYS interested in the pooled output of the final text encoder
+            # ----------- WARNING: ----------
+            # The comment above is from the reference implementation of SDXL pipeline encode prompts function.
+            # It clearly states that we are only interested in the pooled output of the final text encoder, but is in fact taking the last hidden state of the first text encoder.
+            # I think this may be a bug in the reference implementation, but at the moment, we'll do the same (take the last hidden state of the first text encoder)
+            if ind == 0:
+                tt_pooled_prompt_embeds = ttnn.to_torch(
+                    tt_sequence_output.hidden_states[-1],
+                    mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
+                ).to(torch.float32)
+                pooled_prompt_embeds = tt_pooled_prompt_embeds.to(torch.float32)
+            else:
+                pooled_prompt_embeds = tt_pooled_output_torch
+
+            if clip_skip is None:
+                prompt_embeds = tt_sequence_output_torch
+            else:
+                assert False, "Clip skip not none path not tested, use at your own risk!"
+                prompt_embeds = ttnn.to_torch(
+                    tt_sequence_output.hidden_states[-(clip_skip + 2)],
+                    mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
+                ).to(torch.float32)
+
+            prompt_embeds_list.append(prompt_embeds)
+
+        prompt_embeds = torch.concat(prompt_embeds_list, dim=-1)
+
+    zero_out_negative_prompt = negative_prompt is None and pipeline.config.force_zeros_for_empty_prompt
+
+    if do_classifier_free_guidance and negative_prompt_embeds is None and zero_out_negative_prompt:
+        negative_prompt_embeds = torch.zeros_like(prompt_embeds)
+        negative_pooled_prompt_embeds = torch.zeros_like(pooled_prompt_embeds)
+    elif do_classifier_free_guidance and negative_prompt_embeds is None:
+        negative_prompt = negative_prompt or ""
+        negative_prompt_2 = negative_prompt_2 or negative_prompt
+
+        # normalize str to list
+        negative_prompt = batch_size * [negative_prompt] if isinstance(negative_prompt, str) else negative_prompt
+        negative_prompt_2 = (
+            batch_size * [negative_prompt_2] if isinstance(negative_prompt_2, str) else negative_prompt_2
+        )
+
+        uncond_tokens: List[str]
+        if prompt is not None and type(prompt) is not type(negative_prompt):
+            raise TypeError(
+                f"`negative_prompt` should be the same type to `prompt`, but got {type(negative_prompt)} !="
+                f" {type(prompt)}."
+            )
+        elif batch_size != len(negative_prompt):
+            raise ValueError(
+                f"`negative_prompt`: {negative_prompt} has batch size {len(negative_prompt)}, but `prompt`:"
+                f" {prompt} has batch size {batch_size}. Please make sure that passed `negative_prompt` matches"
+                " the batch size of `prompt`."
+            )
+        else:
+            uncond_tokens = [negative_prompt, negative_prompt_2]
+
+        negative_prompt_embeds_list = []
+        for ind, (negative_prompt, tokenizer, text_encoder) in enumerate(zip(uncond_tokens, tokenizers, text_encoders)):
+            max_length = prompt_embeds.shape[1]
+            uncond_input = tokenizer(
+                negative_prompt,
+                padding="max_length",
+                max_length=max_length,
+                truncation=True,
+                return_tensors="pt",
+            )
+
+            tt_tokens = ttnn.from_torch(
+                uncond_input.input_ids,
+                dtype=ttnn.uint32,
+                layout=ttnn.TILE_LAYOUT,
+                device=ttnn_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(ttnn_device, dim=0),
+            )
+            tt_sequence_output_neg, tt_pooled_output_neg = text_encoder(tt_tokens, ttnn_device, parallel_manager=None)
+            tt_sequence_output_neg_torch = ttnn.to_torch(
+                tt_sequence_output_neg.hidden_states[-2],
+                mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
+            ).to(torch.float32)
+            tt_pooled_output_neg_torch = ttnn.to_torch(
+                tt_pooled_output_neg, mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0)
+            ).to(torch.float32)
+
+            # We are only ALWAYS interested in the pooled output of the final text encoder
+            # ----------- WARNING: ----------
+            # The comment above is from the reference implementation of SDXL pipeline encode prompts function.
+            # It clearly states that we are only interested in the pooled output of the final text encoder, but is in fact taking the last hidden state of the first text encoder.
+            # I think this may be a bug in the reference implementation, but at the moment, we'll do the same (take the last hidden state of the first text encoder)            # We are only ALWAYS interested in the pooled output of the final text encoder
+            if ind == 0:
+                tt_pooled_prompt_embeds = (
+                    ttnn.to_torch(
+                        tt_sequence_output_neg.hidden_states[-1],
+                        mesh_composer=ConcatMeshToTensor(ttnn_device, dim=0),
+                    )
+                ).to(torch.float32)
+                negative_pooled_prompt_embeds = tt_pooled_prompt_embeds
+            else:
+                negative_pooled_prompt_embeds = tt_pooled_output_neg_torch
+
+            negative_prompt_embeds = tt_sequence_output_neg_torch
+
+            negative_prompt_embeds_list.append(negative_prompt_embeds)
+
+        negative_prompt_embeds = torch.concat(negative_prompt_embeds_list, dim=-1)
+
+    if pipeline.text_encoder_2 is not None:
+        prompt_embeds = prompt_embeds.to(dtype=pipeline.text_encoder_2.dtype, device=device)
+    else:
+        prompt_embeds = prompt_embeds.to(dtype=pipeline.unet.dtype, device=device)
+
+    bs_embed, seq_len, _ = prompt_embeds.shape
+    # duplicate text embeddings for each generation per prompt, using mps friendly method
+    prompt_embeds = prompt_embeds.repeat(1, num_images_per_prompt, 1)
+    prompt_embeds = prompt_embeds.view(bs_embed * num_images_per_prompt, seq_len, -1)
+
+    if do_classifier_free_guidance:
+        # duplicate unconditional embeddings for each generation per prompt, using mps friendly method
+        seq_len = negative_prompt_embeds.shape[1]
+
+        if pipeline.text_encoder_2 is not None:
+            negative_prompt_embeds = negative_prompt_embeds.to(dtype=pipeline.text_encoder_2.dtype, device=device)
+        else:
+            negative_prompt_embeds = negative_prompt_embeds.to(dtype=pipeline.unet.dtype, device=device)
+
+        negative_prompt_embeds = negative_prompt_embeds.repeat(1, num_images_per_prompt, 1)
+        negative_prompt_embeds = negative_prompt_embeds.view(batch_size * num_images_per_prompt, seq_len, -1)
+
+    pooled_prompt_embeds = pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
+        bs_embed * num_images_per_prompt, -1
+    )
+    if do_classifier_free_guidance:
+        negative_pooled_prompt_embeds = negative_pooled_prompt_embeds.repeat(1, num_images_per_prompt).view(
+            bs_embed * num_images_per_prompt, -1
+        )
+
+    return prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds
 
 
 # Copied from sdxl pipeline
