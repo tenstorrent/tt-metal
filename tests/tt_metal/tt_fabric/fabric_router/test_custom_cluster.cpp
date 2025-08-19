@@ -30,6 +30,9 @@ protected:
 
 
 TEST_F(ClusterFixture, TestCustomCluster) {
+
+    tt::tt_metal::MetalContext::instance();
+
     std::unique_ptr<tt_ClusterDescriptor> cluster_desc =
         tt_ClusterDescriptor::create_from_yaml("./t3k_cluster_desc.yaml");
 
