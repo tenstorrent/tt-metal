@@ -67,7 +67,7 @@ export class StatusGrid extends LitElement {
                     <status-box 
                         name="${metric.name}"
                         .value="${metric.value}"
-                        .clickable="${!metric.isLeaf}"
+                        .clickable="true"
                         .isLeaf="${metric.isLeaf || false}"
                         type="${isBool(metric.value) ? "health" : "valued"}">
                     </status-box>
