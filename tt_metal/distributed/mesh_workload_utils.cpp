@@ -50,7 +50,7 @@ void write_go_signal(
             true);
     }
 
-    go_msg_t run_program_go_signal;
+    go_msg_t run_program_go_signal{};
     run_program_go_signal.signal = RUN_MSG_GO;
     run_program_go_signal.master_x = dispatch_core.x;
     run_program_go_signal.master_y = dispatch_core.y;

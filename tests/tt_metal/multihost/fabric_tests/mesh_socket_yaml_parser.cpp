@@ -299,7 +299,7 @@ PhysicalMeshConfig MeshSocketYamlParser::parse_physical_mesh(const YAML::Node& n
 }
 
 FabricConfig MeshSocketYamlParser::parse_fabric_config(const YAML::Node& node) {
-    FabricConfig config;
+    FabricConfig config{};
 
     TT_FATAL(node["topology"].IsDefined(), "FabricConfig missing required 'topology' field");
 

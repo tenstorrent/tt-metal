@@ -168,8 +168,8 @@ class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
     tt::tt_metal::ShardSpec const& get_shard_spec() const;
 
    private:
-    uint32_t page_size;
-    tt::tt_metal::ShardSpec const shard_spec;
+       uint32_t page_size{};
+       tt::tt_metal::ShardSpec const shard_spec;
 };
 
 struct CclTensorSlicer {
@@ -299,7 +299,7 @@ struct TensorSlice {
     ords_t tensor_slice_offset;
     ords_t worker_slice_shape;
     ords_t worker_slice_offset;
-    std::size_t dim;
+    std::size_t dim{};
 };
 };
 
@@ -649,13 +649,13 @@ private:
     // Class member variables
     tt_xy_pair flattened_tensor_shape;
     tt_xy_pair tensor_slice_shape;
-    Shape4D<uint32_t> tensor_slice_offset;
+    Shape4D<uint32_t> tensor_slice_offset{};
     std::vector<tt_xy_pair> worker_slice_shapes;
     std::vector<tt_xy_pair> worker_slice_offsets;
-    uint32_t input_page_size;
-    bool row_major;
-    uint32_t partition_index;
-    uint32_t partition_size;
+    uint32_t input_page_size{};
+    bool row_major{};
+    uint32_t partition_index{};
+    uint32_t partition_size{};
 };
 
 
@@ -690,15 +690,15 @@ private:
     Shape4D<uint32_t> calculate_tensor_slice_offset(Shape4D<uint32_t> const& tensor_shape, int slice_dim, uint32_t partition_index);
 
     // Class member variables
-    Shape4D<uint32_t> tensor_shape;
-    Shape4D<uint32_t> tensor_slice_shape;
-    Shape4D<uint32_t> tensor_slice_offset;
+    Shape4D<uint32_t> tensor_shape{};
+    Shape4D<uint32_t> tensor_slice_shape{};
+    Shape4D<uint32_t> tensor_slice_offset{};
     std::vector<Shape4D<uint32_t>> worker_slice_shapes;
     std::vector<Shape4D<uint32_t>> worker_slice_offsets;
-    uint32_t input_page_size;
-    bool row_major;
-    uint32_t partition_index;
-    uint32_t partition_size;
+    uint32_t input_page_size{};
+    bool row_major{};
+    uint32_t partition_index{};
+    uint32_t partition_size{};
 };
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(size_t ring_size, size_t ring_index, Topology topology);

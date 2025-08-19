@@ -297,7 +297,7 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
     union {
         float f;
         uint32_t u;
-    } scale_union;
+    } scale_union{};
     scale_union.f = scale.value_or(1.0f);
 
     // log scale

@@ -73,14 +73,14 @@ struct BufferStressTestConfig {
 
 class BufferStressTestConfigSharded {
 public:
-    uint32_t seed;
+    uint32_t seed{};
     uint32_t num_iterations = 100;
 
     const std::array<uint32_t, 2> max_num_pages_per_core;
     const std::array<uint32_t, 2> max_num_cores;
 
-    std::array<uint32_t, 2> num_pages_per_core;
-    std::array<uint32_t, 2> num_cores;
+    std::array<uint32_t, 2> num_pages_per_core{};
+    std::array<uint32_t, 2> num_cores{};
     std::array<uint32_t, 2> page_shape = {32, 32};
     uint32_t element_size = 1;
     TensorMemoryLayout mem_config = TensorMemoryLayout::HEIGHT_SHARDED;

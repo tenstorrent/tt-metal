@@ -500,7 +500,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     union {
         float f;
         uint32_t u;
-    } e;
+    } e{};
     e.f = eps;  // epsilon
 
     // Set runtime arguments based on kernel layout type

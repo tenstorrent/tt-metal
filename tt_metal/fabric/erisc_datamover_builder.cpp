@@ -179,7 +179,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(Topology topology) {
 
     // https://github.com/tenstorrent/tt-metal/issues/26354 to track fix for this hack where we always set aside the
     // memory for the telemetry buffer in Blackhole
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry() || tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_telemetry() ||
+        tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::BLACKHOLE) {
         // Avoid a bug on BH, always allocate the space for the telemetry buffer
         this->perf_telemetry_buffer_address = next_l1_addr;
         next_l1_addr += 32;
@@ -1021,8 +1022,7 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
 
 void FabricEriscDatamoverBuilder::get_telemetry_compile_time_args(std::vector<uint32_t>& ct_args) const {
     auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    uint32_t telemetry_mode = static_cast<uint32_t>(
-        rtoptions.get_enable_fabric_telemetry() ? 1 : 0);
+    uint32_t telemetry_mode = static_cast<uint32_t>(rtoptions.get_enable_fabric_telemetry() ? 1 : 0);
     ct_args.push_back(telemetry_mode);
 
     // Add telemetry buffer address (16B aligned)
@@ -1376,9 +1376,9 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     bool build_in_worker_connection_mode,
     FabricEriscDatamoverType fabric_edm_type,
     eth_chan_directions direction) {
-    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_buffer_index_semaphore_id;
-    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_flow_control_semaphore_id;
-    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_connection_semaphore_id;
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_buffer_index_semaphore_id{};
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_flow_control_semaphore_id{};
+    std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_connection_semaphore_id{};
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
         receiver_channels_downstream_flow_control_semaphore_id;
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>

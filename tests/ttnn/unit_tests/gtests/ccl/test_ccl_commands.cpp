@@ -33,7 +33,7 @@ const Shape4D<uint32_t> uninitialized_test_shape = {
 TEST(CclCommandArgGenerator, PackTensorShapeArg) {
     constexpr std::size_t size_in_words = tensor_shape_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 4);
-    std::array<uint32_t, size_in_words> args;
+    std::array<uint32_t, size_in_words> args{};
     std::ranges::fill(args, std::numeric_limits<uint32_t>::max());
     Shape4D<uint32_t> test_shape = {1, 2, 3, 4};
     tensor_shape_command_arg_t::pack_to(args.data(), test_shape);
@@ -58,7 +58,7 @@ TEST(CclCommandArgGenerator, UnpackTensorShapeArg) {
 
 // tensor slice
 TEST(CclCommandArgGenerator, PackTensorSliceShapeArg) {
-    std::array<uint32_t, tensor_slice_shape_command_arg_t::size_in_words()> args;
+    std::array<uint32_t, tensor_slice_shape_command_arg_t::size_in_words()> args{};
     std::ranges::fill(args, std::numeric_limits<uint32_t>::max());
     constexpr std::size_t size_in_words = tensor_slice_shape_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 4);
@@ -84,7 +84,7 @@ TEST(CclCommandArgGenerator, UnpackTensorSliceShapeArg) {
 
 // tensor slice offset
 TEST(CclCommandArgGenerator, PackTensorSliceOffsetArg) {
-    std::array<uint32_t, tensor_slice_offset_command_arg_t::size_in_words()> args;
+    std::array<uint32_t, tensor_slice_offset_command_arg_t::size_in_words()> args{};
     std::ranges::fill(args, std::numeric_limits<uint32_t>::max());
     constexpr std::size_t size_in_words = tensor_slice_offset_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 4);
@@ -110,7 +110,7 @@ TEST(CclCommandArgGenerator, UnpackTensorSliceOffsetArg) {
 
 // worker start offset in slice
 TEST(CclCommandArgGenerator, PackWorkerStartOffsetInSliceArg) {
-    std::array<uint32_t, worker_start_offset_command_arg_t::size_in_words()> args;
+    std::array<uint32_t, worker_start_offset_command_arg_t::size_in_words()> args{};
     std::ranges::fill(args, std::numeric_limits<uint32_t>::max());
     constexpr std::size_t size_in_words = worker_start_offset_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 4);
@@ -136,7 +136,7 @@ TEST(CclCommandArgGenerator, UnpackWorkerStartOffsetInSliceArg) {
 
 // worker pages per slice
 TEST(CclCommandArgGenerator, PackWorkerPagesPerSliceArg) {
-    std::array<uint32_t, worker_pages_command_arg_t::size_in_words()> args;
+    std::array<uint32_t, worker_pages_command_arg_t::size_in_words()> args{};
     std::ranges::fill(args, std::numeric_limits<uint32_t>::max());
     constexpr std::size_t size_in_words = worker_pages_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 1);
@@ -158,7 +158,7 @@ TEST(CclCommandArgGenerator, UnpackWorkerPagesPerSliceArg) {
 TEST(CclCommandArgGenerator, PackFullTensorArg) {
     constexpr std::size_t size_in_words = full_tensor_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 17);
-    std::array<uint32_t, full_tensor_command_arg_t::size_in_words()> args;
+    std::array<uint32_t, full_tensor_command_arg_t::size_in_words()> args{};
     std::ranges::fill(args, std::numeric_limits<uint32_t>::max());
 
     CclCommandTensor test_tensor = {{0, 1, 2, 3}, {4, 5, 6, 7}, {8, 9, 10, 11}, {12, 13, 14, 15}, 16};
@@ -171,7 +171,7 @@ TEST(CclCommandArgGenerator, PackFullTensorArg) {
 TEST(CclCommandArgGenerator, UnpackFullTensorArg) {
     constexpr std::size_t size_in_words = full_tensor_command_arg_t::size_in_words();
     ASSERT_EQ(size_in_words, 17);
-    std::array<uint32_t, full_tensor_command_arg_t::size_in_words()> args;
+    std::array<uint32_t, full_tensor_command_arg_t::size_in_words()> args{};
     std::iota(args.begin(), args.end(), 0);
 
     full_tensor_command_arg_t::field_type test_tensor = {

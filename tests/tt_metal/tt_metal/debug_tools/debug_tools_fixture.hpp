@@ -11,17 +11,15 @@ namespace tt::tt_metal {
 
 class DebugToolsFixture : public DispatchFixture {
    protected:
-    bool watcher_previous_enabled;
+       bool watcher_previous_enabled{};
 
-    void TearDown() override {
-        DispatchFixture::TearDown();
-    }
+       void TearDown() override { DispatchFixture::TearDown(); }
 
-    template <typename T>
-    void RunTestOnDevice(const std::function<void(T*, IDevice*)>& run_function, IDevice* device) {
-        auto run_function_no_args = [=,this]() { run_function(static_cast<T*>(this), device); };
-        DispatchFixture::RunTestOnDevice(run_function_no_args, device);
-    }
+       template <typename T>
+       void RunTestOnDevice(const std::function<void(T*, IDevice*)>& run_function, IDevice* device) {
+           auto run_function_no_args = [=, this]() { run_function(static_cast<T*>(this), device); };
+           DispatchFixture::RunTestOnDevice(run_function_no_args, device);
+       }
 };
 
 // A version of DispatchFixture with DPrint enabled on all cores.
@@ -133,12 +131,12 @@ public:
     }
 
 protected:
-    int  watcher_previous_interval;
-    bool watcher_previous_dump_all;
-    bool watcher_previous_append;
-    bool watcher_previous_auto_unpause;
-    bool watcher_previous_noinline;
-    bool test_mode_previous;
+    int watcher_previous_interval{};
+    bool watcher_previous_dump_all{};
+    bool watcher_previous_append{};
+    bool watcher_previous_auto_unpause{};
+    bool watcher_previous_noinline{};
+    bool test_mode_previous{};
     void SetUp() override {
         // Enable watcher for this test, save the previous state so we can restore it later.
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
