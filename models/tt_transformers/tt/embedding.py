@@ -32,8 +32,9 @@ class Embedding(LightweightModule):
             cache_file_name=cache_name,
         )
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, embed_scale: int = 1.0) -> ttnn.Tensor:
         x = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.multiply(x, embed_scale)
         return x
 
 

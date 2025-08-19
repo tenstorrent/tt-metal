@@ -128,6 +128,8 @@ class Transformer(LightweightModule):
             max_columns_per_device=self.args.max_columns_per_device_lm_head,
         )
 
+        self.embed_scale = args.embed_scale
+
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
@@ -145,7 +147,8 @@ class Transformer(LightweightModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        tokens_embd = self.embd(tokens)
+        tokens_embd = self.embd(tokens, self.embed_scale)
+
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
@@ -157,6 +160,13 @@ class Transformer(LightweightModule):
             self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
             self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
+        if self.rope_setup_local is not None:
+            tt_rot_mats_prefill_local = [
+                self.rope_setup_local.cos_matrix[:, :, start_pos : start_pos + S, :],
+                self.rope_setup_local.sin_matrix[:, :, start_pos : start_pos + S, :],
+            ]
+        else:
+            tt_rot_mats_prefill_local = None
 
         if hasattr(self, "rope_local_setup"):
             tt_rot_mats_prefill_local = [

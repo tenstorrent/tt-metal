@@ -33,6 +33,7 @@ class LMHead(LightweightModule):
         self.num_devices = args.num_devices
 
         size_per_device = self.vocab_size // self.num_devices
+        self.model_config = args.get_model_config()
 
         if args.is_galaxy:
             size_per_device = self.padded_vocab_size // self.num_devices
@@ -140,12 +141,14 @@ class LMHead(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=pc,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=self.args.lm_head_dtype or ttnn.bfloat8_b,
             )
-            outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG))
+            outputs.append(
+                ttnn.sharded_to_interleaved(output, memory_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"])
+            )
 
         # Concatenate the outputs
-        output = ttnn.concat(outputs, dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        output = ttnn.concat(outputs, dim=-1, memory_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"])
 
         output = tt_all_reduce(
             output,
