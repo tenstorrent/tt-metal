@@ -604,7 +604,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
 
     auto height = logical_shape[-2];
     auto width = logical_shape[-1];
-    std::array<uint32_t, 2> computed_shard_shape;
+    std::array<uint32_t, 2> computed_shard_shape{};
 
     if (shard_shape.has_value()) {
         computed_shard_shape = shard_shape.value();
