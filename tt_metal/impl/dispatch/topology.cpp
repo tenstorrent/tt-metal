@@ -8,6 +8,7 @@
 #include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
+#include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -31,6 +32,7 @@
 #include "dispatch_core_common.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "kernel_config/fd_kernel.hpp"
+#include "dispatch/kernel_config/relay_mux.hpp"
 #include "kernel_types.hpp"
 #include "metal_soc_descriptor.h"
 #include "persistent_kernel_cache.hpp"
@@ -468,7 +470,6 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
     } else {
         // Need to handle N300/T3000 separately from TG/TGG since they have different templates/tunnel depths
         // If using fabric, upstream would have already initalized to the proper config for dispatch
-        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
         if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
             // For Galaxy, we always init all remote devices associated with an mmio device.
             std::vector<DispatchKernelNode> nodes_for_one_mmio =
@@ -826,13 +827,19 @@ void configure_dispatch_cores(IDevice* device) {
 
 std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDatamoverAxis> get_fabric_edm_type(
     const tt::tt_fabric::ControlPlane& control_plane,
-    tt_fabric::Topology topology,
+    const tt::tt_fabric::RoutingDirection direction,
     tt::tt_fabric::MeshId mesh_id,
     chip_id_t chip0,
     chip_id_t chip1,
     bool wrap_around_mesh) {
-    if (topology != tt_fabric::Topology::Ring) {
-        return {tt::tt_fabric::FabricEriscDatamoverType::Default, tt::tt_fabric::FabricEriscDatamoverAxis::Short};
+    auto fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
+    auto fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
+
+    const auto& fabric_context = control_plane.get_fabric_context();
+
+    const auto eth_chan_direction = control_plane.routing_direction_to_eth_direction(direction);
+    if (!fabric_context.need_deadlock_avoidance_support(eth_chan_direction)) {
+        return {fabric_edm_type, fabric_edm_axis};
     }
 
     auto physical_mesh_shape = control_plane.get_physical_mesh_shape(mesh_id);
@@ -840,8 +847,6 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
 
     auto mesh_num_rows = physical_mesh_shape[0];
     auto mesh_num_columns = physical_mesh_shape[1];
-    auto fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
-    auto fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
 
     auto smaller_chip_id = std::min(chip0, chip1);
     auto larger_chip_id = std::max(chip0, chip1);
@@ -892,6 +897,7 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
              chip1 == chip0 - mesh_num_columns);
         bool is_edm_along_row = ((larger_chip_id - smaller_chip_id) == mesh_num_columns) ||
                                 (smaller_chip_id == larger_chip_id % mesh_num_columns);
+
         // Column dateline
         if (is_dateline_edm_along_column) {
             fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Dateline;
@@ -934,21 +940,36 @@ std::pair<tt::tt_fabric::FabricEriscDatamoverType, tt::tt_fabric::FabricEriscDat
         }
     }
 
+    if (fabric_context.is_2D_routing_enabled()) {
+        // for 2D fabric, we need to re-work the buffer space optimization, cannot use 1D optimizations because
+        // of more number of sender channels in 2D
+        // only handling default and dateline edm types for now
+        if (fabric_edm_type != tt::tt_fabric::FabricEriscDatamoverType::Default &&
+            fabric_edm_type != tt::tt_fabric::FabricEriscDatamoverType::Dateline) {
+            // reset to default if set to a non-dateline config
+            fabric_edm_type = tt::tt_fabric::FabricEriscDatamoverType::Default;
+            fabric_edm_axis = tt::tt_fabric::FabricEriscDatamoverAxis::Short;
+        }
+    }
+
     return {fabric_edm_type, fabric_edm_axis};
 }
 
 void build_tt_fabric_program(
     IDevice* device,
     Program* fabric_program_ptr,
-    std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder>& edm_builders) {
+    std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder>& edm_builders,
+    std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricTensixDatamoverBuilder>& tensix_builders) {
     using namespace tt_fabric;
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
     const bool is_TG =
         (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG);
     auto soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
+
     const auto& fabric_context = control_plane.get_fabric_context();
-    const auto& edm_config = fabric_context.get_fabric_router_config();
+    const bool is_2D_routing = fabric_context.is_2D_routing_enabled();
+
     const auto configure_edm_builder_for_dispatch = [&](tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder) {
         constexpr uint32_t k_DispatchFabricRouterContextSwitchInterval = 16;
         // Dispatch requires a higher context switching freq to service slow dispatch / UMD / debug tools
@@ -957,6 +978,7 @@ void build_tt_fabric_program(
     };
 
     if (is_TG && device->is_mmio_capable()) {
+        const auto& edm_config = fabric_context.get_fabric_router_config();
         auto router_chans_and_direction = control_plane.get_active_fabric_eth_channels(fabric_node_id);
         for (const auto& [eth_chan, eth_direction] : router_chans_and_direction) {
             // remote_fabric_node_id is only used to determine the handshake master, no functional impact
@@ -984,8 +1006,6 @@ void build_tt_fabric_program(
     std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
     std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors;
     uint32_t num_intra_chip_neighbors = 0;
-    const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2D_routing = topology == Topology::Mesh;
 
     const auto device_has_dispatch_tunnel = [&]() -> bool {
         auto mmio_device_id =
@@ -1052,7 +1072,7 @@ void build_tt_fabric_program(
     for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
         const auto& [fabric_edm_type, fabric_edm_axis] = get_fabric_edm_type(
             control_plane,
-            topology,
+            direction,
             fabric_node_id.mesh_id,
             fabric_node_id.chip_id,
             remote_fabric_node_id.chip_id,
@@ -1062,6 +1082,13 @@ void build_tt_fabric_program(
                            fabric_edm_type == tt::tt_fabric::FabricEriscDatamoverType::Dateline;
 
         const auto& curr_edm_config = fabric_context.get_fabric_router_config(fabric_edm_type, fabric_edm_axis);
+
+        // Create fabric tensix builder for this ethernet channel
+        // Skip the link used by dispatch using relay mux API
+        uint32_t dispatch_link_idx = RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
+        bool fabric_tensix_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                                     tt::tt_fabric::FabricTensixConfig::DISABLED;
+
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
@@ -1075,6 +1102,16 @@ void build_tt_fabric_program(
                 is_dateline,
                 control_plane.routing_direction_to_eth_direction(direction));
             edm_builders.insert({eth_chan, edm_builder});
+
+            auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
+            if (fabric_tensix_enabled) {
+                // Only create tensix builder if this channel is not used by dispatch
+                if (!(device_has_dispatch_tunnel && link_idx == dispatch_link_idx)) {
+                    auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
+                        device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan);
+                    tensix_builders.insert({eth_chan, tensix_builder});
+                }
+            }
         }
 
         // Last link may be used by dispatch if there is tunneling
@@ -1085,6 +1122,7 @@ void build_tt_fabric_program(
         }
     }
 
+    const auto topology = fabric_context.get_fabric_topology();
     const bool is_galaxy =
         tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
 
@@ -1112,6 +1150,11 @@ void build_tt_fabric_program(
 
                 auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
+
+                // TODO: issue #26792, if have fabric_tensix_builders, need to get the tensix builder 1/2,
+                // then edm_builder1 connect_to_downstream_edm (tensix builder 2)
+                // edm_builder2 connect_to_downstream_edm (tensix builder 1)
+
                 edm_builder1.connect_to_downstream_edm(edm_builder2);
                 edm_builder2.connect_to_downstream_edm(edm_builder1);
 
@@ -1154,14 +1197,23 @@ void build_tt_fabric_program(
 std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     std::unique_ptr<Program> fabric_program_ptr = std::make_unique<Program>();
     std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricEriscDatamoverBuilder> edm_builders;
+    std::unordered_map<tt::tt_fabric::chan_id_t, tt::tt_fabric::FabricTensixDatamoverBuilder> tensix_builders;
 
     const auto& control_plane= tt::tt_metal::MetalContext::instance().get_control_plane();
     auto& fabric_context = control_plane.get_fabric_context();
 
-    build_tt_fabric_program(device, fabric_program_ptr.get(), edm_builders);
+    build_tt_fabric_program(device, fabric_program_ptr.get(), edm_builders, tensix_builders);
     fabric_context.set_num_fabric_initialized_routers(device->id(), edm_builders.size());
     if (edm_builders.empty()) {
         return nullptr;
+    }
+
+    // Compile all fabric tensix builders
+    if (tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+        tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        for (auto& [eth_chan, tensix_builder] : tensix_builders) {
+            tensix_builder.create_and_compile(device, *fabric_program_ptr);
+        }
     }
 
     // for now it doesnt matter which channel is the master, so just pick the 1st in the map
@@ -1174,8 +1226,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
     }
 
     std::map<std::string, std::string> defines = {};
-    const auto topology = fabric_context.get_fabric_topology();
-    if (topology == tt::tt_fabric::Topology::Mesh) {
+    if (fabric_context.is_2D_routing_enabled()) {
         defines["FABRIC_2D"] = "";
     }
 

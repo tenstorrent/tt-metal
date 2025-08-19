@@ -24,7 +24,8 @@ struct ExecuteAllToAllDispatch {
         std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
-        const std::optional<GlobalSemaphore>& global_semaphore = std::nullopt);
+        const std::optional<GlobalSemaphore>& global_semaphore = std::nullopt,
+        const std::optional<GlobalSemaphore>& init_semaphore = std::nullopt);
 };
 
 }  // namespace operations::ccl

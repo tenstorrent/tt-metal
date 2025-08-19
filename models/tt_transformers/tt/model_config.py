@@ -31,7 +31,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     load_meta_state_dict,
     reverse_permute,
     standardize_hf_keys,
-    standardize_hf_keys_qwen25_vl,
+    standardize_hf_keys_multimodal,
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
@@ -452,6 +452,9 @@ class ModelArgs:
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
 
+        self.rms_norm_add_unit_offset = False
+        self.embed_scale = None
+
         assert not os.getenv(
             "FAKE_DEVICE"
         ), "FAKE_DEVICE has been renamed to MESH_DEVICE for consistency with vLLM, please update your environment variables and run again."
@@ -507,7 +510,7 @@ class ModelArgs:
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.CKPT_DIR.lower():
+        if any(keyword in self.CKPT_DIR.lower() for keyword in ("instruct", "it")):
             self.instruct = True
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
@@ -556,7 +559,7 @@ class ModelArgs:
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
                 "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
@@ -716,8 +719,10 @@ class ModelArgs:
             # All Gather Matmul for Dense Out (DO)
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
             # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
+            # TODO: #26657 (self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
             self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
-                self.ccl_topology() == ttnn.Topology.Ring
+                self.num_devices == 8
+                and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
             )
@@ -787,12 +792,15 @@ class ModelArgs:
                 if self.is_galaxy
                 else (self.n_heads * self.head_dim) // self.num_devices
             )
+            # TODO: #26657 (if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
             n_dim = (
                 self.dim // self.cluster_shape[1]
                 if self.is_galaxy
                 else (
                     1024
-                    if self.ccl_topology() == ttnn.Topology.Ring and 1024 % (self.dim / self.num_devices) == 0
+                    if self.num_devices == 8
+                    and os.getenv("ACTUAL_DEVICE", "") != "TG"
+                    and 1024 % (self.dim / self.num_devices) == 0
                     else self.dim
                 )
             )
@@ -1286,7 +1294,11 @@ class ModelArgs:
         return False
 
     def ccl_topology(self):
-        if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG":  # T3K
+        # Use ring on a T3K or 6U galaxy submesh
+        if self.num_devices == 8 and ttnn.cluster.get_cluster_type() in [
+            ttnn.cluster.ClusterType.T3K,
+            ttnn.cluster.ClusterType.GALAXY,
+        ]:
             return ttnn.Topology.Ring
         elif self.num_devices > 1:  # All other multi chip devices
             return ttnn.Topology.Linear
@@ -1392,7 +1404,10 @@ class ModelArgs:
 
     def _set_model_specific_params(self):
         # Gemma3 specific params
-        self.rms_norm_add_unit_offset = "gemma-3" in self.base_model_name.lower()
+        is_gemma3 = "gemma-3" in self.base_model_name.lower()
+        if is_gemma3:
+            self.rms_norm_add_unit_offset = True
+            self.embed_scale = self.dim**0.5
 
     def _set_params_from_dict(self, config, is_hf=False):
         # Try to get text_config, if it doesn't exist everything is text config
@@ -1469,8 +1484,12 @@ class ModelArgs:
                     )
                     self.hidden_dim = padded_hidden_dim
 
+        self.layer_types = text_config.get("layer_types", None)
+
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
+        self.rope_theta_local = text_config.get("rope_local_base_freq", None)
+
         rope_scaling_params = text_config.get("rope_scaling", None)
         self.rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
 
@@ -1499,6 +1518,7 @@ class ModelArgs:
         self.vision_in_channels = 3
 
         self.state_dict_text_prefix = self._get_text_prefix()
+        self.is_multimodal = "vision_config" in config or self.is_vision()
 
         self._set_model_specific_params()
 
@@ -1688,8 +1708,8 @@ class ModelArgs:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
-            if "Qwen2.5-VL" in self.model_name:
-                state_dict = standardize_hf_keys_qwen25_vl(state_dict)
+            if self.is_multimodal:
+                state_dict = standardize_hf_keys_multimodal(state_dict)
             else:
                 state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
@@ -2205,9 +2225,9 @@ class ModelArgs:
 
     def reference_embedding(self, reference_model=None):
         if self.checkpoint_type == CheckpointType.Meta:
-            from models.tt_transformers.tt.common import HostEmbedding
+            from models.tt_transformers.tt.common import HostEmbedding, HostScaledEmbedding
 
-            return HostEmbedding(self)
+            return HostEmbedding(self) if self.embed_scale is None else HostScaledEmbedding(self)
         else:
             if reference_model is None:
                 model = self.reference_transformer(wrap=False)
@@ -2600,6 +2620,7 @@ def determine_device_name(mesh_device):
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
             2: "P300",
             4: "P150x4",
+            8: "P150x8",
         }
     elif is_wormhole_b0():
         dict_device_names = {

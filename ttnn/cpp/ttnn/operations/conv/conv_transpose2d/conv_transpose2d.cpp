@@ -129,6 +129,8 @@ Result conv_transpose2d(
             tt::tt_metal::is_device_tensor(input_tensor) ? std::make_optional(input_tensor.memory_config())
                                                          : std::nullopt,
             kernel_size,
+            dilation,
+            sliding_window::get_pair_n4_padding(padding),
             groups,
             bias_tensor.has_value(),
             compute_config);
@@ -210,7 +212,6 @@ Result conv_transpose2d(
         kernel_size[0],
         kernel_size[1],
         get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader,
         conv_config.full_inner_dim);
 
     bool weight_is_on_device = tt::tt_metal::is_device_tensor(weight_tensor);

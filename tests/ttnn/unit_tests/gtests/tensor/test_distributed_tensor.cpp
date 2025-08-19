@@ -50,6 +50,9 @@ TEST_F(TensorDistributionTest, DistributeToDevice) {
     // Tensor topology is a single device
     const auto& tensor_topology = input_tensor.tensor_topology();
     EXPECT_EQ(tensor_topology.mesh_shape(), MeshShape(1));
+    EXPECT_EQ(
+        tensor_topology.placements(),
+        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
 }
 
 TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {
@@ -62,6 +65,9 @@ TEST_F(TensorDistributionTest, SingleDeviceTensorReplication) {
     // Tensor topology for tensor replicated across entire mesh should be 1D shape with number of devices
     const auto& tensor_topology = replicated_tensor.tensor_topology();
     EXPECT_EQ(tensor_topology.mesh_shape(), MeshShape(mesh_device_->num_devices()));
+    EXPECT_EQ(
+        tensor_topology.placements(),
+        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Replicate{}}));
 
     std::vector<Tensor> device_tensors = get_device_tensors(replicated_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
@@ -96,13 +102,17 @@ TEST_F(TensorDistribution2x4Test, Shard1DFewerShardsThanDevices) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_devices - 1, 3, 1}, DataType::FLOAT32));
 
-    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+    const int shard_dim = 1;
+    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, shard_dim);
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
 
     // Tensor topology for tensor sharded across 1 dimension should be 1D shape with number of actual shards (ie.
     // num_devices - 1)
     const auto& tensor_topology = sharded_tensor.tensor_topology();
     EXPECT_EQ(tensor_topology.mesh_shape(), MeshShape(mesh_device_->num_devices() - 1));
+    EXPECT_EQ(
+        tensor_topology.placements(),
+        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), mesh_device_->num_devices() - 1);
 
@@ -127,13 +137,17 @@ TEST_F(TensorDistribution2x4Test, Shard1DNegativeDim) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, 1, 1, num_devices}, DataType::FLOAT32));
 
-    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, -1);
+    const int shard_dim = -1;
+    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, shard_dim);
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper, *mesh_device_);
 
     // Tensor topology for tensor sharded across 1 dimension should be 1D shape with number of actual shards (ie.
     // num_devices)
     const auto& tensor_topology = sharded_tensor.tensor_topology();
     EXPECT_EQ(tensor_topology.mesh_shape(), MeshShape(mesh_device_->num_devices()));
+    EXPECT_EQ(
+        tensor_topology.placements(),
+        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
     EXPECT_EQ(device_tensors.size(), mesh_device_->num_devices());
@@ -151,13 +165,17 @@ TEST_F(TensorDistribution2x4Test, Shard1D) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_devices, 3, 1}, DataType::FLOAT32));
 
-    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, 1);
+    const int shard_dim = 1;
+    auto mapper = shard_tensor_to_mesh_mapper(*mesh_device_, shard_dim);
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
 
     // Tensor topology for tensor sharded across 1 dimension should be 1D shape with number of actual shards (ie.
     // num_devices)
     const auto& tensor_topology = sharded_tensor.tensor_topology();
     EXPECT_EQ(tensor_topology.mesh_shape(), MeshShape(mesh_device_->num_devices()));
+    EXPECT_EQ(
+        tensor_topology.placements(),
+        (tt::stl::SmallVector<MeshMapperConfig::Placement>{MeshMapperConfig::Shard{shard_dim}}));
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), mesh_device_->num_devices());
 
@@ -184,16 +202,16 @@ TEST_F(TensorDistribution2x4Test, PartialConcat) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, 1, 3}, DataType::FLOAT32));
 
-    auto mapper = create_mesh_mapper(
-        *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Replicate{}},
-        });
+    const auto mesh_mapper_config = MeshMapperConfig{
+        .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Replicate{}},
+    };
+    auto mapper = create_mesh_mapper(*mesh_device_, mesh_mapper_config);
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
 
-    // Tensor topology for tensor sharded/replicated across 2D should be mesh device shape.
+    // Tensor topology for tensor sharded/replicated across 2D should be mesh device shape
     const auto& tensor_topology = sharded_tensor.tensor_topology();
     EXPECT_EQ(tensor_topology.mesh_shape(), mesh_device_->shape());
+    EXPECT_EQ(tensor_topology.placements(), mesh_mapper_config.placements);
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), kNumRows);
 
@@ -238,18 +256,17 @@ TEST_P(TensorDistribution2x4Test2D, FullyReplicated) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_rows, num_cols, 1}, DataType::FLOAT32));
 
-    const auto mesh_shape_override = MeshShape(num_rows, num_cols);
-    auto mapper = create_mesh_mapper(
-        *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Replicate{}},
-            .mesh_shape_override = mesh_shape_override,
-        });
+    const auto mesh_mapper_config = MeshMapperConfig{
+        .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Replicate{}},
+        .mesh_shape_override = MeshShape(num_rows, num_cols),
+    };
+    auto mapper = create_mesh_mapper(*mesh_device_, mesh_mapper_config);
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
 
-    // Tensor topology for tensor replicated across 2D (with override) should be same as mesh shape override
+    // Tensor topology for tensor replicated across 2D (with override) should be same as mesh mapper config
     const auto& tensor_topology = sharded_tensor.tensor_topology();
-    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_shape_override);
+    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_mapper_config.mesh_shape_override);
+    EXPECT_EQ(tensor_topology.placements(), mesh_mapper_config.placements);
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), 1);
 
@@ -280,18 +297,17 @@ TEST_P(TensorDistribution2x4Test2D, ReplicateDim) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_rows, num_cols, 1}, DataType::FLOAT32));
 
-    const auto mesh_shape_override = MeshShape(num_rows, num_cols);
-    auto mapper = create_mesh_mapper(
-        *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Replicate{}},
-            .mesh_shape_override = mesh_shape_override,
-        });
+    const auto mesh_mapper_config = MeshMapperConfig{
+        .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Replicate{}},
+        .mesh_shape_override = MeshShape(num_rows, num_cols),
+    };
+    auto mapper = create_mesh_mapper(*mesh_device_, mesh_mapper_config);
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
 
-    // Tensor topology for tensor sharded/replicated across 2D (with override) should be same as mesh shape override
+    // Tensor topology for tensor sharded/replicated across 2D (with override) should be same as mesh mapper config
     const auto& tensor_topology = sharded_tensor.tensor_topology();
-    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_shape_override);
+    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_mapper_config.mesh_shape_override);
+    EXPECT_EQ(tensor_topology.placements(), mesh_mapper_config.placements);
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), num_rows);
 
@@ -321,18 +337,17 @@ TEST_P(TensorDistribution2x4Test2D, ShardDims) {
     Tensor input_tensor =
         Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_rows, num_cols, 3}, DataType::FLOAT32));
 
-    const auto mesh_shape_override = MeshShape(num_rows, num_cols);
-    auto mapper = create_mesh_mapper(
-        *mesh_device_,
-        MeshMapperConfig{
-            .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
-            .mesh_shape_override = mesh_shape_override,
-        });
+    const auto mesh_mapper_config = MeshMapperConfig{
+        .placements = {MeshMapperConfig::Shard{1}, MeshMapperConfig::Shard{2}},
+        .mesh_shape_override = MeshShape(num_rows, num_cols),
+    };
+    auto mapper = create_mesh_mapper(*mesh_device_, mesh_mapper_config);
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
 
-    // Tensor topology for tensor sharded across 2D (with override) should be same as mesh shape override
+    // Tensor topology for tensor sharded across 2D (with override) should be same as mesh mapper config
     const auto& tensor_topology = sharded_tensor.tensor_topology();
-    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_shape_override);
+    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_mapper_config.mesh_shape_override);
+    EXPECT_EQ(tensor_topology.placements(), mesh_mapper_config.placements);
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), num_rows * num_cols);
 
@@ -438,23 +453,17 @@ TEST_F(TensorDistribution2x4Test, NdMapperShard3D) {
     Tensor input_tensor = Tensor::from_vector(
         test_data, get_tensor_spec(ttnn::Shape{kOuterDim, kNumRows, kNumCols, kInnerDim}, DataType::FLOAT32));
 
-    const auto mesh_shape_override = MeshShape(2, 2, 2);
-    auto mapper = create_mesh_mapper(
-        *mesh_device_,
-        MeshMapperConfig{
-            .placements =
-                {
-                    MeshMapperConfig::Replicate{},
-                    MeshMapperConfig::Shard{2},
-                    MeshMapperConfig::Shard{1},
-                },
-            .mesh_shape_override = mesh_shape_override,
-        });
+    const auto mesh_mapper_config = MeshMapperConfig{
+        .placements = {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{2}, MeshMapperConfig::Shard{1}},
+        .mesh_shape_override = MeshShape(2, 2, 2),
+    };
+    auto mapper = create_mesh_mapper(*mesh_device_, mesh_mapper_config);
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
 
-    // Tensor topology for tensor sharded across 3D (with override) should be same as mesh shape override
+    // Tensor topology for tensor sharded across 3D (with override) should be same as mesh mapper config
     const auto& tensor_topology = sharded_tensor.tensor_topology();
-    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_shape_override);
+    EXPECT_EQ(tensor_topology.mesh_shape(), mesh_mapper_config.mesh_shape_override);
+    EXPECT_EQ(tensor_topology.placements(), mesh_mapper_config.placements);
 
     EXPECT_EQ(count_unique_buffers(sharded_tensor), 2 * 2);
 

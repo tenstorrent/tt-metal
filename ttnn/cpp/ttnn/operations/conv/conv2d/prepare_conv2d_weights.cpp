@@ -744,6 +744,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
     uint32_t groups,
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> stride,
+    std::array<uint32_t, 2> dilation,
+    std::array<uint32_t, 4> padding,
     MeshDevice* device,
     Conv2dConfig& conv_config,
     Layout input_layout,
@@ -771,6 +773,8 @@ static OptimizedConvBlockConfig get_opt_block_config(
         output_dtype,
         input_memory_config,
         kernel_size,
+        dilation,
+        padding,
         groups,
         has_bias,
         compute_config);
@@ -853,7 +857,6 @@ static OptimizedConvBlockConfig get_opt_block_config(
         kernel_size[0],
         kernel_size[1],
         get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader,
         conv_config.full_inner_dim);
 }
 
@@ -940,6 +943,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         groups,
         kernel_size,
         stride,
+        dilation,
+        padding_n4,
         device,
         conv_config,
         input_layout,
