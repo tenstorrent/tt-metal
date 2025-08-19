@@ -16,6 +16,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::upsample3d {
 
@@ -72,16 +73,10 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_interleaved(
     const bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
-    // Reader compile time arguments following 2D upsample pattern
-    const bool src_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(aligned_input_unit_size);
-    const uint32_t src_log2_size = src_size_is_power_of_two ? (std::uint32_t)log2(aligned_input_unit_size) : 0;
-
-    const std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src_is_dram,
-        (std::uint32_t)aligned_input_unit_size,
-        (std::uint32_t)src_size_is_power_of_two,
-        (std::uint32_t)src_log2_size};
+    // Reader compile time arguments with TensorAccessor
+    std::vector<uint32_t> reader_compile_time_args = {
+        (std::uint32_t)src0_cb_index, (std::uint32_t)aligned_input_unit_size};
+    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     const tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -89,16 +84,10 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_interleaved(
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
-    // Writer compile time arguments for 3D upsampling
-    const bool dst_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(output_unit_size);
-    const uint32_t dst_log2_size = dst_size_is_power_of_two ? (std::uint32_t)log2(output_unit_size) : 0;
-
+    // Writer compile time arguments for 3D upsampling with TensorAccessor
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
-        (std::uint32_t)dst_is_dram,
         (std::uint32_t)output_unit_size,
-        (std::uint32_t)dst_size_is_power_of_two,
-        (std::uint32_t)dst_log2_size,
         (std::uint32_t)scale_factor_d,
         (std::uint32_t)scale_factor_h,
         (std::uint32_t)scale_factor_w,
@@ -108,6 +97,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_interleaved(
         (std::uint32_t)1,                // block_height for row-major
         (std::uint32_t)1                 // num_units_per_output_stick
     };
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     const tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
