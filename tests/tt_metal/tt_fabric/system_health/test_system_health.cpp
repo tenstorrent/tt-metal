@@ -13,6 +13,7 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/control_plane.hpp>
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-metalium/mesh_graph.hpp>
 #include "distributed_context.hpp"
 #include "impl/context/metal_context.hpp"
@@ -357,7 +358,9 @@ void dump_to_yaml(const SystemDescriptor& descriptor) {
 
 TEST(Cluster, GetLocalEthernetConnectivity) {
     using namespace tt::tt_metal::distributed::multihost;
-
+    std::cout << "Creating system descriptor..." << std::endl;
+    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor();
+    std::cout << "Done creating system descriptor" << std::endl;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
 

@@ -45,6 +45,7 @@ target_sources(
         serialization/intermesh_link_table.cpp
         erisc_datamover_builder_helper.cpp
         ccl/ccl_common.cpp
+        physical_system_descriptor.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas

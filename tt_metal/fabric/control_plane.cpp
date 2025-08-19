@@ -2369,6 +2369,4 @@ void ControlPlane::populate_fabric_connection_info(
 
 ControlPlane::~ControlPlane() = default;
 
-PhysicalDiscoveryManager::PhysicalDiscoveryManager() {}
-
 }  // namespace tt::tt_fabric
