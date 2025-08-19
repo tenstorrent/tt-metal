@@ -273,15 +273,14 @@ void kernel_main() {
                                     pages_read_in_row = 0;
                                 }
 
-                                scatter_write_for_fabric_write<
-                                    true,
-                                    fabric_mux_num_buffers_per_channel>(
+                                scatter_write_for_fabric_write<true, fabric_mux_num_buffers_per_channel>(
                                     intermediate_addrgen,
                                     tile_one_id,
                                     tile_two_id,
                                     pkt_hdr,
                                     mux_connection_handle,
-                                    l1_read_addr);
+                                    l1_read_addr,
+                                    intermediate_page_size);
                                 tiles_read += 2;
                                 tiles_read_in_current_direction += 2;
                                 break;
