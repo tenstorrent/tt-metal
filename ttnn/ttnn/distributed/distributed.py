@@ -38,6 +38,7 @@ class TensorShardingInfo:
         self.mesh_rank = len(self.mesh_shape)
 
         self.dim_to_axis = self._compute_dim_to_axis_mapping()
+        self.global_tensor_shape = self._compute_global_tensor_shape()
         self.axis_representatives = self._compute_axis_representatives()
         self.device_to_shard_map = self._compute_device_to_shard_mapping()
         self.axis_offsets, self.axis_sizes = self._compute_axis_offsets_and_sizes()
@@ -52,6 +53,13 @@ class TensorShardingInfo:
                 if tensor_dim not in mapping:
                     mapping[tensor_dim] = axis
         return mapping
+
+    def _compute_global_tensor_shape(self):
+        """Compute the global tensor shape."""
+        shape = list(self.tensor.shape)
+        for tensor_dim, axis in self.dim_to_axis.items():
+            shape[tensor_dim] *= self.mesh_shape[axis]
+        return ttnn.Shape(shape)
 
     def _compute_axis_representatives(self):
         """Find representative device for each axis partition."""
@@ -236,7 +244,7 @@ def _create_shard_annotation_text(device_id, device_coord, sharding_info):
 
     slice_ranges = _compute_global_slice_ranges(device_coord, sharding_info)
     slice_strs = [
-        f"{start}:{end}" if not (start == 0 and end == sharding_info.tensor.shape[tensor_dim]) else ":"
+        f"{start}:{end}" if not (start == 0 and end == sharding_info.global_tensor_shape[tensor_dim]) else ":"
         for tensor_dim, (start, end) in enumerate(slice_ranges)
     ]
     slice_header = f"[{', '.join(slice_strs)}]"
