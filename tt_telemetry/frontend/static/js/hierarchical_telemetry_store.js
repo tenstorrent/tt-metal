@@ -25,13 +25,11 @@ export class HierarchicalTelemetryStore {
         // messages compact. This allows us to map back to path.
         this._pathById = new Map();
 
-        // Boolean telemetry values are hashed by path. Partial paths are also tracked and are the
-        // aggregate value of all children (ANDed together). That is, "true" is good and if any
-        // descendant is false (bad), all ancestors up the tree will be bad. Each time an actual
-        // telemetry point (i.e., a leaf node) changes, the aggregate value is propagated upwards.
-        // So e.g. if "host/data1" and "host/data2" are telemetry points, their value will be
-        // stored directly while "host" will also be present in the map and computed from both.
-        this._valueByPath = new Map();
+        // Telemetry data (value + timestamp) hashed by path. Partial paths are also tracked and are the
+        // aggregate value of all children (ANDed together for bools). Timestamps for intermediate nodes
+        // are the most recent timestamp of their children.
+        // Each entry is: { value: any, timestamp: Date }
+        this._dataByPath = new Map();
 
         // Hierarchical map of paths, allowing us to navigate to subsequently deeper levels. Given
         // a path like foo/bar/baz, the first level of keys will include "foo", which will index a
@@ -40,10 +38,10 @@ export class HierarchicalTelemetryStore {
         this._pathChildren = new Map();    // hierarchical map of paths
     }
 
-    // Returns the aggregate "health" value of a path by looking at immediate bool-valued children,
-    // otherwise looks at the node directly, assuming it is a leaf. If it cannot be found, false is
-    // returned. Non-boolean children are ignored in aggregation.
-    _getAggregateHealth(path) {
+    // Returns the aggregate "health" value and most recent timestamp of a path by looking at immediate 
+    // bool-valued children, otherwise looks at the node directly, assuming it is a leaf. 
+    // Returns { value: boolean, timestamp: Date }
+    _getAggregateHealthAndTimestamp(path) {
         // First, we need to navigate to the correct position in the hierarchy
         const parts = path.split("/");
         let currentMap = this._pathChildren;
@@ -64,33 +62,37 @@ export class HierarchicalTelemetryStore {
         
         // If no children, this is a leaf node
         if (!currentMap) {
-            const value = this._valueByPath.get(path);
-            if (!isBool(value)) {
-                console.error(`[HierarchicalTelemetryStore] Value of ${path} was expected to be bool but is ${typeof value}`);
+            const data = this._dataByPath.get(path);
+            if (!data) {
+                return { value: false, timestamp: new Date(0) };
             }
-            return value === true ? true : false;
+            if (!isBool(data.value)) {
+                console.error(`[HierarchicalTelemetryStore] Value of ${path} was expected to be bool but is ${typeof data.value}`);
+            }
+            return { value: data.value === true, timestamp: data.timestamp };
         }
         
-        // Aggregate childrens' boolean values. For now, we only look at children who are boolean.
-        // Eventually, scalar values and others can be associated with conditions for "good" vs.
-        // "bad" (e.g., numeric thresholds, etc.). Inner (non-leaf) nodes should always be boolean
-        // to represent aggregate health of their descendants.
+        // Aggregate childrens' boolean values and find most recent timestamp
         let value = true;
+        let mostRecentTimestamp = new Date(0);
         for (const nextPathComponent of currentMap.keys()) {
             const childPath = path + "/" + nextPathComponent;
-            let childValue = this._valueByPath.get(childPath);
-            if (isBool(childValue)) {
+            let childData = this._dataByPath.get(childPath);
+            if (childData && isBool(childData.value)) {
                 // Only bools are considered for aggregate health
-                value = value && childValue;
+                value = value && childData.value;
+                if (childData.timestamp > mostRecentTimestamp) {
+                    mostRecentTimestamp = childData.timestamp;
+                }
             }
         }
-        return value;
+        return { value, timestamp: mostRecentTimestamp };
     }
 
     // Updates telemetry state for a particular boolean-valued node. Will set the value directly
     // and then propagate upwards if changed. If the value did not already exist and this is the
     // first insertion, propagation will occur.
-    updateBoolValue(id, value) {
+    updateBoolValue(id, value, timestamp = null) {
         const isBoolean = isBool(value) || value === 1 || value === 0;
         if (!isBoolean) {
             console.error(`[HierarchicalTelemetryStore] Value is not bool (${typeof value})`);
@@ -106,30 +108,36 @@ export class HierarchicalTelemetryStore {
         // Convert value to bool type if it is not
         value = value == true;
         
-        // Update value
-        const oldValue = this._valueByPath.get(path);
-        const forceUpdate = oldValue === undefined;
-        let changed = value != oldValue;
-        this._valueByPath.set(path, value);
-        console.log(`Set ${path} = ${value}`);
+        // Convert timestamp to Date if provided, otherwise use current time
+        const timestampDate = timestamp ? new Date(timestamp) : new Date();
+        
+        // Update value and timestamp
+        const oldData = this._dataByPath.get(path);
+        const forceUpdate = oldData === undefined;
+        let changed = !oldData || value !== oldData.value || timestampDate.getTime() !== oldData.timestamp.getTime();
+        this._dataByPath.set(path, { value, timestamp: timestampDate });
+        console.log(`Set ${path} = ${value} at ${timestampDate.toISOString()}`);
 
         // No change? We are done.
         if (!changed && !forceUpdate) {
             return;
         }
 
-        // Split path into components. Then move upwards to propagate the boolean value.
+        // Split path into components. Then move upwards to propagate the boolean value and timestamp.
         const parts = path.split("/");
         for (let i = parts.length; i > 0; i--) {
             const currentPath = parts.slice(0, i).join("/");
-            this._valueByPath.set(currentPath, this._getAggregateHealth(currentPath));
+            if (currentPath !== path) {
+                const aggregateData = this._getAggregateHealthAndTimestamp(currentPath);
+                this._dataByPath.set(currentPath, aggregateData);
+            }
         }
     }
 
     // Updates telemetry state for a particular uint-valued node. Will set the value directly
     // and then propagate upwards if changed. If the value did not already exist and this is the
     // first insertion, propagation will occur.
-    updateUIntValue(id, value) {
+    updateUIntValue(id, value, timestamp = null) {
         if (!isInt(value)) {
             console.error(`[HierarchicalTelemetryStore] Value is not uint (${typeof value})`);
         }
@@ -141,32 +149,36 @@ export class HierarchicalTelemetryStore {
             return;
         }
 
-        // Update value
-        const oldValue = this._valueByPath.get(path);
-        const forceUpdate = oldValue === undefined;
-        let changed = value != oldValue;
-        this._valueByPath.set(path, value);
-        console.log(`Set ${path} = ${value}`);
+        // Convert timestamp to Date if provided, otherwise use current time
+        const timestampDate = timestamp ? new Date(timestamp) : new Date();
+        
+        // Update value and timestamp
+        const oldData = this._dataByPath.get(path);
+        const forceUpdate = oldData === undefined;
+        let changed = !oldData || value !== oldData.value || timestampDate.getTime() !== oldData.timestamp.getTime();
+        this._dataByPath.set(path, { value, timestamp: timestampDate });
+        console.log(`Set ${path} = ${value} at ${timestampDate.toISOString()}`);
 
         // No change? We are done.
         if (!changed && !forceUpdate) {
             return;
         }
 
-        // Split path into components. Then move upwards to propagate the boolean value.
+        // Split path into components. Then move upwards to propagate the boolean value and timestamp.
         const parts = path.split("/");
         for (let i = parts.length; i > 0; i--) {
             const currentPath = parts.slice(0, i).join("/");
-            if (currentPath != path) {
-                // _getAggregateHealth only supports bools at leaf level, so we don't want to
+            if (currentPath !== path) {
+                // _getAggregateHealthAndTimestamp only supports bools at leaf level, so we don't want to
                 // invoke it on our uint
-                this._valueByPath.set(currentPath, this._getAggregateHealth(currentPath));
+                const aggregateData = this._getAggregateHealthAndTimestamp(currentPath);
+                this._dataByPath.set(currentPath, aggregateData);
             }
         }
     }
 
     // Adds a new telemetry value to the store for the first time.
-    addPath(path, id, initialValue, isBoolValue) {
+    addPath(path, id, initialValue, isBoolValue, timestamp = null) {
         if (this._pathById.has(id)) {
             const existingPath = this._pathById.get(id);
             console.error(`[HierarchicalTelemetryStore] Cannot add (${id}, ${path}) to id -> path mapping because (${id}, ${existingPath}) already exists there`);
@@ -189,11 +201,11 @@ export class HierarchicalTelemetryStore {
 
         console.log(`[HierarchicalTelemetryStore] Added ${id}:${path} (value=${initialValue})`);
 
-        // Update value
+        // Update value with timestamp
         if (isBoolValue) {
-            this.updateBoolValue(id, initialValue);
+            this.updateBoolValue(id, initialValue, timestamp);
         } else {
-            this.updateUIntValue(id, initialValue);
+            this.updateUIntValue(id, initialValue, timestamp);
         }
     }
 
@@ -218,16 +230,25 @@ export class HierarchicalTelemetryStore {
     }
 
     // Gets telemetry value. The path (a string) or ID (a number) may be supplied.
+    // Returns just the value for backward compatibility.
     getValue(idOrPath) {
+        const data = this.getData(idOrPath);
+        return data ? data.value : false;
+    }
+
+    // Gets telemetry data (value + timestamp). The path (a string) or ID (a number) may be supplied.
+    // Returns { value: any, timestamp: Date } or null if not found.
+    getData(idOrPath) {
         const isPath = typeof(idOrPath) === "string" || idOrPath instanceof String;
         const path = isPath ? idOrPath : this._pathById.get(idOrPath);
         if (!path) {
             // Invalid telemetry data, does not map to any known path
             console.error(`[HierarchicalTelemetryStore] Unknown id ${idOrPath}`);
-            return false;
+            return null;
         }
-        console.log(`[HierarchicalTelemetryStore] Get value ${path} = ${this._valueByPath.get(path)}`);
-        return this._valueByPath.get(path);
+        const data = this._dataByPath.get(path);
+        console.log(`[HierarchicalTelemetryStore] Get data ${path} = ${data ? data.value : 'undefined'} at ${data ? data.timestamp.toISOString() : 'no timestamp'}`);
+        return data || null;
     }
 }
 
