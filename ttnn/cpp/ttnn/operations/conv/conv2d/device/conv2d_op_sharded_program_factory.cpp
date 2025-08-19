@@ -527,7 +527,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     const uint32_t output_image_width = sliding_window_config.get_output_shape()[2];
     const uint32_t output_image_height = sliding_window_config.get_output_shape()[1];
     const uint32_t output_matrix_height_tiles = (output_image_height * output_image_width) / tt::constants::TILE_HEIGHT;
-    const bool need_to_push_remaining_tiles = output_matrix_height_tiles % act_block_h_ntiles > 0;
 
     Conv2dConfig conv_config = Conv2dConfig{
         .weights_dtype = b.dtype(),
@@ -636,6 +635,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     // compute kernel args
     uint32_t tilized_cb_row_offset = 0, tilized_cb_second_reader_offset = 0;
 
+    uint32_t total_remaining_tiles_to_push = 0, cores_pushing_remaining_tiles = 0, partial_core_remaining_tiles = 0;
+    uint32_t last_core_with_work = 0;
+
     if (enable_activation_reuse) {
         // Calculate compile time args needed for activation reuse feature
         image_width_tiles = (output_image_width + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
@@ -674,6 +676,19 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         // tilized CB
         tilized_cb_row_offset = (tilized_act_tile_size * act_block_w_ntiles);
         tilized_cb_second_reader_offset = (tilized_act_tile_size * act_block_h_nsubblocks_split * act_block_w_ntiles);
+
+        // Last cores sometime have less work to do, but we still need to push the same number of tiles
+        // to avoid blocking compute kernels; Here we compute how many cores will be pushing the remaining tiles
+        total_remaining_tiles_to_push = act_block_h_ntiles * total_active_num_cores - output_matrix_height_tiles;
+        if (total_remaining_tiles_to_push > 0) {
+            cores_pushing_remaining_tiles =
+                (total_remaining_tiles_to_push + act_block_h_ntiles - 1) / act_block_h_ntiles;  // Ceiling division
+
+            partial_core_remaining_tiles = total_remaining_tiles_to_push % act_block_h_ntiles;
+            if (partial_core_remaining_tiles == 0) {
+                partial_core_remaining_tiles = act_block_h_ntiles;
+            }
+        }
     }
 
 
@@ -715,7 +730,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
             image_width_tiles,
             output_image_width,
             reuse_window_offset,
-            static_cast<uint32_t>(need_to_push_remaining_tiles)};
+            static_cast<uint32_t>(total_remaining_tiles_to_push != 0)};
 
         reader_compile_time_args.insert(
             reader_compile_time_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
@@ -818,7 +833,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 image_width_tiles,
                 output_image_width,
                 reuse_window_offset,
-                static_cast<uint32_t>(need_to_push_remaining_tiles)};
+                static_cast<uint32_t>(total_remaining_tiles_to_push != 0)};
             split_reader_args.insert(
                 split_reader_args.end(), activation_reuse_args.begin(), activation_reuse_args.end());
         }
@@ -959,18 +974,31 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
                 bias_ntiles);
         }
 
-        // Last core sometimes has less work to do, but we still need to push the same number of tiles
+        // Last cores sometime have less work to do, but we still need to push the same number of tiles
         // to avoid blocking compute kernels
         uint32_t reader_remaining_tiles_to_push = 0;
         uint32_t writer_remaining_tiles_to_push = 0;
-        if (enable_activation_reuse && core_i == total_active_num_cores - 1) {
-            if (last_core_height_tiles < act_block_h_nsubblocks_split) {
-                reader_remaining_tiles_to_push = act_block_h_nsubblocks_split - last_core_height_tiles;
-                writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
-            } else {
-                reader_remaining_tiles_to_push = 0;
-                writer_remaining_tiles_to_push =
-                    act_block_h_nsubblocks_split_last - (last_core_height_tiles - act_block_h_nsubblocks_split);
+        if (enable_activation_reuse) {
+            // Core pushing at least 1 tile in height of real data
+            if (core_i == total_active_num_cores - cores_pushing_remaining_tiles) {
+                reader_remaining_tiles_to_push = partial_core_remaining_tiles;
+                if (enable_split_reader) {
+                    if (partial_core_remaining_tiles > act_block_h_nsubblocks_split_last) {
+                        writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
+                        reader_remaining_tiles_to_push =
+                            partial_core_remaining_tiles - act_block_h_nsubblocks_split_last;
+                    } else {
+                        writer_remaining_tiles_to_push = partial_core_remaining_tiles;
+                        reader_remaining_tiles_to_push = 0;
+                    }
+                }
+                // Cores with no meaningful work
+            } else if (core_i > total_active_num_cores - cores_pushing_remaining_tiles) {
+                reader_remaining_tiles_to_push = act_block_h_ntiles;
+                if (enable_split_reader) {
+                    reader_remaining_tiles_to_push = act_block_h_nsubblocks_split;
+                    writer_remaining_tiles_to_push = act_block_h_nsubblocks_split_last;
+                }
             }
         }
 
