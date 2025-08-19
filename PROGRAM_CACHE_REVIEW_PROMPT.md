@@ -235,7 +235,7 @@ Starter pytest template (fill in OP specifics):
 import pytest, torch, ttnn
 from models.utility_functions import comp_pcc
 
-@pytest.mark.timeout(60)
+@pytest.mark.timeout(30)
 def test_<op_name>_program_cache_override_rtargs(device):
     torch.manual_seed(0)
 
@@ -276,3 +276,35 @@ def test_<op_name>_program_cache_override_rtargs(device):
 Sharded variant hints:
 - Convert tensors with `ttnn.interleaved_to_sharded(...)` to force per-core addresses and offsets to change between runs.
 - In the second run, keep sharding config the same (so the hash matches) but reallocate tensors or vary runtime-only scalars to exercise per-core override logic.
+
+### Iteration workflow: proposing issues and tests
+
+1) Identify a potential issue
+- Inspect the OP’s `override_runtime_arguments` and kernels it feeds. Look for missing buffer base updates, wrong arg order/indices, stale per-core offsets, missing CB size/page updates, or runtime-only scalars not overridden.
+
+2) Write a focused test to expose it
+- Create a minimal pytest that does two runs (compile then cache-hit). In comments or docstring, clearly state:
+  - What you are exposing and why it should fail only on the cache-hit path.
+  - Exact locations involved (files and line numbers), e.g., `ttnn/cpp/ttnn/operations/<op>/device/<file>.cpp:L123`, and any kernel arg indices affected.
+  - Whether the expected failure is PCC mismatch or a hang.
+
+3) Run with pytest
+- Use `pytest -q tests/<path_to_test>::<test_name>` (optionally add `-s` for logs). Consider `@pytest.mark.timeout(30)` to classify hangs.
+
+4) If the test fails on the second run (intended cache-hit)
+- Record the exact failing line and place the test under `program_cache/<OP>/failures/<test_name>`.
+  - PCC failure: highlight the PCC assertion line in the test where `comp_pcc` check fails.
+  - Hang: if runtime exceeds >30s timeout, note the line where the call blocks (usually the OP invocation) and include the timeout marker.
+
+5) If the test fails before the second run
+- Record the failing line and error. Place it under `program_cache/<OP>/unknown_failures/<test_name>`.
+- Note why it didn’t reach the cache-hit (e.g., first-run compile error, shape mismatch causing a different hash, or infrastructure/setup issue).
+
+Placement and naming
+- Place newly generated tests under the top-level `program_cache/<OP>/failures/` or `program_cache/<OP>/unknown_failures/` directories.
+- Use descriptive names that reflect the suspected override issue (e.g., `test_<op>_cachehit_missing_output_addr.py`).
+
+Hang recovery
+- If a test hang occurs (runtime >30s/timeout), recover the device(s) before continuing:
+  - Run: `tt-smi -r` and wait until it completes.
+  - Only resume testing once recovery finishes successfully.
