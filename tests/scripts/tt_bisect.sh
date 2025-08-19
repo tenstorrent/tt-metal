@@ -73,6 +73,8 @@ if ([ ! -z "$patch" ]); then
     echo "Cherry-pick commit:" $patch
 fi
 
+./create_venv.sh
+source python_env/bin/activate
 
 
 echo "Current location: `pwd`"
@@ -92,42 +94,8 @@ while [[ "$found" = "false" ]]; do
       git cherry-pick $patch
    fi
    git submodule update --recursive
-
-   if [ -f rust/Cargo.lock ]; then
-      grep 'name = "tokenizers"' -A 1 rust/Cargo.lock
-   fi
-
-
    build_rc=0
-
-   rm -rf /tmp/ccache
-
-   mkdir -p /tmp/ccache
-   ccache -z
-
-
-   cmake -S . -B build_Debug -G Ninja \
-      -DCMAKE_BUILD_TYPE=Debug \
-      -DCMAKE_INSTALL_PREFIX=build_Debug \
-      -DCMAKE_EXPORT_COMPILE_COMMANDS=OFF \
-      -DTT_UNITY_BUILDS=ON \
-      -DTT_ENABLE_LIGHT_METAL_TRACE=ON \
-      -DTT_METAL_BUILD_TESTS=ON \
-      -DTTNN_BUILD_TESTS=ON \
-      -DBUILD_PROGRAMMING_EXAMPLES=ON \
-      -DBUILD_TT_TRAIN=ON \
-      -DWITH_PYTHON_BINDINGS=ON \
-      -DPython3_EXECUTABLE=/opt/venv/bin/python3 \
-      -DPython3_INCLUDE_DIR=/usr/include/python3.10 \
-      -DPython3_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython3.10.so \
-      -DENABLE_DISTRIBUTED=ON \
-      -DENABLE_FAKE_KERNELS_TARGET=OFF \
-      -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake \
-      -DCPM_USE_LOCAL_PACKAGES=OFF \
-      -DCPM_GIT_TAG_SEARCH=OFF \
-      -Dtokenizers-cpp_GIT_TAG=c0caed993d2e1030645ce1d7959dd358ff29dc9b
-
-   cmake --build build_Debug --target install -j"$(nproc)"
+   ./build_metal.sh --build-all || build_rc=$?
    echo "::endgroup::"
 
    if [[ $build_rc -ne 0 ]]; then
