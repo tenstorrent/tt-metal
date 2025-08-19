@@ -45,6 +45,8 @@ class DispatcherCoreData:
 class DispatcherData:
     def __init__(self, inspector_data: InspectorData, context: Context):
         self.inspector_data = inspector_data
+        if inspector_data.kernels is None or len(inspector_data.kernels) == 0:
+            raise TTTriageError("No kernels found in inspector data.")
 
         self._a_kernel_path = next(iter(inspector_data.kernels.values())).path
         brisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "brisc")
@@ -70,7 +72,7 @@ class DispatcherData:
                 f"Failed to extract DWARF info from ELF file {idle_erisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
             )
 
-        # Acces the value of enumerator for supported blocks
+        # Access the value of enumerator for supported blocks
         self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.enumerators["ProgrammableCoreType::TENSIX"].value
         self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.enumerators["ProgrammableCoreType::IDLE_ETH"].value
 
