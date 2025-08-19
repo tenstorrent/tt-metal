@@ -41,7 +41,7 @@ def reference_model(hf_config):
 def test_forward_pass(
     mode,
     seq_len,
-    use_deterministic_env,
+    set_deterministic_env,
     reference_model,
     hf_config,
     tmp_path,
