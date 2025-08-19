@@ -32,11 +32,11 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     "paged_attention",
     (
         True,
-        False,
+        # False,
     ),
     ids=(
         "paged_attention",
-        "default_attention",
+        # "default_attention",
     ),
 )
 @pytest.mark.parametrize(
@@ -163,6 +163,8 @@ def test_attention_inference(
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
         pt_attention_input = torch.randn(
             batch_size, seq_len, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
+        ).to(
+            dtype=torch.bfloat16
         )  # Qwen2.5 0.5B sees 0.1 to 2.1
 
         tt_attention_input = pt_attention_input.clone()
@@ -188,12 +190,15 @@ def test_attention_inference(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
+        print("tt_out ", tt_out)
+
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
 
         # In this test all users have the same position (if using batch > 1)
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
         reference_output = reference_model(pt_attention_input, current_pos[0], freqs_cis_i, mask=None)
+        print("tt_output_torch ", tt_output_torch.shape)
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 

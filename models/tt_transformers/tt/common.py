@@ -5,9 +5,11 @@
 import math
 import re
 from enum import Enum
+from types import SimpleNamespace
 from typing import Optional
 
 import torch
+from llama_models.llama3.api.datatypes import ImageMedia
 from loguru import logger
 from pydantic import AliasChoices, BaseModel, Field
 
@@ -42,8 +44,8 @@ class PagedAttentionConfig:
 class RopeScalingType(str, Enum):
     """Types of RoPE scaling."""
 
-    LINEAR = "linear"
     # DYNAMIC = "dynamic"
+    LINEAR = "linear"
     YARN = "yarn"
     LLAMA3 = "llama3"
     DEFAULT = "default"
@@ -71,6 +73,14 @@ class RopeScalingLlama3(RopeScaling):
     high_freq_factor: Optional[float] = 4.0
 
 
+class RopeScalingLinear(RopeScaling):
+    """RoPE scaling configuration for Linear."""
+
+    # Linear-specific parameters
+    factor: float = 8.0
+    original_max_position_embeddings: int = 2048
+
+
 class RopeScalingYarn(RopeScaling):
     """RoPE scaling configuration for Yarn."""
 
@@ -89,6 +99,8 @@ def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
         return RopeScalingLlama3(**rope_scaling_params)
     elif rope_scaling_type == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
+    elif rope_scaling_type == RopeScalingType.LINEAR:
+        return RopeScalingLinear(**rope_scaling_params)
     elif rope_scaling_type in ["default", "mrope"]:
         logger.warning(
             f"Rope scaling type was set to {rope_scaling_type}, defaulting to no rope scaling as this rope type is not supported yet by TTT"
@@ -236,34 +248,8 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
         return tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
 
 
-def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
-    """
-    Transform cos/sin frequencies to a rotation matrix.
-    """
-    emb_size, emb_dim = cos_freqs.shape
-    dhead = emb_dim * 2
-    rot_emb_matrix = torch.zeros(emb_size, dhead, dhead)
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
-
-    rot_emb_matrix = rot_emb_matrix.transpose(-1, -2)  # Necessary for correct rotation when applied as (x @ R)
-    return rot_emb_matrix
-
-
-def gather_cos_sin(position_ids, cos, sin):
-    position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
-    cos = cos.gather(0, position_id_expanded)
-    sin = sin.gather(0, position_id_expanded)
-    cos = torch.stack([cos, cos], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
-    sin = torch.stack([sin, sin], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
-    return cos, sin
-
-
-def apply_llama3_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
-    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
-    # Values obtained from grid search
+def compute_llama3_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Llama-3.x specific scaling for rotary embeddings."""
     low_freq_factor = 1
     high_freq_factor = 4
 
@@ -283,7 +269,31 @@ def apply_llama3_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_
     return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
 
 
-def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
+def compute_linear_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Linear scaling for rotary embeddings."""
+    freqs /= scale_factor
+    return freqs
+
+
+def compute_default_parameters(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    """Default scaling for rotary embeddings."""
+    return freqs
+
+
+def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int, rope_type="llama3"):
+    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
+
+    if rope_type == "default":
+        freqs = compute_default_parameters(freqs, scale_factor, orig_context_len)
+    elif rope_type == "linear":
+        freqs = compute_linear_parameters(freqs, scale_factor, orig_context_len)
+    elif rope_type == "llama3":
+        freqs = compute_llama3_parameters(freqs, scale_factor, orig_context_len)
+
+    return freqs
+
+
+def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, rope_type="llama3"):
     """
     Precompute the frequency tensor for sine and cosine values with given dimensions.
 
@@ -298,7 +308,7 @@ def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
     if scale_factor is not None:
-        freqs = apply_llama3_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_scaling(freqs, scale_factor, orig_context_len, rope_type=rope_type)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
 
@@ -615,3 +625,46 @@ def create_tt_model(
     tt_kv_cache = [l.attention.layer_past for l in model.layers] if paged_attention_config else None
 
     return tt_model_args, model, tt_kv_cache, state_dict
+
+
+def hf_multimodal_encode(messages, processor):
+    hf_messages = []
+
+    for msg in messages:
+        hf_content = []
+
+        for item in msg.content:
+            if isinstance(item, ImageMedia):
+                hf_content.append(
+                    {
+                        "type": "image",
+                        "image": item.image,
+                    }
+                )
+            elif isinstance(item, str):
+                hf_content.append(
+                    {
+                        "type": "text",
+                        "text": item,
+                    }
+                )
+
+        hf_messages.append(
+            {
+                "role": msg.role,
+                "content": hf_content,
+            }
+        )
+
+    encoded = processor.apply_chat_template(
+        hf_messages, add_generation_prompt=True, tokenize=True, return_dict=True, return_tensors="pt"
+    ).to("cpu", dtype=torch.bfloat16)
+
+    return SimpleNamespace(
+        **encoded,
+        tokens=encoded["input_ids"].squeeze(0),
+        vision=SimpleNamespace(
+            images=encoded["pixel_values"],
+            mask=None,
+        ),
+    )

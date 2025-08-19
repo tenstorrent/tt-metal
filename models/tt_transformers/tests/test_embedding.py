@@ -47,8 +47,7 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
         logger.info(f"Using scaled embedding with scale {model_args.embed_scale}")
 
     reference_emb = model_args.reference_embedding()
-
-    if model_args.is_vision():
+    if model_args.is_vision() and not model_args.base_model_name.startswith("gemma-3"):
         layer_name = "text_model.tok_embeddings.weight"
     else:
         layer_name = "tok_embeddings.weight"
@@ -81,7 +80,8 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
-    tt_output = tt_emb(tt_input)
+    embed_scale = model_args.embed_scale
+    tt_output = tt_emb(tt_input, embed_scale)
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=model_args.cluster_shape),
