@@ -11,6 +11,8 @@
 #include <array>
 #include "lite_fabric_header.hpp"
 
+namespace lite_fabric {
+
 // STREAM REGISTER ASSIGNMENT
 // senders update this stream
 constexpr uint32_t to_receiver_0_pkts_sent_id = 0;
@@ -144,7 +146,6 @@ constexpr bool SKIP_CONNECTION_LIVENESS_CHECK = false;
 constexpr bool enable_ring_support = false;
 constexpr bool enable_trid_flush_check_on_noc_txn = false;
 
-namespace lite_fabric {
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 constexpr uint8_t local_chip_data_cmd_buf = BRISC_WR_CMD_BUF;  // Used
 constexpr uint8_t worker_handshake_noc = NOC_INDEX;

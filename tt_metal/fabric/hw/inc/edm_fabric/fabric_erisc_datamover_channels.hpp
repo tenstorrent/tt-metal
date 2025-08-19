@@ -40,7 +40,7 @@ public:
     //                         |                |
     //                         |----------------|
 
-    EthChannelBuffer() : buffer_size_in_bytes(0), max_eth_payload_size_in_bytes(0) {}
+    explicit EthChannelBuffer() = default;
 
     /*
      * Expected that *buffer_index_ptr is initialized outside of this object
@@ -99,9 +99,9 @@ private:
     std::array<size_t, NUM_BUFFERS> buffer_addresses;
 
     // header + payload regions only
-    const std::size_t buffer_size_in_bytes;
+    std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
-    const std::size_t max_eth_payload_size_in_bytes;
+    std::size_t max_eth_payload_size_in_bytes;
     std::size_t cached_next_buffer_slot_addr;
     uint8_t channel_id;
 };
@@ -110,6 +110,8 @@ private:
 template <typename HEADER_TYPE, size_t... BufferSizes>
 struct EthChannelBufferTuple {
     std::tuple<tt::tt_fabric::EthChannelBuffer<HEADER_TYPE, BufferSizes>...> channel_buffers;
+
+    explicit EthChannelBufferTuple() = default;
 
     void init(
         const size_t channel_base_address[],
