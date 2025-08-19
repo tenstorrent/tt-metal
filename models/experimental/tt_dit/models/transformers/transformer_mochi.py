@@ -5,7 +5,7 @@
 import torch
 import ttnn
 from .attention_mochi import MochiAttention
-from ...layers.normalization import RMSNorm, LayerNorm
+from ...layers.normalization import RMSNorm, DistributedLayerNorm
 from ...layers.linear import ColParallelLinear, Linear
 from ...layers.feedforward import ParallelFeedForward
 from ...layers.embeddings import MochiPatchEmbed
@@ -390,6 +390,7 @@ class MochiTransformer3DModel:
         self.patch_size = patch_size
 
         inner_dim = num_attention_heads * attention_head_dim
+        self.inner_dim = inner_dim
         self.out_channels = out_channels or in_channels
 
         self.patch_embed = MochiPatchEmbed(
@@ -430,14 +431,35 @@ class MochiTransformer3DModel:
             for i in range(num_layers)
         ]
 
-        self.norm_out_norm = LayerNorm(
+        self.fracture_spatial_input = ColParallelLinear(
+            in_features=inner_dim,
+            out_features=inner_dim,
+            bias=False,
+            mesh_device=mesh_device,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
+            init=init,
+        )
+
+        # self.norm_out_norm = LayerNorm(
+        #     embedding_dim=inner_dim,
+        #     norm_eps=1e-6,
+        #     norm_elementwise_affine=False,
+        #     mesh_device=mesh_device,
+        #     init=False,
+        #     # use_row_major_workaround=True, # Issue #20789, hang for large tensor layernorm
+        # )
+
+        self.norm_out_norm = DistributedLayerNorm(
             embedding_dim=inner_dim,
             norm_eps=1e-6,
             norm_elementwise_affine=False,
+            bias=False,
+            mesh_axis=parallel_config.tensor_parallel.mesh_axis,
             mesh_device=mesh_device,
-            init=init,
-            use_row_major_workaround=True,
+            ccl_manager=ccl_manager,
+            init=False,
         )
+
         self.norm_out_linear = Linear(
             in_features=inner_dim,
             out_features=inner_dim * 2,
@@ -473,6 +495,10 @@ class MochiTransformer3DModel:
         self.norm_out_norm.load_state_dict(substate(state_dict, "norm_out.norm"))
         self.norm_out_linear.load_state_dict(substate(state_dict, "norm_out.linear"))
         self.proj_out.load_state_dict(substate(state_dict, "proj_out"))
+
+        identity_tensor = torch.eye(self.inner_dim)
+        identity_state = {"weight": identity_tensor}
+        self.fracture_spatial_input.load_state_dict(identity_state)
 
     def prepare_rope_features(self, T, H, W):
         pH, pW = H // self.patch_size, W // self.patch_size
@@ -573,31 +599,19 @@ class MochiTransformer3DModel:
 
         # AllGather hanging for large seqlen
         # # Gather sequence-parallel output
-        # spatial_1BND = ttnn.experimental.all_gather_async(
-        #     spatial_1BND,
-        #     persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-        #         spatial_1BND.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
-        #     ),
-        #     dim=2,
-        #     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
-        #     num_links=self.ccl_manager.num_links,
-        #     topology=self.ccl_manager.topology,
-        #     cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
-        # )
-        # logger.info(f'Spatial output after gathering: {spatial_1BND.shape}')
-        # spatial_BND = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0]).squeeze(0)
-
-        concat_dims = [None, None]
-        concat_dims[self.parallel_config.sequence_parallel.mesh_axis] = 2
-        concat_dims[self.parallel_config.tensor_parallel.mesh_axis] = 0
-        spatial_BND = ttnn.to_torch(
+        spatial_1BND = ttnn.experimental.all_gather_async(
             spatial_1BND,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                self.mesh_device, dims=concat_dims, mesh_shape=tuple(self.mesh_device.shape)
+            persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                spatial_1BND.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
             ),
+            dim=2,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+            num_links=self.ccl_manager.num_links,
+            topology=self.ccl_manager.topology,
+            cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
         )
-        spatial_BND = spatial_BND[0]
-        logger.info(f"Spatial output after concatenating: {spatial_BND.shape}")
+        logger.info(f"Spatial output after gathering: {spatial_1BND.shape}")
+        spatial_BND = ttnn.to_torch(ttnn.get_device_tensors(spatial_1BND)[0]).squeeze(0)
 
         spatial_BND = spatial_BND[:, :N]  # Slice out sequence-parallel padding tokens
         logger.info(f"Spatial output after slicing: {spatial_BND.shape}")
@@ -629,19 +643,55 @@ class MochiTransformer3DModel:
             spatial_1BND, prompt_1BLP = block(
                 spatial_1BND, prompt_1BLP, temb_11BD, N, rope_cos_1HND, rope_sin_1HND, trans_mat
             )
+            ttnn.synchronize_device(self.mesh_device)
+            logger.info(f"Transformer block {idx} done")
 
         # Modulate the spatial output
         mod = self.norm_out_linear(
             ttnn.silu(temb_11BD), core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
         )
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"Norm out linear done")
         scale, shift = ttnn.chunk(mod, 2, -1)
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"Chunk done")
 
-        spatial_norm_1BND = self.norm_out_norm(spatial_1BND) * (1 + scale) + shift
+        ## SUPER HACKY WORKAROUND
+        # Large tensor layernorm is hanging, issue #20789
+        # The workaround is to use distributed layernorm by fracturing the input on the TP axis
 
+        spatial_fractured_1BND = self.fracture_spatial_input(
+            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
+        )
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"Fracture done")
+        spatial_norm_fractured_1BND = self.norm_out_norm(spatial_fractured_1BND)
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"Norm out done")
+
+        spatial_norm_1BND = ttnn.experimental.all_gather_async(
+            spatial_norm_fractured_1BND,
+            persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                spatial_norm_fractured_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+            ),
+            dim=3,
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+            num_links=self.ccl_manager.num_links,
+            topology=self.ccl_manager.topology,
+            cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+        )
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"All gather done")
+
+        spatial_norm_1BND = spatial_norm_1BND * (1 + scale) + shift
+
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"Norm scale/shift done")
         proj_out_1BNI = self.proj_out(
             spatial_norm_1BND, core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
         )
-
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info(f"Proj out done")
         spatial_out = self.postprocess_spatial_output(proj_out_1BNI, T, H, W, N)
 
         return spatial_out
