@@ -51,9 +51,16 @@ class DeepseekV3LMHead(nn.Module):
         ("prefill", 2048),
     ],
 )
-def test_forward_pass(mode: str, seq_len: int, hf_config: Any, tmp_path: Path, mesh_device: ttnn.Device, ccl: CCL1D):
+def test_forward_pass(
+    mode: str,
+    seq_len: int,
+    hf_config: Any,
+    tmp_path: Path,
+    mesh_device: ttnn.Device,
+    ccl: CCL1D,
+    set_deterministic_env: Any,
+):
     assert mesh_device.get_num_devices() == 32, "Mesh device must have 32 devices for this test."
-    torch.manual_seed(0)
 
     reference_model = DeepseekV3LMHead(hf_config).eval()
     state_dict = reference_model.state_dict()
