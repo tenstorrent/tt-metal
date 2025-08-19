@@ -15,6 +15,7 @@ from ...reference.modeling_gpt_oss import GptOssRotaryEmbedding
 from ...tt.ccl import CCLManager
 from ...tt.model import Model
 from ...tt.rope import ApplyRotaryPosEmb
+from ...utils.general_utils import get_decode_mask
 
 tensor_cache_dir = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16") + "/ttnn_cache"
 local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
@@ -82,13 +83,28 @@ def test_model(
         torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=-sliding_window
     )
 
+    tt_mask_in = mask
+    tt_sliding_mask_in = sliding_mask
+    if seq_len == 1:  # decode
+        tt_mask_in = get_decode_mask(position_ids[0].item(), sliding_window=0)
+        tt_mask_in = tt_mask_in.repeat(1, config.num_attention_heads // mesh_device.shape[1], 1, 1).transpose(1, 2)
+
+        tt_sliding_mask_in = get_decode_mask(position_ids[0].item(), sliding_window=sliding_window)
+        tt_sliding_mask_in = tt_mask_in.repeat(1, config.num_attention_heads // mesh_device.shape[1], 1, 1).transpose(
+            1, 2
+        )
+
     RopeEmbeddings = GptOssRotaryEmbedding(config)
     cos, sin = RopeEmbeddings(hidden_states, position_ids)
 
-    tt_mask = ttnn.from_torch(mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_sliding_mask = ttnn.from_torch(sliding_mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_mask = ttnn.from_torch(tt_mask_in, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_sliding_mask = ttnn.from_torch(
+        tt_sliding_mask_in, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
+    )
     tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_position_idx = ttnn.from_torch(position_ids, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+
     apply_rope = ApplyRotaryPosEmb(config)
     rope_stuff = (apply_rope, tt_cos, tt_sin)
 
@@ -135,6 +151,7 @@ def test_model(
         input_ids=tt_input_ids,
         attention_masks={"full_attention": tt_mask, "sliding_attention": tt_sliding_mask},
         position_embeddings=rope_stuff,
+        position_idx=tt_position_idx,
     )
 
     # Handle multi-device output

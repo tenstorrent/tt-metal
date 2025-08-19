@@ -15,6 +15,7 @@ from ...reference.modeling_gpt_oss import GptOssRotaryEmbedding
 from ...tt.ccl import CCLManager
 from ...tt.layer import DecoderLayer
 from ...tt.rope import ApplyRotaryPosEmb
+from ...utils.general_utils import get_decode_mask
 
 local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 
@@ -332,11 +333,17 @@ def test_decoder_layer(
     # Create input tensors
     hidden_states = torch.randn(batch_size, seq_len, hidden_size)
 
+    tt_mask_in = mask
+    if seq_len == 1:  # decode
+        tt_mask_in = get_decode_mask(position_ids[0].item(), sliding_window)
+        tt_mask_in = tt_mask_in.repeat(1, config.num_attention_heads // mesh_device.shape[1], 1, 1).transpose(1, 2)
+
     # Convert to TTNN tensors
     tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-    tt_mask = ttnn.from_torch(mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_mask = ttnn.from_torch(tt_mask_in, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_position_idx = ttnn.from_torch(position_ids, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
 
     apply_rope = ApplyRotaryPosEmb(config)
     rope_stuff = (apply_rope, tt_cos, tt_sin)
@@ -366,6 +373,7 @@ def test_decoder_layer(
         hidden_states=tt_hidden_states,
         attention_mask=tt_mask,
         position_embeddings=rope_stuff,
+        position_idx=tt_position_idx,
     )
 
     tt_output_tensors = ttnn.get_device_tensors(tt_output)
