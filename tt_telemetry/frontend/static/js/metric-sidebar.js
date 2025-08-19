@@ -273,11 +273,7 @@ export class MetricSidebar extends LitElement {
                     </div>
                     ${this.metricTimestamp ? html`
                     <div class="info-item">
-                        <span class="info-label">Timestamp (UTC):</span>
-                        <span class="info-value">${this.metricTimestamp.toISOString()}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Age:</span>
+                        <span class="info-label"></span>
                         <span class="info-value">${this._getTimestampAge()}</span>
                     </div>
                     ` : ''}
