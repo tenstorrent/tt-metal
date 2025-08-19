@@ -123,7 +123,6 @@ class CrossAttentionTransformer(torch.nn.Module):
 
         self.mesh_device = mesh_device
         self.tt_ccl = TT_CCL(self.mesh_device)
-        self.state_dict = state_dict
         self.weight_cache_path = weight_cache_path
         self.dtype = dtype
         self.configuration = configuration
