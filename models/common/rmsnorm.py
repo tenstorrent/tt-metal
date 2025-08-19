@@ -45,7 +45,7 @@ class RMSNorm(LightweightModule):
         weight_memory_config=ttnn.DRAM_MEMORY_CONFIG,
         weight_dtype=ttnn.bfloat16,
         is_distributed=None,
-        eps: float = 1e-06,
+        eps: float = 1e-05,
         add_unit_offset=False,
         sharded_program_config=None,
         sharded_output_config=None,
@@ -127,11 +127,6 @@ class RMSNorm(LightweightModule):
             assert not distributed, "Distributed RMSNorm does not support sharded inputs"
         else:
             assert not out_sharded, "Non-sharded version of RMSNorm cannot output a sharded tensor"
-
-        # if x.shape[-1] % weight.shape[-1] == 0:
-        #     # Reshape weight only if x's last dimension is divisible by weight's last dimension,
-        #     # to avoid padding errors in RMSNorm when dimensions are not aligned
-        #     weight = ttnn.reshape(weight, [1, 1, 1, -1])
 
         x = norm(
             x,
