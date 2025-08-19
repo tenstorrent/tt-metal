@@ -397,7 +397,7 @@ def run_flash_mla_decode_impl(
     assert num_program_cache_entries == 2, f"Expected 2 program cache entries, got {num_program_cache_entries}."
 
 
-@pytest.mark.skip_if(not ENABLE_SDPA_STRESS_TESTS, reason="Only running stress tests")
+@pytest.mark.skip_if(ENABLE_SDPA_STRESS_TESTS, reason="Only running stress tests")
 @pytest.mark.parametrize(
     "batch, seq_len, nh, nkv, kv_lora_rank, d_rope, q_num_cores",
     # batch, seq_len, num heads q, num heads kv, kv lora rank, dim rope, number of cores to shard q on
@@ -467,7 +467,7 @@ def test_flash_mla_decode(
     )
 
 
-@pytest.mark.skip_if(ENABLE_SDPA_STRESS_TESTS, reason="Stress tests are disabled by default.")
+@pytest.mark.skipif(not ENABLE_SDPA_STRESS_TESTS, reason="Stress tests are disabled by default.")
 @pytest.mark.parametrize(
     "batch",
     [
