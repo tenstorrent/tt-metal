@@ -881,8 +881,8 @@ void MetalContext::initialize_device_bank_to_noc_tables(
 void MetalContext::initialize_logical_to_translated_tables(chip_id_t device_id, const HalProgrammableCoreType& core_type, CoreCoord virtual_core) {
     // Generate logical to translated map for DRAM and L1 banks
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
-    const uint32_t logical_col_to_translated_col_sz_in_bytes = soc_desc.grid_size.x * sizeof(uint16_t);
-    const uint32_t logical_row_to_translated_row_sz_in_bytes = soc_desc.grid_size.y * sizeof(uint16_t);
+    const uint32_t logical_col_to_translated_col_sz_in_bytes = sizeof(logical_col_to_translated_col_[device_id]);
+    const uint32_t logical_row_to_translated_row_sz_in_bytes = sizeof(logical_row_to_translated_row_[device_id]);
     const uint64_t logical_to_translated_map_addr = hal_->get_dev_addr(core_type, HalL1MemAddrType::LOGICAL_TO_TRANSLATED_SCRATCH);
     const uint32_t logical_to_translated_map_size = hal_->get_dev_size(core_type, HalL1MemAddrType::LOGICAL_TO_TRANSLATED_SCRATCH);
 
@@ -897,8 +897,11 @@ void MetalContext::initialize_logical_to_translated_tables(chip_id_t device_id, 
         logical_col_to_translated_col_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
         logical_col_to_translated_col_addr);
-        
-    uint64_t logical_row_to_translated_row_addr = logical_to_translated_map_addr + logical_col_to_translated_col_sz_in_bytes;
+
+    // Size of the data in the firmware is the full size of the grid, not the harvested size.
+    // Therefore, we must adjust the address to account for the full grid size.
+    uint64_t logical_row_to_translated_row_addr =
+        logical_to_translated_map_addr + soc_desc.grid_size.x * sizeof(uint16_t);
     cluster_->write_core(
         &logical_row_to_translated_row_[device_id][0],
         logical_row_to_translated_row_sz_in_bytes,
@@ -916,7 +919,7 @@ void MetalContext::initialize_firmware(
 
     initialize_device_bank_to_noc_tables(device_id, core_type, virtual_core);
     initialize_logical_to_translated_tables(device_id, core_type, virtual_core);
-    
+
     uint32_t core_type_idx = hal_->get_programmable_core_type_index(core_type);
     uint32_t processor_class_count = hal_->get_processor_classes_count(core_type);
     auto jit_build_config =
