@@ -203,14 +203,14 @@ def _compute_global_slice_ranges(device_coord, sharding_info):
                 ):
                     start = sharding_info.axis_offsets[axis][part_index]
                     size = sharding_info.axis_sizes[axis][part_index]
-                    end_inclusive = start + size - 1
-                    slice_ranges.append((start, end_inclusive))
+                    end = start + size
+                    slice_ranges.append((start, end))
                 else:
-                    slice_ranges.append((0, dim_size - 1))
+                    slice_ranges.append((0, dim_size))
             except (IndexError, TypeError):
-                slice_ranges.append((0, dim_size - 1))
+                slice_ranges.append((0, dim_size))
         else:
-            slice_ranges.append((0, dim_size - 1))
+            slice_ranges.append((0, dim_size))
 
     return slice_ranges
 
@@ -235,7 +235,10 @@ def _create_shard_annotation_text(device_id, device_coord, sharding_info):
     layout_str = str(shard.layout).split(".")[-1]
 
     slice_ranges = _compute_global_slice_ranges(device_coord, sharding_info)
-    slice_strs = [f"{start}:{end}" for start, end in slice_ranges]
+    slice_strs = [
+        f"{start}:{end}" if not (start == 0 and end == sharding_info.tensor.shape[tensor_dim]) else ":"
+        for tensor_dim, (start, end) in enumerate(slice_ranges)
+    ]
     slice_header = f"[{', '.join(slice_strs)}]"
 
     return f"{slice_header}\nShape: {shape_str}\nDtype: {dtype_str}\nLayout: {layout_str}"
