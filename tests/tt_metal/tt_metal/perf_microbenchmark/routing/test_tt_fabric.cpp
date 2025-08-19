@@ -26,6 +26,17 @@ const std::unordered_map<std::pair<Topology, RoutingType>, FabricConfig, tt::tt_
         {{Topology::Mesh, RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC},
 };
 
+const std::
+    unordered_map<std::tuple<Topology, std::string, RoutingType>, FabricConfig, tt::tt_fabric::fabric_tests::tuple_hash>
+        TestFixture::torus_topology_to_fabric_config_map = {
+            {{Topology::Torus, "X", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_X},
+            {{Topology::Torus, "X", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X},
+            {{Topology::Torus, "Y", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_Y},
+            {{Topology::Torus, "Y", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y},
+            {{Topology::Torus, "XY", RoutingType::LowLatency}, FabricConfig::FABRIC_2D_TORUS_XY},
+            {{Topology::Torus, "XY", RoutingType::Dynamic}, FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY},
+};
+
 int main(int argc, char** argv) {
     log_info(tt::LogTest, "Starting Test");
     std::vector<std::string> input_args(argv, argv + argc);
@@ -117,7 +128,7 @@ int main(int argc, char** argv) {
         const auto& topology = test_config.fabric_setup.topology;
         const auto& routing_type = test_config.fabric_setup.routing_type.value();
         log_info(tt::LogTest, "Opening devices with topology: {} and routing type: {}", topology, routing_type);
-        test_context.open_devices(topology, routing_type);
+        test_context.open_devices(test_config.fabric_setup);
 
         log_info(tt::LogTest, "Building tests");
         auto built_tests = builder.build_tests({test_config});

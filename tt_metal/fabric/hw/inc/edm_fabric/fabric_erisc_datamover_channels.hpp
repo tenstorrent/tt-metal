@@ -192,7 +192,7 @@ struct EdmChannelWorkerInterface {
     }
 
     // Only used for persistent connections (i.e. upstream is EDM)
-    template <bool enable_ring_support>
+    template <bool enable_deadlock_avoidance>
     FORCE_INLINE void update_persistent_connection_copy_of_free_slots(int32_t inc_val) {
         noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
             this->cached_worker_semaphore_address,
