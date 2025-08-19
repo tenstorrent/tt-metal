@@ -384,12 +384,12 @@ void wait_for_heartbeat_custom(chip_id_t device_id, const CoreCoord& virtual_cor
         const auto now = std::chrono::high_resolution_clock::now();
         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
         if (elapsed > 10000) {
-            std::cerr << "timed out waiting" << std::endl;
+            std::cout << "timed out waiting" << std::endl;
             std::abort();
         }
     }
 
-    std::cerr << "wait_for_heartbeat done" << std::endl;
+    std::cout << "wait_for_heartbeat done" << std::endl;
 }
 
 void output_debug_info(
@@ -406,7 +406,7 @@ void output_debug_info(
         llrt::read_hex_vec_from_core(device->id(), virtual_core, buffer_start, sizeof(uint32_t) * 32);
     const auto debug_contents =
         llrt::read_hex_vec_from_core(device->id(), virtual_core, debug_dump_addr, sizeof(uint32_t) * 32);
-    std::cerr << fmt::format(
+    std::cout << fmt::format(
                      "Debug Info\nBuffer[{} : {}] = {:#010x}\nDebug Info: {:#010x}",
                      failure_index,
                      failure_index + 32,
@@ -416,7 +416,60 @@ void output_debug_info(
     // the core we copied to logical tensix 0,0. can we trust host reads from eth 0,11?
     const auto other_core_l1 =
         llrt::read_hex_vec_from_core(device->id(), other_debug_core, 0x20000, sizeof(uint32_t) * 8);
-    std::cerr << fmt::format("Worker 0,0 (virt 1,2) Debug Info: {:#010x}", fmt::join(other_core_l1, ", ")) << "\n";
+    std::cout << fmt::format("Worker 0,0 (virt 1,2) Debug Info: {:#010x}", fmt::join(other_core_l1, ", ")) << "\n";
+}
+
+void do_debug_test_2(
+    tt::tt_metal::IDevice* device,
+    uint32_t debug_dump_addr,
+    uint32_t buffer_base,
+    uint32_t arg_base,
+    uint32_t num_writes,
+    const CoreCoord& virtual_core,
+    const CoreCoord& other_debug_core_virt,
+    bool is_eth,
+    uint32_t tensix_heartbeat_addr = 0) {
+    // Copy debug to other core
+    // Write dummy messages to process
+
+    uint32_t response_buffer_addr = buffer_base + 2;
+    uint32_t stop_buffer_addr = buffer_base + 4;
+
+    llrt::write_hex_vec_to_core(
+            device->id(), virtual_core, std::vector<uint32_t>{0, 0}, buffer_base);
+
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+    
+    uint32_t i = 0;
+        
+    while(true) {
+        // uint32_t msg_i = i & 0xffff;
+
+        uint16_t msg = (((uint8_t)i) << 8) | (uint8_t)i;
+        llrt::write_hex_vec_to_core(
+            device->id(), virtual_core, std::vector<uint16_t>{msg}, buffer_base);
+
+        // tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+
+        std::cout << "Sent message to kernel: " << std::hex << (uint32_t)msg << std::dec << std::endl;
+
+        // Wait for kernel to process message
+        uint8_t stop_signal =
+            llrt::read_hex_vec_from_core(device->id(), virtual_core, stop_buffer_addr, sizeof(uint32_t))[0] & 0xff;
+
+        std::cout << "stop signal " << std::hex << (uint32_t)stop_signal << std::dec << std::endl;
+
+        if (stop_signal == 1) {
+            // uint16_t last_val_kernel =
+            // llrt::read_hex_vec_from_core(device->id(), virtual_core, response_buffer_addr, sizeof(uint16_t))[0];
+
+            std::cout << "Host received stop signal from kernel" << std::endl;
+            while(true) {}
+            // std::cout << "Last value written by kernel: 0x" << std::hex << (uint32_t)last_val_kernel << std::dec << std::endl;
+        }
+
+        i++;
+    }
 }
 
 void do_debug_test(
@@ -431,60 +484,95 @@ void do_debug_test(
     uint32_t tensix_heartbeat_addr = 0) {
     // Copy debug to other core
     // Write dummy messages to process
-    for (uint32_t i = 1; i < num_writes; ++i) {
+    uint16_t i = 1;
+    while(true) {
+
+        if (i == 0) {
+            i++;
+            continue;
+        }
+
+        std::cout << "waiting for heartbeat" << std::endl;
         if (is_eth) {
             llrt::internal_::wait_for_heartbeat(device->id(), virtual_core);
         } else {
             wait_for_heartbeat_custom(device->id(), virtual_core, tensix_heartbeat_addr);
         }
-        uint32_t msg_i = i & 0xffff;
+        std::cout << "done heartbeat" << std::endl;
+        uint32_t msg_i = i << 16 | i;
         // llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{msg_i}, arg_base);
         // std::this_thread::sleep_for(std::chrono::nanoseconds(50));
         // tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-        uint32_t dest_buffer_addr = buffer_base + (i * sizeof(uint32_t));
+        uint32_t dest_buffer_addr = buffer_base;
         llrt::write_hex_vec_to_core(
-            device->id(), virtual_core, std::vector<uint32_t>{0xca110000 | msg_i}, dest_buffer_addr);
+            device->id(), virtual_core, std::vector<uint32_t>{msg_i}, dest_buffer_addr);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-        std::cerr << "message " << std::dec << i << " sent" << " " << std::hex << (0xca110000 | msg_i) << " to "
+        std::cout << "message " << std::dec << i << " sent" << " " << std::hex << (msg_i) << " to "
                   << dest_buffer_addr << std::endl;
 
-        // Wait for kernel to process message
         uint32_t mailbox_val =
             llrt::read_hex_vec_from_core(device->id(), virtual_core, dest_buffer_addr, sizeof(uint32_t))[0];
-        uint32_t msg_status = mailbox_val & 0xffff0000;
-        {
-            const auto start = std::chrono::high_resolution_clock::now();
-            constexpr auto k_sleep_time = std::chrono::nanoseconds{10};
-            while (msg_status != 0xd0e50000) {
-                std::this_thread::sleep_for(std::chrono::nanoseconds(k_sleep_time));
-                mailbox_val =
-                    llrt::read_hex_vec_from_core(device->id(), virtual_core, dest_buffer_addr, sizeof(uint32_t))[0];
-                msg_status = mailbox_val & 0xffff0000;
 
-                const auto now = std::chrono::high_resolution_clock::now();
-                const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
-                if (elapsed > 10000) {
-                    std::cerr << "timed out waiting" << std::endl;
-                    output_debug_info(device, debug_dump_addr, buffer_base, i, virtual_core, other_debug_core_virt);
-                    std::abort();
-                }
-            }
+        std::cout << "mailbox_val 0x" << std::hex << mailbox_val << std::dec << std::endl;
+
+        uint32_t stop_signal =
+            llrt::read_hex_vec_from_core(device->id(), virtual_core, buffer_base + 8, sizeof(uint32_t))[0] & 0xff;
+
+        std::cout << "stop signal 0x" << std::hex << stop_signal << std::dec << std::endl;
+
+        if (stop_signal == 1) {
+            std::cout << "Host received stop signal from kernel" << std::endl;
+            uint32_t last_val =
+                llrt::read_hex_vec_from_core(device->id(), virtual_core, buffer_base + 4, sizeof(uint32_t))[0];
+            std::cout << "Last value written by kernel: 0x" << std::hex << last_val << std::dec << std::endl;
         }
+
+        if (stop_signal == 2) {
+            std::cout << "Host received DOUBLE WRITE signal" << std::endl;
+            uint32_t last_val =
+                llrt::read_hex_vec_from_core(device->id(), virtual_core, buffer_base + 4, sizeof(uint32_t))[0];
+            std::cout << "Last value written by kernel: 0x" << std::hex << last_val << std::dec << std::endl;
+        }
+
+        // Wait for kernel to process message
+        // uint32_t mailbox_val =
+        //     llrt::read_hex_vec_from_core(device->id(), virtual_core, dest_buffer_addr, sizeof(uint32_t))[0];
+        // uint32_t msg_status = mailbox_val & 0xffff0000;
+        // {
+        //     const auto start = std::chrono::high_resolution_clock::now();
+        //     constexpr auto k_sleep_time = std::chrono::nanoseconds{10};
+        //     while (msg_status != 0xd0e50000) {
+        //         std::this_thread::sleep_for(std::chrono::nanoseconds(k_sleep_time));
+        //         mailbox_val =
+        //             llrt::read_hex_vec_from_core(device->id(), virtual_core, dest_buffer_addr, sizeof(uint32_t))[0];
+        //         msg_status = mailbox_val & 0xffff0000;
+
+        //         const auto now = std::chrono::high_resolution_clock::now();
+        //         const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - start).count();
+        //         if (elapsed > 10000) {
+        //             std::cout << "timed out waiting" << std::endl;
+        //             output_debug_info(device, debug_dump_addr, buffer_base, i, virtual_core, other_debug_core_virt);
+        //             std::abort();
+        //         }
+        //     }
+        // }
 
         // We didnt write what we wanted?
-        if ((mailbox_val & 0xffff) != msg_i) {
-            TT_THROW("Read msg i {} but expected {}", mailbox_val, msg_i);
-        }
+        // if ((mailbox_val & 0xffff) != msg_i) {
+        //     TT_THROW("Read msg i {} but expected {}", mailbox_val, msg_i);
+        // }
+
+        i++;
     }
 
-    std::cerr << "Check final value\n";
+    std::cout << "Check final value\n";
     // Output the buffer values to see if we receive the final value on the core
     auto buffer_val = llrt::read_hex_vec_from_core(
         device->id(), virtual_core, buffer_base + ((num_writes - 1) * sizeof(uint32_t)), sizeof(uint32_t))[0];
     EXPECT_EQ(buffer_val, 0xd0e50000 | ((num_writes - 1) & 0xffff));
 
-    std::cerr << "Kernel done" << std::endl;
+    std::cout << "Kernel done" << std::endl;
     llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0xdead0000}, buffer_base);
 }
 
@@ -503,8 +591,8 @@ TEST(Debugging, Test_Eth) {
         uint32_t arg_base = l1_base;
         uint32_t buffer_base = l1_base + 16;
 
-        std::cerr << "l1_base " << std::hex << l1_base << std::endl;
-        std::cerr << "buffer_base " << std::hex << buffer_base << std::endl;
+        std::cout << "l1_base " << std::hex << l1_base << std::endl;
+        std::cout << "buffer_base " << std::hex << buffer_base << std::endl;
         const auto& other_debug_core_virt = device->virtual_core_from_logical_core(CoreCoord{1, 1}, CoreType::WORKER);
 
         std::vector<uint32_t> ct_args = {
@@ -517,7 +605,7 @@ TEST(Debugging, Test_Eth) {
         llrt::write_hex_vec_to_core(device->id(), virtual_core, zero_buffer, buffer_base);
         llrt::write_hex_vec_to_core(device->id(), virtual_core, std::vector<uint32_t>{0}, arg_base);
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
-        std::cerr << "virtual_core " << virtual_core.str() << std::endl;
+        std::cout << "virtual_core " << virtual_core.str() << std::endl;
 
         tt_metal::Program program = tt_metal::CreateProgram();
         tt_metal::KernelHandle kernel = tt_metal::CreateKernel(
@@ -555,8 +643,8 @@ TEST(Debugging, Test_Tensix) {
         uint32_t arg_base = debug_dump_base + 64;
         uint32_t buffer_base = arg_base + 16;
 
-        std::cerr << "l1_base " << std::hex << l1_base << std::endl;
-        std::cerr << "buffer_base " << std::hex << buffer_base << std::endl;
+        std::cout << "l1_base " << std::hex << l1_base << std::endl;
+        std::cout << "buffer_base " << std::hex << buffer_base << std::endl;
         const auto& other_debug_core_virt = device->virtual_core_from_logical_core(CoreCoord{1, 1}, CoreType::WORKER);
 
         std::vector<uint32_t> ct_args = {
@@ -616,7 +704,7 @@ TEST(Debugging, TestBasicWritesEth) {
         }
     }
 
-    std::cerr << "done" << std::endl;
+    std::cout << "done" << std::endl;
 }
 
 TEST(Debugging, TestBasicWritesTensix) {
@@ -639,7 +727,7 @@ TEST(Debugging, TestBasicWritesTensix) {
         }
     }
 
-    std::cerr << "done" << std::endl;
+    std::cout << "done" << std::endl;
 }
 
 }  // namespace tt::tt_metal

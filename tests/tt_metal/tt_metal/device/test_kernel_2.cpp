@@ -27,50 +27,52 @@ void kernel_main() {
     volatile uint32_t msg_count = 0;
     DPRINT << "Kernel started " << HEX() << buffer_base << ENDL();
     auto buffer_ptr = reinterpret_cast<volatile uint32_t*>(buffer_base);
+    auto respond_ptr = reinterpret_cast<volatile uint32_t*>(buffer_base + 4);
+    auto status_ptr = reinterpret_cast<volatile uint32_t*>(buffer_base + 8);
     auto arg_ptr = reinterpret_cast<volatile uint32_t*>(arg_base);
     // post a heartbeat to the same address for the host api to read
     auto heartbeat_ptr = reinterpret_cast<volatile uint32_t*>(heartbeat);
     volatile uint32_t* const debug_dump = reinterpret_cast<volatile uint32_t*>(debug_dump_addr);
     uint32_t heartbeat_cnt = 0;
 
+    uint32_t last_seen = 0;
+
     debug_dump[1] = 0xbbbb;
-    for (uint32_t i = 1; i < num_writes; ++i) {
+    while(true) {
+        invalidate_l1_cache();
+        volatile uint32_t heartbeat = 0xabcd0000 | heartbeat_cnt;
+        heartbeat_cnt++;
+        heartbeat_cnt &= 0xFFFF;
+        heartbeat_ptr[0] = heartbeat;
+
         // wait for a message
         invalidate_l1_cache();
-        volatile uint32_t val = buffer_ptr[i];
-        volatile uint32_t msg_status = val & 0xffff0000;
-        volatile uint32_t msg_type = val & 0xffff;
-        // uint32_t j = 0;
-        while (msg_status != 0xca110000) {
-            invalidate_l1_cache();
-            volatile uint32_t heartbeat = 0xabcd0000 | heartbeat_cnt;
-            heartbeat_cnt++;
-            heartbeat_cnt &= 0xFFFF;
-            heartbeat_ptr[0] = heartbeat;
-            val = buffer_ptr[i];
-            msg_status = val & 0xffff0000;
-            msg_type = val & 0xffff;
-            uint32_t non_volatile_val = buffer_ptr[i];
-            debug_dump[1] = 0xaaaa;
-            debug_dump[2] = non_volatile_val;
-            debug_dump[3] = buffer_ptr[i];
-            // debug_dump[3] = j++;
-            // yes. sometimes misaligned. just a check.
-            noc_async_write((uint32_t)&buffer_ptr[i], get_noc_addr(other_x, other_y, 0x20000), 4);
-            noc_async_write_barrier();
+        volatile uint32_t val = buffer_ptr[0];
+        if (val == 0xdeadbeef) {
+            continue;
         }
-
-        // change it to done
-        debug_dump[1] = 0xcccc;
-        buffer_ptr[i] = 0xd0e50000 | msg_type;
-        debug_dump[1] = 0xdddd;
-
-        // if the message type is not in sync then hang
-        if (msg_type != i) {
-            debug_dump[1] = 0xeeee;
+        volatile uint32_t upper = (val & 0xffff0000) >> 16;
+        volatile uint32_t lower = val & 0xffff;
+        
+       if (upper != lower) {
+            invalidate_l1_cache();
+            respond_ptr[0] = val;
+            status_ptr[0] = 1;
             while (true) {
-                __asm__ volatile("nop");
+                do_nothing(0);
+            }
+       } else {
+        if (upper == last_seen && upper != 0) {
+            invalidate_l1_cache();
+            respond_ptr[0] = val;
+            status_ptr[0] = 2;
+            while (true) {
+                do_nothing(0);
             }
         }
+        invalidate_l1_cache();
+        last_seen = upper;
+        buffer_ptr[0] = 0xdeadbeef;
+       }
     }
 }
