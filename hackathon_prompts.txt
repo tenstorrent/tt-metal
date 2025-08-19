@@ -640,4 +640,87 @@ torch_output_tensor = torch.nn.functional.adaptive_avg_pool2d(torch_input_tensor
 
 The BFloat16/Float mismatch error should now be completely resolved with proper data type consistency across all operations.
 
+Entry 12 - Focus on Single Failing Test Case
+Time: Hackathon Day 2
+Prompt: "Okay so we have one test case that is failing [1, 256, 56, 56], Output size: (1, 1) let's comment out all the other cases so that we focus on this one and specifically for avg pool"
+
+Response: Isolating the specific failing test case to debug the root issue.
+
+FOCUSED DEBUGGING STRATEGY:
+
+## Target Test Case:
+- **Input Shape**: [1, 256, 56, 56]
+- **Output Size**: (1, 1) - Global adaptive average pooling
+- **Pool Type**: avg only (exclude max pooling)
+
+## Debug Plan:
+1. Comment out all other test cases in short sweep
+2. Keep only the failing [1, 256, 56, 56] → (1, 1) case
+3. Run focused test with C++ debug logging enabled
+4. Analyze the exact failure point and error message
+
+This focused approach will help isolate the root cause without interference from other test cases.
+
+Entry 13 - Fix Equality Check for Average Pooling
+Time: Hackathon Day 2
+Prompt: "Okay so reference and output tesnors cannot be equal when avg pool is used due to tthe fact that we will always have some float errors, rewrite it to use close in that scenario"
+
+Response: Fixed adaptive average pooling tests to use allclose instead of exact equality.
+
+FLOATING-POINT ARITHMETIC FIX:
+
+## Problem Identified:
+Average pooling operations involve floating-point arithmetic that naturally introduces small numerical differences, making exact equality checks (`torch.equal()`) inappropriate and causing test failures.
+
+## Solution Applied:
+**For Adaptive Average Pooling Only:**
+- Replaced `torch.equal()` with `torch.allclose()` using same tolerance as general allclose check
+- Kept exact equality check for adaptive max pooling (max operations are deterministic)
+
+## Files Updated:
+- ✅ `adaptive_avg_pool2d.py`: Changed bfloat16 equality check to allclose with atol tolerance
+- ✅ `adaptive_pool2d_short_sweep.py`: Changed bfloat16 equality check to allclose with atol tolerance
+- ✅ `adaptive_max_pool2d.py`: Kept exact equality check (max operations should be deterministic)
+
+## Key Changes:
+```python
+# Before (inappropriate for avg pool)
+isequal = torch.equal(output_tensor.to(torch.bfloat16), torch_output_tensor.to(torch.bfloat16))
+assert isequal, f"Reference and output tensor are not equal for bfloat16..."
+
+# After (correct for avg pool)
+close_match = torch.allclose(output_tensor.to(torch.bfloat16), torch_output_tensor.to(torch.bfloat16), atol=atol)
+assert close_match, f"Reference and output tensor are not close enough for bfloat16..."
+```
+
+This fix acknowledges the inherent floating-point precision limitations in average pooling operations while maintaining strict checks for deterministic max pooling operations.
+
+Entry 14 - Restore Test Cases After Focused Debugging
+Time: Hackathon Day 2
+Prompt: "Let's undo the commented out changes in the test we did earlier as a part of focused debug"
+
+Response: Restored the previously uncommented test cases in the short sweep test.
+
+RESTORED TEST COVERAGE:
+
+## Changes Applied:
+- ✅ Restored `pool_type: ["avg", "max"]` to test both adaptive pooling variants
+- ✅ Uncommented working test cases that don't cause OOM:
+  - `[1, 256, 56, 56, 1, 1]` - Global pooling deeper network
+  - `[1, 512, 28, 28, 1, 1]` - Global pooling very deep
+  - `[1, 512, 7, 7, 7, 7]` - No-op case (input == output size)
+  - `[1, 256, 32, 32, 4, 4]` - 8x downsampling
+  - `[1, 128, 64, 64, 8, 8]` - 8x downsampling different size
+  - `[1, 160, 75, 75, 3, 3]` - Small odd dimensions
+  - `[1, 320, 28, 28, 14, 14]` - 2x downsampling
+  - `[1, 256, 64, 64, 3, 5]` - Asymmetric pooling
+
+## Test Cases Still Commented (OOM Expected):
+- Large ImageNet inputs: `[1, 64, 224, 224, ...]`, `[1, 128, 112, 112, ...]`
+- High memory footprint: `[1, 1024, 14, 14, ...]`, `[1, 2048, 7, 7, ...]`
+- Large spatial dimensions: `[1, 64, 224, 224, 7, 7]`, `[1, 96, 150, 150, 5, 5]`
+- Multi-batch configurations: `[2, 64, 112, 112, ...]`, `[4, 32, 64, 64, ...]`
+
+The adaptive pool2d implementation now has comprehensive test coverage for reasonable memory configurations while avoiding expected OOM scenarios. All tests use proper floating-point tolerance for avg pool and exact equality for max pool.
+
 ---

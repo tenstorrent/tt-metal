@@ -6,6 +6,7 @@
 
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/buffer_types.hpp>
+#include <array>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
@@ -360,32 +361,55 @@ Tensor AdaptiveAvgPool2DOp::invoke(
         output_size[0],
         output_size[1]);
 
-    // Calculate adaptive kernel size and stride
     uint32_t output_h = output_size[0];
     uint32_t output_w = output_size[1];
 
-    // Adaptive pooling kernel size calculation: ceil(input_size / output_size)
-    uint32_t kernel_h = (input_h + output_h - 1) / output_h;  // ceil division
-    uint32_t kernel_w = (input_w + output_w - 1) / output_w;  // ceil division
+    // NEW UNIFORM APPROACH: Use minimal padding to make dimensions perfectly divisible
+    // This allows uniform kernel size and stride, which is much simpler and more efficient
 
-    // Adaptive pooling stride calculation: floor(input_size / output_size)
-    uint32_t stride_h = input_h / output_h;
-    uint32_t stride_w = input_w / output_w;
+    // Calculate required padded dimensions for perfect divisibility
+    uint32_t padded_h =
+        ((input_h + output_h - 1) / output_h) * output_h;  // Equivalent to ceil(input_h / output_h) * output_h
+    uint32_t padded_w =
+        ((input_w + output_w - 1) / output_w) * output_w;  // Equivalent to ceil(input_w / output_w) * output_w
 
-    std::array<uint32_t, 2> adaptive_kernel_size = {kernel_h, kernel_w};
-    std::array<uint32_t, 2> adaptive_stride = {stride_h, stride_w};
-    std::array<uint32_t, 2> adaptive_padding = {0, 0};  // No padding for adaptive pooling
+    // Calculate uniform kernel size and stride (they are the same for perfect tiling)
+    uint32_t uniform_kernel_h = padded_h / output_h;
+    uint32_t uniform_kernel_w = padded_w / output_w;
+    uint32_t uniform_stride_h = uniform_kernel_h;  // For perfect tiling, stride = kernel size
+    uint32_t uniform_stride_w = uniform_kernel_w;
+
+    // Calculate minimal padding needed
+    uint32_t pad_h = padded_h - input_h;
+    uint32_t pad_w = padded_w - input_w;
+
+    std::array<uint32_t, 2> uniform_kernel_size = {uniform_kernel_h, uniform_kernel_w};
+    std::array<uint32_t, 2> uniform_stride = {uniform_stride_h, uniform_stride_w};
+    std::array<uint32_t, 2> uniform_padding = {pad_h, pad_w};
 
     log_debug(
         tt::LogOp,
-        "[AdaptiveAvgPool2D] CALCULATED: kernel=[{}, {}], stride=[{}, {}], padding=[{}, {}]",
-        kernel_h,
-        kernel_w,
-        stride_h,
-        stride_w,
-        adaptive_padding[0],
-        adaptive_padding[1]);
-    log_debug(tt::LogOp, "[AdaptiveAvgPool2D] CALLING pool2d_invoke with Pool2DType::AVG_POOL2D");
+        "[AdaptiveAvgPool2D] UNIFORM APPROACH: kernel=[{}, {}], stride=[{}, {}], padding=[{}, {}]",
+        uniform_kernel_h,
+        uniform_kernel_w,
+        uniform_stride_h,
+        uniform_stride_w,
+        pad_h,
+        pad_w);
+
+    // DETAILED LOGGING FOR DEBUG
+    log_info(tt::LogOp, "[AdaptiveAvgPool2D] === UNIFORM KERNEL/STRIDE APPROACH ===");
+    log_info(tt::LogOp, "[AdaptiveAvgPool2D] Input: {}x{} -> Output: {}x{}", input_h, input_w, output_h, output_w);
+    log_info(tt::LogOp, "[AdaptiveAvgPool2D] Padded input: {}x{} (padding: {}x{})", padded_h, padded_w, pad_h, pad_w);
+    log_info(tt::LogOp, "[AdaptiveAvgPool2D] Uniform kernel: {}x{}", uniform_kernel_h, uniform_kernel_w);
+    log_info(tt::LogOp, "[AdaptiveAvgPool2D] Uniform stride: {}x{}", uniform_stride_h, uniform_stride_w);
+    log_info(
+        tt::LogOp,
+        "[AdaptiveAvgPool2D] Memory overhead: {:.1f}%",
+        100.0 * (padded_h * padded_w - input_h * input_w) / (input_h * input_w));
+    log_info(tt::LogOp, "[AdaptiveAvgPool2D] Using count_include_pad=FALSE to ignore padding");
+
+    log_debug(tt::LogOp, "[AdaptiveAvgPool2D] CALLING pool2d_invoke with uniform parameters");
 
     return pool2d_invoke(
         queue_id,
@@ -395,12 +419,12 @@ Tensor AdaptiveAvgPool2DOp::invoke(
         input_h,
         input_w,
         channels,
-        adaptive_kernel_size,
-        adaptive_stride,
-        adaptive_padding,
+        uniform_kernel_size,
+        uniform_stride,
+        uniform_padding,
         std::nullopt,  // dilation
         false,         // ceil_mode = false
-        true,          // count_include_pad
+        false,         // count_include_pad = FALSE (ignores padding values)
         std::nullopt,  // divisor_override
         memory_config,
         applied_shard_scheme,
@@ -433,33 +457,56 @@ Tensor AdaptiveMaxPool2DOp::invoke(
         output_size[0],
         output_size[1]);
 
-    // Calculate adaptive kernel size and stride
     uint32_t output_h = output_size[0];
     uint32_t output_w = output_size[1];
 
-    // Adaptive pooling kernel size calculation: ceil(input_size / output_size)
-    uint32_t kernel_h = (input_h + output_h - 1) / output_h;  // ceil division
-    uint32_t kernel_w = (input_w + output_w - 1) / output_w;  // ceil division
+    // NEW UNIFORM APPROACH: Use minimal padding to make dimensions perfectly divisible
+    // This allows uniform kernel size and stride, which is much simpler and more efficient
 
-    // Adaptive pooling stride calculation: floor(input_size / output_size)
-    uint32_t stride_h = input_h / output_h;
-    uint32_t stride_w = input_w / output_w;
+    // Calculate required padded dimensions for perfect divisibility
+    uint32_t padded_h =
+        ((input_h + output_h - 1) / output_h) * output_h;  // Equivalent to ceil(input_h / output_h) * output_h
+    uint32_t padded_w =
+        ((input_w + output_w - 1) / output_w) * output_w;  // Equivalent to ceil(input_w / output_w) * output_w
 
-    std::array<uint32_t, 2> adaptive_kernel_size = {kernel_h, kernel_w};
-    std::array<uint32_t, 2> adaptive_stride = {stride_h, stride_w};
-    std::array<uint32_t, 2> adaptive_padding = {0, 0};  // No padding for adaptive pooling
+    // Calculate uniform kernel size and stride (they are the same for perfect tiling)
+    uint32_t uniform_kernel_h = padded_h / output_h;
+    uint32_t uniform_kernel_w = padded_w / output_w;
+    uint32_t uniform_stride_h = uniform_kernel_h;  // For perfect tiling, stride = kernel size
+    uint32_t uniform_stride_w = uniform_kernel_w;
+
+    // Calculate minimal padding needed
+    uint32_t pad_h = padded_h - input_h;
+    uint32_t pad_w = padded_w - input_w;
+
+    std::array<uint32_t, 2> uniform_kernel_size = {uniform_kernel_h, uniform_kernel_w};
+    std::array<uint32_t, 2> uniform_stride = {uniform_stride_h, uniform_stride_w};
+    std::array<uint32_t, 2> uniform_padding = {pad_h, pad_w};
     std::array<uint32_t, 2> dilation = {1, 1};
 
     log_debug(
         tt::LogOp,
-        "[AdaptiveMaxPool2D] CALCULATED: kernel=[{}, {}], stride=[{}, {}], padding=[{}, {}]",
-        kernel_h,
-        kernel_w,
-        stride_h,
-        stride_w,
-        adaptive_padding[0],
-        adaptive_padding[1]);
-    log_debug(tt::LogOp, "[AdaptiveMaxPool2D] CALLING pool2d_invoke with Pool2DType::MAX_POOL2D");
+        "[AdaptiveMaxPool2D] UNIFORM APPROACH: kernel=[{}, {}], stride=[{}, {}], padding=[{}, {}]",
+        uniform_kernel_h,
+        uniform_kernel_w,
+        uniform_stride_h,
+        uniform_stride_w,
+        pad_h,
+        pad_w);
+
+    // DETAILED LOGGING FOR DEBUG
+    log_info(tt::LogOp, "[AdaptiveMaxPool2D] === UNIFORM KERNEL/STRIDE APPROACH ===");
+    log_info(tt::LogOp, "[AdaptiveMaxPool2D] Input: {}x{} -> Output: {}x{}", input_h, input_w, output_h, output_w);
+    log_info(tt::LogOp, "[AdaptiveMaxPool2D] Padded input: {}x{} (padding: {}x{})", padded_h, padded_w, pad_h, pad_w);
+    log_info(tt::LogOp, "[AdaptiveMaxPool2D] Uniform kernel: {}x{}", uniform_kernel_h, uniform_kernel_w);
+    log_info(tt::LogOp, "[AdaptiveMaxPool2D] Uniform stride: {}x{}", uniform_stride_h, uniform_stride_w);
+    log_info(
+        tt::LogOp,
+        "[AdaptiveMaxPool2D] Memory overhead: {:.1f}%",
+        100.0 * (padded_h * padded_w - input_h * input_w) / (input_h * input_w));
+    log_info(tt::LogOp, "[AdaptiveMaxPool2D] Using -inf padding for max pooling (doesn't affect result)");
+
+    log_debug(tt::LogOp, "[AdaptiveMaxPool2D] CALLING pool2d_invoke with uniform parameters");
 
     return pool2d_invoke(
         queue_id,
@@ -469,12 +516,12 @@ Tensor AdaptiveMaxPool2DOp::invoke(
         input_h,
         input_w,
         channels,
-        adaptive_kernel_size,
-        adaptive_stride,
-        adaptive_padding,
+        uniform_kernel_size,
+        uniform_stride,
+        uniform_padding,
         dilation,
         false,         // ceil_mode = false
-        true,          // count_include_pad
+        false,         // count_include_pad = FALSE (doesn't matter for max pool, but consistent)
         std::nullopt,  // divisor_override
         memory_config,
         applied_shard_scheme,
