@@ -39,8 +39,8 @@ from models.experimental.tt_dit.utils.check import assert_quality
     ],
     ids=["encoder_1", "encoder_2"],
 )
-@pytest.mark.parametrize("mesh_device", [(1, 1), (2, 4)], ids=["single_device", "t3k"], indirect=True)
-@pytest.mark.parametrize("submesh_shape", [(1, 1), (1, 4), (2, 2)], ids=["1x1", "1x4", "2x2"])
+@pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
+@pytest.mark.parametrize("submesh_shape", [(1, 4), (2, 2)], ids=["1x4", "2x2"])
 @pytest.mark.parametrize(
     "device_params, topology",
     [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],

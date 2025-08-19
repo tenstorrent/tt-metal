@@ -13,6 +13,15 @@ from ...layers.feedforward import ColParallelLinear, ParallelFeedForward
 from loguru import logger
 
 
+# clipstack:
+# 1. transformer block / encoder layer
+# (one transformer layer)
+# 1.1 self attention
+# 1.2 feedforward
+# 2. final layer norm
+# 3. projection
+
+
 class CLIPConfig:
     def __init__(
         self,
@@ -55,10 +64,12 @@ class CLIPEncoder:
         self.eos_token_id = eos_token_id
         self.encoder = CLIPStack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
 
+    # load weights
     def load_state_dict(self, state_dict):
         self.embeddings.load_state_dict(substate(state_dict, "text_model.embeddings"))
         self.encoder.load_state_dict(substate(state_dict, "text_model.encoder"))
 
+        # TODO: add "_weights" to all weights variables (ex. token_embedding -> token_embedding_weights)
         self.final_layer_norm = bf16_tensor(
             state_dict["text_model.final_layer_norm.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
         )
@@ -72,7 +83,7 @@ class CLIPEncoder:
 
     def __call__(
         self, prompt_tokenized: ttnn.Tensor, mesh_device: ttnn.Device, with_projection: bool = True
-    ) -> torch.Tensor:
+    ) -> ttnn.Tensor:
         hidden_states = self.embeddings(prompt_tokenized, mesh_device)
 
         causal_attention_mask = create_4d_causal_attention_mask(
@@ -96,13 +107,15 @@ class CLIPEncoder:
             epsilon=self.config.layer_norm_eps,
         )
 
+        encoder_output.append(normalized_final_state)
+
         # gather eos
         if self.eos_token_id is None:
             self.eos_token_id = 2
 
         pooled_output = _gather_eos(normalized_final_state, prompt_tokenized, self.eos_token_id, mesh_device)
 
-        # Conditionally apply text projection based on with_projection parameter
+        # apply text projection based on with_projection param
         if with_projection:
             if self.text_projection is None:
                 raise ValueError("projection weights are not loaded")
@@ -168,7 +181,7 @@ class CLIPStack:
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
         output_hidden_states: bool = True,
-    ) -> torch.Tensor:
+    ) -> ttnn.Tensor:
         all_hidden_states = []  # list of hidden states from each layer
         all_hidden_states.append(hidden_states)
 
@@ -176,7 +189,7 @@ class CLIPStack:
             hidden_states = layer(hidden_states, causal_attention_mask, ccl_manager, parallel_config)
             all_hidden_states.append(hidden_states)
 
-        return all_hidden_states
+        return all_hidden_states  # list of hidden states from each layer
 
 
 class CLIPEncoderLayer:
@@ -471,7 +484,7 @@ class EncoderLayerSelfAttention:
 
 class TextEmbeddings:
     """
-    Embeds text tokens and adds position embeddings.
+    Embeds text tokens and adds *absolute* position embeddings.
 
     Args:
         config: Config

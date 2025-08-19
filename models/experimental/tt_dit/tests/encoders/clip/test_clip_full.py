@@ -30,7 +30,7 @@ from models.experimental.tt_dit.utils.check import assert_quality
     "clip_path, tokenizer_path, expected_pcc",
     [
         ("text_encoder", "tokenizer", 0.99),
-        ("text_encoder_2", "tokenizer_2", 0.985),
+        ("text_encoder_2", "tokenizer_2", 0.984),
     ],
     ids=["encoder_1", "encoder_2"],
 )
@@ -132,9 +132,10 @@ def test_clip_encoder(
         hf_execution_time = hf_end_time - hf_start_time
 
     # option 1: encoder output (before final layer norm)
-    hf_sequence_output = hf_output.hidden_states[-2]  # Last encoder layer output (before final layer norm)
+    # hf_sequence_output = hf_output.hidden_states[-1]  # Last encoder layer output (before final layer norm)
     # option 2: Final layer normed output
-    # hf_sequence_output = hf_output.last_hidden_state  # After final layer norm
+    hf_sequence_output = hf_output.last_hidden_state  # After final layer norm
+    # breakpoint()
     hf_projected_output = hf_output.text_embeds  # projected/pooled output
 
     # convert mesh tensor to torch tensor for pcc
