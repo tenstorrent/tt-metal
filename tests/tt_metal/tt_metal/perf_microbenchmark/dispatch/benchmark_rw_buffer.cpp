@@ -53,13 +53,18 @@ using namespace tt::tt_metal::distributed;
  * https://docs.google.com/spreadsheets/d/1zy1teJtgf7hsMMdgy5uIOtcuI73AGVqy4lnyYwL7YFQ/edit
  */
 
+static constexpr auto num_test_repetitions = 101;
+
 static constexpr auto KB = 1024;
 static constexpr auto MB = 1024 * KB;
 static constexpr auto GB = 1024 * MB;
 
-static const std::vector<int64_t> PAGE_SIZE_ARGS{32, 128, 512, 1024, 4096, 8192, 512 << 10, 1 << 20, 16 << 20};
-constexpr uint64_t max_transfer_size{8ul * GB};
-static const std::vector<int64_t> TRANSFER_SIZE_ARGS = {1 * GB, max_transfer_size};
+// static const std::vector<int64_t> PAGE_SIZE_ARGS{32, 128, 512, 1024, 4096, 8192, 512 * KB, 1 * MB, 16 * MB};
+static const std::vector<int64_t> PAGE_SIZE_ARGS{32, 128, 512, 1024};
+constexpr uint64_t max_transfer_size{1 * GB /*4294934528*/ /*(4ul * GB) - (32 * KB)*/};
+// static const std::vector<int64_t> TRANSFER_SIZE_ARGS = {16 * MB, 32 * MB, 64 * MB, 128 * MB, 512 * MB, 1 * GB, 2 *
+// GB, (4ul * GB) - (16 * MB), max_transfer_size};
+static const std::vector<int64_t> TRANSFER_SIZE_ARGS = {1 * GB};
 
 static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, BufferType::L1};
 static const std::vector<int64_t> BUFFER_TYPE_ARGS = {0};
@@ -121,6 +126,7 @@ static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_de
 
 int main(int argc, char** argv) {
     benchmark::Initialize(&argc, argv);
+
     auto random_buffer_seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto host_buffer_max = create_random_vector_of_bfloat16(max_transfer_size, 1000, random_buffer_seed);
 
@@ -140,12 +146,25 @@ int main(int argc, char** argv) {
     for (auto [device_id, device] : devices) {
         // Device ID embedded here for extraction
         auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
+        auto compute_min = [](const std::vector<double>& v) -> double { return *std::min_element(v.begin(), v.end()); };
+        auto compute_max = [](const std::vector<double>& v) -> double { return *std::max_element(v.begin(), v.end()); };
         // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
         // benchmark
-        benchmark::RegisterBenchmark("Write", BM_write, device, std::cref(host_buffer_max))
+        benchmark::RegisterBenchmark("Write", BM_write, device, host_buffer_max)
             ->ArgsProduct(benchmark_args)
-            ->UseRealTime();
-        benchmark::RegisterBenchmark("Read", BM_read, device)->ArgsProduct(benchmark_args)->UseRealTime();
+            ->UseRealTime()
+            ->Repetitions(num_test_repetitions)
+            ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+            ->ComputeStatistics("min", compute_min)
+            ->ComputeStatistics("max", compute_max);
+
+        benchmark::RegisterBenchmark("Read", BM_read, device)
+            ->ArgsProduct(benchmark_args)
+            ->UseRealTime()
+            ->Repetitions(num_test_repetitions)
+            ->ReportAggregatesOnly(true)  // Only show aggregated results (cv, min, max)
+            ->ComputeStatistics("min", compute_min)
+            ->ComputeStatistics("max", compute_max);
     }
 
     benchmark::RunSpecifiedBenchmarks();
