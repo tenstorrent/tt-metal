@@ -462,6 +462,7 @@ def test_binary_sharded(a_shape, b_shape, a_config, b_config, out_config, dtype_
     out_tt = ttnn.add(a_tt, b_tt, memory_config=out_config, use_legacy=None)
     assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
 
+
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     ((torch.Size([5, 7, 64, 128]), torch.Size([5, 7, 64, 128])),),
