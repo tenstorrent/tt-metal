@@ -1,6 +1,6 @@
 project(tt_stl)
 
-add_library(tt_stl SHARED ${CMAKE_CURRENT_SOURCE_DIR}/tt_stl/llvm/llvm_small_vector.cpp)
+add_library(tt_stl SHARED)
 add_library(TT::STL ALIAS tt_stl)
 
 # FIXME: TT-STL should support down to C++17 (so that TT-Metalium can), but we have headers (eg: <reflect>) in our
@@ -28,6 +28,8 @@ target_sources(
             tt_stl/strong_type.hpp
             tt_stl/type_name.hpp
             tt_stl/unique_any.hpp
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/tt_stl/llvm/llvm_small_vector.cpp
 )
 
 # These dependencies are currently brought in by dependencies/CMakeLists.txt
