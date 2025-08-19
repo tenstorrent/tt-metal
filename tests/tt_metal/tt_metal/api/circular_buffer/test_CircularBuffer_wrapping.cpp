@@ -69,18 +69,18 @@ static constexpr DataT WRITE_OVER_VALUE = 0xBBBB;
 // Expected result of the test.
 static const std::vector<DataT> EXPECTED_RESULT = {WRAP_WRITE_VALUE, WRAP_WRITE_VALUE, WRITE_OVER_VALUE};
 
-TEST_F(DeviceFixture, TensixTestCircularBufferWrapping) {
+TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlocking) {
     auto device = devices_.at(0);
     Program program;
     CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_writer.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_writer.cpp",
         WORKER_CORE,
         ComputeConfig{});
 
     auto reader_kernel = CreateKernel(
         program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_reader.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_reader.cpp",
         WORKER_CORE,
         WriterDataMovementConfig{});
 
