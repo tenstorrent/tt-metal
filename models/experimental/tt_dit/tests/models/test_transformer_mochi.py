@@ -168,17 +168,6 @@ def test_mochi_transformer_block(
     trans_mat = get_rot_transformation_mat(None)
     tt_trans_mat = bf16_tensor(trans_mat, device=mesh_device)
 
-    # Run torch model
-    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
-    attention_mask = torch.ones((B, prompt_seq_len), dtype=torch_dtype)
-    torch_spatial_out, torch_prompt_out = torch_model(
-        hidden_states=spatial_input,
-        encoder_hidden_states=prompt_input,
-        temb=temb_input,
-        encoder_attention_mask=attention_mask,
-        image_rotary_emb=[rope_cos, rope_sin],
-    )
-
     # Run TT model
     logger.info(
         f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
@@ -203,6 +192,17 @@ def test_mochi_transformer_block(
         ),
     )
     tt_spatial_out = tt_spatial_out[:, :, :spatial_seq_len, :]
+
+    # Run torch model
+    logger.info(f"Running torch model with spatial shape {spatial_input.shape}, prompt shape {prompt_input.shape}")
+    attention_mask = torch.ones((B, prompt_seq_len), dtype=torch_dtype)
+    torch_spatial_out, torch_prompt_out = torch_model(
+        hidden_states=spatial_input,
+        encoder_hidden_states=prompt_input,
+        temb=temb_input,
+        encoder_attention_mask=attention_mask,
+        image_rotary_emb=[rope_cos, rope_sin],
+    )
 
     logger.info(f"Checking spatial outputs")
     for i in range(tt_spatial_out.shape[0]):
@@ -251,8 +251,6 @@ def test_mochi_transformer_block(
     ],
     ids=["short_seq", "long_seq"],
 )
-# TODO: Remove worker_l1_size when not running with watcher
-# @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "worker_l1_size": 1344544}], indirect=True)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mochi_transformer_model(
     mesh_device: ttnn.MeshDevice,
