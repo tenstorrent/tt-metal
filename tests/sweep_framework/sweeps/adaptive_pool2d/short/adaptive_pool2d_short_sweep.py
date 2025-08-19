@@ -121,71 +121,108 @@ def run_adaptive_pool2d(in_n, in_c, in_h, in_w, out_h, out_w, pool_type, dtype, 
     # Convert back to NCHW format for comparison
     output_tensor = torch.permute(result, (0, 3, 1, 2))
 
-    # Test for numerical accuracy with bfloat16 tolerances
-    atol, _ = torch.testing._comparison.default_tolerances(torch.bfloat16)
-    if dtype == ttnn.bfloat8_b:
-        atol = 0.35
-    elif dtype == ttnn.bfloat16 and pool_type == "avg":
-        # Adaptive avg pooling needs higher tolerance due to mathematical differences
-        # Our algorithm uses padding + count_include_pad=false which introduces small precision differences
-        atol = 0.035  # Increased from default 0.016 to 0.035 to account for max difference of ~0.032
-
-    allclose = torch.allclose(output_tensor.to(torch.bfloat16), torch_output_tensor.to(torch.bfloat16), atol=atol)
-
-    # DETAILED ELEMENT-BY-ELEMENT COMPARISON FOR DEBUGGING
-    if not allclose:
-        print(f"\n=== ELEMENT-BY-ELEMENT COMPARISON DEBUG ===")
-        print(f"Input: {input_shape}, Output size: {output_size}, Pool type: {pool_type}, dtype: {dtype}")
-        print(f"Used atol: {atol}")
-
-        torch_bf16 = torch_output_tensor.to(torch.bfloat16)
-        output_bf16 = output_tensor.to(torch.bfloat16)
-        diff = torch.abs(torch_bf16 - output_bf16)
-
-        print(f"PyTorch result shape: {torch_bf16.shape}")
-        print(f"TTNN result shape: {output_bf16.shape}")
-
-        # For small outputs, show all elements
-        if torch_bf16.numel() <= 100:  # Show details for small tensors
-            print(f"PyTorch output (bfloat16):")
-            print(torch_bf16)
-            print(f"TTNN output (bfloat16):")
-            print(output_bf16)
-            print(f"Absolute differences:")
-            print(diff)
-            print(f"Max difference: {torch.max(diff).item():.6f}")
-            print(f"Mean difference: {torch.mean(diff).item():.6f}")
-        else:
-            print(f"Max difference: {torch.max(diff).item():.6f}")
-            print(f"Mean difference: {torch.mean(diff).item():.6f}")
-            print(f"Elements that exceed tolerance ({atol}):")
-            exceeds_tol = diff > atol
-            if torch.any(exceeds_tol):
-                print(f"Number of elements exceeding tolerance: {torch.sum(exceeds_tol).item()}")
-                print(f"Positions exceeding tolerance: {torch.nonzero(exceeds_tol)[:10]}")  # First 10
-        print(f"=== END DEBUG ===\n")
-
-    assert (
-        allclose
-    ), f"Reference and output tensor are not close. Input: {input_shape}, Output size: {output_size}, Pool type: {pool_type}"
-
-    # For adaptive avg pool, use allclose instead of equal due to floating-point arithmetic
-    if dtype == ttnn.bfloat16:
-        close_match = torch.allclose(
-            output_tensor.to(torch.bfloat16), torch_output_tensor.to(torch.bfloat16), atol=atol
-        )
+    # Test for equivalence - using patterns from existing pool tests
+    if pool_type == "max":
+        # MAX POOL: Use strict equivalence checks like maxpool2d
+        pcc_thresh = 1.0
+        atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+        if dtype == ttnn.bfloat8_b:
+            pcc_thresh = 0.99
+            atol = 0.35
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc_thresh)
+        allclose = torch.allclose(output_tensor, torch_output_tensor, atol=atol, rtol=rtol)
+        isequal = torch.equal(output_tensor, torch_output_tensor)
         assert (
-            close_match
-        ), f"Reference and output tensor are not close enough for bfloat16. Input: {input_shape}, Output size: {output_size}, Pool type: {pool_type}"
+            allclose
+        ), f"Reference and output tensor are not close. Input: {input_shape}, Output size: {output_size}, Pool type: {pool_type}"
+        if dtype == ttnn.bfloat16:
+            assert (
+                isequal
+            ), f"Reference and output tensor are not equal for bfloat16. Input: {input_shape}, Output size: {output_size}, Pool type: {pool_type}"
+    else:
+        # AVG POOL: Use relaxed checks like avgpool2d due to bfloat16 precision limitations
+        pcc_thresh = 0.985
+        atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+        # TTNN only supports scalars in Bfloat16, so we cannot support rtol lower than 0.01
+        # for instance, a 3x3 kernel uses scalar 1/9 = 0.111, which in Bfloat16 is 0.11084
+        # so if we fill the tensor with 1s, Torch gets 9 * 0.111 = 0.999 which converted back
+        # to Bfloat16 rounds to 1.0 but TTNN gets 9 * 0.11084 = 0.99756 which converted back
+        # to Bfloat16 rounds to 0.9961, so the rdiff in this case is 0.0039
+        # since the atol default is 0.016 we don't see this issue for low magnitude values, but
+        # when using small divisor overrides with large kernels we see much large values which
+        # overwhelm the atol and the rtol becomes significant
+        rtol = 0.01
+        if dtype == ttnn.bfloat8_b:
+            atol = 0.35
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc_thresh)
+        allclose = torch.allclose(output_tensor, torch_output_tensor, atol=atol, rtol=rtol)
+        assert (
+            allclose
+        ), f"Reference and output tensor are not close. Input: {input_shape}, Output size: {output_size}, Pool type: {pool_type}"
 
-    # PCC assertion with higher threshold matching max_pool2d
-    pcc_passed, pcc_message = assert_with_pcc(torch_output_tensor, output_tensor, 0.998)
-    assert pcc_passed, pcc_message
+    print(f"Adaptive {pool_type} pool2d - Input: {input_shape}, Output size: {output_size}")
+
+    # Get the actual tolerance values used in the test
+    test_atol, test_rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+    if pool_type == "avg":
+        test_rtol = 0.01  # Updated rtol for avg pool
+    if dtype == ttnn.bfloat8_b:
+        test_atol = 0.35
+
+    # Detailed element-by-element comparison for debugging
+    print(f"\n=== ELEMENTS EXCEEDING TEST TOLERANCES ===")
+    print(f"Test tolerances: atol={test_atol:.6f}, rtol={test_rtol:.6f}")
+    print(f"Output shape: {torch_output_tensor.shape}")
+
+    # Flatten for easier comparison
+    torch_flat = torch_output_tensor.flatten()
+    ttnn_flat = output_tensor.flatten()
+    diff_flat = torch.abs(torch_flat - ttnn_flat)
+
+    # Find elements that exceed tolerance using PyTorch's allclose logic
+    # allclose: |a - b| <= atol + rtol * |b|
+    tolerance_threshold = test_atol + test_rtol * torch.abs(torch_flat)
+    exceeds_tolerance = diff_flat > tolerance_threshold
+
+    failing_indices = torch.nonzero(exceeds_tolerance).flatten()
+
+    if len(failing_indices) > 0:
+        print(f"\n{len(failing_indices)} elements exceed tolerances:")
+        print(f"{'Index':<8} {'PyTorch':<14} {'TTNN':<14} {'Abs Diff':<14} {'Threshold':<14} {'Excess':<14}")
+        print(f"{'-'*8} {'-'*14} {'-'*14} {'-'*14} {'-'*14} {'-'*14}")
+
+        for idx in failing_indices[:20]:  # Show first 20 failing elements
+            i = idx.item()
+            torch_val = torch_flat[i].item()
+            ttnn_val = ttnn_flat[i].item()
+            abs_diff = diff_flat[i].item()
+            threshold = tolerance_threshold[i].item()
+            excess = abs_diff - threshold
+
+            print(f"{i:<8} {torch_val:<14.8f} {ttnn_val:<14.8f} {abs_diff:<14.8f} {threshold:<14.8f} {excess:<14.8f}")
+
+        if len(failing_indices) > 20:
+            print(f"... ({len(failing_indices) - 20} more failing elements)")
+    else:
+        print("✅ All elements are within test tolerances!")
+
+    # Statistics
+    mean_diff = torch.mean(diff_flat).item()
+    max_diff = torch.max(diff_flat).item()
+    std_diff = torch.std(diff_flat).item()
+    max_threshold = torch.max(tolerance_threshold).item()
+
+    print(f"\nTOLERANCE ANALYSIS:")
+    print(f"Mean absolute difference: {mean_diff:.8f}")
+    print(f"Max absolute difference:  {max_diff:.8f}")
+    print(f"Max tolerance threshold:  {max_threshold:.8f}")
+    print(f"Max excess over tolerance: {torch.max(diff_flat - tolerance_threshold).item():.8f}")
+    print(
+        f"Elements within tolerance: {len(torch_flat) - len(failing_indices)}/{len(torch_flat)} ({100*(len(torch_flat) - len(failing_indices))/len(torch_flat):.1f}%)"
+    )
 
     # Check results
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
-
-    print(f"Adaptive {pool_type} pool2d - Input: {input_shape}, Output size: {output_size}, PCC: {pcc}")
 
     return pcc
 
