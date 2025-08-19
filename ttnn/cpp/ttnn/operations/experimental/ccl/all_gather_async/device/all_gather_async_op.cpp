@@ -461,7 +461,8 @@ Tensor all_gather_async_impl(
     uint32_t num_devices = devices.size();
     uint32_t ring_size = num_devices;
     if (cluster_axis.has_value()) {
-        ring_size = (cluster_axis.value() == 0) ? 8 : 4;
+        const auto& mesh_view = input_tensor.device()->get_view();
+        ring_size = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     }
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
