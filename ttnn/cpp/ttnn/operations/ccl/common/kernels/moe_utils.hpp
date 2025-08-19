@@ -14,7 +14,33 @@ enum class Polarity : uint8_t {
     POSITIVE,
 };
 namespace routing_state {
-std::array<Polarity, 2> polarity_table = {Polarity::NEGATIVE, Polarity::NEGATIVE};
+
+struct PolarState {
+    std::array<Polarity, 2> polarity_table = {Polarity::NEGATIVE, Polarity::NEGATIVE};
+
+    inline Polarity reverse(Polarity p) { return p == Polarity::POSITIVE ? Polarity::NEGATIVE : Polarity::POSITIVE; }
+
+    inline uint32_t polar_compare_stateful(
+        uint32_t positive_distance,
+        uint32_t positive_direction,
+        uint32_t negative_distance,
+        uint32_t negative_direction,
+        uint32_t axis) {
+        auto polarity = polarity_table[axis];
+        uint32_t result = 0;
+        if (polarity == Polarity::POSITIVE) {
+            result = positive_distance <= negative_distance ? positive_direction : negative_direction;
+        } else {
+            result = positive_distance < negative_distance ? positive_direction : negative_direction;
+        }
+        if (positive_distance == negative_distance) {
+            polarity_table[axis] = reverse(polarity);
+        }
+        return result;
+    }
+};
+
+PolarState polar_state;
 }
 
 template <size_t Size>
@@ -71,8 +97,6 @@ enum class ReplicateGroup : int {
     ROWS = 1,
     COLS = 0,
 };
-
-inline Polarity reverse(Polarity p) { return p == Polarity::POSITIVE ? Polarity::NEGATIVE : Polarity::POSITIVE; }
 
 // check if the target is along the same axis as the source if the axis is configured
 template <uint32_t LinearizedSrcMeshCoord, uint32_t MeshRows, uint32_t MeshCols, ReplicateGroup Axis>
@@ -142,25 +166,6 @@ uint32_t manhattan_distance(uint32_t linearized_src_mesh_coord, uint32_t lineari
            topological_distance<Topology>(src_col, dest_col, MeshCols);
 }
 
-uint32_t polar_compare(
-    uint32_t positive_distance,
-    uint32_t positive_direction,
-    uint32_t negative_distance,
-    uint32_t negative_direction,
-    uint32_t axis) {
-    auto polarity = routing_state::polarity_table[axis];
-    uint32_t result = 0;
-    if (polarity == Polarity::POSITIVE) {
-        result = positive_distance <= negative_distance ? positive_direction : negative_direction;
-    } else {
-        result = positive_distance < negative_distance ? positive_direction : negative_direction;
-    }
-    if (positive_distance == negative_distance) {
-        routing_state::polarity_table[axis] = reverse(polarity);
-    }
-    return result;
-}
-
 template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols>
 uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
     auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_src_mesh_coord);
@@ -175,7 +180,8 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
             // with wrap around, we can go either East or West. Choose the shorter route
             uint32_t east_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::POSITIVE);
             uint32_t west_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::NEGATIVE);
-            return polar_compare(east_distance, eth_chan_directions::EAST, west_distance, eth_chan_directions::WEST, 1);
+            return routing_state::polar_state.polar_compare_stateful(
+                east_distance, eth_chan_directions::EAST, west_distance, eth_chan_directions::WEST, 1);
         }
     } else {
         if constexpr (!has_wrap_around<Topology>()) {
@@ -184,7 +190,7 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
             // with wrap around, we can go either North or South. Choose the shorter route
             uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::POSITIVE);
             uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::NEGATIVE);
-            return polar_compare(
+            return routing_state::polar_state.polar_compare_stateful(
                 south_distance, eth_chan_directions::SOUTH, north_distance, eth_chan_directions::NORTH, 0);
         }
     }
