@@ -81,6 +81,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_metal/perf_microbenchmark
 )
 
 target_link_libraries(
