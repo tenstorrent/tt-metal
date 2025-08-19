@@ -5,7 +5,7 @@ This is the Entire ImageTransformer for Gemma-3-4b-it.
 We have adapted the TtGemmaImageTransformerBlock from TtLlamaImageTransformerBlock
 with changes incorporating the GemmaImageAttention and GemmaImageFeedForward
 """
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -19,6 +19,7 @@ class TtGemmaImageTransformer(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -32,11 +33,13 @@ class TtGemmaImageTransformer(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.gated = gated
 
         self.resblocks = [
             TtGemmaImageTransformerBlock(
                 mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 state_dict=state_dict,
                 state_dict_prefix=f"{state_dict_prefix}{block_key}.{i}.",
                 weight_cache_path=weight_cache_path,

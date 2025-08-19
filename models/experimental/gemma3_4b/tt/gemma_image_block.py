@@ -6,7 +6,7 @@ We have reused the TtLlamaImageTransformerBlock with incorporating the
 TtGemmaImageAttention and TtGemmaImageFeedForward
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -22,6 +22,7 @@ class TtGemmaImageTransformerBlock(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -33,6 +34,7 @@ class TtGemmaImageTransformerBlock(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
         self.hidden_size = configuration.vision_dim
         self.gated = gated
@@ -49,6 +51,7 @@ class TtGemmaImageTransformerBlock(LightweightModule):
 
         self.attn = TtGemmaImageAttention(
             mesh_device,
+            tt_ccl,
             state_dict,
             state_dict_prefix=f"{state_dict_prefix}attn.",
             weight_cache_path=weight_cache_path,
@@ -68,6 +71,7 @@ class TtGemmaImageTransformerBlock(LightweightModule):
 
         self.mlp = TtGemmaImageFeedForward(
             mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
             args=configuration,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}mlp.",

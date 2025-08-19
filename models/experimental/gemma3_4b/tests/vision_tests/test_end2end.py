@@ -1,5 +1,5 @@
 """End-to-end test for Gemma-3-4B-it vision-text pipeline."""
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import torch
@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import os
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import (
     encode_prompt_hf,
     sample_host,
@@ -241,9 +242,12 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
             max_num_blocks=page_params["page_max_num_blocks"],
         )
 
+    tt_ccl = TT_CCL(mesh_device)
+
     # Load vision model (exactly like test_end2end.py)
     vision_model = TtGemmaTransformerVision(
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         state_dict=state_dict,
         state_dict_prefix=vision_prefix,
         dtype=dtype,
@@ -255,6 +259,7 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
     text_model = Gemma3_4BTransformer(
         args=model_args,
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         dtype=dtype,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),

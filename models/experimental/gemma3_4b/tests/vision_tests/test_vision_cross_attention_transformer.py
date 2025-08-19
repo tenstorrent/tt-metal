@@ -1,7 +1,7 @@
 """Gemma-3-4b-it Test for Vision Transformer"""
 
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -13,13 +13,14 @@ from loguru import logger
 
 import ttnn
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.ccl import TT_CCL
 
 from models.experimental.gemma3_4b.tt.gemma_vision_crossattention import TtGemmaTransformerVision
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "fabric_config": True}], indirect=True)
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -90,8 +91,10 @@ def test_gemma_vision(
         input_tensor,
     )
 
+    tt_ccl = TT_CCL(mesh_device)
     test_gemma_vision = TtGemmaTransformerVision(
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix="vision_tower.vision_model.",
         dtype=dtype,

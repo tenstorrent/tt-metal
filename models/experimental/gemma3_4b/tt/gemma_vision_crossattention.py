@@ -3,7 +3,7 @@ This is the Vision Transformer Block for Gemma-3-4b-it.
 This involves vision followed by MultiModalProjector processing
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -17,6 +17,7 @@ class TtGemmaTransformerVision(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         dtype,
@@ -28,6 +29,7 @@ class TtGemmaTransformerVision(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.model_config = configuration.get_model_config()
 
         self.dim = configuration.dim
@@ -38,11 +40,12 @@ class TtGemmaTransformerVision(LightweightModule):
 
         self.vision_encoder = TtSiglipGemmaVisionModel(
             mesh_device,
+            self.tt_ccl,
             state_dict,
             f"model.{state_dict_prefix}",
-            weight_cache_path=configuration.weight_cache_path(dtype),
             dtype=dtype,
             configuration=configuration,
+            weight_cache_path=configuration.weight_cache_path(dtype),
             return_intermediate=return_intermediate,
         )
 

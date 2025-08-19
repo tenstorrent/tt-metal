@@ -1,7 +1,7 @@
 """Gemma-3-4b-it Test for Vision MLP"""
 
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.gemma3_4b.tt.gemma_image_mlp import TtGemmaImageFeedForward
 from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_for_grayskull
@@ -31,6 +32,7 @@ from models.utility_functions import comp_allclose, comp_pcc, nearest_32, skip_f
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds):
     dtype = ttnn.bfloat16
     model_args = ModelArgs(mesh_device)
@@ -48,8 +50,10 @@ def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds):
     reference_model = model_args.reference_vision_mlp()
     # reference_model.load_state_dict(partial_state_dict)
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtGemmaImageFeedForward(
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         args=model_args,
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,

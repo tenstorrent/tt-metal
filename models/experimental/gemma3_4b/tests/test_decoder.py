@@ -1,6 +1,6 @@
 """Gemma-3-4b-it Test for Text Decoder"""
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -55,6 +55,7 @@ from models.tt_transformers.tt.rope import RotarySetup
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
     max_seq_len,
     batch_size,

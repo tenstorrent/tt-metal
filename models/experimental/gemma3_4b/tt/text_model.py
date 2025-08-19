@@ -4,7 +4,7 @@ This is the end-to-end implementation of the Gemma-3-4b-it model.
 
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -15,7 +15,6 @@ from models.experimental.gemma3_4b.tt.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.embedding import Embedding
 from models.tt_transformers.tt.rope import RotarySetup
-from models.tt_transformers.tt.ccl import TT_CCL
 
 from models.experimental.gemma3_4b.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
@@ -33,6 +32,7 @@ class Gemma3_4BTransformer(LightweightModule):
         args,
         dtype,
         mesh_device,
+        tt_ccl,
         state_dict,
         weight_cache_path,
         paged_attention_config=None,
@@ -44,12 +44,11 @@ class Gemma3_4BTransformer(LightweightModule):
         assert self.vocab_size > 0
         self.n_layers = args.n_layers
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.dtype = dtype
         self.model_config = args.get_model_config()
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
-
-        self.tt_ccl = TT_CCL(self.mesh_device)
 
         self.embd = Embedding(
             mesh_device=mesh_device,

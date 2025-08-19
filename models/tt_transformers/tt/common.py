@@ -237,48 +237,6 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
         return tokenizer.apply_chat_template([prompt_text], add_generation_prompt=True, tokenize=True)
 
 
-def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
-    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
-    # Values obtained from grid search
-    low_freq_factor = 1
-    high_freq_factor = 4
-
-    low_freq_wavelen = orig_context_len / low_freq_factor
-    high_freq_wavelen = orig_context_len / high_freq_factor
-    new_freqs = []
-    for freq in freqs:
-        wavelen = 2 * math.pi / freq
-        if wavelen < high_freq_wavelen:
-            new_freqs.append(freq)
-        elif wavelen > low_freq_wavelen:
-            new_freqs.append(freq / scale_factor)
-        else:
-            assert low_freq_wavelen != high_freq_wavelen
-            smooth = (orig_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
-            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
-    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
-
-
-def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
-    """
-    Precompute the frequency tensor for sine and cosine values with given dimensions.
-
-    Args:
-        dim (int): Dimension of the frequency tensor.
-        end (int): End index for precomputing frequencies.
-        theta (float, optional): Scaling factor for frequency computation. Defaults to 500000.0.
-
-    Returns:
-        Tuple[torch.Tensor, torch.Tensor]: Tensors containing cosine and sine values.
-    """
-    freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-    t = torch.arange(end)
-    if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
-    freqs = torch.outer(t, freqs).float()
-    return torch.cos(freqs), torch.sin(freqs)
-
-
 def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
     """
     Transform cos/sin frequencies to a rotation matrix.
@@ -304,6 +262,28 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
+def apply_llama3_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+    # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
+    # Values obtained from grid search
+    low_freq_factor = 1
+    high_freq_factor = 4
+
+    low_freq_wavelen = orig_context_len / low_freq_factor
+    high_freq_wavelen = orig_context_len / high_freq_factor
+    new_freqs = []
+    for freq in freqs:
+        wavelen = 2 * math.pi / freq
+        if wavelen < high_freq_wavelen:
+            new_freqs.append(freq)
+        elif wavelen > low_freq_wavelen:
+            new_freqs.append(freq / scale_factor)
+        else:
+            assert low_freq_wavelen != high_freq_wavelen
+            smooth = (orig_context_len / wavelen - low_freq_factor) / (high_freq_factor - low_freq_factor)
+            new_freqs.append((1 - smooth) * freq / scale_factor + smooth * freq)
+    return torch.tensor(new_freqs, dtype=freqs.dtype, device=freqs.device)
+
+
 #  Add-Multiply method of rotary embeddings for prefill
 def get_rot_transformation_mat(dhead):
     # ROPE op uses a single tile
@@ -326,7 +306,7 @@ def get_single_rot_mat(
 ):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     if scale_factor is not None:
-        freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len)
+        freqs = apply_llama3_scaling(freqs_unscaled, scale_factor, orig_context_len)
     rot_matrix = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of rot_matrix
     sin_freqs, cos_freqs = torch.sin(freqs).to(rot_matrix.dtype), torch.cos(freqs).to(rot_matrix.dtype)
@@ -339,7 +319,7 @@ def get_single_rot_mat(
     # Support for start_pos different than 0
     freqs = start_pos * freqs_unscaled
     if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_llama3_scaling(freqs, scale_factor, orig_context_len)
     current_rot_mat = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of current_rot_mat
     sin_freqs, cos_freqs = torch.sin(freqs).to(current_rot_mat.dtype), torch.cos(freqs).to(current_rot_mat.dtype)

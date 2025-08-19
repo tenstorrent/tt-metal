@@ -1,7 +1,7 @@
 """Gemma-3-4b-it test for Vision Transformer submodule"""
 
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -11,6 +11,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
@@ -31,6 +32,7 @@ from models.experimental.gemma3_4b.tt.gemma_image_transformer import TtGemmaImag
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_image_transformer_inference(batch, num_chunks, mesh_device):
     pcc_required = 0.99
 
@@ -58,8 +60,10 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
 
     all_tests_pass = True
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtGemmaImageTransformer(
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),

@@ -1,7 +1,7 @@
 """Gemma-3-4b-it Test for Vision Layernorm"""
 
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 

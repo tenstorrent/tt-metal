@@ -1,6 +1,6 @@
 """Gemma-3-4b-it Test for Text MLP"""
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -21,10 +21,10 @@ from models.tt_transformers.tt.ccl import TT_CCL
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
-    "device",
+    "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("device"), len(ttnn.get_device_ids())
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
     indirect=True,
@@ -37,16 +37,13 @@ from models.tt_transformers.tt.ccl import TT_CCL
     "batch_size",
     (1,),
 )
-def test_mlp_inference(seq_len, batch_size, reset_seeds, device):
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+def test_mlp_inference(seq_len, batch_size, reset_seeds, mesh_device):
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
-    # tt_model_args = ModelArgs(
-    #     device,
-    #     max_batch_size=batch_size,
-    #     max_seq_len=128,
-    # )
-    tt_model_args = ModelArgs(device, max_batch_size=batch_size, max_seq_len=128)
+    tt_ccl = TT_CCL(mesh_device)
+    tt_model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
 
     tt_model_args.n_layers = 1
     state_dict = tt_model_args.load_state_dict()
@@ -62,10 +59,8 @@ def test_mlp_inference(seq_len, batch_size, reset_seeds, device):
     reference_model = tt_model_args.reference_mlp()  # Gemma3 MLP
     reference_model.load_state_dict(partial_state_dict)
 
-    tt_ccl = TT_CCL(device)
-
     tt_model = MLP(
-        mesh_device=device,
+        mesh_device=mesh_device,
         tt_ccl=tt_ccl,
         args=tt_model_args,
         state_dict=state_dict,
@@ -80,9 +75,11 @@ def test_mlp_inference(seq_len, batch_size, reset_seeds, device):
 
     tt_input = ttnn.from_torch(
         torch_input,
-        device=device,
+        device=mesh_device,
         mesh_mapper=ttnn.ShardTensor2dMesh(
-            device, dims=(None, 3) if tt_model_args.is_galaxy else (None, None), mesh_shape=tt_model_args.cluster_shape
+            mesh_device,
+            dims=(None, 3) if tt_model_args.is_galaxy else (None, None),
+            mesh_shape=tt_model_args.cluster_shape,
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -94,7 +91,7 @@ def test_mlp_inference(seq_len, batch_size, reset_seeds, device):
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(device, dims=(1, 3), mesh_shape=tt_model_args.cluster_shape),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=tt_model_args.cluster_shape),
     )
 
     # tt_output_torch = tt_output_torch[:, :1, :, :]

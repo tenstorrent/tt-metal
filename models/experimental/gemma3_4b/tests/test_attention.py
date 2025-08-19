@@ -1,7 +1,7 @@
 """Gemma-3-4b-it Test for Text Attention"""
 
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 import os
@@ -12,8 +12,8 @@ from loguru import logger
 
 import ttnn
 from models.experimental.gemma3_4b.tt.attention import Attention
-from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
-from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.common import PagedAttentionConfig
+from models.tt_transformers.tt.rope import RotarySetup, compute_freqs_cis
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
@@ -54,6 +54,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
     "max_seq_len",
     (1,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_attention_inference(
     max_seq_len,
     batch_size,
@@ -138,14 +139,12 @@ def test_attention_inference(
         paged_attention_config=paged_attention_config,
     )
 
-    cos, sin = precompute_freqs(
-        model_args.head_dim,
-        model_args.max_seq_len * 2,
-        model_args.rope_theta,
-        model_args.rope_scaling.factor if model_args.rope_scaling else None,
-        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
+    freqs_cis = compute_freqs_cis(
+        dhead=model_args.head_dim,
+        end=model_args.max_seq_len * 2,
+        theta=model_args.rope_theta,
+        rope_scaling=model_args.rope_scaling,
     )
-    freqs_cis = torch.complex(cos, sin)
 
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])

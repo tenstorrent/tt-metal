@@ -8,7 +8,7 @@ In Gemma-3-4b-it, The decoder Block has Additional pre_feedforward_layernorm and
 And the logic of implementation is different from the existing implementation in TT-Transformers.
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 

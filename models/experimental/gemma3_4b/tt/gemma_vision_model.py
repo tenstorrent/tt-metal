@@ -2,7 +2,7 @@
 This is the Vision Tower Model for Gemma-3-4b-it.
 """
 
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -18,6 +18,7 @@ class TtSiglipGemmaVisionModel(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         dtype,
@@ -28,6 +29,7 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         super().__init__()
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
 
         self.image_size = configuration.vision_chunk_size
         self.patch_size = configuration.vision_patch_size
@@ -56,6 +58,7 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         # transformer
         self.encoder = TtGemmaImageTransformer(
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             state_dict=state_dict,
             state_dict_prefix=f"{state_dict_prefix}encoder.",
             weight_cache_path=configuration.weight_cache_path(dtype),
