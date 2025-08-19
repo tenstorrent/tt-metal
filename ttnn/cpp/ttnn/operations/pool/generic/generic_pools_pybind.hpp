@@ -6,12 +6,13 @@
 
 #include "ttnn-pybind/pybind_fwd.hpp"
 
-namespace py = pybind11;
-
 namespace ttnn::operations::pool {
+namespace py = pybind11;
 
 void bind_max_pool2d_operation(py::module& module);
 void bind_avg_pool2d_operation(py::module& module);
+void bind_max_pool3d_operation(py::module& module);
+void bind_avg_pool3d_operation(py::module& module);
 void py_module(py::module& module);
 
 }  // namespace ttnn::operations::pool

@@ -225,6 +225,56 @@ static Tensor pool2d_invoke(
     return output_tensor;
 }
 
+// Adaptive 2D pool implementation
+static Tensor adaptive_pool2d_invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    Pool2DType pool_type,
+    uint32_t batch_size,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 2> output_size,
+    const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+    bool in_place_halo = false) {
+    uint32_t output_h = output_size[0];
+    uint32_t output_w = output_size[1];
+
+    // Calculate adaptive kernel and stride sizes
+    // Following PyTorch's adaptive pooling logic:
+    // kernel_size = ceil(input_size / output_size)
+    // stride = floor(input_size / output_size)
+    uint32_t kernel_h = (input_h + output_h - 1) / output_h;  // ceil division
+    uint32_t kernel_w = (input_w + output_w - 1) / output_w;  // ceil division
+    uint32_t stride_h = input_h / output_h;                   // floor division
+    uint32_t stride_w = input_w / output_w;                   // floor division
+
+    std::array<uint32_t, 2> kernel_size = {kernel_h, kernel_w};
+    std::array<uint32_t, 2> stride = {stride_h, stride_w};
+    std::array<uint32_t, 4> padding = {0, 0, 0, 0};  // No padding for adaptive pooling
+
+    // Use existing pool2d_invoke with calculated parameters
+    return pool2d_invoke(
+        queue_id,
+        input_tensor,
+        pool_type,
+        batch_size,
+        input_h,
+        input_w,
+        channels,
+        kernel_size,
+        stride,
+        padding,
+        std::nullopt,  // dilation
+        false,         // ceil_mode
+        true,          // count_include_pad
+        std::nullopt,  // divisor_override
+        memory_config,
+        applied_shard_scheme,
+        in_place_halo);
+}
+
 Tensor MaxPool2DOp::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
@@ -281,6 +331,170 @@ Tensor AvgPool2DOp::invoke(
         input_tensor,
         Pool2DType::AVG_POOL2D,
         batch_size,
+        input_h,
+        input_w,
+        channels,
+        kernel_size,
+        stride,
+        padding,
+        std::nullopt,  // dilation
+        ceil_mode,
+        count_include_pad,
+        divisor_override,
+        memory_config,
+        applied_shard_scheme,
+        in_place_halo);
+}
+
+// Pool3D implementation - strategy: apply 2D pooling iteratively across depth dimension
+// This maximizes code reuse while providing 3D functionality
+static Tensor pool3d_invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    Pool2DType pool_type,
+    uint32_t batch_size,
+    uint32_t input_d,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 3> kernel_size,
+    std::array<uint32_t, 3> stride,
+    std::variant<std::array<uint32_t, 3>, std::array<uint32_t, 6>> padding,
+    std::optional<std::array<uint32_t, 3>> dilation = std::nullopt,
+    bool ceil_mode = false,
+    bool count_include_pad = true,
+    std::optional<int32_t> divisor_override = std::nullopt,
+    const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
+    bool in_place_halo = false) {
+    // Extract 3D parameters
+    uint32_t kernel_d = kernel_size[0], kernel_h = kernel_size[1], kernel_w = kernel_size[2];
+    uint32_t stride_d = stride[0], stride_h = stride[1], stride_w = stride[2];
+    uint32_t dilation_d = dilation.has_value() ? dilation.value()[0] : 1;
+    uint32_t dilation_h = dilation.has_value() ? dilation.value()[1] : 1;
+    uint32_t dilation_w = dilation.has_value() ? dilation.value()[2] : 1;
+
+    // Extract padding (support both 3D and 6D padding like PyTorch)
+    std::array<uint32_t, 6> padding_6d;
+    if (std::holds_alternative<std::array<uint32_t, 3>>(padding)) {
+        auto pad_3d = std::get<std::array<uint32_t, 3>>(padding);
+        padding_6d = {pad_3d[0], pad_3d[0], pad_3d[1], pad_3d[1], pad_3d[2], pad_3d[2]};
+    } else {
+        padding_6d = std::get<std::array<uint32_t, 6>>(padding);
+    }
+    uint32_t pad_d_front = padding_6d[0], pad_d_back = padding_6d[1];
+    uint32_t pad_h_top = padding_6d[2], pad_h_bottom = padding_6d[3];
+    uint32_t pad_w_left = padding_6d[4], pad_w_right = padding_6d[5];
+
+    // Calculate output dimensions
+    uint32_t output_d = (input_d + pad_d_front + pad_d_back - dilation_d * (kernel_d - 1) - 1) / stride_d + 1;
+    uint32_t output_h = (input_h + pad_h_top + pad_h_bottom - dilation_h * (kernel_h - 1) - 1) / stride_h + 1;
+    uint32_t output_w = (input_w + pad_w_left + pad_w_right - dilation_w * (kernel_w - 1) - 1) / stride_w + 1;
+
+    if (ceil_mode) {
+        output_d = (input_d + pad_d_front + pad_d_back - dilation_d * (kernel_d - 1) - 1 + stride_d - 1) / stride_d + 1;
+        output_h = (input_h + pad_h_top + pad_h_bottom - dilation_h * (kernel_h - 1) - 1 + stride_h - 1) / stride_h + 1;
+        output_w = (input_w + pad_w_left + pad_w_right - dilation_w * (kernel_w - 1) - 1 + stride_w - 1) / stride_w + 1;
+    }
+
+    // For now, implement 3D pooling by processing depth slices with 2D pooling
+    // This is a simplified implementation that maximizes code reuse
+    // TODO: In the future, this could be optimized with native 3D kernels
+
+    TT_FATAL(
+        kernel_d == 1 && stride_d == 1 && dilation_d == 1 && pad_d_front == 0 && pad_d_back == 0,
+        "Currently only identity depth pooling is supported (kernel_d=1, stride_d=1, pad_d=0). "
+        "Full 3D pooling will be implemented in future iterations.");
+
+    // For identity depth pooling, we can directly apply 2D pooling
+    std::array<uint32_t, 2> kernel_2d = {kernel_h, kernel_w};
+    std::array<uint32_t, 2> stride_2d = {stride_h, stride_w};
+    std::array<uint32_t, 4> padding_2d = {pad_h_top, pad_h_bottom, pad_w_left, pad_w_right};
+    std::array<uint32_t, 2> dilation_2d = {dilation_h, dilation_w};
+
+    // Call the existing 2D pool implementation with depth treated as part of batch dimension
+    uint32_t effective_batch = batch_size * input_d;
+
+    return pool2d_invoke(
+        queue_id,
+        input_tensor,
+        pool_type,
+        effective_batch,  // batch * depth
+        input_h,
+        input_w,
+        channels,
+        kernel_2d,
+        stride_2d,
+        padding_2d,
+        dilation_2d,
+        ceil_mode,
+        count_include_pad,
+        divisor_override,
+        memory_config,
+        applied_shard_scheme,
+        in_place_halo);
+}
+
+Tensor MaxPool3DOp::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    uint32_t batch_size,
+    uint32_t input_d,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 3> kernel_size,
+    std::array<uint32_t, 3> stride,
+    std::variant<std::array<uint32_t, 3>, std::array<uint32_t, 6>> padding,
+    std::array<uint32_t, 3> dilation,
+    bool ceil_mode,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme,
+    bool in_place_halo) {
+    return pool3d_invoke(
+        queue_id,
+        input_tensor,
+        Pool2DType::MAX_POOL2D,
+        batch_size,
+        input_d,
+        input_h,
+        input_w,
+        channels,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        ceil_mode,
+        true,          // count_include_pad
+        std::nullopt,  // divisor_override
+        memory_config,
+        applied_shard_scheme,
+        in_place_halo);
+}
+
+Tensor AvgPool3DOp::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    uint32_t batch_size,
+    uint32_t input_d,
+    uint32_t input_h,
+    uint32_t input_w,
+    uint32_t channels,
+    std::array<uint32_t, 3> kernel_size,
+    std::array<uint32_t, 3> stride,
+    std::variant<std::array<uint32_t, 3>, std::array<uint32_t, 6>> padding,
+    bool ceil_mode,
+    bool count_include_pad,
+    std::optional<int32_t> divisor_override,
+    const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme,
+    bool in_place_halo) {
+    return pool3d_invoke(
+        queue_id,
+        input_tensor,
+        Pool2DType::AVG_POOL2D,
+        batch_size,
+        input_d,
         input_h,
         input_w,
         channels,

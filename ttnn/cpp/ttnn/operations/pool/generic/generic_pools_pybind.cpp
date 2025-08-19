@@ -244,9 +244,181 @@ void bind_avg_pool2d_operation(py::module& module) {
             py::arg("queue_id") = 0});
 }
 
+void bind_max_pool3d_operation(py::module& module) {
+    bind_registered_operation(
+        module,
+        ttnn::max_pool3d,
+        R"doc(
+        Applies a 3D max pool convolution to the input tensor. The resulting output Tensor will contain the maximum
+        value for each channel within a 3D kernel window. The input tensor is expected to be in [NDHW, C] format and
+        should be on the device. Currently only identity depth pooling is supported (kernel_d=1, stride_d=1).
+
+        Args:
+            input_tensor_a (ttnn.Tensor): the tensor to be convolved.
+            batch_size (int): the number of batches (N in a [N, C, D, H, W] shaped tensor).
+            input_d (int): the depth of the input tensor (D in a [N, C, D, H, W] shaped tensor).
+            input_h (int): the height of the input tensor (H in a [N, C, D, H, W] shaped tensor).
+            input_w (int): the width of the input tensor (W in a [N, C, D, H, W] shaped tensor).
+            channels (int): the number of channels (C in a [N, C, D, H, W] shaped tensor).
+            kernel_size (List of [int]): the (d, h, w) size of the 3D kernel window.
+            stride (List of [int]): the (d, h, w) stride of the 3D kernel window.
+            padding (List of [int]): the (d, h, w) padding of the input tensor.
+            dilation (List of [int]): the (d, h, w) dilation of the 3D kernel window.
+            ceil_mode (bool): whether to use ceil mode for the output shape. Defaults to `False`.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
+            applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`, which should be used with pre-sharded input tensors.
+            in_place (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
+            queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the max pool convolved output tensor.
+        )doc",
+        ttnn::pybind_overload_t{
+            [](const decltype(ttnn::max_pool3d)& self,
+               const ttnn::Tensor& input_tensor,
+               uint32_t batch_size,
+               uint32_t input_d,
+               uint32_t input_h,
+               uint32_t input_w,
+               uint32_t channels,
+               std::array<uint32_t, 3> kernel_size,
+               std::array<uint32_t, 3> stride,
+               std::variant<std::array<uint32_t, 3>, std::array<uint32_t, 6>> padding,
+               std::array<uint32_t, 3> dilation,
+               bool ceil_mode,
+               const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
+               bool in_place_halo,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input_tensor,
+                    batch_size,
+                    input_d,
+                    input_h,
+                    input_w,
+                    channels,
+                    kernel_size,
+                    stride,
+                    padding,
+                    dilation,
+                    ceil_mode,
+                    memory_config,
+                    applied_shard_scheme,
+                    in_place_halo);
+            },
+            py::arg("input_tensor"),
+            py::arg("batch_size"),
+            py::arg("input_d"),
+            py::arg("input_h"),
+            py::arg("input_w"),
+            py::arg("channels"),
+            py::arg("kernel_size"),
+            py::arg("stride"),
+            py::arg("padding"),
+            py::arg("dilation"),
+            py::arg("ceil_mode") = false,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("applied_shard_scheme") = std::nullopt,
+            py::arg("in_place_halo") = false,
+            py::arg("queue_id") = DefaultQueueId});
+}
+
+void bind_avg_pool3d_operation(py::module& module) {
+    bind_registered_operation(
+        module,
+        ttnn::avg_pool3d,
+        R"doc(
+        Applies a 3D average pool convolution to the input tensor. The resulting output Tensor will contain the average
+        value for each channel within a 3D kernel window. The input tensor is expected to be in [NDHW, C] format and
+        should be on the device. Currently only identity depth pooling is supported (kernel_d=1, stride_d=1).
+
+        Args:
+            input_tensor_a (ttnn.Tensor): the tensor to be convolved.
+            batch_size (int): the number of batches (N in a [N, C, D, H, W] shaped tensor).
+            input_d (int): the depth of the input tensor (D in a [N, C, D, H, W] shaped tensor).
+            input_h (int): the height of the input tensor (H in a [N, C, D, H, W] shaped tensor).
+            input_w (int): the width of the input tensor (W in a [N, C, D, H, W] shaped tensor).
+            channels (int): the number of channels (C in a [N, C, D, H, W] shaped tensor).
+            kernel_size (List of [int]): the (d, h, w) size of the 3D kernel window.
+            stride (List of [int]): the (d, h, w) stride of the 3D kernel window.
+            padding (List of [int]): the (d, h, w) padding of the input tensor.
+            ceil_mode (bool): When True, uses 'ceiling' function instead of 'floor' function in the formula to compute output shape. Default: False.
+            count_include_pad (bool): When True, includes zero-padding in the avg calculation. Default: True.
+            divisor_override (int, optional): If specified, it will be used as a divisor, otherwise size of the pooling region will be used. Default: None.
+
+        Keyword Args:
+            memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
+            applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`, which should be used with pre-sharded input tensors.
+            in_place (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
+            queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
+
+        Returns:
+            ttnn.Tensor: the average pool convolved output tensor.
+        )doc",
+        ttnn::pybind_overload_t{
+            [](const decltype(ttnn::avg_pool3d)& self,
+               const ttnn::Tensor& input_tensor,
+               uint32_t batch_size,
+               uint32_t input_d,
+               uint32_t input_h,
+               uint32_t input_w,
+               uint32_t channels,
+               std::array<uint32_t, 3> kernel_size,
+               std::array<uint32_t, 3> stride,
+               std::variant<std::array<uint32_t, 3>, std::array<uint32_t, 6>> padding,
+               bool ceil_mode,
+               bool count_include_pad,
+               std::optional<int32_t> divisor_override,
+               const std::optional<const MemoryConfig>& memory_config,
+               const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
+               bool in_place_halo,
+               QueueId queue_id) -> ttnn::Tensor {
+                return self(
+                    queue_id,
+                    input_tensor,
+                    batch_size,
+                    input_d,
+                    input_h,
+                    input_w,
+                    channels,
+                    kernel_size,
+                    stride,
+                    padding,
+                    ceil_mode,
+                    count_include_pad,
+                    divisor_override,
+                    memory_config,
+                    applied_shard_scheme,
+                    in_place_halo);
+            },
+            py::arg("input_tensor"),
+            py::arg("batch_size"),
+            py::arg("input_d"),
+            py::arg("input_h"),
+            py::arg("input_w"),
+            py::arg("channels"),
+            py::arg("kernel_size"),
+            py::arg("stride"),
+            py::arg("padding"),
+            py::arg("ceil_mode") = false,
+            py::arg("count_include_pad") = true,
+            py::arg("divisor_override") = std::nullopt,
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("applied_shard_scheme") = std::nullopt,
+            py::arg("in_place_halo") = false,
+            py::arg("queue_id") = 0});
+}
+
 void py_module(py::module& module) {
     bind_max_pool2d_operation(module);
     bind_avg_pool2d_operation(module);
+    bind_max_pool3d_operation(module);
+    bind_avg_pool3d_operation(module);
 }
 
 }  // namespace ttnn::operations::pool
