@@ -675,7 +675,7 @@ def as_tensor(
             else:
                 ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor)
             if device is not None:
-                tensor = tensor.to_device(device, memory_config)
+                tensor = tensor.to(device, memory_config)
             return tensor
 
         if enable_multihost_format:
