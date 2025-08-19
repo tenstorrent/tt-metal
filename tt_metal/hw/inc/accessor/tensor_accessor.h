@@ -49,6 +49,7 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
 template <typename _DSpec>
 struct TensorAccessor {
     using DSpec = _DSpec;
+    static constexpr bool is_dram = DSpec::is_dram;
 
 private:
     // DSpec can be static or dynamic, so we use a conditional instance
