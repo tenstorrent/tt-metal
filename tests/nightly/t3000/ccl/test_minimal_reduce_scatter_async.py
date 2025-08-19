@@ -117,7 +117,7 @@ def run_reduce_scatter_impl(
 
     for i in range(num_iters):
         rs_global_input_shape = rs_input_shape[:]
-        rs_global_input_shape[3] *= num_devices
+        rs_global_input_shape[dim] *= num_devices
         if ones_tensor:
             rs_input_tensor = torch.ones(rs_global_input_shape).bfloat16()
         else:
@@ -244,7 +244,7 @@ def run_reduce_scatter_impl(
         (8, [1, 1, 352, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
         (8, [2, 1, 2048, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
         (8, [1, 1, 4096, 2560], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),  # use batching when fused
-        # Tests for training shapes
+        # Composite-RS tests
         (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
         (8, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
         (8, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
@@ -258,9 +258,9 @@ def run_reduce_scatter_impl(
         "batch_1_sd35_prompt",
         "batch_2",
         "batch_1",
-        "tt_training_test_one",
-        "tt_training_test_two",
-        "tt_training_test_three",
+        "composite_rs_test_one",
+        "composite_rs_test_two",
+        "composite_rs_test_three",
     ],
 )
 @pytest.mark.parametrize(
@@ -343,6 +343,104 @@ def test_reduce_scatter_async(
         ones_tensor=ones_tensor,
         use_barrier=use_barrier,
         use_persistent_buffers=use_persistent_buffers,
+    )
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "num_devices, rs_input_shape, dim, layout, rs_input_dtype",
+    [
+        # Scatter on dim 0
+        (8, [16, 1, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 16, 128, 128], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [8, 16, 8, 8], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # Scatter on dim 1
+        (8, [1, 16, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 16, 128, 128], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 8, 8, 8], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # Scatter on dim 2
+        (8, [1, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 1, 512, 128], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 16, 512, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        # # Scatter on dim 3
+        (8, [1, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 1, 128, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [16, 16, 8, 512], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "tt_training_test_one",
+        "tt_training_test_two",
+        "tt_training_test_three",
+        "tt_training_test_four",
+        "tt_training_test_five",
+        "tt_training_test_six",
+        "tt_training_test_seven",
+        "tt_training_test_eight",
+        "tt_training_test_nine",
+        "tt_training_test_ten",
+        "tt_training_test_eleven",
+        "tt_training_test_twelve",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace,num_iters",
+    [
+        (True, 10),
+        (False, 1),
+    ],
+    ids=["perf", "check"],
+)
+@pytest.mark.parametrize(
+    "device_params, rs_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring", "fabric_linear"],
+)
+def test_reduce_scatter_async_training_shapes(
+    t3k_mesh_device,
+    num_devices,
+    rs_input_shape,
+    dim,
+    num_links,
+    rs_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    rs_topology,
+    num_iters,
+):
+    if enable_trace:
+        pytest.skip("We've seen ND PCC when running the composite-RS with trace")
+
+    run_reduce_scatter_impl(
+        t3k_mesh_device,
+        num_devices,
+        rs_input_shape,
+        dim,
+        num_links,
+        rs_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        rs_topology=rs_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        use_barrier=True,
+        use_persistent_buffers=False,
     )
 
 
