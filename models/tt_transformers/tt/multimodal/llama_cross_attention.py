@@ -26,7 +26,6 @@ class TtLlamaCrossAttention(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
@@ -67,7 +66,7 @@ class TtLlamaCrossAttention(LightweightModule):
 
         # TODO DRAM Shard the weights (see llama3 text)
         self.wq = ttnn.as_tensor(
-            self.state_dict[wq_str].transpose(-2, -1),
+            state_dict[wq_str].transpose(-2, -1),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
             dtype=self.dtype,
@@ -77,7 +76,7 @@ class TtLlamaCrossAttention(LightweightModule):
         )
 
         self.wk = ttnn.as_tensor(
-            self.state_dict[wk_str].transpose(-2, -1),
+            state_dict[wk_str].transpose(-2, -1),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
             dtype=self.dtype,
@@ -87,7 +86,7 @@ class TtLlamaCrossAttention(LightweightModule):
         )
 
         self.wv = ttnn.as_tensor(
-            self.state_dict[wv_str].transpose(-2, -1),
+            state_dict[wv_str].transpose(-2, -1),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
             dtype=self.dtype,
@@ -97,7 +96,7 @@ class TtLlamaCrossAttention(LightweightModule):
         )
 
         self.wo = ttnn.as_tensor(
-            self.state_dict[wo_str].transpose(-2, -1),
+            state_dict[wo_str].transpose(-2, -1),
             device=self.mesh_device,
             mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-2),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
