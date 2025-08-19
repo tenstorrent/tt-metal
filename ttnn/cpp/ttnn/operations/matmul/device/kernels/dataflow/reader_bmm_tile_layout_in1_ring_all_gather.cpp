@@ -12,9 +12,10 @@
 
 enum class CORE_TYPE : uint8_t { IDLE_CORE = 0, WORKER_CORE = 1, HOP_CORE = 2 };
 
+template <typename TensorAccessorType>
 void read_block_from_dram(
     uint32_t cb_id,
-    const TensorAccessor& s1,
+    const TensorAccessorType& s1,
     uint32_t tensor_width_in_tiles,
     uint32_t block_w_idx,
     uint32_t block_h_idx,
