@@ -86,6 +86,39 @@ static tt::stl::hash::hash_t compute_mesh_workload_hash(
 }
 ```
 
+### How OP execution uses the program cache
+
+1) Program definition and kernels
+- Each OP defines a program that launches kernels on device. Compile-time parameters are set during `create(...)` and determine kernel selection, CB sizes, grids, and codegen. Values that vary per invocation should be passed as runtime arguments and updated via `override_runtime_arguments(...)`.
+
+2) Program hash selection
+- Each OP has an associated program hash. If the OP implements a custom `compute_program_hash(...)`, that result is used (often to intentionally reuse the same compiled program across shapes/layouts when legal). If not, the default hash is computed from the OP type, `operation_attributes`, and `tensor_args` (tensor shape, dtype, layout, etc.). See the “How the default program hash is computed” section above.
+
+3) Launch flow and cache behavior
+- On the first Python invocation, the infra computes the hash and queries the device `ProgramCache`.
+  - Miss: Build the full program via the selected program factory’s `create(...)`, insert into the cache.
+  - Hit: Fetch the cached program and call `override_runtime_arguments(...)` to update all per-invocation values that may differ from the original creation (e.g., buffer addresses/offsets, sizes, scalar params, seed/step counters). No recompilation occurs.
+
+Why step 3 matters
+- Correctness depends on OPs accurately updating runtime arguments on cache hits. Under-keyed hashes without proper overrides can cause stale arguments to be reused. Over-keyed hashes negate caching benefits. The review checklist in this document is intended to detect these issues.
+
+Operational note
+- Program cache enables efficient back-to-back model execution. A typical workflow runs the model once to populate the cache and kernel binaries; subsequent runs are fast because each OP skips compilation and only performs the short `override_runtime_arguments(...)` path.
+
+### Two OP infrastructures (syntax differences)
+
+There are two OP infrastructures in this repo, with slightly different APIs for creating programs and overriding runtime arguments:
+
+- Type-erased (old) infra: `ttnn/api/ttnn/operation.hpp`
+  - Program creation typically returns a `ProgramWithCallbacks` and stores an `override_runtime_arguments` callback.
+  - Overrides are applied via the stored callback during the cache-hit path. See adapter usage in `ttnn/core/old_infra_device_operation.cpp`.
+
+- Fully templated (new) infra: `ttnn/api/ttnn/device_operation.hpp`
+  - Defines a typed `ProgramFactory` with `create(...)` and `override_runtime_arguments(...)`, plus optional `compute_program_hash(...)`.
+  - Mesh variants use `ttnn/api/ttnn/mesh_device_operation_adapter.hpp` to build per-range workloads and apply per-range overrides.
+
+Reviewer note: When checking caching correctness, account for both styles. In the old infra, ensure the callback-based override is wired and invoked on cache hits; in the new infra, verify the factory’s `override_runtime_arguments(...)` and `shared_variables_t` semantics are correct and that hashing matches factory selection.
+
 ### Your task
 
 Review code (or a diff) for potential program cache issues.
