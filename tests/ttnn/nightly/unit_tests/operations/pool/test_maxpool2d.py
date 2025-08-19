@@ -577,3 +577,127 @@ def test_run_max_pool_squeeze_net_model(
         dtype,
         ceil_mode=ceil_mode,
     )
+
+
+def run_adaptive_max_pool(
+    input_shape,
+    output_size,
+    device,
+    tensor_map,
+    dtype,
+    memory_config=None,
+    shard_scheme=None,
+):
+    in_n, in_c, in_h, in_w = input_shape
+    out_h, out_w = output_size
+
+    torch.manual_seed(0)
+    torch_input = randomize_torch_tensor(tensor_map, input_shape)
+
+    ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
+    torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
+    torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
+
+    if dtype == ttnn.bfloat8_b:
+        ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    else:
+        ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    pre_shard = shard_scheme == None
+    if pre_shard:
+        parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
+            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            batch_size=in_n,
+            input_channels=in_c,
+            output_height=out_h,
+            output_width=out_w,
+            output_channels=in_c,
+            input_channels_alignment=32,
+            compute_grid_size=device.compute_with_storage_grid_size(),
+            block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            enable_channels_padding=False,
+            is_shard_height_tile_multiple=dtype == ttnn.bfloat8_b,
+            is_shard_width_tile_multiple=dtype == ttnn.bfloat8_b,
+        )
+        sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
+            tensor_shape=ttnn_input.shape,
+            parallel_config=parallel_config,
+            tile_size=32 if dtype == ttnn.bfloat8_b else 1,
+        )
+        ttnn_input = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
+
+    # run ttnn adaptive_max_pool2d
+    ttnn_output = ttnn.adaptive_max_pool2d(
+        input_tensor=ttnn_input,
+        batch_size=in_n,
+        input_h=in_h,
+        input_w=in_w,
+        channels=in_c,
+        output_size=output_size,
+        memory_config=memory_config,
+        applied_shard_scheme=shard_scheme,
+    )
+
+    # run torch adaptive max pool2d
+    torch_output = torch.nn.AdaptiveMaxPool2d(output_size=output_size)(torch_input)
+
+    # adjust the TTNN output to match the expected shape
+    ttnn_output = ttnn.to_torch(ttnn_output)
+    ttnn_output = ttnn_output.reshape(in_n, out_h, out_w, in_c)  # N, H, W, C
+    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
+
+    # test for equivalance
+    pcc_thresh = 1.0
+    atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+    if dtype == ttnn.bfloat8_b:
+        pcc_thresh = 0.997
+        atol = 0.35
+    assert_with_pcc(ttnn_output, torch_output, pcc_thresh)
+    allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
+    assert allclose
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",  ## NCHW
+    (
+        [1, 64, 112, 112],
+        [1, 128, 56, 56],
+        [1, 256, 28, 28],
+        [1, 512, 14, 14],
+        [2, 64, 32, 32],
+        [4, 32, 16, 16],
+    ),
+)
+@pytest.mark.parametrize(
+    "output_size",
+    (
+        (1, 1),
+        (2, 2),
+        (4, 4),
+        (7, 7),
+        (14, 14),
+    ),
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+def test_run_adaptive_max_pool_height_shard(input_shape, output_size, device, tensor_map, dtype):
+    # Skip if output size is larger than input
+    in_n, in_c, in_h, in_w = input_shape
+    out_h, out_w = output_size
+    if out_h > in_h or out_w > in_w:
+        pytest.skip("Output size cannot be larger than input size for adaptive pooling")
+
+    run_adaptive_max_pool(
+        input_shape,
+        output_size,
+        device,
+        tensor_map,
+        dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    )
