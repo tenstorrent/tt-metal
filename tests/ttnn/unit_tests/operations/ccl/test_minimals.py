@@ -447,6 +447,10 @@ def test_bh_trace_ag(
     output_shard_grid,
     tensor_mem_layout,
 ):
+    if (p150_mesh_device.shape[0] != num_devices) and (all_gather_topology == ttnn.Topology.Ring):
+        pytest.skip("Ring configuration requires the entire row or column so it loops around")
+    if p150_mesh_device.shape[0] < num_devices:
+        pytest.skip("Test requires more devices than are available on this platform")
     profiler = BenchmarkProfiler()
     run_all_gather_impl(
         p150_mesh_device,
