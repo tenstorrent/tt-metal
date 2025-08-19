@@ -301,6 +301,8 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
         this->chunks_per_sync,
         this->num_workers_per_link,
         this->num_buffers_per_channel,
+        this->use_all_gather_async_llama_sharded,
+        this->use_optimal_ccl_for_llama,
         input_shape,
         input_memory_layout,
         input_dtype,
