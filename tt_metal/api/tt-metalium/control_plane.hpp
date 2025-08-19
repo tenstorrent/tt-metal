@@ -21,6 +21,12 @@
 #include <vector>
 
 namespace tt::tt_fabric {
+struct UbbId {
+    std::uint32_t tray_id;
+    std::uint32_t asic_id;
+};
+
+UbbId get_ubb_id(chip_id_t chip_id);
 
 class FabricContext;
 

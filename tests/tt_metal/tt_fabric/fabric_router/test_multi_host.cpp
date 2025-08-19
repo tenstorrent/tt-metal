@@ -85,5 +85,59 @@ TEST(MultiHost, TestDualGalaxyControlPlaneAPIs) {
     }
 }
 
+TEST(MultiHost, TestExaboxControlPlaneInit) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path exabox_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_exabox_8x4_mesh_graph_descriptor.yaml";
+    auto control_plane = std::make_unique<ControlPlane>(exabox_mesh_graph_desc_path.string());
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+}
+
+TEST(MultiHost, TestExaboxFabricSanity) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+}
+TEST(MultiHost, TestExaboxControlPlaneAPIs) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    tt::tt_metal::MetalContext::instance().initialize_fabric_config();
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    FabricNodeId src_node_id(MeshId{0}, 3);  // On host rank 0
+    MeshCoordinate src_mesh_coord(0, 3);
+    FabricNodeId dst_node_id(MeshId{1}, 17);  // On host rank 1
+    MeshCoordinate dst_mesh_coord(0, 4);
+
+    auto distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
+
+    if (*(distributed_context->rank()) == 0) {
+        const auto& direction = control_plane.get_forwarding_direction(src_node_id, dst_node_id);
+        EXPECT_TRUE(direction.has_value());
+
+        const auto& eth_chans_by_direction =
+            control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id, direction.value());
+        EXPECT_TRUE(!eth_chans_by_direction.empty());
+        const auto& eth_chans = control_plane.get_forwarding_eth_chans_to_chip(src_node_id, dst_node_id);
+        EXPECT_TRUE(!eth_chans.empty());
+    }
+}
 }  // namespace multi_host_tests
 }  // namespace tt::tt_fabric
