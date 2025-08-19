@@ -58,7 +58,7 @@ struct boot_results_t {
 #include "ethernet/erisc.h"
 
 FORCE_INLINE bool is_link_up() {
-    // Collected when FW/Fabric is idle and context switches to base FW
+    internal_::risc_context_switch_without_noc_sync();
     volatile boot_results_t* link_stats = (volatile boot_results_t*)(MEM_SYSENG_BOOT_RESULTS_BASE);
     return link_stats->link_status == 0x6;
 }
