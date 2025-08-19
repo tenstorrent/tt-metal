@@ -34,7 +34,7 @@ class TtLinearParameters:
         else:
             bias = None
         weight = state["weight"]
-        if os.environ["MESH_DEVICE"] == "T3K":
+        if os.environ.get("MESH_DEVICE", "") == "T3K":
             hidden_dim = 2432
             hidden_dim_pad = 128
             hidden_dim_new = 2560
@@ -123,7 +123,7 @@ class TtLinearParameters:
         weight = state["weight"]
         torch_weight = weight.transpose(0, 1)
 
-        if os.environ["MESH_DEVICE"] == "T3K":
+        if os.environ.get("MESH_DEVICE", "") == "T3K":
             head_size = torch_weight.shape[1] // 3 // unpadded_num_heads
             head_padding = device.get_num_devices() - (unpadded_num_heads % device.get_num_devices())
             weight_h, weight_w = torch_weight.shape
@@ -185,7 +185,7 @@ class TtLinearParameters:
         weight = state["weight"]
         torch_weight = weight.transpose(0, 1)
 
-        if os.environ["MESH_DEVICE"] == "T3K":
+        if os.environ.get("MESH_DEVICE", "") == "T3K":
             weight_h, weight_w = torch_weight.shape
             torch_weight = torch_weight.reshape(weight_h, num_chunks, -1)
             torch_weight = torch.nn.functional.pad(
