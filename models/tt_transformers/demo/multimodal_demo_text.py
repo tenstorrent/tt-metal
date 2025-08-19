@@ -51,6 +51,7 @@ def test_multimodal_demo_text(
     mesh_device,
     target,
     warmup_iters,
+    is_ci_env,
     temperature: float = 0.5,
     top_p: float = 0.9,
     max_seq_len: int = 512,
@@ -69,7 +70,7 @@ def test_multimodal_demo_text(
         model_args, model, _ = create_multimodal_model(
             mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len
         )
-        preprocessor = AutoProcessor.from_pretrained(ckpt_dir)
+        preprocessor = AutoProcessor.from_pretrained(ckpt_dir, local_files_only=is_ci_env)
         generator = Generator([model], [model_args], mesh_device, preprocessor=preprocessor)
 
     with open(IMG_PATH / "dog.jpg", "rb") as f:

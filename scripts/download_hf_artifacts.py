@@ -41,7 +41,9 @@ PYTHON_MODELS = [
 ]
 
 SINGLE_CARD_MODELS = [
+    "CompVis/stable-diffusion-v1-4",
     "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
+    "state-spaces/mamba-2.8b",
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.2-1B-Instruct",
     "meta-llama/Llama-3.2-3B-Instruct",
@@ -49,6 +51,7 @@ SINGLE_CARD_MODELS = [
     "mistralai/Mistral-7B-Instruct-v0.3",
     "nvidia/segformer-b0-finetuned-ade-512-512",
     "tiiuae/falcon-7b-instruct",
+    "timm/ese_vovnet19b_dw.ra_in1k",
     "Qwen/Qwen2-7B-Instruct",
 ]
 
@@ -60,6 +63,8 @@ T3K_MODELS = [
     "meta-llama/Llama-3.2-11B-Vision-Instruct",
     "meta-llama/Llama-3.2-90B-Vision-Instruct",
     "mistralai/Mistral-7B-Instruct-v0.3",
+    "tiiuae/falcon-7b-instruct",
+    "tiiuae/falcon-40b-instruct",
     "Qwen/Qwen2.5-7B-Instruct",
     "Qwen/Qwen2.5-72B-Instruct",
     "Qwen/Qwen2.5-Coder-32B",

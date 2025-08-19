@@ -315,9 +315,9 @@ run_t3000_llama3_load_checkpoints_tests() {
   # Llama3.2-90B weights
   llama90b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-90B-Vision-Instruct
 
-  for hf_model in "$llama70b" "$llama90b"; do
-    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_load_checkpoints.py --timeout=1800; fail+=$?
-    echo "LOG_METAL: Llama3 load checkpoints tests for $hf_model completed"
+  for llama_dir in "$llama70b" "$llama90b"; do
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_load_checkpoints.py --timeout=1800; fail+=$?
+    echo "LOG_METAL: Llama3 load checkpoints tests for $llama_dir completed"
   done
 
   # Record the end time

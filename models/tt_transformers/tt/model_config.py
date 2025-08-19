@@ -529,19 +529,8 @@ class ModelArgs:
             self._set_model_params(self.CKPT_DIR)
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
             self.checkpoint_type = CheckpointType.Meta
-            if "3.2-1B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_1B_PARAMS"
-            elif "3.2-3B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_3B_PARAMS"
-            elif "3.1-8B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_8B_PARAMS"
-            elif "3.2-11B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_11B_PARAMS"
-            elif "3.1-70B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_70B_PARAMS"
-            elif "3.2-90B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_90B_PARAMS"
-            else:
+            local_params = self.__get_llama_local_params_name(self.CKPT_DIR)
+            if local_params is None:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
                 )
@@ -1277,6 +1266,24 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+    @staticmethod
+    def __get_llama_local_params_name(model_name):
+        if "3.2-1B" in model_name:
+            local_params = "LLAMA3_2_1B_PARAMS"
+        elif "3.2-3B" in model_name:
+            local_params = "LLAMA3_2_3B_PARAMS"
+        elif "3.1-8B" in model_name:
+            local_params = "LLAMA3_1_8B_PARAMS"
+        elif "3.2-11B" in model_name:
+            local_params = "LLAMA3_2_11B_PARAMS"
+        elif "3.1-70B" in model_name:
+            local_params = "LLAMA3_1_70B_PARAMS"
+        elif "3.2-90B" in model_name:
+            local_params = "LLAMA3_2_90B_PARAMS"
+        else:
+            local_params = None
+        return local_params
+
     def get_xqkv_prefill_mem_cfg(self, seq_len):
         return ttnn.create_sharded_memory_config(
             (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
@@ -1436,6 +1443,16 @@ class ModelArgs:
             self.hidden_dim = text_config["intermediate_size"]
             self.ffn_dim_multiplier = None
             self.multiple_of = None
+
+            # temporary solution for using HF_MODEL for LLaMA until llama_model references are removed
+            local_params = self.__get_llama_local_params_name(self.model_name)
+            if local_params in self.LOCAL_LLAMA_PARAMS:
+                params_file = os.path.join(self.LOCAL_LLAMA_PARAMS[local_params], "params.json")
+                if os.path.exists(params_file):
+                    with open(params_file, "r") as f:
+                        params = json.load(f)
+                    self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
+                    self.multiple_of = params["multiple_of"]
         else:
             self.ffn_dim_multiplier = text_config["ffn_dim_multiplier"]
             self.multiple_of = text_config["multiple_of"]
@@ -2161,7 +2178,8 @@ class ModelArgs:
                 except ValueError as e:
                     logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
                     logger.warning(f"Falling back to base model encoding with no chat template")
-
+            if hasattr(self.tokenizer, "tokenizer"):
+                return self.tokenizer.tokenizer.encode(prompt_text, add_special_tokens=False)
             return self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
     def reference_lm_head(self):

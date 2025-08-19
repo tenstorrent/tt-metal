@@ -59,7 +59,7 @@ class TtLlamaConv2dPatch(LightweightModule):
 
         self._unfold = torch.nn.Unfold(kernel_size=self.kernel_size, stride=self.stride)
 
-        weight = state_dict[f"{state_dict_prefix}_linear.weight"].flatten(start_dim=1)
+        weight = state_dict[f"{state_dict_prefix}_linear.weight"]
         pad_len = nearest_32(weight.shape[-1]) - weight.shape[-1]
         padding = torch.zeros(self.out_channels, pad_len, dtype=weight.dtype)
         padded_weight = torch.cat([weight, padding], dim=-1)

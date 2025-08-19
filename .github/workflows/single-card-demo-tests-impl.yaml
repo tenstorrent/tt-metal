@@ -247,6 +247,7 @@ jobs:
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e ARCH_NAME=${{ inputs.arch }}
             -e HF_HOME=/mnt/MLPerf/huggingface
+            -e HF_METRICS_CACHE=~/.cache/huggingface/metrics
             -v /mnt/MLPerf:/mnt/MLPerf:ro
           install_wheel: true
           run_args: python3 .github/scripts/data_analysis/create_benchmark_with_environment_json.py

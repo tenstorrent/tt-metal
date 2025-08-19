@@ -91,7 +91,8 @@ def convert_hf_to_meta_mllama(state_dict, head_dim, config):
     state_dict = split_hf_keys(state_dict)
     state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
     state_dict = map_hf_to_meta_keys_mllama(state_dict, config)
-    state_dict = convert_tile_pos_embeddings(state_dict)
+    state_dict = convert_pos_embeddings(state_dict)
+    state_dict = flatten_conv_linear(state_dict)
     return state_dict
 
 
@@ -346,11 +347,11 @@ def map_hf_to_meta_keys_mllama(loaded_weights, config):
     return replace_keys(loaded_weights, replacements)
 
 
-def convert_tile_pos_embeddings(state_dict):
-    state_dict = {
-        k: invert_pre_compute_positional_embedding(v) if "tile_pos_embed.embedding" in k else v
-        for k, v in state_dict.items()
-    }
+def convert_pos_embeddings(state_dict):
+    do_convert = lambda key: (
+        ("tile_pos_embed.embedding" in key) or (key == "vision_model.vision_encoder.gated_positional_embedding")
+    )
+    state_dict = {k: invert_pre_compute_positional_embedding(v) if do_convert(k) else v for k, v in state_dict.items()}
     return state_dict
 
 
@@ -358,8 +359,13 @@ def invert_pre_compute_positional_embedding(precomputed_embeddings):
     """Inverts https://github.com/huggingface/transformers/blob/41980ce93e775f6c88500c51c8db7946fc6a2add/src/transformers/models/mllama/convert_mllama_weights_to_hf.py#L122-L148"""
 
     # TBD: remove hardcode
-    assert tuple(precomputed_embeddings.shape) == (9, 5120)
-    max_aspect_ratio_id, max_num_tiles, num_patches, hidden_size = 9 - 1, 4, 1, 1280
+    if tuple(precomputed_embeddings.shape) == (9, 5120):
+        max_aspect_ratio_id, max_num_tiles, num_patches, hidden_size = 9 - 1, 4, 1, 1280
+    elif tuple(precomputed_embeddings.shape) == (9, 8197120):
+        max_aspect_ratio_id, max_num_tiles, num_patches, hidden_size = 9 - 1, 4, 1601, 1280
+    else:
+        raise ValueError(f"Unknown embedding shape: {precomputed_embeddings.shape}")
+
     precomputed_embeddings = precomputed_embeddings.reshape(
         max_aspect_ratio_id + 1, max_num_tiles, num_patches, hidden_size
     )
@@ -376,6 +382,12 @@ def invert_pre_compute_positional_embedding(precomputed_embeddings):
         embedding[:height, :width] = current_embedding.reshape(height, width, num_patches, hidden_size)
 
     return embedding
+
+
+def flatten_conv_linear(state_dict):
+    do_flatten = lambda key: (("conv" in key) and ("_linear.weight" in key))
+    state_dict = {k: v.flatten(start_dim=1) if do_flatten(k) else v for k, v in state_dict.items()}
+    return state_dict
 
 
 def map_hf_to_meta_keys(loaded_weights):
