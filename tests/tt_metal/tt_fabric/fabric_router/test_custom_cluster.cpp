@@ -30,7 +30,6 @@ protected:
 
 
 TEST_F(ClusterFixture, TestCustomCluster) {
-
     std::unique_ptr<tt_ClusterDescriptor> cluster_desc =
         tt_ClusterDescriptor::create_from_yaml("./tg_cluster_desc.yaml");
 
@@ -40,7 +39,9 @@ TEST_F(ClusterFixture, TestCustomCluster) {
    auto cluster = std::make_unique<tt::Cluster>(cluster_desc.get(), rtoptions, hal);
    tt::tt_metal::MetalContext::set_default_cluster(std::move(cluster));
 
-    tt::tt_metal::MetalContext::instance();
+    uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
+    tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
+        tt::tt_fabric::FabricConfig::FABRIC_2D, num_routing_planes);
 
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
@@ -49,11 +50,11 @@ TEST_F(ClusterFixture, TestCustomCluster) {
 
     auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
 
-    control_plane->initialize_fabric_context(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    control_plane->initialize_fabric_context(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
 
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
 
-    // TODO: Check if these routing tables generated are correct // test on TG
+    control_plane->write_routing_tables_to_file("routing_tables_new.txt");
 }
 
 }  // namespace mock_cluster_tests
