@@ -221,7 +221,12 @@ TEST(Cluster, ReportIntermeshLinks) {
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
         if (control_plane.has_intermesh_links(chip_id)) {
             auto links = control_plane.get_intermesh_eth_links(chip_id);
-            log_info(tt::LogTest, "Chip {}: {} inter-mesh ethernet links", chip_id, links.size());
+            log_info(
+                tt::LogTest,
+                "Chip {}: {} inter-mesh ethernet links ({})",
+                chip_id,
+                links.size(),
+                get_ubb_id_str(chip_id));
 
             for (const auto& [eth_core, channel] : links) {
                 log_info(tt::LogTest, "  Channel {} at {}", channel, eth_core.str());

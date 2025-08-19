@@ -18,6 +18,8 @@
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <tt_stl/indestructible.hpp>
 #include <tt_stl/caseless_comparison.hpp>
+#include <impl/context/metal_context.hpp>
+#include "tt_metal/fabric/physical_system_descriptor.hpp"
 
 namespace tt {
 enum class ARCH;
@@ -34,6 +36,247 @@ FabricType operator&(FabricType lhs, FabricType rhs) {
 
 namespace {
 constexpr const char* MESH_GRAPH_DESCRIPTOR_DIR = "tt_metal/fabric/mesh_graph_descriptors";
+std::string get_ubb_edge_label(int tray_id, int nid, int chan_id, MeshShape topology) {
+    std::map<std::tuple<int, int, int>, std::string> label_map;
+
+    if (topology == MeshShape{8, 4}) {
+        // Tray 1 mappings
+        label_map[{1, 1, 4}] = "N0";
+        label_map[{1, 1, 5}] = "N1";
+        label_map[{1, 1, 6}] = "N2";
+        label_map[{1, 1, 7}] = "N3";
+        label_map[{1, 5, 4}] = "N4";
+        label_map[{1, 5, 5}] = "N5";
+        label_map[{1, 5, 6}] = "N6";
+        label_map[{1, 5, 7}] = "N7";
+        label_map[{1, 1, 0}] = "W0";
+        label_map[{1, 1, 1}] = "W1";
+        label_map[{1, 1, 2}] = "W2";
+        label_map[{1, 1, 3}] = "W3";
+        label_map[{1, 2, 0}] = "W4";
+        label_map[{1, 2, 1}] = "W5";
+        label_map[{1, 2, 2}] = "W6";
+        label_map[{1, 2, 3}] = "W7";
+        label_map[{1, 3, 0}] = "W8";
+        label_map[{1, 3, 1}] = "W9";
+        label_map[{1, 3, 2}] = "W10";
+        label_map[{1, 3, 3}] = "W11";
+        label_map[{1, 4, 0}] = "W12";
+        label_map[{1, 4, 1}] = "W13";
+        label_map[{1, 4, 2}] = "W14";
+        label_map[{1, 4, 3}] = "W15";
+
+        // Tray 3 mappings
+        label_map[{3, 1, 4}] = "S0";
+        label_map[{3, 1, 5}] = "S1";
+        label_map[{3, 1, 6}] = "S2";
+        label_map[{3, 1, 7}] = "S3";
+        label_map[{3, 5, 4}] = "S4";
+        label_map[{3, 5, 5}] = "S5";
+        label_map[{3, 5, 6}] = "S6";
+        label_map[{3, 5, 7}] = "S7";
+        label_map[{3, 4, 0}] = "W16";
+        label_map[{3, 4, 1}] = "W17";
+        label_map[{3, 4, 2}] = "W18";
+        label_map[{3, 4, 3}] = "W19";
+        label_map[{3, 3, 0}] = "W20";
+        label_map[{3, 3, 1}] = "W21";
+        label_map[{3, 3, 2}] = "W22";
+        label_map[{3, 3, 3}] = "W23";
+        label_map[{3, 2, 0}] = "W24";
+        label_map[{3, 2, 1}] = "W25";
+        label_map[{3, 2, 2}] = "W26";
+        label_map[{3, 2, 3}] = "W27";
+        label_map[{3, 1, 0}] = "W28";
+        label_map[{3, 1, 1}] = "W29";
+        label_map[{3, 1, 2}] = "W30";
+        label_map[{3, 1, 3}] = "W31";
+
+        // Tray 2 mappings
+        label_map[{2, 5, 4}] = "N8";
+        label_map[{2, 5, 5}] = "N9";
+        label_map[{2, 5, 6}] = "N10";
+        label_map[{2, 5, 7}] = "N11";
+        label_map[{2, 1, 4}] = "N12";
+        label_map[{2, 1, 5}] = "N13";
+        label_map[{2, 1, 6}] = "N14";
+        label_map[{2, 1, 7}] = "N15";
+        label_map[{2, 1, 0}] = "E0";
+        label_map[{2, 1, 1}] = "E1";
+        label_map[{2, 1, 2}] = "E2";
+        label_map[{2, 1, 3}] = "E3";
+        label_map[{2, 2, 0}] = "E4";
+        label_map[{2, 2, 1}] = "E5";
+        label_map[{2, 2, 2}] = "E6";
+        label_map[{2, 2, 3}] = "E7";
+        label_map[{2, 3, 0}] = "E8";
+        label_map[{2, 3, 1}] = "E9";
+        label_map[{2, 3, 2}] = "E10";
+        label_map[{2, 3, 3}] = "E11";
+        label_map[{2, 4, 0}] = "E12";
+        label_map[{2, 4, 1}] = "E13";
+        label_map[{2, 4, 2}] = "E14";
+        label_map[{2, 4, 3}] = "E15";
+
+        // Tray 4 mappings
+        label_map[{4, 5, 4}] = "S8";
+        label_map[{4, 5, 5}] = "S9";
+        label_map[{4, 5, 6}] = "S10";
+        label_map[{4, 5, 7}] = "S11";
+        label_map[{4, 1, 4}] = "S12";
+        label_map[{4, 1, 5}] = "S13";
+        label_map[{4, 1, 6}] = "S14";
+        label_map[{4, 1, 7}] = "S15";
+        label_map[{4, 4, 0}] = "E16";
+        label_map[{4, 4, 1}] = "E17";
+        label_map[{4, 4, 2}] = "E18";
+        label_map[{4, 4, 3}] = "E19";
+        label_map[{4, 3, 0}] = "E20";
+        label_map[{4, 3, 1}] = "E21";
+        label_map[{4, 3, 2}] = "E22";
+        label_map[{4, 3, 3}] = "E23";
+        label_map[{4, 2, 0}] = "E24";
+        label_map[{4, 2, 1}] = "E25";
+        label_map[{4, 2, 2}] = "E26";
+        label_map[{4, 2, 3}] = "E27";
+        label_map[{4, 1, 0}] = "E28";
+        label_map[{4, 1, 1}] = "E29";
+        label_map[{4, 1, 2}] = "E30";
+        label_map[{4, 1, 3}] = "E31";
+    } else if (topology == MeshShape{1, 32}) {
+        // only contains mapping for channels 0, 1, 2, 3
+        // Assumes the 1x32 will use mapping of
+        // T1 N1  T1 N2  T1 N3  T1 N4  T1 N8  T1 N7  T1 N6  T1 N5
+        // T2 N5  T2 N1  T2 N2  T2 N3  T2 N4  T4 N4 T4 N3  T4 N2
+        // T4 N1  T4 N5  T3 N5  T3 N1  T3 N2  T3 N3  T3 N4  T3 N8
+        // T3 N7  T3 N6  T4 N6  T4 N7  T4 N8  T2 N8  T2 N7  T2 N6
+        label_map[{1, 1, 0}] = "N0";
+        label_map[{1, 1, 1}] = "N1";
+        label_map[{1, 1, 2}] = "N2";
+        label_map[{1, 1, 3}] = "N3";
+        label_map[{1, 2, 0}] = "N4";
+        label_map[{1, 2, 1}] = "N5";
+        label_map[{1, 2, 2}] = "N6";
+        label_map[{1, 2, 3}] = "N7";
+        label_map[{1, 3, 0}] = "N8";
+        label_map[{1, 3, 1}] = "N9";
+        label_map[{1, 3, 2}] = "N10";
+        label_map[{1, 3, 3}] = "N11";
+        label_map[{1, 4, 0}] = "N12";
+        label_map[{1, 4, 1}] = "N13";
+        label_map[{1, 4, 2}] = "N14";
+        label_map[{1, 4, 3}] = "N15";
+
+        // Tray 2 mappings
+        label_map[{2, 1, 0}] = "N36";
+        label_map[{2, 1, 1}] = "N37";
+        label_map[{2, 1, 2}] = "N38";
+        label_map[{2, 1, 3}] = "N39";
+        label_map[{2, 2, 0}] = "N40";
+        label_map[{2, 2, 1}] = "N41";
+        label_map[{2, 2, 2}] = "N42";
+        label_map[{2, 2, 3}] = "N43";
+        label_map[{2, 3, 0}] = "N44";
+        label_map[{2, 3, 1}] = "N45";
+        label_map[{2, 3, 2}] = "N46";
+        label_map[{2, 3, 3}] = "N47";
+        label_map[{2, 4, 0}] = "N48";
+        label_map[{2, 4, 1}] = "N49";
+        label_map[{2, 4, 2}] = "N50";
+        label_map[{2, 4, 3}] = "N51";
+
+        // Tray 4 mappings
+        label_map[{4, 4, 0}] = "N52";
+        label_map[{4, 4, 1}] = "N53";
+        label_map[{4, 4, 2}] = "N54";
+        label_map[{4, 4, 3}] = "N55";
+        label_map[{4, 3, 0}] = "N56";
+        label_map[{4, 3, 1}] = "N57";
+        label_map[{4, 3, 2}] = "N58";
+        label_map[{4, 3, 3}] = "N59";
+        label_map[{4, 2, 0}] = "N60";
+        label_map[{4, 2, 1}] = "N61";
+        label_map[{4, 2, 2}] = "N62";
+        label_map[{4, 2, 3}] = "N63";
+        label_map[{4, 1, 0}] = "N64";
+        label_map[{4, 1, 1}] = "N65";
+        label_map[{4, 1, 2}] = "N66";
+        label_map[{4, 1, 3}] = "N67";
+
+        // Tray 3 mappings
+        label_map[{3, 1, 0}] = "N76";
+        label_map[{3, 1, 1}] = "N77";
+        label_map[{3, 1, 2}] = "N78";
+        label_map[{3, 1, 3}] = "N79";
+        label_map[{3, 2, 0}] = "N80";
+        label_map[{3, 2, 1}] = "N81";
+        label_map[{3, 2, 2}] = "N82";
+        label_map[{3, 2, 3}] = "N83";
+        label_map[{3, 3, 0}] = "N84";
+        label_map[{3, 3, 1}] = "N85";
+        label_map[{3, 3, 2}] = "N86";
+        label_map[{3, 3, 3}] = "N87";
+        label_map[{3, 4, 0}] = "N88";
+        label_map[{3, 4, 1}] = "N89";
+        label_map[{3, 4, 2}] = "N90";
+        label_map[{3, 4, 3}] = "N91";
+    }
+
+    auto key = std::make_tuple(tray_id, nid, chan_id);
+    auto it = label_map.find(key);
+    if (it == label_map.end()) {
+        throw std::runtime_error(
+            "No label found for tray_id: " + std::to_string(tray_id) + ", nid: " + std::to_string(nid) +
+            ", chan_id: " + std::to_string(chan_id));
+    }
+    return it->second;
+}
+
+YAML::Node get_mgd_graph_from_physical_system_descriptor(
+    tt::tt_metal::PhysicalSystemDescriptor& physical_system_desc, MeshShape topology) {
+    YAML::Node mgd_graph;
+    const auto& host_to_rank = physical_system_desc.get_host_to_rank_map();
+    const auto& system_graph = physical_system_desc.get_system_graph();
+    const auto& asic_descriptors = physical_system_desc.get_asic_descriptors();
+    auto hostnames = physical_system_desc.get_all_hostnames();
+    for (const auto& src_host : hostnames) {
+        for (const auto& dst_host : hostnames) {
+            if (src_host == dst_host) {
+                continue;
+            }
+            auto exit_nodes = physical_system_desc.get_connecting_exit_nodes(src_host, dst_host);
+            for (const auto& exit_node : exit_nodes) {
+                auto src_asic = exit_node.src_exit_node;
+                auto src_chan = exit_node.eth_conn.src_chan;
+                auto dst_asic = exit_node.dst_exit_node;
+                auto dst_chan = exit_node.eth_conn.dst_chan;
+                auto src_asic_desc = asic_descriptors.at(src_asic);
+                auto dst_asic_desc = asic_descriptors.at(dst_asic);
+
+                YAML::Node port_0 = YAML::Node(YAML::NodeType::Sequence);
+                port_0.SetStyle(YAML::EmitterStyle::Flow);
+                port_0.push_back(host_to_rank.at(src_asic_desc.host_name));
+                port_0.push_back(get_ubb_edge_label(*src_asic_desc.tray_id, *src_asic_desc.n_id, src_chan, topology));
+                YAML::Node port_1 = YAML::Node(YAML::NodeType::Sequence);
+                port_1.SetStyle(YAML::EmitterStyle::Flow);
+                port_1.push_back(host_to_rank.at(dst_asic_desc.host_name));
+                port_1.push_back(get_ubb_edge_label(*dst_asic_desc.tray_id, *dst_asic_desc.n_id, dst_chan, topology));
+
+                YAML::Node connection_pair_fwd = YAML::Node(YAML::NodeType::Sequence);
+                connection_pair_fwd.SetStyle(YAML::EmitterStyle::Flow);
+                connection_pair_fwd.push_back(port_0);
+                connection_pair_fwd.push_back(port_1);
+
+                mgd_graph.push_back(connection_pair_fwd);
+            }
+        }
+    }
+
+    std::ofstream fout("mgd_graph.yaml");
+    fout << mgd_graph;
+    fout.close();
+    return mgd_graph;
+}
 }
 
 const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
@@ -364,7 +607,20 @@ void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_pat
         std::uint32_t chan_id = static_cast<uint32_t>(std::stoul(port_string.substr(1, port_string.size() - 1)));
         return {mesh_id, {port_direction, chan_id}};
     };
-    for (const auto& mesh_connection : yaml["Graph"]) {
+    YAML::Node graph = yaml["Graph"];
+    if (board_name_to_topology.find("Galaxy") != board_name_to_topology.end() and
+        this->inter_mesh_connectivity_.size() > 1) {
+        log_warning(
+            tt::LogFabric,
+            "Using physical system descriptor to populate inter mesh connectivity, to work around instability in "
+            "exabox");
+        auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor();
+        // Use the physical system descriptor to populate the inter mesh connectivity, to work around instability in
+        // exabox
+        graph = get_mgd_graph_from_physical_system_descriptor(
+            physical_system_desc, MeshShape(board_name_to_topology["Galaxy"][0], board_name_to_topology["Galaxy"][1]));
+    }
+    for (const auto& mesh_connection : graph) {
         TT_FATAL(mesh_connection.size() == 2, "MeshGraph: Expecting 2 elements in each Graph connection");
         const auto& [src_mesh_id, src_port_id] = convert_yaml_to_port_id(mesh_connection[0]);
         const auto& [dst_mesh_id, dst_port_id] = convert_yaml_to_port_id(mesh_connection[1]);
