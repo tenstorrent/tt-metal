@@ -26,9 +26,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<GlobalSemaphore>& global_semaphore,
-    const std::optional<GlobalSemaphore>& init_semaphore) {
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
     auto mesh_device = input_tensor.mesh_device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
@@ -37,9 +35,6 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
 
-    TT_FATAL(
-        global_semaphore.has_value(),
-        "Global semaphore is required for all_to_all_dispatch due to limitations in trace");
     const auto [cb_sizes, cb_page_sizes] =
         detail::get_cb_sizes(input_tensor, expert_indices_tensor, expert_mapping_tensor, num_links_, axis);
 
@@ -66,7 +61,6 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
                 .axis = axis,
                 .num_links = num_links_,
                 .topology = topology_,
-                .cross_device_semaphore = global_semaphore,
                 .impl = impl},
             AllToAllDispatchDeviceOperation::tensor_args_t{
                 .input_tensor = input_tensor,
@@ -103,9 +97,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
         topology_,
         memory_config_,
         subdevice_core_range_set,
-        global_semaphore,
-        impl,
-        init_semaphore);
+        impl);
 }
 
 }  // namespace ttnn::operations::ccl
