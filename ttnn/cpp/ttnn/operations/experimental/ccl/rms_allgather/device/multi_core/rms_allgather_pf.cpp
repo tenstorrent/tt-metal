@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
+#include <set>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -1209,6 +1210,65 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
         }
     }
 
+    // Extract buffer address indices from the actual runtime args that get set
+    std::map<KernelHandle, std::set<uint32_t>> kernel_address_indices;
+    std::map<KernelHandle, std::map<uint32_t, std::string>> kernel_address_names;
+
+    // For each core's runtime args, scan for buffer addresses that will be updated in override callback
+    // We need to track from the original SetRuntimeArgs calls where addresses are placed
+    for (uint32_t i = 0; i < cores.size(); ++i) {
+        const auto& core = cores[i];
+        uint32_t width_index = i;
+        uint32_t width_index_two_stage = width_index % num_blocks_first_stage;
+
+        if ((not use_two_stage_reduce and width_index < num_cores_all_to_all) or
+            (use_two_stage_reduce and width_index_two_stage < 1)) {
+            // This core uses writer_mcast_sender_kernels_id
+            // From the writer_mcast_sender_args construction (lines 1116-1164):
+            // all_gather_rts gets inserted, containing semaphore.address() at offset 0 and stats.buffer() at offset 2
+            // These end up at different indices based on the writer_mcast_sender_args structure
+
+            // The callback updates these indices: runtime_args[8] and runtime_args[10]
+            kernel_address_indices[writer_mcast_sender_kernels_id].insert(8);   // semaphore.address()
+            kernel_address_indices[writer_mcast_sender_kernels_id].insert(10);  // stats.buffer().address()
+            kernel_address_names[writer_mcast_sender_kernels_id][8] = "semaphore";
+            kernel_address_names[writer_mcast_sender_kernels_id][10] = "stats";
+        } else {
+            // This core uses writer_mcast_receiver_kernels_id
+            kernel_address_indices[writer_mcast_receiver_kernels_id].insert(8);   // semaphore.address()
+            kernel_address_indices[writer_mcast_receiver_kernels_id].insert(10);  // stats.buffer().address()
+            kernel_address_names[writer_mcast_receiver_kernels_id][8] = "semaphore";
+            kernel_address_names[writer_mcast_receiver_kernels_id][10] = "stats";
+        }
+    }
+
+    // Extract CBs that are created with set_globally_allocated_address from the CB creation code
+    std::vector<std::pair<CBHandle, std::string>> cbs_with_global_address;
+
+    // From the CB creation around lines 477-516 and 531-575:
+    if (b) {
+        cbs_with_global_address.push_back({cb_in1, "a"});  // Line 483: set_globally_allocated_address(*a.buffer())
+        cbs_with_global_address.push_back(
+            {cb_add_out, "b"});  // Line 488: set_globally_allocated_address(*b.value().buffer())
+        cbs_with_global_address.push_back(
+            {cb_in0, "b"});  // Line 495: set_globally_allocated_address(*b.value().buffer())
+        cbs_with_global_address.push_back(
+            {pre_cb_in0, "b"});  // Line 501: set_globally_allocated_address(*b.value().buffer())
+    } else {
+        cbs_with_global_address.push_back({cb_in0, "a"});      // Line 508: set_globally_allocated_address(*a.buffer())
+        cbs_with_global_address.push_back({pre_cb_in0, "a"});  // Line 514: set_globally_allocated_address(*a.buffer())
+    }
+    cbs_with_global_address.push_back(
+        {cb_stats, "stats"});  // Line 597: set_globally_allocated_address(*stats.value().buffer())
+
+    if (skip_write_back) {
+        cbs_with_global_address.push_back(
+            {cb_output, "output"});  // Line 532: set_globally_allocated_address(*output.buffer())
+    } else {
+        cbs_with_global_address.push_back(
+            {cb_output_reshard, "output"});  // Line 573: set_globally_allocated_address(*output.buffer())
+    }
+
     auto override_runtime_arguments_callback =
         [writer_kernel_ids,
          writer_mcast_sender_kernels_id,
@@ -1221,12 +1281,15 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
          cb_stats,
          cb_output,
          cb_output_reshard,
-         cores](
+         cores,
+         kernel_address_indices,
+         kernel_address_names,
+         cbs_with_global_address](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
+            const std::vector<Tensor>& output_tensors) mutable {
             const auto src_buffer_a = input_tensors.at(0).buffer();
             const auto& b_tensor = optional_input_tensors.at(0);
             const auto& gamma_tensor = optional_input_tensors.at(1);
@@ -1240,41 +1303,127 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
                                                      : writer_sender_args_by_core;
             auto semaphore = static_cast<const RMSAllGather*>(operation)->semaphore;
             const auto gamma_address = gamma_tensor.has_value() ? gamma_tensor.value().buffer()->address() : 0;
+
+            // Track which indices actually get updated by the EXISTING logic
+            std::map<KernelHandle, std::set<uint32_t>> actual_updated_indices;
+
             for (uint32_t i = 0; i < cores.size(); ++i) {
                 const CoreCoord& core = cores[i];
-
                 const auto writer_kernel_id = writer_kernel_ids.at(i);
 
                 if (writer_kernel_id == writer_mcast_sender_kernels_id) {
                     auto& runtime_args = writer_sender_args_by_core[core.x][core.y];
+
+                    // KEEP ORIGINAL LOGIC - just track what gets updated
                     runtime_args[8] = semaphore.address();
                     runtime_args[10] = stats_tensor.buffer()->address();
                     // runtime_args[0] holds the start of the post arguments, apply that offset
                     runtime_args[runtime_args[0] + 2] = gamma_address;
+
+                    // Track what indices were actually updated
+                    actual_updated_indices[writer_kernel_id].insert(8);
+                    actual_updated_indices[writer_kernel_id].insert(10);
+
                 } else if (writer_kernel_id == writer_mcast_receiver_kernels_id) {
                     auto& runtime_args = writer_receiver_args_by_core[core.x][core.y];
+
+                    // KEEP ORIGINAL LOGIC - just track what gets updated
                     runtime_args[8] = semaphore.address();
                     runtime_args[10] = stats_tensor.buffer()->address();
                     runtime_args[runtime_args[0] + 2] = gamma_address;
+
+                    // Track what indices were actually updated
+                    actual_updated_indices[writer_kernel_id].insert(8);
+                    actual_updated_indices[writer_kernel_id].insert(10);
                 }
             }
-            // Repoint to the input buffers
+
+            // VALIDATION: Check if the existing logic updates all expected indices
+            for (const auto& [kernel_id, expected_indices] : kernel_address_indices) {
+                if (actual_updated_indices[kernel_id] != expected_indices) {
+                    TT_FATAL(
+                        false,
+                        "Runtime args update logic is incorrect for kernel {}! Expected indices: [{}], but actual "
+                        "logic updates: [{}]",
+                        kernel_id,
+                        expected_indices.size(),
+                        actual_updated_indices[kernel_id].size());
+                }
+            }
+
+            // Track which CBs actually get updated by the EXISTING logic
+            std::set<CBHandle> expected_cb_updates;
+            std::set<CBHandle> actual_cb_updates;
+
+            // Build expected CB updates from the program factory analysis
+            for (const auto& [cb_handle, tensor_name] : cbs_with_global_address) {
+                expected_cb_updates.insert(cb_handle);
+            }
+
+            // KEEP ORIGINAL LOGIC - just track what CBs get updated
             if (b_tensor.has_value()) {
                 UpdateDynamicCircularBufferAddress(program, cb_in1, *src_buffer_a);
                 UpdateDynamicCircularBufferAddress(program, cb_add_out, *b_tensor.value().buffer());
                 UpdateDynamicCircularBufferAddress(program, cb_in0, *b_tensor.value().buffer());
                 UpdateDynamicCircularBufferAddress(program, pre_cb_in0, *b_tensor.value().buffer());
+
+                // Track what CBs were actually updated by original logic
+                actual_cb_updates.insert({cb_in1, cb_add_out, cb_in0, pre_cb_in0});
             } else {
                 UpdateDynamicCircularBufferAddress(program, cb_in0, *src_buffer_a);
                 UpdateDynamicCircularBufferAddress(program, pre_cb_in0, *src_buffer_a);
+
+                // Track what CBs were actually updated by original logic
+                actual_cb_updates.insert({cb_in0, pre_cb_in0});
             }
             if (!skip_write_back) {
                 UpdateDynamicCircularBufferAddress(program, cb_output_reshard, *dst_buffer);
+                actual_cb_updates.insert(cb_output_reshard);
             } else {
                 UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+                actual_cb_updates.insert(cb_output);
             }
             const auto stats_buffer = stats_tensor.buffer();
             UpdateDynamicCircularBufferAddress(program, cb_stats, *stats_buffer);
+            actual_cb_updates.insert(cb_stats);
+
+            // VALIDATION: Check if the existing CB update logic matches expected from program factory
+            if (actual_cb_updates != expected_cb_updates) {
+                TT_FATAL(
+                    false,
+                    "CB update logic is incorrect! Program factory created {} CBs with globally_allocated_address, but "
+                    "override logic updates {} CBs",
+                    expected_cb_updates.size(),
+                    actual_cb_updates.size());
+            }
+
+            // VALIDATION: Check tensor name alignment between program factory and override logic
+            std::map<std::string, const Buffer*> tensor_buffers = {
+                {"a", src_buffer_a},
+                {"b", b_tensor.has_value() ? b_tensor.value().buffer() : nullptr},
+                {"stats", stats_tensor.buffer()},
+                {"output", dst_buffer}};
+
+            for (const auto& [cb_handle, expected_tensor_name] : cbs_with_global_address) {
+                bool cb_was_updated = actual_cb_updates.find(cb_handle) != actual_cb_updates.end();
+                if (!cb_was_updated) {
+                    TT_FATAL(
+                        false,
+                        "CB {} was created with globally_allocated_address for tensor '{}' in program factory, but was "
+                        "not updated in override callback!",
+                        cb_handle,
+                        expected_tensor_name);
+                }
+
+                // Verify tensor buffer alignment
+                if (expected_tensor_name != "b" || b_tensor.has_value()) {
+                    TT_FATAL(
+                        tensor_buffers[expected_tensor_name] != nullptr,
+                        "Buffer for tensor '{}' mapped to CB {} is null",
+                        expected_tensor_name,
+                        cb_handle);
+                }
+            }
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

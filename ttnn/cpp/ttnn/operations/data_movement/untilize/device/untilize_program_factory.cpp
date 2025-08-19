@@ -5,6 +5,7 @@
 #include "untilize_program_factory.hpp"
 
 #include <math.h>
+#include <set>
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
@@ -1477,12 +1478,26 @@ operation::ProgramWithCallbacks untilize_single_core(
         shard_builder::extend_sharding_run_time_args(output, writer_run_time_args);
     }
 
+    // Create sets to track indices of buffer address arguments
+    std::set<uint32_t> reader_buffer_indices;
+    std::set<uint32_t> writer_buffer_indices;
+
+    // Track reader buffer address indices
+    // Index 0 contains src0_buffer->address()
+    reader_buffer_indices.insert(0);
+
+    // Track writer buffer address indices
+    // Index 0 contains dst_buffer->address()
+    writer_buffer_indices.insert(0);
+
     // Set run-time args
     tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_run_time_args);
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_run_time_args);
 
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
-                                           writer_kernel_id = unary_writer_kernel_id](
+                                           writer_kernel_id = unary_writer_kernel_id,
+                                           reader_buffer_indices,
+                                           writer_buffer_indices](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -1493,14 +1508,42 @@ operation::ProgramWithCallbacks untilize_single_core(
 
         CoreCoord core = {0, 0};
 
+        // Update reader runtime args and validate all buffer indices are updated
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_buffer->address();
+            std::set<uint32_t> updated_indices;
+
+            for (uint32_t idx : reader_buffer_indices) {
+                TT_FATAL(
+                    idx < runtime_args.size(),
+                    "Reader buffer index {} is out of bounds for runtime args size {}",
+                    idx,
+                    runtime_args.size());
+                runtime_args[idx] = src_buffer->address();
+                updated_indices.insert(idx);
+            }
+
+            // Verify all expected indices were updated
+            TT_FATAL(updated_indices == reader_buffer_indices, "Not all reader buffer indices were updated");
         }
 
+        // Update writer runtime args and validate all buffer indices are updated
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_buffer->address();
+            std::set<uint32_t> updated_indices;
+
+            for (uint32_t idx : writer_buffer_indices) {
+                TT_FATAL(
+                    idx < runtime_args.size(),
+                    "Writer buffer index {} is out of bounds for runtime args size {}",
+                    idx,
+                    runtime_args.size());
+                runtime_args[idx] = dst_buffer->address();
+                updated_indices.insert(idx);
+            }
+
+            // Verify all expected indices were updated
+            TT_FATAL(updated_indices == writer_buffer_indices, "Not all writer buffer indices were updated");
         }
     };
 
