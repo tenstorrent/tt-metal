@@ -227,6 +227,27 @@ void RunTestChipMCast1D(
 
 void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info);
 
+enum NocSendType : uint8_t {
+    NOC_UNICAST_WRITE = 0,
+    NOC_UNICAST_INLINE_WRITE = 1,
+    NOC_UNICAST_ATOMIC_INC = 2,
+    NOC_FUSED_UNICAST_ATOMIC_INC = 3,
+    NOC_UNICAST_SCATTER_WRITE = 4,
+    NOC_MULTICAST_WRITE = 5,       // mcast has bug
+    NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
+    NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
+};
+
+void FabricUnicastCommon(
+    BaseFabricFixture* fixture,
+    NocSendType noc_send_type,
+    const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs);
+
+void FabricMulticastCommon(
+    BaseFabricFixture* fixture,
+    NocSendType noc_send_type,
+    const std::vector<std::tuple<RoutingDirection, uint32_t /*start_distance*/, uint32_t /*range*/>>& dir_configs);
+
 void RunEDMConnectionStressTest(
     BaseFabricFixture* fixture,
     const std::vector<size_t>& stall_durations_cycles,
