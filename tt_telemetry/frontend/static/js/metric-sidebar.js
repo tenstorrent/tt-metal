@@ -160,7 +160,8 @@ export class MetricSidebar extends LitElement {
     static properties = {
         open: { type: Boolean, reflect: true },
         metricName: { type: String },
-        metricValue: { type: Object }
+        metricValue: { type: Object },
+        metricTimestamp: { type: Object }
     };
 
     constructor() {
@@ -168,6 +169,7 @@ export class MetricSidebar extends LitElement {
         this.open = false;
         this.metricName = '';
         this.metricValue = null;
+        this.metricTimestamp = null;
     }
 
     _handleClose() {
@@ -178,8 +180,12 @@ export class MetricSidebar extends LitElement {
 
     _getMockData() {
         // Mock data - in the future this would come from props or API calls
+        const lastUpdated = this.metricTimestamp ? 
+            this.metricTimestamp.toLocaleString() : 
+            'Never';
+        
         return {
-            lastUpdated: new Date().toLocaleString(),
+            lastUpdated,
             updateFrequency: '5 seconds',
             dataType: typeof this.metricValue === 'boolean' ? 'Boolean Health' : 'Numeric Value',
             source: 'Hardware Monitor',
@@ -206,6 +212,27 @@ export class MetricSidebar extends LitElement {
         const statusClass = `status-badge status-${status ? 'good' : 'bad'}`;
         const statusText = status ? 'GOOD' : 'BAD'; 
         return html`<span class="${statusClass}">${statusText}</span>`;
+    }
+
+    _getTimestampAge() {
+        if (!this.metricTimestamp) return 'Unknown';
+        
+        const now = new Date();
+        const diffMs = now.getTime() - this.metricTimestamp.getTime();
+        const diffSeconds = Math.floor(diffMs / 1000);
+        
+        if (diffSeconds < 60) {
+            return `${diffSeconds} seconds ago`;
+        } else if (diffSeconds < 3600) {
+            const minutes = Math.floor(diffSeconds / 60);
+            return `${minutes} minute${minutes !== 1 ? 's' : ''} ago`;
+        } else if (diffSeconds < 86400) {
+            const hours = Math.floor(diffSeconds / 3600);
+            return `${hours} hour${hours !== 1 ? 's' : ''} ago`;
+        } else {
+            const days = Math.floor(diffSeconds / 86400);
+            return `${days} day${days !== 1 ? 's' : ''} ago`;
+        }
     }
 
     render() {
@@ -241,9 +268,19 @@ export class MetricSidebar extends LitElement {
                         <span class="info-value">${this.metricValue}</span>
                     </div>
                     <div class="info-item">
-                        <span class="info-label">Last Updated:</span>
+                        <span class="info-label">Last Changed:</span>
                         <span class="info-value">${mockData.lastUpdated}</span>
                     </div>
+                    ${this.metricTimestamp ? html`
+                    <div class="info-item">
+                        <span class="info-label">Timestamp (UTC):</span>
+                        <span class="info-value">${this.metricTimestamp.toISOString()}</span>
+                    </div>
+                    <div class="info-item">
+                        <span class="info-label">Age:</span>
+                        <span class="info-value">${this._getTimestampAge()}</span>
+                    </div>
+                    ` : ''}
                 </div>
 
                 <div class="info-section">
@@ -255,14 +292,6 @@ export class MetricSidebar extends LitElement {
                     <div class="info-item">
                         <span class="info-label">Update Frequency:</span>
                         <span class="info-value">${mockData.updateFrequency}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Source:</span>
-                        <span class="info-value">${mockData.source}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Threshold:</span>
-                        <span class="info-value">${mockData.threshold}</span>
                     </div>
                 </div>
 

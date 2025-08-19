@@ -97,9 +97,15 @@ export class TelemetryDashboard extends LitElement {
                     const boolMetricIds = data["bool_metric_ids"];
                     const boolMetricNames = data["bool_metric_names"];    // optional, and indicates new telemetry metrics if present
                     const boolMetricValues = data["bool_metric_values"];
+                    const boolMetricTimestamps = data["bool_metric_timestamps"] || [];
 
                     if (boolMetricIds.length != boolMetricValues.length) {
                         console.log(`SSE error: Received differing id and value counts (${boolMetricIds.length} vs. ${boolMetricValues.length})`);
+                        return;
+                    }
+
+                    if (boolMetricTimestamps.length > 0 && boolMetricTimestamps.length != boolMetricIds.length) {
+                        console.log(`SSE error: Received differing id and timestamp counts (${boolMetricIds.length} vs. ${boolMetricTimestamps.length})`);
                         return;
                     }
 
@@ -114,7 +120,8 @@ export class TelemetryDashboard extends LitElement {
                             const path = boolMetricNames[i];
                             const id = boolMetricIds[i];
                             const value = boolMetricValues[i];
-                            this._telemetryStore.addPath(path, id, value, true);
+                            const timestamp = boolMetricTimestamps[i];
+                            this._telemetryStore.addPath(path, id, value, true, timestamp);
                             didUpdate = true;
                         }
                     } else {
@@ -122,7 +129,8 @@ export class TelemetryDashboard extends LitElement {
                         for (let i = 0; i < boolMetricIds.length; i++) {
                             const id = boolMetricIds[i];
                             const value = boolMetricValues[i];
-                            this._telemetryStore.updateBoolValue(id, value);
+                            const timestamp = boolMetricTimestamps[i];
+                            this._telemetryStore.updateBoolValue(id, value, timestamp);
                             didUpdate = true;
                         }
                     }
@@ -130,9 +138,15 @@ export class TelemetryDashboard extends LitElement {
                     const uintMetricIds = data["uint_metric_ids"];
                     const uintMetricNames = data["uint_metric_names"];    // optional, and indicates new telemetry metrics if present
                     const uintMetricValues = data["uint_metric_values"];
+                    const uintMetricTimestamps = data["uint_metric_timestamps"] || [];
 
                     if (uintMetricIds.length != uintMetricValues.length) {
                         console.log(`SSE error: Received differing id and value counts (${uintMetricIds.length} vs. ${uintMetricValues.length})`);
+                        return;
+                    }
+
+                    if (uintMetricTimestamps.length > 0 && uintMetricTimestamps.length != uintMetricIds.length) {
+                        console.log(`SSE error: Received differing id and timestamp counts (${uintMetricIds.length} vs. ${uintMetricTimestamps.length})`);
                         return;
                     }
 
@@ -147,7 +161,8 @@ export class TelemetryDashboard extends LitElement {
                             const path = uintMetricNames[i];
                             const id = uintMetricIds[i];
                             const value = uintMetricValues[i];
-                            this._telemetryStore.addPath(path, id, value, false);
+                            const timestamp = uintMetricTimestamps.length > 0 ? uintMetricTimestamps[i] : null;
+                            this._telemetryStore.addPath(path, id, value, false, timestamp);
                             didUpdate = true;
                         }
                     } else {
@@ -155,7 +170,8 @@ export class TelemetryDashboard extends LitElement {
                         for (let i = 0; i < uintMetricIds.length; i++) {
                             const id = uintMetricIds[i];
                             const value = uintMetricValues[i];
-                            this._telemetryStore.updateUIntValue(id, value);
+                            const timestamp = uintMetricTimestamps.length > 0 ? uintMetricTimestamps[i] : null;
+                            this._telemetryStore.updateUIntValue(id, value, timestamp);
                             didUpdate = true;
                         }
                     }
@@ -197,10 +213,12 @@ export class TelemetryDashboard extends LitElement {
             this.currentPath = [...this.currentPath, metricName]; // descend one level deeper (don't use push, we need to mutate array to trigger state update)
         } else {
             // This is a leaf node - open sidebar with details
+            const metricData = this._telemetryStore.getData(newPath);
             this.selectedMetric = {
                 name: metricName,
                 fullPath: newPath,
-                value: this._telemetryStore.getValue(newPath)
+                value: metricData ? metricData.value : null,
+                timestamp: metricData ? metricData.timestamp : null
             };
             this.sidebarOpen = true;
         }
@@ -235,9 +253,11 @@ export class TelemetryDashboard extends LitElement {
         for (const metricName of metricNames) {
             const metricPath = [...this.currentPath, metricName].join("/");
             const hasChildren = this._telemetryStore.getChildNames(metricPath).length > 0;
+            const metricData = this._telemetryStore.getData(metricPath);
             metrics.push({
                 name: metricName,
-                value: this._telemetryStore.getValue(metricPath),
+                value: metricData ? metricData.value : null,
+                timestamp: metricData ? metricData.timestamp : null,
                 isLeaf: !hasChildren  // True if this is a final node with no children
             });
         }
@@ -266,6 +286,7 @@ export class TelemetryDashboard extends LitElement {
                 ?open="${this.sidebarOpen}"
                 .metricName="${this.selectedMetric?.name || ''}"
                 .metricValue="${this.selectedMetric?.value}"
+                .metricTimestamp="${this.selectedMetric?.timestamp}"
                 @sidebar-close="${this._handleSidebarClose}">
             </metric-sidebar>
         `;
