@@ -871,7 +871,8 @@ class ModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
+                    1,
+                    8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
                     self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
@@ -1818,7 +1819,7 @@ class ModelArgs:
 
                 model = AutoModelForCausalLM.from_pretrained(
                     self.CKPT_DIR,
-                    torch_dtype="auto"
+                    torch_dtype="auto",
                     # Note that the default setting is torch.dtype.float32, but model weights are
                     # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                     # unnecessary cast.
@@ -2176,6 +2177,7 @@ class ModelArgs:
             # Mapping of base model names to their known tokenizer paths
             # These are the original models that have proper tokenizers
             base_model_tokenizer_mapping = {
+                "gemma-3-4b-it": "google/gemma-3-4b-it",
                 "Qwen2.5-0.5B": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
                 "Qwen2.5-1.5B": "Qwen/Qwen2.5-1.5B-Instruct",
                 "Qwen2.5-3B": "Qwen/Qwen2.5-3B-Instruct",
