@@ -37,7 +37,7 @@ The application will start showing a window similar to the image below.
 
 .. image:: ../_static/tracy-get-started.png
     :alt: Tracy get started
-    :scale: 50%
+    :width: 77%
 
 Set client address to the IP address of the remote machine, listen over port 8086 (e.g. 172.27.28.132:8086) and click connect.
 
