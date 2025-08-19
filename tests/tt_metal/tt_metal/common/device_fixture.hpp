@@ -79,7 +79,7 @@ protected:
     DeviceFixture(size_t l1_small_size = DEFAULT_L1_SMALL_SIZE, size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE) :
         DispatchFixture(l1_small_size, trace_region_size) {}
 
-    size_t num_devices_;
+    size_t num_devices_{};
 
 public:
     std::pair<unsigned, unsigned> worker_grid_minimum_dims() {
@@ -135,9 +135,9 @@ protected:
         this->num_devices_ = this->reserved_devices_.size();
     }
 
-    tt::tt_metal::IDevice* device_;
+    tt::tt_metal::IDevice* device_{};
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
-    size_t num_devices_;
+    size_t num_devices_{};
 };
 
 class DeviceSingleCardBufferFixture : public DeviceSingleCardFixture {};

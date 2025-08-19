@@ -1076,7 +1076,7 @@ void ControlPlane::write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t c
             // eth_chans are the active ethernet channels on this chip
             const auto& eth_chan_intra_mesh_routing_table = chip_intra_mesh_routing_tables[eth_chan];
             const auto& eth_chan_inter_mesh_routing_table = chip_inter_mesh_routing_tables[eth_chan];
-            tt::tt_fabric::fabric_router_l1_config_t fabric_router_config;
+            tt::tt_fabric::fabric_router_l1_config_t fabric_router_config{};
             std::fill_n(
                 fabric_router_config.intra_mesh_table.dest_entry,
                 tt::tt_fabric::MAX_MESH_SIZE,

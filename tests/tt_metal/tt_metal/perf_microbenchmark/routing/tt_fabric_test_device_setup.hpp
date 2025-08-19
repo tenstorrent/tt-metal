@@ -58,7 +58,7 @@ public:
 
 protected:
     CoreCoord logical_core_;
-    uint32_t worker_id_;
+    uint32_t worker_id_{};
     std::string kernel_src_;
     TestDevice* test_device_ptr_;
 };

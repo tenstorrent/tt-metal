@@ -1105,7 +1105,7 @@ int main(int argc, char** argv) {
             tt::DataFormat::Float16_b,
             tt::DataFormat::Float16_b);
 
-        std::chrono::duration<double, std::nano> duration;
+        std::chrono::duration<double, std::nano> duration{};
 
         // took from run_operation.cpp
         auto start = std::chrono::high_resolution_clock::now();

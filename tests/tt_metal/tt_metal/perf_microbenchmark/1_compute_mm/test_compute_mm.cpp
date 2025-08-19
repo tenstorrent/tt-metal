@@ -631,7 +631,7 @@ int main(int argc, char** argv) {
                         rmax_tflops[i]);
                 } else {
                     log_debug(LogTest, "calling EnqueueProgram");
-                    std::chrono::duration<double, std::nano> duration;
+                    std::chrono::duration<double, std::nano> duration{};
                     auto t_begin = std::chrono::high_resolution_clock::now();
                     EnqueueProgram(device->command_queue(), program, false);
                     Finish(device->command_queue());

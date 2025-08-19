@@ -631,7 +631,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     union {
         float f;
         uint32_t u;
-    } scale_union;
+    } scale_union{};
     scale_union.f = scale.value_or(1.0f);
 
     // Create core groups for reduce cores

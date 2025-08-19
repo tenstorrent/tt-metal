@@ -531,7 +531,7 @@ KernelGroup* detail::ProgramImpl::kernels_on_core(const CoreCoord& core, uint32_
 }
 
 struct KernelGroupInt {
-    bool valid;
+    bool valid{};
     kernel_id_array_t kernel_ids;
 
     bool operator==(const KernelGroupInt &b) const;
