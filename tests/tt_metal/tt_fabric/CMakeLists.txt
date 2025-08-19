@@ -82,7 +82,6 @@ target_link_libraries(
     test_fabric_smoke
     PRIVATE
         tt_metal
-        fabric
         test_common_libs
 )
 
