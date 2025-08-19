@@ -89,6 +89,7 @@ class SwinSPerformanceRunnerInfra:
         torch_input_tensor = self.torch_input_tensor if torch_input_tensor is None else torch_input_tensor
 
         n, c, h, w = torch_input_tensor.shape
+        assert n % self.num_devices == 0, f"n isn't evenly divided by the available number of devices"
         n = n // self.num_devices if n // self.num_devices != 0 else n
         if c == channels:
             c = padded_channels

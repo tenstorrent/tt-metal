@@ -7,7 +7,6 @@ import pytest
 import torch
 from loguru import logger
 from tqdm import tqdm
-from transformers import AutoImageProcessor
 
 import ttnn
 from models.demos.mobilenetv2.common import load_torch_model
@@ -96,8 +95,6 @@ def run_mobilenetv2_imagenet_demo(
         profiler.start(f"compile")
         pipe.compile(host_input_tensor)
         profiler.end(f"compile")
-        model_version = "microsoft/resnet-50"
-        image_processor = AutoImageProcessor.from_pretrained(model_version)
         logger.info("ImageNet-1k validation Dataset")
         input_loc = load_imagenet_dataset(model_location_generator)
         data_loader = get_data_loader(input_loc, batch_size, iterations, entire_imagenet_dataset)
