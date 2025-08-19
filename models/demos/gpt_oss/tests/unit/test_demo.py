@@ -33,7 +33,9 @@ BASE_PROMPT_LEN = 81  # Send empty prompt to apply_chat_template
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8", "bf4"])
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 12087296}], indirect=True
+)
 def test_model(
     mesh_device,
     generation_length,
@@ -123,51 +125,88 @@ def test_model(
     outputs += prefill_token_out
     print(f"Prefill token output: {prefill_token_out}")
 
-    # Generate
-    iteration = 0
+    ###### Decode Setup ######
     prev_token_id = prefill_out_token_id.unsqueeze(0)
-    while iteration < generation_length:
-        cur_pos = decode_start_pos + iteration
-        cur_seq_len = cur_pos + 1
+    cur_pos = decode_start_pos
 
-        # Prepare inputs for the next iteration
-        position_ids = torch.tensor([cur_pos]).unsqueeze(0)
-        cos, sin = RopeEmbeddings(rope_temp_tensor, position_ids)
+    # Prepare inputs
+    position_ids = torch.tensor([cur_pos]).unsqueeze(0)
+    cos, sin = RopeEmbeddings(rope_temp_tensor, position_ids)
+    sliding_mask = get_decode_mask(position_ids[0].item(), config.sliding_window)
+    sliding_mask = sliding_mask.repeat(1, config.num_attention_heads // mesh_device.shape[1], 1, 1).transpose(1, 2)
 
-        sliding_mask = get_decode_mask(position_ids[0].item(), config.sliding_window)
-        sliding_mask = sliding_mask.repeat(1, config.num_attention_heads // mesh_device.shape[1], 1, 1).transpose(1, 2)
+    tt_mask = None  # No causal mask needed in decode mode
+    tt_sliding_mask = ttnn.from_torch(sliding_mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_position_idx = ttnn.from_torch(position_ids, device=mesh_device, dtype=ttnn.int32)
+    rope_stuff = (apply_rope, tt_cos, tt_sin)
 
-        tt_mask = None  # No causal mask needed in decode mode
-        tt_sliding_mask = ttnn.from_torch(
-            sliding_mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
-        )
-        tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-        tt_position_idx = ttnn.from_torch(
-            position_ids, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
-        )
+    tt_input_id = ttnn.from_torch(prev_token_id, device=mesh_device, dtype=ttnn.uint32)
 
-        rope_stuff = (apply_rope, tt_cos, tt_sin)
-
-        tt_input_id = ttnn.from_torch(
-            prev_token_id, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32
-        )
-
-        # Get output
-        ta = perf_counter()
+    ###### Compile ######
+    def run_decode():
         tt_output = tt_model(
             input_ids=tt_input_id,
             attention_masks={"full_attention": tt_mask, "sliding_attention": tt_sliding_mask},
             position_embeddings=rope_stuff,
             position_idx=tt_position_idx,
         )
+        ttnn.plus_one(tt_position_idx)
 
-        # Handle output
+        return tt_output
+
+    print("Compiling decode model")
+    tt_output = run_decode()
+
+    # Reset tensors
+    tt_position_idx_reset = ttnn.from_torch(position_ids, dtype=ttnn.int32)
+    ttnn.copy_host_to_device_tensor(tt_position_idx_reset, tt_position_idx)
+
+    print("Capturing decode trace")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    tt_output = run_decode()
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Reset tensors
+    tt_position_idx_reset = ttnn.from_torch(position_ids, dtype=ttnn.int32)
+    ttnn.copy_host_to_device_tensor(tt_position_idx_reset, tt_position_idx)
+
+    # Generate
+    print("Starting generation")
+    iteration = 0
+    while iteration < generation_length:
+        cur_pos = decode_start_pos + iteration
+
+        # Prepare inputs for the next iteration
+        position_ids = torch.tensor([cur_pos]).unsqueeze(0)
+        cos, sin = RopeEmbeddings(rope_temp_tensor, position_ids)
+        sliding_mask = get_decode_mask(position_ids[0].item(), config.sliding_window)
+        sliding_mask = sliding_mask.repeat(1, config.num_attention_heads // mesh_device.shape[1], 1, 1).transpose(1, 2)
+
+        # Host tensors
+        tt_sliding_mask_in = ttnn.from_torch(sliding_mask, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        tt_cos_in = ttnn.from_torch(cos.unsqueeze(-2), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        tt_sin_in = ttnn.from_torch(sin.unsqueeze(-2), layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        tt_input_id_in = ttnn.from_torch(prev_token_id, dtype=ttnn.uint32)
+
+        # Copy host tensors to device
+        ttnn.copy_host_to_device_tensor(tt_sliding_mask_in, tt_sliding_mask)
+        ttnn.copy_host_to_device_tensor(tt_cos_in, tt_cos)
+        ttnn.copy_host_to_device_tensor(tt_sin_in, tt_sin)
+        ttnn.copy_host_to_device_tensor(tt_input_id_in, tt_input_id)
+
+        # Run decode
+        ta = perf_counter()
+        ttnn.execute_trace(mesh_device, trace_id, blocking=False)
         tt_output_tensor = ttnn.get_device_tensors(tt_output)[0]
-
+        tt_output_tensor = tt_output_tensor.cpu(blocking=True, cq_id=0)
         tt_output_tensor = ttnn.to_torch(tt_output_tensor)[:, 0, :]
         tb = perf_counter()
+
         print(f"Iteration {iteration} took {tb - ta:.4f} seconds and t/s: {1 / (tb - ta):.2f}")
+
         output_token_id = torch.argmax(tt_output_tensor.float(), dim=-1)
         output_token = tokenizer.decode(output_token_id.flatten())
         outputs += output_token
