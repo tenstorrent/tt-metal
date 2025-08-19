@@ -54,11 +54,13 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim0) {
     auto tensor_0 = xtensors_back[0];
     auto tensor_1 = xtensors_back[1];
 
+    auto num_devices = ttml::autograd::ctx().get_device().num_devices();
+
     EXPECT_EQ(tensor_0.shape()[0], size / 2);
     EXPECT_EQ(tensor_1.shape()[0], size / 2);
     for (int i = 0; i < size / 2; ++i) {
-        EXPECT_EQ(tensor_0(i, 0, 0, 0), 2 * i);
-        EXPECT_EQ(tensor_1(i, 0, 0, 0), 2 * (i + size / 2));
+        EXPECT_EQ(tensor_0(i, 0, 0, 0), num_devices * i);
+        EXPECT_EQ(tensor_1(i, 0, 0, 0), num_devices * (i + size / 2));
     }
 }
 
@@ -78,11 +80,13 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim1) {
     auto tensor_0 = xtensors_back[0];
     auto tensor_1 = xtensors_back[1];
 
+    auto num_devices = ttml::autograd::ctx().get_device().num_devices();
+
     EXPECT_EQ(tensor_0.shape()[1], size / 2);
     EXPECT_EQ(tensor_1.shape()[1], size / 2);
     for (int i = 0; i < size / 2; ++i) {
-        EXPECT_EQ(tensor_0(0, i, 0, 0), 2 * i);
-        EXPECT_EQ(tensor_1(0, i, 0, 0), 2 * (i + size / 2));
+        EXPECT_EQ(tensor_0(0, i, 0, 0), num_devices * i);
+        EXPECT_EQ(tensor_1(0, i, 0, 0), num_devices * (i + size / 2));
     }
 }
 
@@ -102,11 +106,13 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim2) {
     auto tensor_0 = xtensors_back[0];
     auto tensor_1 = xtensors_back[1];
 
+    auto num_devices = ttml::autograd::ctx().get_device().num_devices();
+
     EXPECT_EQ(tensor_0.shape()[2], size / 2);
     EXPECT_EQ(tensor_1.shape()[2], size / 2);
     for (int i = 0; i < size / 2; ++i) {
-        EXPECT_EQ(tensor_0(0, 0, i, 0), 2 * i);
-        EXPECT_EQ(tensor_1(0, 0, i, 0), 2 * (i + size / 2));
+        EXPECT_EQ(tensor_0(0, 0, i, 0), num_devices * i);
+        EXPECT_EQ(tensor_1(0, 0, i, 0), num_devices * (i + size / 2));
     }
 }
 
@@ -126,10 +132,12 @@ TEST_F(TrivialTnnFixedDistributedTest, TestCustomScatterDim3) {
     auto tensor_0 = xtensors_back[0];
     auto tensor_1 = xtensors_back[1];
 
+    auto num_devices = ttml::autograd::ctx().get_device().num_devices();
+
     EXPECT_EQ(tensor_0.shape()[3], size / 2);
     EXPECT_EQ(tensor_1.shape()[3], size / 2);
     for (int i = 0; i < size / 2; ++i) {
-        EXPECT_EQ(tensor_0(0, 0, 0, i), 2 * i);
-        EXPECT_EQ(tensor_1(0, 0, 0, i), 2 * (i + size / 2));
+        EXPECT_EQ(tensor_0(0, 0, 0, i), num_devices * i);
+        EXPECT_EQ(tensor_1(0, 0, 0, i), num_devices * (i + size / 2));
     }
 }

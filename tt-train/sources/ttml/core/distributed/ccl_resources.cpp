@@ -9,8 +9,13 @@ namespace ttml::core::distributed {
 
 CCLResources::CCLResources() {
     auto* device = &ttml::autograd::ctx().get_device();
-    auto core_range_set = tt::tt_metal::CoreRangeSet(
-        tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{7, 6}});
+
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+
+    auto core_range_set = tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange{
+        tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{num_cores_x - 1U, num_cores_y - 1U}});
 
     barrier_semaphores.reserve(kNumSemaphoresPairs);
     all_gather_semaphores.reserve(kNumSemaphoresPairs * kNumSemaphoresPerAllGather);
