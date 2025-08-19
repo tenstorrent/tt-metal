@@ -470,6 +470,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      * Compute Kernel: input cb -> tilize_block -> input tiles -> reduce_h max -> output tiles -> untilize_block ->
      * output cb
      */
+
+    const uint32_t num_of_pages_to_reserve_back = 0;  // since we do not have a writer
+
     std::vector<uint32_t> compute_ct_args = {
         params.in_ntiles_c,             // 0
         kernel_h * kernel_w,            // 1
@@ -483,7 +486,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id_0,              // 9
         in_scalar_cb_id_1,              // 10
         out_cb_id,                      // 11
-        one_scalar_per_core};           // 12
+        one_scalar_per_core,
+        num_of_pages_to_reserve_back};          // 12
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
