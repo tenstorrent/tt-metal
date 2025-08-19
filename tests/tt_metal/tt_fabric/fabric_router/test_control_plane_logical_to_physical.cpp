@@ -347,7 +347,11 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds4x1Mesh) {
     auto topology_info = build_mesh_adjacency_map(
         user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
 
-    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info);
+    auto adj_map_sorter = [&](const IntraMeshAdjacencyMap& topology_info) {
+        return std::make_pair(topology_info.adjacency_map, 0);  // Start with chip 0
+    };
+
+    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info, adj_map_sorter);
 
     // Verify all chip mappings for 4x1 mesh
     verify_physical_chip_ids(
@@ -370,7 +374,11 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds1x8Mesh) {
     auto topology_info = build_mesh_adjacency_map(
         user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
 
-    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info);
+    auto adj_map_sorter = [&](const IntraMeshAdjacencyMap& topology_info) {
+        return std::make_pair(topology_info.adjacency_map, 0);  // Start with chip 0
+    };
+
+    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info, adj_map_sorter);
 
     // Verify all chip mappings for 1x8 mesh
     verify_physical_chip_ids(
@@ -402,7 +410,10 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds1x8MeshOn2x
     auto topology_info = build_mesh_adjacency_map(
         user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
 
-    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info);
+    auto adj_map_sorter = [&](const IntraMeshAdjacencyMap& topology_info) {
+        return std::make_pair(topology_info.adjacency_map, 0);  // Start with chip 0
+    };
+    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info, adj_map_sorter);
 
     // Verify all chip mappings for 1x8 mesh
     verify_physical_chip_ids(

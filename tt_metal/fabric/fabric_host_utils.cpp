@@ -336,15 +336,64 @@ IntraMeshAdjacencyMap build_mesh_adjacency_map(
     return topology_info;
 }
 
-std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(const IntraMeshAdjacencyMap& topology_info) {
-    // For consistency across invocations on the same machine always start the DFS on the chip with the lowest id.
-    auto first_chip = std::min_element(topology_info.adjacency_map.begin(), topology_info.adjacency_map.end())->first;
+std::pair<std::unordered_map<chip_id_t, std::vector<chip_id_t>>, chip_id_t> sort_adjacency_map_by_eth_coords(
+    const IntraMeshAdjacencyMap& topology_info) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto eth_coords = cluster.get_user_chip_ethernet_coordinates();
+    if (eth_coords.size() != topology_info.adjacency_map.size()) {
+        return {
+            topology_info.adjacency_map,
+            std::min_element(topology_info.adjacency_map.begin(), topology_info.adjacency_map.end())->first};
+    }
+    auto min_eth_chip = std::min_element(eth_coords.begin(), eth_coords.end(), [](const auto& a, const auto& b) {
+        if (a.second.y != b.second.y) {
+            return a.second.y < b.second.y;
+        }
+        return a.second.x < b.second.x;
+    });
+
+    auto adjacency_map = topology_info.adjacency_map;
+    for (auto& [chip_id, neighbors] : adjacency_map) {
+        std::sort(neighbors.begin(), neighbors.end(), [&eth_coords](chip_id_t a, chip_id_t b) {
+            const auto& coord_a = eth_coords.at(a);
+            const auto& coord_b = eth_coords.at(b);
+            if (coord_a.y != coord_b.y) {
+                return coord_a.y < coord_b.y;
+            }
+            return coord_a.x < coord_b.x;
+        });
+    }
+    return {adjacency_map, min_eth_chip->first};
+}
+
+std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(
+    const IntraMeshAdjacencyMap& topology_info,
+    std::optional<std::function<std::pair<AdjacencyMap, chip_id_t>(const IntraMeshAdjacencyMap&)>> graph_sorter) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    chip_id_t first_chip = 0;
+    auto adj_map = topology_info.adjacency_map;
+    if (cluster.get_board_type(0) == BoardType::N300) {
+        // #26987: On N300 based systems we currently use Ethernet Coordinates to sort the adjacency map.
+        // This ensures that the Fabric Node IDs are deterministically mapped to physical chips across hosts.
+        // If this is not the case, we will need to regenerate MGDs depending on the host being run on, due to
+        // the current infra tightly coupling logical and physical representations.
+        // This will not be an issue once we have MGD 2.0 in logical space and algorithms to bind logical connections
+        // in the MGD to physical ethernet channels.
+        if (!graph_sorter.has_value()) {
+            // Default behavior: sort adjacency map by Ethernet coordinates
+            std::tie(adj_map, first_chip) = sort_adjacency_map_by_eth_coords(topology_info);
+        } else {
+            // User provided a sorting function. This is primarily done for testing.
+            std::tie(adj_map, first_chip) = graph_sorter.value()(topology_info);
+        }
+    } else {
+        first_chip = std::min_element(topology_info.adjacency_map.begin(), topology_info.adjacency_map.end())->first;
+    }
 
     // This vector contains a 1D view of devices in the mesh, constructed using DFS. This works since we are using a
     // mesh topology which guarantees connectivity.
     std::vector<chip_id_t> physical_chip_ids;
-    create_1d_mesh_view_with_dfs(
-        topology_info.adjacency_map, first_chip, topology_info.ns_size * topology_info.ew_size, physical_chip_ids);
+    create_1d_mesh_view_with_dfs(adj_map, first_chip, topology_info.ns_size * topology_info.ew_size, physical_chip_ids);
     return physical_chip_ids;
 }
 
