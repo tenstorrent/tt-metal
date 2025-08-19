@@ -28,32 +28,6 @@ ALWI void REL() { release_dst(); }
 
 namespace NAMESPACE {
 
-// ================================
-// Remove when Welford's is hooked up
-// Dummy mean and variance calculations
-// Mean = 2 * Wt * x (dst1)
-// Variance = 4 * Wt * x (dst2)
-inline void dummy_mean_and_variance(
-    uint32_t cb_x, uint32_t j, uint32_t wt, uint32_t Wt, uint32_t dst0, uint32_t dst1, uint32_t dst2) {
-    if (wt + j < Wt - 1) {
-        return;
-    }
-
-    copy_tile_to_dst_init_short(cb_x, 0);
-    copy_tile(cb_x, 0, dst1);
-    copy_tile_to_dst_init_short(cb_x, 0);
-    copy_tile(cb_x, 0, dst2);
-
-    add_binary_tile_init();
-    for (uint32_t i = 0; i < 4 * Wt - 1; i++) {
-        if (i < 2 * Wt - 1) {
-            add_binary_tile(dst1, dst0);
-        }
-        add_binary_tile(dst2, dst0);
-    }
-}
-// ================================
-
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
