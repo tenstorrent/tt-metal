@@ -14,7 +14,11 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-bool use_composite_all_gather(const ttnn::Tensor& input_tensor, const int32_t dim) {
+bool use_composite_all_gather(
+    const ttnn::Tensor& input_tensor,
+    const int32_t dim,
+    const uint32_t semaphore_size,
+    const std::optional<ttnn::MemoryConfig>& memory_config) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
@@ -23,6 +27,13 @@ bool use_composite_all_gather(const ttnn::Tensor& input_tensor, const int32_t di
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
+
+    auto input_memory_config = input_tensor.memory_config();
+    auto output_memory_config = memory_config.value_or(input_memory_config);
+
+    if (input_memory_config.memory_layout() != output_memory_config.memory_layout() && semaphore_size < 2) {
+        return true;
+    }
 
     // Use composite for row-major tensors
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
@@ -68,6 +79,8 @@ ttnn::Tensor composite_all_gather(
     // and after re-tilizing
     DataType input_dtype = input_tensor.dtype();
     bool convert_to_bfloat16_for_composite = is_tiled_and_not_tile_aligned && input_dtype == DataType::BFLOAT8_B;
+    auto input_memory_config = input_tensor.memory_config();
+    auto output_memory_config = memory_config.value_or(input_memory_config);
 
     // Convert to row major
     if (is_tiled_and_not_tile_aligned) {
@@ -79,10 +92,9 @@ ttnn::Tensor composite_all_gather(
     }
 
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
-        input_tensor, num_links, memory_config, ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
+        input_tensor, num_links, input_memory_config, ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
 
     ttnn::Tensor all_gather_output_tensor = ttnn::concat(broadcasted_tensors, gather_dim);
-
     // Convert back to tiled
     if (is_tiled_and_not_tile_aligned) {
         all_gather_output_tensor = ttnn::to_layout(all_gather_output_tensor, Layout::TILE);
@@ -91,6 +103,10 @@ ttnn::Tensor composite_all_gather(
         if (convert_to_bfloat16_for_composite) {
             all_gather_output_tensor = ttnn::typecast(all_gather_output_tensor, input_dtype);
         }
+    }
+
+    if (input_memory_config.memory_layout() != output_memory_config.memory_layout()) {
+        all_gather_output_tensor = ttnn::to_memory_config(all_gather_output_tensor, output_memory_config);
     }
 
     return all_gather_output_tensor;
@@ -123,7 +139,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    if (use_composite_all_gather(input_tensor, dim)) {
+    if (use_composite_all_gather(input_tensor, dim, multi_device_global_semaphore.size(), memory_config)) {
         return composite_all_gather(
             input_tensor,
             dim,
@@ -160,7 +176,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    if (use_composite_all_gather(input_tensor, dim)) {
+    if (use_composite_all_gather(input_tensor, dim, multi_device_global_semaphore.size(), memory_config)) {
         return composite_all_gather(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
         return ttnn::operations::experimental::ccl::all_gather_async(
@@ -191,7 +207,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    if (use_composite_all_gather(input_tensors[0], dim)) {
+    if (use_composite_all_gather(input_tensors[0], dim, multi_device_global_semaphore.size(), memory_config)) {
         return composite_all_gather(
             input_tensors,
             dim,
@@ -226,7 +242,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    if (use_composite_all_gather(input_tensor, dim)) {
+    if (use_composite_all_gather(input_tensor, dim, multi_device_global_semaphore.size(), memory_config)) {
         return composite_all_gather(
             input_tensor, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
     } else {
@@ -259,7 +275,7 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_optimal_ccl_for_llama,
     const std::optional<GlobalSemaphore>& barrier_semaphore) {
-    if (use_composite_all_gather(input_tensors[0], dim)) {
+    if (use_composite_all_gather(input_tensors[0], dim, multi_device_global_semaphore.size(), memory_config)) {
         return composite_all_gather(
             input_tensors, dim, num_preferred_links.value_or(1), memory_config, subdevice_id, cluster_axis);
     } else {
