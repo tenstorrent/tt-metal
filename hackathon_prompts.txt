@@ -280,4 +280,132 @@ output = ttnn.adaptive_max_pool2d(input_tensor, batch_size=1, input_h=64, input_
 
 **Ready for Integration**: All changes implemented from Python entry point through C++ frontend, maintaining full compatibility with existing codebase architecture.
 
+Entry 6 - Identify Low Hanging Fruits for Next Hackathon Implementations
+Time: Hackathon Day 1
+Prompt: "Since this seems to be going quite fast can you propose other low hanging fruits we can implement on this hackaton similar to adaptive pool when pool exists. Dig into sliding window based ops that we have and come up with ideas on what to implement next"
+
+Response: Analyzed sliding window operations and identified 8 high-impact low-hanging fruit implementations for the hackathon.
+
+# 🚀 **LOW HANGING FRUIT IMPLEMENTATIONS FOR HACKATHON**
+
+Based on analysis of existing sliding window infrastructure, here are **8 prioritized operations** that can be implemented quickly by reusing existing code:
+
+## 🥇 **TIER 1: IMMEDIATE WINS (1-2 days each)**
+
+### 1. **Fractional Max/Avg Pool2D** ⭐⭐⭐⭐⭐
+**Reuse:** 95% of existing pool2d infrastructure
+**Effort:** 1-2 days
+**Impact:** Very high - enables stochastic downsampling in CNNs
+```python
+ttnn.fractional_max_pool2d(input_tensor, output_size, random_samples=None)
+ttnn.fractional_avg_pool2d(input_tensor, output_size, random_samples=None)
+```
+**Key difference:** Instead of fixed kernel/stride, uses random sampling based on output ratio
+**Implementation:** Add random kernel size generation + reuse pool2d_invoke
+
+### 2. **Interpolate/Resize (Nearest Neighbor)** ⭐⭐⭐⭐⭐
+**Reuse:** 90% of upsample infrastructure (already exists!)
+**Effort:** 1 day (mostly API extension)
+**Impact:** Critical for model compatibility
+```python
+ttnn.interpolate(input_tensor, size=None, scale_factor=None, mode='nearest')
+```
+**Implementation:** Extend existing upsample operation with size parameter
+
+### 3. **LP Pooling (L1, L2, etc.)** ⭐⭐⭐⭐
+**Reuse:** 90% of existing pool2d infrastructure
+**Effort:** 1-2 days
+**Impact:** High - used in advanced architectures
+```python
+ttnn.lp_pool2d(input_tensor, norm_type, kernel_size, stride, padding)
+```
+**Implementation:** Modify pool2d kernel to compute Lp norm instead of max/avg
+
+## 🥈 **TIER 2: MODERATE EFFORT (2-3 days each)**
+
+### 4. **Separable/Depthwise Conv2D** ⭐⭐⭐⭐
+**Reuse:** 85% of conv2d infrastructure
+**Effort:** 2-3 days
+**Impact:** Very high - essential for MobileNet architectures
+```python
+ttnn.separable_conv2d(input_tensor, weights, bias, stride, padding)
+```
+**Implementation:** Split regular conv2d into depthwise + pointwise convolutions
+
+### 5. **Dilated/Atrous Pooling** ⭐⭐⭐
+**Reuse:** 80% of pool2d infrastructure
+**Effort:** 2-3 days
+**Impact:** High - used in semantic segmentation
+```python
+ttnn.dilated_max_pool2d(input_tensor, kernel_size, stride, padding, dilation)
+```
+**Implementation:** Extend existing dilation support from conv2d to pooling
+
+### 6. **Global Average/Max Pool** ⭐⭐⭐⭐⭐
+**Reuse:** 95% of adaptive pool infrastructure (trivial extension!)
+**Effort:** 0.5 days
+**Impact:** Very high - commonly used in classifiers
+```python
+ttnn.global_avg_pool2d(input_tensor) # equivalent to adaptive_avg_pool2d(input, [1,1])
+ttnn.global_max_pool2d(input_tensor)
+```
+**Implementation:** Wrapper around adaptive pool with output_size=[1,1]
+
+## 🥉 **TIER 3: ADVANCED FEATURES (3-4 days each)**
+
+### 7. **Reflect/Circular Pad + Pool** ⭐⭐⭐
+**Reuse:** 70% of pool2d + existing pad operations
+**Effort:** 3-4 days
+**Impact:** Medium - used in advanced vision models
+```python
+ttnn.pool2d_with_reflect_pad(input_tensor, kernel_size, stride, pad_mode='reflect')
+```
+**Implementation:** Combine existing pad operations with pooling
+
+### 8. **Multi-Scale Pooling** ⭐⭐⭐⭐
+**Reuse:** 80% of pool2d infrastructure
+**Effort:** 3-4 days
+**Impact:** High - used in feature pyramid networks
+```python
+ttnn.multi_scale_pool2d(input_tensor, scales=[1,2,4,8])
+```
+**Implementation:** Apply pooling at multiple scales and concatenate results
+
+---
+
+## 📈 **IMPLEMENTATION STRATEGY**
+
+### **Phase 1 (Day 1-2):** Implement Global Pooling + Fractional Pooling
+- **Global Pool:** 4 hours (trivial wrapper)
+- **Fractional Pool:** 1.5 days (random sampling logic)
+
+### **Phase 2 (Day 3-4):** Add Interpolate + LP Pooling
+- **Interpolate:** 1 day (extend upsample)
+- **LP Pooling:** 1 day (modify kernel math)
+
+### **Phase 3 (Day 5-6):** Separable Conv2D
+- **Depthwise Conv:** 2-3 days (split conv operation)
+
+### **Phase 4 (Day 7+):** Advanced features if time permits
+
+---
+
+## 🔑 **KEY REUSE PATTERNS IDENTIFIED**
+
+1. **Sliding Window Config:** All operations reuse SlidingWindowConfig
+2. **Halo Operations:** All leverage existing halo infrastructure
+3. **Sharding Logic:** Memory management patterns are identical
+4. **Kernel Templates:** Pool/conv kernels can be parameterized
+5. **Python Bindings:** Follow exact same pybind11 patterns
+
+## 🎯 **EXPECTED OUTCOMES**
+
+With **6 operations implemented** in the hackathon:
+- **5 critical PyTorch compatibility gaps closed**
+- **Significant model coverage improvement** (MobileNet, EfficientNet, etc.)
+- **Clean, maintainable code** following existing patterns
+- **Comprehensive test suites** using established frameworks
+
+This represents **maximum value delivery** with **minimal risk** by leveraging your existing robust sliding window infrastructure!
+
 ---
