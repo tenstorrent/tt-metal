@@ -152,7 +152,6 @@ AllToAllCombineDeviceOperation::invoke(
     const tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const std::optional<uint32_t>& axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const bool locally_reduced,
     const CoreRangeSet& worker_core_range_set) {

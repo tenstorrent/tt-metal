@@ -43,7 +43,6 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
         topology_,
         memory_config_,
         axis,
-        subdevice_id,
         optional_output_tensor,
         locally_reduced,
         subdevice_core_range_set);
