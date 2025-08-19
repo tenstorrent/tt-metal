@@ -29,33 +29,6 @@ ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
 
 namespace NAMESPACE {
-
-// ================================
-// Remove when Welford's is hooked up
-// Dummy mean and variance calculations
-// Mean = 2 * Wt * x (dst1)
-// Variance = 4 * Wt * x (dst2)
-inline void dummy_mean_and_variance(
-    uint32_t cb_x, uint32_t j, uint32_t wt, uint32_t Wt, uint32_t dst0, uint32_t dst1, uint32_t dst2) {
-    if (wt + j < Wt - 1) {
-        return;
-    }
-
-    copy_tile_to_dst_init_short(cb_x, 0);
-    copy_tile(cb_x, 0, dst1);
-    copy_tile_to_dst_init_short(cb_x, 0);
-    copy_tile(cb_x, 0, dst2);
-
-    add_binary_tile_init();
-    for (uint32_t i = 0; i < 4 * Wt - 1; i++) {
-        if (i < 2 * Wt - 1) {
-            add_binary_tile(dst1, dst0);
-        }
-        add_binary_tile(dst2, dst0);
-    }
-}
-// ================================
-
 void MAIN {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
@@ -63,13 +36,8 @@ void MAIN {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(2);
     constexpr uint32_t do_beta = get_compile_time_arg_val(3);
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t W = get_compile_time_arg_val(5);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(6);
-    constexpr bool rms_norm = static_cast<bool>(get_compile_time_arg_val(7));
-    constexpr bool fuse_pre_add = static_cast<bool>(get_compile_time_arg_val(8));
 
     constexpr uint32_t onetile = 1;
-    constexpr bool layernorm = !rms_norm;
     // reserve one tile for zeros on cb_in2
     // TODO(AP): check that if DST is indeed zeroed by release_dst (and initially), we can use it as zeroes
 
@@ -83,201 +51,208 @@ void MAIN {
     constexpr auto cb_out = tt::CBIndex::c_16;    // output
     constexpr auto cb_gamma = tt::CBIndex::c_5;
     constexpr auto cb_beta = tt::CBIndex::c_6;
-    constexpr auto cb_xmm = rms_norm && !fuse_pre_add ? cb_in : tt::CBIndex::c_24;  // x^2 or x - E[x]
-
+#if defined RMSNORM and not defined FUSE_PRE_ADD
+    constexpr uint32_t cb_xmm = cb_in;  // x minus mean
+#else
+    constexpr uint32_t cb_xmm = tt::CBIndex::c_24;  // x minus mean
+#endif
     constexpr auto cb_ex = tt::CBIndex::c_18;      // E[x]
     constexpr auto cb_ex2 = tt::CBIndex::c_19;     // E[(x-E[x])^2]
+    constexpr auto cb_xmm2 = tt::CBIndex::c_20;    // xmm^2
     constexpr auto cb_ex2pe = tt::CBIndex::c_21;   // E[(x-E[x])^2]+eps
     constexpr auto cb_fusion = tt::CBIndex::c_22;  // stream gamma/beta
-    constexpr auto cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
-
     constexpr auto scaler0 = 0;
+#ifdef FUSE_PRE_ADD
+#ifdef RMSNORM
+    constexpr uint32_t cb_x = cb_xmm;
+#else
+    constexpr uint32_t cb_x = tt::CBIndex::c_23;
+#endif
+#else
+    constexpr uint32_t cb_x = cb_in;
+#endif
 
-    // x^2 (only used for RMS norm)
-    constexpr auto cb_x2 = []() -> auto {
-        if constexpr (rms_norm) {
-            return tt::CBIndex::c_20;
-        }
-
-        return tt::CBIndex::SIZE;  // Invalid, just needed for compilation
-    }();
-
-    //  Either in or in + b if doing fused pre-add
-    constexpr auto cb_x = []() -> auto {
-        if constexpr (fuse_pre_add) {
-            if constexpr (rms_norm) {
-                return cb_xmm;
-            } else {
-                return tt::CBIndex::c_23;
-            }
-        } else {
-            return cb_in;
-        }
-    }();
-
-    constexpr int dst0 = 0;  // Input tile to Welford's algorithm
-    constexpr int dst1 = 1;  // Partial E[x] result for Welford's
-    constexpr int dst2 = 2;  // Partial Var[x] result for Welford's
+#ifdef FUSE_PRE_ADD
+    binary_op_init_common(cb_in, cb_inb, cb_x);
+#else
+    binary_op_init_common(cb_in, cb_in, cb_xmm2);
+#endif
 
     cb_wait_front(cb_scaler, 1);  // comes from the reader
     cb_wait_front(cb_eps, 1);     // comes from the reader
 
-    if constexpr (fuse_pre_add) {
-        binary_op_init_common(cb_in, cb_inb, cb_x);
-        pack_reconfig_data_format(cb_x);
-    } else {
-        if constexpr (rms_norm) {
-            binary_op_init_common(cb_xmm, cb_xmm, cb_x2);
-            pack_reconfig_data_format(cb_x2);
-        } else {
-            binary_op_init_common(cb_in, cb_scaler, cb_ex);
-            pack_reconfig_data_format(cb_ex);
-        }
-    }
+    constexpr int cb_im_or_out = (do_gamma | do_beta) ? cb_fusion : cb_out;
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        if constexpr (fuse_pre_add) {
-            // x = in + b
-            add_tiles_init(cb_in, cb_inb);
-            reconfig_data_format(cb_in, cb_inb);
-            pack_reconfig_data_format(cb_x);
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                ACQ();
-                cb_wait_front(cb_in, blk);
-                cb_wait_front(cb_inb, blk);
-                cb_reserve_back(cb_x, blk);
-                for (uint32_t j = 0; j < blk; j++) {
-                    add_tiles(cb_in, cb_inb, j, j, j);
-                    pack_tile(j, cb_x);
-                }
-                REL();
-                cb_push_back(cb_x, blk);  // push the sum into the same buffer
-                cb_pop_front(cb_in, blk);
-                cb_pop_front(cb_inb, blk);
+        constexpr int onetile = 1;
+        constexpr int dst0 = 0;
+
+/*
+ * X + Y
+ */
+#ifdef FUSE_PRE_ADD
+        reconfig_data_format(cb_in, cb_inb);
+        pack_reconfig_data_format(cb_x);
+        add_tiles_init(cb_in, cb_inb);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            ACQ();
+            // UNPACK(( { DPRINT  << "Waiting on cb_x" << ENDL(); } ));
+            cb_wait_front(cb_in, blk);
+            // UNPACK(( { DPRINT  << "Waiting on cb_inb" << ENDL(); } ));
+            cb_wait_front(cb_inb, blk);
+            // UNPACK(( { DPRINT  << "Done Waiting on cb_inb" << ENDL(); } ));
+            cb_reserve_back(cb_x, blk);
+            for (uint32_t j = 0; j < blk; j++) {
+                add_tiles(cb_in, cb_inb, j, j, j);
+                pack_tile(j, cb_x);
             }
-            if constexpr (rms_norm) {
-                reconfig_data_format(cb_in, cb_x, cb_inb, cb_x);
-            } else {
-                reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
+            REL();
+            cb_push_back(cb_x, blk);  // push the sum into the same buffer
+            cb_pop_front(cb_in, blk);
+            cb_pop_front(cb_inb, blk);
+        }
+#ifndef RMSNORM
+        reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
+#else
+        reconfig_data_format(cb_in, cb_x, cb_inb, cb_x);
+#endif
+        // by the end of this loop we should end up with Wt tiles in cb_x
+#else
+#ifndef RMSNORM
+        reconfig_data_format(cb_in, cb_scaler);
+        pack_reconfig_data_format(cb_ex);
+#else
+        reconfig_data_format(cb_in, cb_in);
+        pack_reconfig_data_format(cb_xmm2);
+#endif
+#endif
+
+#ifndef RMSNORM
+        /*
+         * E[x]
+         * means = ttnn.sum(x, 3, True, None, None, 1.0/W) # -> NCH1
+         */
+        ACQ();
+        cb_reserve_back(cb_ex, onetile);
+        reduce_init(cb_x, cb_scaler, cb_ex);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            cb_wait_front(cb_x, wt + blk);
+            for (uint32_t j = 0; j < blk; j++) {
+                reduce_tile(cb_x, cb_scaler, wt + j, scaler0, dst0);
             }
+            // we don't pop cb_x until we compute Ex
+        }
+        pack_tile(dst0, cb_ex);
+        reduce_uninit();
+        REL();
+
+        cb_push_back(cb_ex, 1);
+
+        /*
+         * x - E[x]
+         * compute xmm=x-mean. Reuse cb_x since we didn't pop anything from it
+         */
+        if constexpr (FLOAT32_DTYPE) {
+            reconfig_data_format(cb_x, cb_ex);
+        }
+        cb_wait_front(cb_ex, 1);  // should have 1 tile
+        cb_reserve_back(cb_xmm, Wt);
+        sub_bcast_cols_init_short(cb_x, cb_ex);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            ACQ();
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                sub_tiles_bcast_cols(cb_x, cb_ex, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
+                pack_tile(wtr, cb_xmm);
+            }
+            cb_push_back(cb_xmm, blk);
+            REL();
+        }
+        cb_pop_front(cb_ex, 1);
+        cb_pop_front(cb_x, Wt);
+
+#ifndef FUSE_PRE_ADD
+        reconfig_data_format_srca(cb_x, cb_xmm);
+#endif
+#endif
+
+        /* (x - E[x])^2
+         * compute temp = xmm*xmm = (x-E[x])^2
+         */
+        mul_tiles_init(cb_xmm, cb_xmm);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            cb_wait_front(cb_xmm, wt + blk);  // cumulative wait
+            cb_reserve_back(cb_xmm2, blk);    // can probably use less space for this if we block
+            ACQ();
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                mul_tiles(cb_xmm, cb_xmm, wt + wtr, wt + wtr, wtr);
+                // mul_tiles(cb_xmm, cb_col1, wt+wtr, wt+wtr, wtr);
+                pack_tile(wtr, cb_xmm2);
+            }
+            cb_push_back(cb_xmm2, blk);
+            REL();
         }
 
-        if constexpr (layernorm) {
-            // Simultaneous calculation of E[x] and Var[x] using Welford's algorithm
-            ACQ();
+#if defined RMSNORM and not defined FUSED_PRE_ADD
+        reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
+#endif
 
-            cb_reserve_back(cb_ex, onetile);
-            cb_reserve_back(cb_ex2, onetile);
-            uint32_t start_N = 0;
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                cb_wait_front(cb_x, wt + blk);
-                for (uint32_t j = 0; j < blk; j++) {
-                    // Welford's needs transposed input tile
-                    transpose_wh_init_short(cb_x);
-                    transpose_wh_tile(cb_x, wt + j, dst0);
-                    welford_init();
-                    welford(dst0, dst1, dst2, start_N, W, wt + j == Wt);
-                    start_N += tile_width;
-                }
-            }
-            // Transpose dst1 and dst2 back to columns
-            layernorm::compute::utils::transpose_pack_mean_and_variance(cb_ex, cb_ex2, dst1, dst2);
-            REL();
-
-            // x - E[x]
-            // Reuse cb_x since we didn't pop anything from it
-            if constexpr (FLOAT32_DTYPE) {
-                reconfig_data_format(cb_x, cb_ex);
-            }
-            cb_wait_front(cb_ex, onetile);  // should have 1 tile
-            cb_reserve_back(cb_xmm, Wt);
-            sub_bcast_cols_init_short(cb_x, cb_ex);
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                ACQ();
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    sub_tiles_bcast_cols(cb_x, cb_ex, wt + wtr, 0, wtr);
-                    pack_tile(wtr, cb_xmm);
-                }
-                cb_push_back(cb_xmm, blk);
-                REL();
-            }
-            cb_pop_front(cb_ex, 1);
-            cb_pop_front(cb_x, Wt);
-            cb_wait_front(cb_xmm, Wt);
-
-            if constexpr (!fuse_pre_add) {
-                reconfig_data_format_srca(cb_x, cb_xmm);
-            }
-        } else {
-            // RMS norm
-            // x^2
-            mul_tiles_init(cb_xmm, cb_xmm);
-            reconfig_data_format(cb_xmm, cb_xmm);
-            pack_reconfig_data_format(cb_x2);
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                cb_wait_front(cb_xmm, wt + blk);  // cumulative wait
-                cb_reserve_back(cb_x2, blk);      // can probably use less space for this if we block
-                ACQ();
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    mul_tiles(cb_xmm, cb_xmm, wt + wtr, wt + wtr, wtr);
-                    pack_tile(wtr, cb_x2);
-                }
-                cb_push_back(cb_x2, blk);
-                REL();
-            }
-
-            if constexpr (!fuse_pre_add) {
-                reconfig_data_format(cb_xmm, cb_x2, cb_xmm, cb_scaler);
-            }
-
-            // Accumulate x^2 into (∑x^2)/n
-            if constexpr (FLOAT32_DTYPE) {
-                reconfig_data_format(cb_x2, cb_scaler);
-            }
-            cb_reserve_back(cb_ex2, onetile);
-            ACQ();
-            cb_wait_front(cb_x2, Wt);
-            reduce_init(cb_x2, cb_scaler, cb_ex2);
-            for (uint32_t wt = 0; wt < Wt; wt += blk) {
-                // reduce
-                for (uint32_t wtr = 0; wtr < blk; wtr++) {
-                    reduce_tile(cb_x2, cb_scaler, wt + wtr, scaler0, dst0);
-                }
-            }
-            cb_pop_front(cb_x2, Wt);
-            pack_tile(dst0, cb_ex2);
-            REL();
-
-            cb_push_back(cb_ex2, onetile);
+        /* Var(x)
+         * compute E[(x-E[x])^2]
+         * IIRC E[x^2] - E[x]^2 trick was unstable
+         * TODO(AP): can save space here by reusing CB
+         */
+        if constexpr (FLOAT32_DTYPE) {
+            reconfig_data_format(cb_xmm2, cb_scaler);
         }
+        cb_reserve_back(cb_ex2, 1);
+        reduce_init(cb_xmm2, cb_scaler, cb_ex2);
+        ACQ();
+        cb_wait_front(cb_xmm2, Wt);
+        // cb_wait_front(cb_xmm, Wt);
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            // reduce
+            for (uint32_t wtr = 0; wtr < blk; wtr++) {
+                reduce_tile(cb_xmm2, cb_scaler, wt + wtr, scaler0, dst0);
+            }
+            // reduce_tile(cb_xmm, cb_scaler, wt+wtr, scaler0, dst0);
+        }
+        cb_pop_front(cb_xmm2, Wt);
+        pack_tile(dst0, cb_ex2);
+        reduce_uninit();
+        REL();
 
-        // Var(x) + eps
-        binary_op_init_common(cb_ex2, cb_eps, cb_ex2pe);
+        cb_push_back(cb_ex2, 1);
+        cb_wait_front(cb_ex2, 1);
+
+        /* Var(x) + eps
+         * add epsilon E[(x-E[x])^2]+eps
+         */
         if constexpr (FLOAT32_DTYPE) {
             reconfig_data_format(cb_ex2, cb_eps);
         }
-        cb_wait_front(cb_ex2, onetile);  // should have 1 tile
         ACQ();
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
-        cb_reserve_back(cb_ex2pe, onetile);
+        cb_reserve_back(cb_ex2pe, 1);  // 1
         sqrt_tile_init();
         sqrt_tile(dst0);
         recip_tile_init();
         recip_tile(dst0);
         pack_tile(dst0, cb_ex2pe);
-        cb_push_back(cb_ex2pe, onetile);
+        cb_push_back(cb_ex2pe, 1);
         REL();
-        cb_pop_front(cb_ex2, onetile);
+        cb_pop_front(cb_ex2, 1);
 
-        // Remainder of the layer/RMS norm operation
-        // norm(x) * gamma + beta,
-        // where norm(x) is either:
-        // (x - E[x]) / sqrt(E[(x-E[x])^2] + eps) for layernorm or
-        // x / sqrt((∑x^2)/n + eps)) for rms norm
-        cb_wait_front(cb_ex2pe, onetile);
+        /* ln(x) * gamma + beta (gamma and beta are optional)
+         * now xmm = (x-E[x])
+         * we have 1.0/sqrt( E[(x-E[x])^2] + eps) in cb_ex2pe
+         * just need to bcast_mul xmm with cb_ex2pe
+         */
+        cb_wait_front(cb_ex2pe, 1);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            // if (ht == 1) UNPACK(( DPRINT << "wt_2=" << wt << " " ));
+            // if (ht == 1) UNPACK(( DPRINT << "rem_2=" << rem << ENDL() ));
             reconfig_data_format(cb_xmm, cb_ex2pe);
             if constexpr (do_gamma == 0 && do_beta == 0) {
                 pack_reconfig_data_format(cb_out);
@@ -285,25 +260,23 @@ void MAIN {
                 pack_reconfig_data_format(cb_fusion);
             }
             cb_reserve_back(cb_im_or_out, blk);
-
-            if constexpr (rms_norm && !fuse_pre_add) {
-                reconfig_data_format_srca(cb_fusion, cb_xmm);
-            }
-
+#if defined RMSNORM and not defined FUSE_PRE_ADD
+            reconfig_data_format_srca(cb_fusion, cb_xmm);
+#endif
             ACQ();
             mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
-                mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);
+                mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
                 pack_tile(wtr, cb_im_or_out);  // pack either to intermediate (cb_fusion or out0)
             }
             cb_push_back(cb_im_or_out, blk);  // if no gamma/beta are provided, this will be passed on to the writer
             REL();
 
             if constexpr (!(do_gamma == 0 && do_beta == 0)) {
-                if constexpr (rms_norm && !fuse_pre_add) {
-                    reconfig_data_format_srca(cb_xmm, cb_fusion);
-                }
+#if defined RMSNORM and not defined FUSE_PRE_ADD
+                reconfig_data_format_srca(cb_xmm, cb_fusion);
+#endif
             }
             if constexpr (do_gamma) {
                 if constexpr (do_beta == 0) {
@@ -348,7 +321,7 @@ void MAIN {
                 REL();
             }
         }
-        cb_pop_front(cb_ex2pe, onetile);
+        cb_pop_front(cb_ex2pe, 1);
         cb_pop_front(cb_xmm, Wt);
 
     }  // NCHt loop
