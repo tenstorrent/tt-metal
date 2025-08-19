@@ -153,7 +153,6 @@ run_t3000_ccl_tests() {
   # Run ccl performance tests
   run_t3000_ccl_all_gather_perf_tests
   run_t3000_ccl_reduce_scatter_perf_tests
-
 }
 
 run_t3000_model_perf_tests() {
