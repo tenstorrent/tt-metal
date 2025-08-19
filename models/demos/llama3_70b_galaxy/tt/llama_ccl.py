@@ -522,7 +522,8 @@ class TT_CCL:
                 "FF3": [(1, 1, seqlen, 3584)],
                 "FF2": [(1, 1, seqlen, 2048)],
                 "LAYERNORM": [(1, 1, seqlen, 128)],
-                # "SAMPLING": [(1, 1, 32, 128 * 1024)]
+                "LM_HEAD": [(1, 1, 32, 16384)],
+                "SAMPLING": [(1, 1, 32, 128 * 1024)],
             }
             for key, shape in buffers_dict.items():
                 tt_buffer = ttnn.as_tensor(
@@ -984,7 +985,8 @@ class TT_CCL:
         )
         if self.mode == "prefill" and buffer_key is not None:
             # reshape input back
-            ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
+            if buffer_key != "LM_HEAD":
+                ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
 
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
@@ -1016,7 +1018,8 @@ class TT_CCL:
         )
         if self.mode == "prefill" and buffer_key is not None:
             # reshape input back
-            ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
+            if buffer_key != "LM_HEAD":
+                ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
