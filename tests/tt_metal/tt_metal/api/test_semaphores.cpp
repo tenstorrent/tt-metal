@@ -27,7 +27,6 @@
 #include <tt-metalium/semaphore.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "umd/device/tt_core_coordinates.h"
-#include <tt-metalium/tt_metal.hpp>
 
 namespace tt {
 namespace tt_metal {
