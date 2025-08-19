@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/container/vector.hpp>
 #include <fmt/base.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
