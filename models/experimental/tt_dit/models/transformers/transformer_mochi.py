@@ -649,22 +649,15 @@ class MochiTransformer3DModel:
         spatial_1BND = self.patch_embed(spatial_1BNI)
 
         for idx, block in enumerate(self.transformer_blocks):
-            logger.info(f"Running transformer block {idx}")
             spatial_1BND, prompt_1BLP = block(
                 spatial_1BND, prompt_1BLP, temb_11BD, N, rope_cos_1HND, rope_sin_1HND, trans_mat
             )
-            ttnn.synchronize_device(self.mesh_device)
-            logger.info(f"Transformer block {idx} done")
 
         # Modulate the spatial output
         mod = self.norm_out_linear(
             ttnn.silu(temb_11BD), core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
         )
-        ttnn.synchronize_device(self.mesh_device)
-        logger.info(f"Norm out linear done")
         scale, shift = ttnn.chunk(mod, 2, -1)
-        ttnn.synchronize_device(self.mesh_device)
-        logger.info(f"Chunk done")
 
         ## SUPER HACKY WORKAROUND
         # Large tensor layernorm is hanging, issue #20789
@@ -673,11 +666,7 @@ class MochiTransformer3DModel:
         spatial_fractured_1BND = self.fracture_spatial_input(
             spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
         )
-        ttnn.synchronize_device(self.mesh_device)
-        logger.info(f"Fracture done")
         spatial_norm_fractured_1BND = self.norm_out_norm(spatial_fractured_1BND)
-        ttnn.synchronize_device(self.mesh_device)
-        logger.info(f"Norm out done")
 
         spatial_norm_1BND = ttnn.experimental.all_gather_async(
             spatial_norm_fractured_1BND,
@@ -692,18 +681,13 @@ class MochiTransformer3DModel:
             topology=self.ccl_manager.topology,
             cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
         )
-        ttnn.synchronize_device(self.mesh_device)
-        logger.info(f"All gather done")
 
         spatial_norm_1BND = spatial_norm_1BND * (1 + scale) + shift
 
-        ttnn.synchronize_device(self.mesh_device)
-        logger.info(f"Norm scale/shift done")
         proj_out_1BNI = self.proj_out(
             spatial_norm_1BND, core_grid=self.core_grid, compute_kernel_config=self.hifi4_compute_kernel_config
         )
-        ttnn.synchronize_device(self.mesh_device)
-        logger.info(f"Proj out done")
+
         spatial_out = self.postprocess_spatial_output(proj_out_1BNI, T, H, W, N)
 
         return spatial_out
