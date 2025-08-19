@@ -82,12 +82,12 @@ TEST_F(N300CommOpsTest, TestAllReduceNotFullyTiled) {
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
-        grad_data,
+        grad_data * 2.F,
         grad_xtensor[0],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        grad_data,
+        grad_data * 2.F,
         grad_xtensor[1],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
@@ -147,12 +147,12 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
-        grad_data,
+        grad_data * 2.F,
         grad_xtensor[0],
         /* rtol */ 1e-3,
         /* atol */ 2e-2));
     EXPECT_TRUE(xt::allclose(
-        grad_data,
+        grad_data * 2.F,
         grad_xtensor[1],
         /* rtol */ 1e-3,
         /* atol */ 2e-2));
@@ -207,12 +207,12 @@ TEST_F(N300CommOpsTest, TestAllReduceFullyTiled) {
     auto grad_xtensor = ttml::core::to_xtensor<float>(tensor->get_grad(), ttml::core::IdentityComposer{});
     EXPECT_EQ(grad_xtensor[0].shape(), grad_xtensor[1].shape());
     EXPECT_TRUE(xt::allclose(
-        grad_data,
+        grad_data * 2.F,
         grad_xtensor[0],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
     EXPECT_TRUE(xt::allclose(
-        grad_data,
+        grad_data * 2.F,
         grad_xtensor[1],
         /* rtol */ 1e-3,
         /* atol */ 1e-2));
