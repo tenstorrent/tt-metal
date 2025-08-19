@@ -68,7 +68,7 @@ using tt::tt_metal::distributed::SystemMesh;
 
 class BaseFabricFixture {
 protected:
-    tt::ARCH arch_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
     std::size_t num_devices_{};
     bool device_open = false;
 
@@ -141,7 +141,7 @@ public:
 
 class Fabric1DFixture {
 public:
-    tt::ARCH arch_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
     std::size_t num_devices_{};
     bool device_open = false;
 

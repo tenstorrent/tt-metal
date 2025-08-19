@@ -32,8 +32,8 @@ using vector_cache_aligned = std::vector<T, tt::stl::aligned_allocator<T, CACHE_
 class JitBuildSettings;
 
 struct JitBuiltStateConfig {
-    HalProgrammableCoreType core_type;
-    HalProcessorClassType processor_class;
+    HalProgrammableCoreType core_type{};
+    HalProcessorClassType processor_class{};
     int processor_id = 0;
     bool is_fw = false;
     uint32_t dispatch_message_addr = 0;
