@@ -181,12 +181,13 @@ class TtLlamaDecoder_optimized:
         kv_cache=None,
     ) -> List[ttnn.Tensor]:
         ### xs (residual stream) is fractured on all chips
-        xs_replicated = ttnn.all_gather(
-            xs,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"],
-        )
+        # xs_replicated = ttnn.all_gather(
+        #     xs,
+        #     dim=3,
+        #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+        #     memory_config=self.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"],
+        # )
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # In-place RMSNorm
         attn_norm_replicated = ttnn.rms_norm(
@@ -220,12 +221,13 @@ class TtLlamaDecoder_optimized:
         )
         attn_outs.deallocate(True)
 
-        attn_resid_replicated = ttnn.all_gather(
-            output,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=self.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"],
-        )
+        # attn_resid_replicated = ttnn.all_gather(
+        #     output,
+        #     dim=3,
+        #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+        #     memory_config=self.model_config["HIDDEN_WIDTH_16_CORES_MEMCFG"],
+        # )
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # In-place RMSNorm
         ffn_norm_replicated = ttnn.rms_norm(
@@ -257,12 +259,13 @@ class TtLlamaDecoder_optimized:
         )
 
         # AllGather stats
-        tt_stats = ttnn.all_gather(
-            tt_stats,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # tt_stats = ttnn.all_gather(
+        #     tt_stats,
+        #     dim=3,
+        #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # Run distributed rmsnorm part 2
         tt_out = ttnn.rms_norm_post_all_gather(
@@ -289,12 +292,13 @@ class TtLlamaDecoder_optimized:
         chunk_start_idx=None,
     ) -> List[ttnn.Tensor]:
         attn_norm_interleaved = self.tt_distributed_rmsnorm(xs, self.norm_eps, self.attn_norm_sharded)
-        attn_norm_interleaved = ttnn.all_gather(
-            attn_norm_interleaved,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # attn_norm_interleaved = ttnn.all_gather(
+        #     attn_norm_interleaved,
+        #     dim=3,
+        #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         # attn_outs is fractured
         attn_outs = self.attention(
@@ -317,12 +321,13 @@ class TtLlamaDecoder_optimized:
         attn_outs.deallocate(True)
 
         ffn_norm_interleaved = self.tt_distributed_rmsnorm(output, self.norm_eps, self.ffn_norm_sharded)
-        ffn_norm_interleaved = ttnn.all_gather(
-            ffn_norm_interleaved,
-            dim=3,
-            num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        # ffn_norm_interleaved = ttnn.all_gather(
+        #     ffn_norm_interleaved,
+        #     dim=3,
+        #     num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
+        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        # )
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         ffn_out = self.mlp(ffn_norm_interleaved, mode="prefill")
 

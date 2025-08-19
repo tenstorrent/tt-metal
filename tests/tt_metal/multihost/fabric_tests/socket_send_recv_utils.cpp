@@ -152,8 +152,7 @@ bool test_socket_send_recv(
                         2 * packet_header_size_bytes, {{reserved_packet_header_CB_index, tt::DataFormat::UInt32}})
                         .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
 
-                auto sender_packet_header_CB_handle =
-                    CreateCircularBuffer(sender_program, sender_core, sender_cb_reserved_packet_header_config);
+                CreateCircularBuffer(sender_program, sender_core, sender_cb_reserved_packet_header_config);
 
                 std::vector<uint32_t> sender_rtas;
                 tt_fabric::append_fabric_connection_rt_args(
@@ -191,7 +190,6 @@ bool test_socket_send_recv(
                 auto recv_program = CreateProgram();
 
                 auto recv_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
-                auto output_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
 
                 KernelHandle recv_kernel = CreateKernel(
                     recv_program,

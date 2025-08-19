@@ -330,7 +330,7 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
     uint32_t seed = tt::parse_env("TT_METAL_SEED", 0);
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
-    for (auto buffer_type : {BufferType::L1, BufferType::DRAM}) {
+    for ([[maybe_unused]] auto buffer_type : {BufferType::L1, BufferType::DRAM}) {
         DeviceLocalBufferConfig per_device_buffer_config{
             .page_size = single_tile_size, .buffer_type = BufferType::L1, .bottom_up = false};
 
