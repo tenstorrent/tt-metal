@@ -187,7 +187,7 @@ void DataCollector::RecordKernelGroup(
                  program.get_kernel(*kernel_id)->get_kernel_processor_class()});
         }
     }
-    program_id_to_kernel_groups[program_id][core_type].push_back({kernel_data, kernel_group.core_ranges});
+    program_id_to_kernel_groups[program_id][core_type].push_back({std::move(kernel_data), kernel_group.core_ranges});
 }
 
 void DataCollector::RecordProgramRun(uint64_t program_id) {
