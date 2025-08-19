@@ -262,7 +262,7 @@ size_t generate_ccl_tensor_slice_command_args(
     std::vector<uint32_t>& args_out) {
     // Copy the header
     std::size_t num_command_args_added = 0;
-    auto const args_index_old = args_out.size();
+    [[maybe_unused]] auto const args_index_old = args_out.size();
     if (!last_tensor_slice.has_value()) {
         // push back Command Header
         // push back arg 0 header
@@ -822,7 +822,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     }
     if (datamovement_kernel_config.defines.size() > 0) {
         log_trace(tt::LogOp, "Command Kernel Defines:");
-        for (auto const& [k, v] : datamovement_kernel_config.defines) {
+        for ([[maybe_unused]] auto const& [k, v] : datamovement_kernel_config.defines) {
             log_trace(tt::LogOp, "\t{}: {}", k, v);
         }
     }
@@ -868,12 +868,12 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
 
         datamovement_kernel_config.compile_args = ct_args;
         log_trace(tt::LogOp, "\tSenderReader Kernel Defines");
-        for (auto const& [k, v] : datamovement_kernel_config.defines) {
+        for ([[maybe_unused]] auto const& [k, v] : datamovement_kernel_config.defines) {
             log_trace(tt::LogOp, "\t\t{}: {}", k, v);
         }
         log_trace(tt::LogOp, "\tSenderReader CT Args");
         for (size_t i = 0; i < ct_args.size(); i++) {
-            auto const& arg = ct_args[i];
+            [[maybe_unused]] auto const& arg = ct_args[i];
             log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
         }
     }
@@ -1175,7 +1175,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
 
     log_trace(tt::LogOp, "\tMulti-input command processor RT Args");
     for (size_t i = 0; i < rt_args.size(); i++) {
-        auto const& arg = rt_args[i];
+        [[maybe_unused]] auto const& arg = rt_args[i];
         log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
     }
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, worker_core_range, rt_args);
@@ -1313,7 +1313,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
 
     log_trace(tt::LogOp, "\tMulti-input command processor RT Args");
     for (size_t i = 0; i < rt_args.size(); i++) {
-        auto const& arg = rt_args[i];
+        [[maybe_unused]] auto const& arg = rt_args[i];
         log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
     }
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, worker_core_range, rt_args);

@@ -7,6 +7,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
+      contents: read
     secrets: inherit
     with:
       build-wheel: true
@@ -21,10 +22,13 @@ jobs:
         run: |
           echo "image-tag-name=${GITHUB_REF_NAME//\//-}" >> $GITHUB_OUTPUT
   publish-release-image:
+    uses: ./.github/workflows/publish-release-image.yaml
+    permissions:
+      packages: write
+      contents: read
     needs:
       - build-artifact
       - create-image-tag-name
-    uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     with:
       version: dev-${{ needs.create-image-tag-name.outputs.image-tag-name }}

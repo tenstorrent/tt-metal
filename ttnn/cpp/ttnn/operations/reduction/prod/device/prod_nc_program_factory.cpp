@@ -35,7 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
 
     const auto& input_shape = input.padded_shape();
 
-    const auto N = input_shape[0];
+    [[maybe_unused]] const auto N = input_shape[0];
     const auto C = input_shape[1];
     const auto Ht = input_shape[2] / TILE_HEIGHT;
     const auto Wt = input_shape[3] / TILE_WIDTH;
@@ -94,7 +94,6 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     bool input_is_dram = input_buffer_type->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_is_dram, static_cast<uint32_t>(dim)};
 
-    tt_metal::Buffer* output_buffer_type = output.buffer();
     constexpr uint32_t cb_id_out = CBIndex::c_3;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out};
     tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);

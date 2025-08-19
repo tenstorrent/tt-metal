@@ -21,7 +21,7 @@ def test_perf_device_bare_metal_vovnet(batch_size, expected_perf):
     num_iterations = 1
     margin = 0.03
 
-    command = f"pytest models/experimental/vovnet/tests/pcc/test_tt_vovnet.py"
+    command = f"pytest models/experimental/vovnet/tests/pcc/test_tt_vovnet.py::test_vovnet_model_inference"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"

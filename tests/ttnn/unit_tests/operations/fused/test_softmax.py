@@ -424,3 +424,36 @@ def test_softmax_sd(device):
     )
 
     passed, pcc = assert_with_pcc(out_torch, ttnn.to_torch(out), pcc=0.999)
+
+
+@pytest.mark.parametrize(
+    "shape, dim, dtype",
+    [
+        ([32, 32], -1, [torch.bfloat16, ttnn.bfloat16]),
+        ([32, 32], -1, [torch.float32, ttnn.float32]),
+        ([32, 32], 0, [torch.bfloat16, ttnn.bfloat16]),
+        ([32, 32], 0, [torch.float32, ttnn.float32]),
+        ([32, 32, 32, 32], -1, [torch.bfloat16, ttnn.bfloat16]),
+        ([32, 32, 32, 32], -1, [torch.float32, ttnn.float32]),
+        ([32, 32, 32, 32], -2, [torch.bfloat16, ttnn.bfloat16]),
+        ([32, 32, 32, 32], -2, [torch.float32, ttnn.float32]),
+        ([32, 32, 32, 32], -3, [torch.bfloat16, ttnn.bfloat16]),
+        ([32, 32, 32, 32], -3, [torch.float32, ttnn.float32]),
+    ],
+)
+def test_softmax_dtypes(device, shape, dim, dtype):
+    torch.manual_seed(0)
+
+    torch_dtype, ttnn_dtype = dtype
+
+    torch_tensor = torch.rand(shape, dtype=torch_dtype)
+    ttnn_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn_dtype)
+
+    torch_output = torch.softmax(
+        torch_tensor,
+        dim=dim,
+    )
+    ttnn_output = ttnn.softmax(ttnn_tensor, dim=dim)
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.997)
