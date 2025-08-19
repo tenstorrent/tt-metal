@@ -648,26 +648,6 @@ std::vector<std::string> ComputeKernel::file_paths(IDevice& device) const {
     return file_paths;
 }
 
-RISCV DataMovementKernel::processor() const {
-    switch (this->config_.processor) {
-        case DataMovementProcessor::RISCV_0: return RISCV::BRISC;
-        case DataMovementProcessor::RISCV_1: return RISCV::NCRISC;
-        default: TT_THROW("Unsupported data movement processor");
-    }
-    return RISCV::BRISC;
-}
-
-RISCV EthernetKernel::processor() const {
-    switch (this->config_.processor) {
-        case DataMovementProcessor::RISCV_0: return RISCV::ERISC;
-        case DataMovementProcessor::RISCV_1: return RISCV::ERISC1;
-        default: TT_THROW("Unsupported data movement processor");
-    }
-    return RISCV::ERISC;
-}
-
-RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
-
 bool DataMovementKernel::configure(
     IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {
     if (not is_on_logical_core(logical_core)) {
