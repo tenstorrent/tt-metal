@@ -1679,20 +1679,12 @@ void __attribute__((noinline)) wait_for_static_connection_to_ready(
         }
         establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids_ordered[sender_channel_idx]);
     };
-    if constexpr (multi_txq_enabled) {
-        tuple_for_each_constexpr(
-            local_sender_channel_worker_interfaces.channel_worker_interfaces, [&](auto& interface, auto idx) {
-                if constexpr (is_sender_channel_serviced[idx]) {
-                    establish_static_connection_from_receiver_side(interface, idx);
-                }
-            });
-    } else {
-        // Very slight performance regression on WH if we commonize to the above path, so we preserve this path
-        // too
-        tuple_for_each(
-            local_sender_channel_worker_interfaces.channel_worker_interfaces,
-            [&](auto& interface, size_t idx) { establish_static_connection_from_receiver_side(interface, idx); });
-    }
+    tuple_for_each_constexpr(
+        local_sender_channel_worker_interfaces.channel_worker_interfaces, [&](auto& interface, auto idx) {
+            if constexpr (is_sender_channel_serviced[idx]) {
+                establish_static_connection_from_receiver_side(interface, idx);
+            }
+        });
 }
 
 // Returns the number of starting credits for the specified sender channel `i`

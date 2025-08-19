@@ -20,10 +20,18 @@
 #include <vector>
 #include <array>
 #include <cstddef>
+#include <variant>
+#include <functional>
 
 namespace tt::tt_fabric {
 
 struct FabricRiscConfig;
+class FabricEriscDatamoverBuilder;
+class FabricTensixDatamoverBuilder;
+
+// Type alias for any fabric datamover builder
+using FabricDatamoverBuilder = std::
+    variant<std::reference_wrapper<FabricEriscDatamoverBuilder>, std::reference_wrapper<FabricTensixDatamoverBuilder>>;
 
 /**
  * Specify the EDM types—Default, Dateline, DatelineUpstream, and DatelineUpstreamAdjacentDevice—used to configure
@@ -404,6 +412,7 @@ struct FabricRiscConfig {
     bool is_sender_channel_serviced(int id) const { return is_sender_channel_serviced_[id]; };
     bool is_receiver_channel_serviced(int id) const { return is_receiver_channel_serviced_[id]; };
     tt::tt_metal::NOC get_configured_noc() const { return noc_; };
+    void set_sender_channel_serviced(int id, bool value) { is_sender_channel_serviced_[id] = value; };
 
 private:
     tt::tt_metal::NOC noc_ = tt::tt_metal::NOC::NOC_0;
@@ -500,7 +509,8 @@ public:
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
         FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
-        eth_chan_directions direction = eth_chan_directions::EAST);
+        eth_chan_directions direction = eth_chan_directions::EAST,
+        bool disable_internal_sender_channels = false);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -511,7 +521,8 @@ public:
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
         FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
-        eth_chan_directions direction = eth_chan_directions::EAST);
+        eth_chan_directions direction = eth_chan_directions::EAST,
+        bool disable_internal_sender_channels = false);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc);
@@ -523,7 +534,7 @@ public:
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
-    void connect_to_downstream_edm(FabricEriscDatamoverBuilder& downstream_edm);
+    void connect_to_downstream_edm(FabricDatamoverBuilder downstream_builder);
 
     eth_chan_directions get_direction() const;
     size_t get_configured_risc_count() const;
@@ -612,6 +623,11 @@ public:
     FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default;
     bool dateline_connection = false;
     bool wait_for_host_signal = false;
+
+private:
+    // Shared helper for setting up VC connections
+    template <typename BuilderType>
+    void setup_downstream_vc_connection(BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id);
 };
 
 }  // namespace tt::tt_fabric

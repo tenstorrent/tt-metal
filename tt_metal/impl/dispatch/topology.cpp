@@ -1060,6 +1060,9 @@ void build_tt_fabric_program(
 
     const bool wrap_around_mesh = fabric_context.is_wrap_around_mesh(fabric_node_id.mesh_id);
 
+    bool fabric_tensix_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                                 tt::tt_fabric::FabricTensixConfig::DISABLED;
+
     for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
         const auto& [fabric_edm_type, fabric_edm_axis] = get_fabric_edm_type(
             control_plane,
@@ -1075,11 +1078,12 @@ void build_tt_fabric_program(
         // Create fabric tensix builder for this ethernet channel
         // Skip the link used by dispatch using relay mux API
         uint32_t dispatch_link_idx = RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
-        bool fabric_tensix_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                     tt::tt_fabric::FabricTensixConfig::DISABLED;
 
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
+            auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
+            // Disable sender channels if fabric tensix is enabled and this is NOT the dispatch link
+            bool disable_internal_sender_channels = fabric_tensix_enabled && link_idx != dispatch_link_idx;
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 device,
                 *fabric_program_ptr,
@@ -1089,15 +1093,16 @@ void build_tt_fabric_program(
                 curr_edm_config,
                 false, /* build_in_worker_connection_mode */
                 fabric_edm_type,
-                control_plane.routing_direction_to_eth_direction(direction));
+                control_plane.routing_direction_to_eth_direction(direction),
+                disable_internal_sender_channels);
             edm_builders.insert({eth_chan, edm_builder});
 
-            auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
             if (fabric_tensix_enabled) {
                 // Only create tensix builder if this channel is not used by dispatch
                 if (!(device_has_dispatch_tunnel && link_idx == dispatch_link_idx)) {
+                    auto eth_direction = control_plane.routing_direction_to_eth_direction(direction);
                     auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
-                        device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan);
+                        device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
                     tensix_builders.insert({eth_chan, tensix_builder});
                 }
             }
@@ -1140,12 +1145,19 @@ void build_tt_fabric_program(
                 auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
 
-                // TODO: issue #26792, if have fabric_tensix_builders, need to get the tensix builder 1/2,
-                // then edm_builder1 connect_to_downstream_edm (tensix builder 2)
-                // edm_builder2 connect_to_downstream_edm (tensix builder 1)
+                if (fabric_tensix_enabled) {
+                    if (tensix_builders.find(eth_chan_dir1) != tensix_builders.end() &&
+                        tensix_builders.find(eth_chan_dir2) != tensix_builders.end()) {
+                        auto& tensix_builder1 = tensix_builders.at(eth_chan_dir1);
+                        auto& tensix_builder2 = tensix_builders.at(eth_chan_dir2);
 
-                edm_builder1.connect_to_downstream_edm(edm_builder2);
-                edm_builder2.connect_to_downstream_edm(edm_builder1);
+                        edm_builder1.connect_to_downstream_edm(std::ref(tensix_builder2));
+                        edm_builder2.connect_to_downstream_edm(std::ref(tensix_builder1));
+                    }
+                } else {
+                    edm_builder1.connect_to_downstream_edm(std::ref(edm_builder2));
+                    edm_builder2.connect_to_downstream_edm(std::ref(edm_builder1));
+                }
 
                 // select VC based on the current link
                 auto edm_noc_vc = edm_builder1.config.DEFAULT_NOC_VC + (link % edm_builder1.config.NUM_EDM_NOC_VCS);
