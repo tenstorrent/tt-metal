@@ -32,9 +32,9 @@ message(STATUS "Building Unified Library for all architectures, thanks to blozan
 
 message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 # FIXME: Why are we setting these ourselves?
-set(CMAKE_CXX_FLAGS_RELEASE "-O3")
-set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
-set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
+# set(CMAKE_CXX_FLAGS_RELEASE "-O3")
+# set(CMAKE_CXX_FLAGS_DEBUG "-O0 -g -DDEBUG")
+# set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "-O3 -g -DDEBUG")
 
 # Defining build types is the pervue of the top-level project
 if(PROJECT_IS_TOP_LEVEL)
@@ -147,9 +147,9 @@ endif()
 #   These interface libs are linked with PUBLIC scope at lowest common target (tt_metal/common) and at tt_metal_libs level
 #   in order to propagate to the rest of tt_metal, tt_eager, etc.
 ############################################################################################################################
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --coverage")
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --coverage")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} --coverage")
+# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} --coverage")
+# set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --coverage")
+# set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} --coverage")
 
 add_library(metal_common_libs INTERFACE)
 target_link_libraries(

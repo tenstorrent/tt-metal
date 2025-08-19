@@ -82,7 +82,7 @@ cxx_compiler_path=""
 cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
-toolchain_path="cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
 
 # Requested handling for 20.04 -> 22.04 migration
 if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
@@ -406,5 +406,5 @@ cmake "${cmake_args[@]}"
 # Build libraries and cpp tests
 if [ "$configure_only" = "OFF" ]; then
     echo "INFO: Building Project"
-    cmake --build $build_dir --target install
+    cmake --build $build_dir --target install -- -v
 fi
