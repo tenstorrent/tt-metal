@@ -14,14 +14,16 @@ from models.utility_functions import skip_for_wormhole_b0
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_layer_norm(device, h, w):
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_layer_norm(device, h, w, use_welford):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.layer_norm(input_tensor)
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -31,7 +33,8 @@ def test_layer_norm(device, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_layer_norm_with_weight_and_bias(device, h, w):
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -46,7 +49,8 @@ def test_layer_norm_with_weight_and_bias(device, h, w):
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias)
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias, program_config=program_config)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -56,7 +60,8 @@ def test_layer_norm_with_weight_and_bias(device, h, w):
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
-def test_layer_norm_with_weight_bias_and_residual_input(device, h, w):
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -72,7 +77,14 @@ def test_layer_norm_with_weight_bias_and_residual_input(device, h, w):
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.layer_norm(input_tensor, residual_input_tensor=residual_input_tensor, weight=weight, bias=bias)
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    output_tensor = ttnn.layer_norm(
+        input_tensor,
+        residual_input_tensor=residual_input_tensor,
+        weight=weight,
+        bias=bias,
+        program_config=program_config,
+    )
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -120,36 +132,32 @@ def test_layer_norm_with_tile_layout(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
-@pytest.mark.parametrize("h, w", [(2048, 2048)])
-@pytest.mark.parametrize("d_type", [torch.bfloat16, torch.float32])
-def test_large_layer_norm(device, h, w, d_type):
+@pytest.mark.parametrize("h", [608, 2080])
+@pytest.mark.parametrize("w", [1824, 4128])
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_large_layer_norm(device, h, w, use_welford):
+    if h == 2080 and w == 4128:
+        pytest.skip("Bug, see https://github.com/tenstorrent/tt-metal/issues/27126")
+
     torch.manual_seed(0)
 
-    base_row = torch.arange(w, dtype=torch.float64).unsqueeze(0)  # shape: [1, 4096]
-
-    # Create a column vector with exponents from 0 to rows-1
-    exponents = torch.arange(h, dtype=torch.float64).unsqueeze(1)  # shape: [2048, 1]
-
-    # Compute the multipliers as powers of 10 (10^0, 10^1, ..., 10^(rows-1))
-    multipliers = 10**exponents  # shape: [2048, 1]
-
-    # Multiply the multipliers with the base_row using broadcasting.
-    # Each row becomes 10 times the previous row.
-    tensor = multipliers * base_row  # shape: [2048, 4096]
-    torch_input_tensor = torch.rand((h, w), dtype=d_type)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
-    output_tensor = ttnn.layer_norm(input_tensor)
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    output_tensor = ttnn.layer_norm(input_tensor, program_config=program_config)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
-@pytest.mark.parametrize("h, w", [(2048, 2048)])
-def test_large_layer_norm_with_weight_and_bias(device, h, w):
+@pytest.mark.parametrize("h", [2048])
+@pytest.mark.parametrize("w", [4096])
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -164,7 +172,8 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w):
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias)
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    output_tensor = ttnn.layer_norm(input_tensor, weight=weight, bias=bias, program_config=program_config)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -172,8 +181,10 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
 
 
-@pytest.mark.parametrize("h, w", [(2048, 2048)])
-def test_large_layer_norm_with_weight(device, h, w):
+@pytest.mark.parametrize("h", [2048])
+@pytest.mark.parametrize("w", [4096])
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_large_layer_norm_with_weight(device, h, w, use_welford):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -184,7 +195,8 @@ def test_large_layer_norm_with_weight(device, h, w):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.layer_norm(input_tensor, weight=weight)
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    output_tensor = ttnn.layer_norm(input_tensor, weight=weight, program_config=program_config)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
@@ -192,8 +204,10 @@ def test_large_layer_norm_with_weight(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
 
 
-@pytest.mark.parametrize("h, w", [(2048, 2048)])
-def test_large_layer_norm_with_bias(device, h, w):
+@pytest.mark.parametrize("h", [2048])
+@pytest.mark.parametrize("w", [4096])
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_large_layer_norm_with_bias(device, h, w, use_welford):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
@@ -204,9 +218,47 @@ def test_large_layer_norm_with_bias(device, h, w):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.layer_norm(input_tensor, bias=bias)
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    output_tensor = ttnn.layer_norm(input_tensor, bias=bias, program_config=program_config)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
+
+
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [1024, 4096])
+@pytest.mark.parametrize("use_welford", [True, False])
+def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford):
+    if w == 4096 or (w == 1024 and not use_welford):
+        pytest.skip("Low PCC, see https://github.com/tenstorrent/tt-metal/issues/27122")
+
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_residual_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((w,), dtype=torch.bfloat16)
+    torch_output_tensor = torch.nn.functional.layer_norm(
+        torch_input_tensor + torch_residual_input_tensor, normalized_shape=[w], weight=torch_weight, bias=torch_bias
+    )
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    residual_input_tensor = ttnn.from_torch(torch_residual_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
+    bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
+
+    program_config = ttnn.LayerNormDefaultProgramConfig(use_welford=use_welford)
+    output_tensor = ttnn.layer_norm(
+        input_tensor,
+        residual_input_tensor=residual_input_tensor,
+        weight=weight,
+        bias=bias,
+        program_config=program_config,
+    )
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, 0.9997)
