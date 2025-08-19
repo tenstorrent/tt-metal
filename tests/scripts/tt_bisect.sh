@@ -105,6 +105,9 @@ while [[ "$found" = "false" ]]; do
    mkdir -p /tmp/ccache
    ccache -z
 
+   mkdir -p /work/.cpmcache
+
+
    cmake -S . -B build_Debug -G Ninja \
       -DCMAKE_BUILD_TYPE=Debug \
       -DCMAKE_INSTALL_PREFIX=build_Debug \
