@@ -7,7 +7,6 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.multimodal.llama_vision_encoder import TtLlamaVisionEncoder
-from models.utility_functions import is_blackhole
 
 
 class TtLlamaCrossAttentionTransformerVision(LightweightModule):
@@ -104,22 +103,17 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # TODO: 26411
-        # Remove this blackhole condition once fabric CCLs are working on blackhole
-        if is_blackhole():
-            vision_tokens = ttnn.all_gather(vision_tokens, dim=3, num_links=1, topology=ttnn.Topology.Linear)
-        else:
-            vision_tokens = ttnn.experimental.all_gather_async(
-                vision_tokens,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                topology=ttnn.Topology.Linear,
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
+        vision_tokens = ttnn.experimental.all_gather_async(
+            vision_tokens,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
 
         return vision_tokens

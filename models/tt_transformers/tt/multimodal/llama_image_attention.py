@@ -6,7 +6,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.utility_functions import is_blackhole, nearest_32
+from models.utility_functions import nearest_32
 
 
 class TtLlamaImageAttention(LightweightModule):
@@ -289,23 +289,18 @@ class TtLlamaImageAttention(LightweightModule):
 
         # All reduce
         if self.num_devices > 1:  # replace with reduce_scatter and all_gather
-            # TODO: 26411
-            # Remove this blackhole condition once fabric CCLs are working on blackhole
-            if is_blackhole():
-                dense_out_gathered = ttnn.all_gather(output_11SH, dim=1, num_links=1, topology=ttnn.Topology.Linear)
-            else:
-                dense_out_gathered = ttnn.experimental.all_gather_async(
-                    output_11SH,
-                    persistent_output_buffer=None,
-                    dim=1,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                    num_links=1,
-                    topology=ttnn.Topology.Linear,
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
-                )
+            dense_out_gathered = ttnn.experimental.all_gather_async(
+                output_11SH,
+                persistent_output_buffer=None,
+                dim=1,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
             dense_out_reduced = ttnn.experimental.fast_reduce_nc(
                 dense_out_gathered, dims=[1], output=None, compute_kernel_config=None
             )

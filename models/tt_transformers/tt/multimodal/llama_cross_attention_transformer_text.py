@@ -14,7 +14,7 @@ from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.tt_transformers.tt.rope import RotarySetup
-from models.utility_functions import is_blackhole, nearest_32
+from models.utility_functions import nearest_32
 
 
 def _get_full_row_masked_out_mask(
@@ -343,23 +343,18 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             )
 
             if self.configuration.num_devices > 1:
-                # TODO: 26411
-                # Remove this blackhole condition once fabric CCLs are working on blackhole
-                if is_blackhole():
-                    output = ttnn.all_gather(output, dim=3, num_links=1, topology=ttnn.Topology.Linear)
-                else:
-                    output = ttnn.experimental.all_gather_async(
-                        output,
-                        persistent_output_buffer=None,
-                        dim=3,
-                        multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                        num_links=1,
-                        topology=ttnn.Topology.Linear,
-                        barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                        chunks_per_sync=10,
-                        num_workers_per_link=2,
-                        num_buffers_per_channel=2,
-                    )
+                output = ttnn.experimental.all_gather_async(
+                    output,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=1,
+                    topology=ttnn.Topology.Linear,
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
             outputs.append(output)
 
         output = ttnn.concat(outputs, dim=-1)
