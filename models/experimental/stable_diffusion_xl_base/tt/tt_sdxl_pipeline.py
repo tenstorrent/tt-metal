@@ -303,7 +303,6 @@ class TtSDXLPipeline(LightweightModule):
         )
 
         self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
-
         text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim
         assert (
             text_encoder_projection_dim == 1280
