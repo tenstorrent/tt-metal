@@ -47,6 +47,7 @@ class TtResnetBlock2D(nn.Module):
             conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"]
 
         core_x, core_y, self.norm_blocks_1 = get_DRAM_GN_config(module_path, 1)
+        self.is_sharded_gn1 = self.norm_blocks_1 == -1
         self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=core_x)
 
         self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
@@ -57,6 +58,7 @@ class TtResnetBlock2D(nn.Module):
         )
 
         core_x, core_y, self.norm_blocks_2 = get_DRAM_GN_config(module_path, 2)
+        self.is_sharded_gn2 = self.norm_blocks_2 == -1
         self.norm_core_grid_2 = ttnn.CoreGrid(y=core_y, x=core_x)
 
         self.gamma_t_2, self.beta_t_2 = prepare_gn_beta_gamma(
@@ -103,7 +105,7 @@ class TtResnetBlock2D(nn.Module):
     def forward(self, input_tensor, input_shape):
         B, C, H, W = input_shape
 
-        if self.norm_blocks_1 == -1:
+        if self.is_sharded_gn1:
             shard_shape = B * H * W // self.norm_core_grid_1.x, C // self.norm_core_grid_1.y
             sharded_mem_config = ttnn.create_sharded_memory_config(
                 shard_shape,
@@ -171,7 +173,7 @@ class TtResnetBlock2D(nn.Module):
         )
         C = self.conv1_params["output_channels"]
 
-        if self.norm_blocks_2 == -1:
+        if self.is_sharded_gn2:
             shard_shape = B * H * W // self.norm_core_grid_2.x, C // self.norm_core_grid_2.y
             sharded_mem_config = ttnn.create_sharded_memory_config(
                 shard_shape,
