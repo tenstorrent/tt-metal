@@ -155,10 +155,11 @@ def test_perf_yolov8s_world_dp(
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 106.2],
+        [1, 109.82],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 def test_perf_device_yolov8s_world(batch_size, expected_perf):
     subdir = "ttnn_yolov8s_world"
     num_iterations = 1
