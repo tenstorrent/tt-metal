@@ -97,7 +97,6 @@ public:
 #else
             tt::tt_fabric::fabric_set_unicast_route(
                 (tt::tt_fabric::LowLatencyMeshPacketHeader*)packet_header_addr,
-                (eth_chan_directions)router_direction,
                 my_dev_id,
                 to_dev_id,
                 to_mesh_id,

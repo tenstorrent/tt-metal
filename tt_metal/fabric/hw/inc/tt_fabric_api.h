@@ -389,7 +389,7 @@ void fabric_set_unicast_route(
     }
 }
 
-void fabric_set_unicast_route(
+void fabric_set_unicast_route_deprecated(
     volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
     eth_chan_directions outgoing_direction,
     uint16_t my_dev_id,
