@@ -178,6 +178,7 @@ class TtLlamaMLP(LightweightModule):
             buffer_key="BINARY_MUL",
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
+        breakpoint()
 
         ttnn.deallocate(ff1ff3)
 
