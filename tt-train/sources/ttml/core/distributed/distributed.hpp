@@ -16,6 +16,7 @@ using Tag = tt::tt_metal::distributed::multihost::Tag;
 using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
 
 ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor);
+
 void synchronize_parameters(const serialization::NamedParameters& parameters);
 
 }  // namespace ttml::core::distributed
