@@ -14,6 +14,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::constants;
@@ -29,6 +30,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     std::optional<const Tensor> cur_pos_tensor,
     std::optional<const Tensor> page_table_tensor,
     std::optional<const Tensor> attn_mask,
+    std::optional<const Tensor> attention_sink,
     const Tensor& output_tensor,
     bool is_causal,
     const std::vector<uint32_t>& cur_pos_ids,
@@ -140,9 +142,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     bool use_cur_pos_tensor = cur_pos_tensor.has_value();
     bool use_attention_mask = attn_mask.has_value();
+    bool use_attention_sink = attention_sink.has_value();
 
     log_debug(tt::LogOp, "use_cur_pos_tensor: {}", use_cur_pos_tensor);
     log_debug(tt::LogOp, "use_attention_mask: {}", use_attention_mask);
+    log_debug(tt::LogOp, "use_attention_sink: {}", use_attention_sink);
 
     // Parallelization scheme
     // We will assign cores to batches
@@ -466,6 +470,14 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                             .set_tile_dims(CBIndex::c_3, mask_tile);
     CreateCircularBuffer(program, core_grid, c_in3_config);
 
+    // attention_sink input (conditionally created based on use_attention_sink)
+    if (use_attention_sink) {
+        auto c_in4_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{CBIndex::c_4, stats_df}})
+                                .set_page_size(CBIndex::c_4, stats_tile_size)
+                                .set_tile_dims(CBIndex::c_4, stats_tile);
+        CreateCircularBuffer(program, core_grid, c_in4_config);
+    }
+
     // identity scale input
     auto c_in5_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{CBIndex::c_5, scalar_df}})
                             .set_page_size(CBIndex::c_5, scalar_tile_size)
@@ -705,12 +717,16 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_output_cores,
         is_causal,
         use_attention_mask,
+        use_attention_sink,
         max_dynamic_chunk_size,
         tilize_q,
         (uint32_t)use_mla,
         use_half_tile,
         q_chunk_size_bytes,
     };
+    if (use_attention_sink) {
+        tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
+    }
 
     std::vector<uint32_t> writer_compile_time_args_common = {
         B,
@@ -764,6 +780,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         num_heads_per_core,
         is_causal,
         use_attention_mask,
+        use_attention_sink,
         max_dynamic_chunk_size,
         tilize_q,
         q_heads_parallel_factor,
@@ -846,6 +863,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().buffer()->address() : 0;
     uint32_t page_table_addr = is_paged_attention ? page_table_tensor.value().buffer()->address() : 0;
     uint32_t attn_mask_addr = use_attention_mask ? attn_mask.value().buffer()->address() : 0;
+    uint32_t attention_sink_addr = use_attention_sink ? attention_sink.value().buffer()->address() : 0;
     uint32_t out_addr = out0_buffer->address();
 
     // Set rt args
@@ -883,6 +901,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             pos_addr,
             page_table_addr,
             attn_mask_addr,
+            attention_sink_addr,
             page_table_stick_size,
             do_reduce,
             do_output,
@@ -952,6 +971,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
          q_heads_parallel_factor,
          use_cur_pos_tensor,
          use_attention_mask,
+         use_attention_sink,
          is_paged_attention,
          is_causal,
          use_mla](
@@ -975,6 +995,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             uint32_t page_table_addr =
                 is_paged_attention ? optional_input_tensors.at(1).value().buffer()->address() : 0;
             uint32_t attn_mask_addr = use_attention_mask ? optional_input_tensors.at(2).value().buffer()->address() : 0;
+            uint32_t attention_sink_addr =
+                use_attention_sink ? optional_input_tensors.at(3).value().buffer()->address() : 0;
             auto page_table_buffer = is_paged_attention ? optional_input_tensors.at(1).value().buffer() : nullptr;
             uint32_t page_table_stick_size = is_paged_attention ? page_table_buffer->aligned_page_size() : 0;
             uint32_t out_addr = out0_buffer->address();
@@ -1010,6 +1032,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
                 reader_args[arg_idx++] = pos_addr;
                 reader_args[arg_idx++] = page_table_addr;
                 reader_args[arg_idx++] = attn_mask_addr;
+                reader_args[arg_idx++] = attention_sink_addr;
                 reader_args[arg_idx++] = page_table_stick_size;
                 reader_args[arg_idx++] = do_reduce;
                 reader_args[arg_idx++] = do_output;
