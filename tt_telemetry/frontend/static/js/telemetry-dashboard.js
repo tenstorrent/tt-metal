@@ -265,7 +265,7 @@ export class TelemetryDashboard extends LitElement {
             <metric-sidebar
                 ?open="${this.sidebarOpen}"
                 .metricName="${this.selectedMetric?.name || ''}"
-                .metricValue="${this.selectedMetric?.value || null}"
+                .metricValue="${this.selectedMetric?.value}"
                 @sidebar-close="${this._handleSidebarClose}">
             </metric-sidebar>
         `;

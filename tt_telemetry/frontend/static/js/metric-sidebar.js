@@ -179,8 +179,6 @@ export class MetricSidebar extends LitElement {
     _getMockData() {
         // Mock data - in the future this would come from props or API calls
         return {
-            status: typeof this.metricValue === 'boolean' ? 
-                (this.metricValue ? 'good' : 'bad') : 'unknown',
             lastUpdated: new Date().toLocaleString(),
             updateFrequency: '5 seconds',
             dataType: typeof this.metricValue === 'boolean' ? 'Boolean Health' : 'Numeric Value',
@@ -188,26 +186,25 @@ export class MetricSidebar extends LitElement {
             threshold: typeof this.metricValue === 'boolean' ? 'N/A' : '> 100',
             unit: typeof this.metricValue === 'boolean' ? 'Status' : 'Count',
             events: [
-                {
-                    time: '2 minutes ago',
-                    message: 'Metric value updated successfully'
-                },
-                {
-                    time: '5 minutes ago', 
-                    message: 'Data collection cycle completed'
-                },
-                {
-                    time: '8 minutes ago',
-                    message: 'Connection established to hardware'
-                }
+                // {
+                //     time: '2 minutes ago',
+                //     message: 'Metric value updated successfully'
+                // },
+                // {
+                //     time: '5 minutes ago', 
+                //     message: 'Data collection cycle completed'
+                // },
+                // {
+                //     time: '8 minutes ago',
+                //     message: 'Connection established to hardware'
+                // }
             ]
         };
     }
 
     _renderStatusBadge(status) {
-        const statusClass = `status-badge status-${status}`;
-        const statusText = status === 'good' ? 'Healthy' : 
-                          status === 'bad' ? 'Error' : 'Unknown';
+        const statusClass = `status-badge status-${status ? 'good' : 'bad'}`;
+        const statusText = status ? 'GOOD' : 'BAD'; 
         return html`<span class="${statusClass}">${statusText}</span>`;
     }
 
@@ -215,6 +212,17 @@ export class MetricSidebar extends LitElement {
         if (!this.open) return html``;
 
         const mockData = this._getMockData();
+
+        const isBoolean = typeof this.metricValue === 'boolean'
+        let statusBadge = '';
+        if (isBoolean) {
+            statusBadge = html`
+            <div class="info-item">
+                <span class="info-label">Status:</span>
+                ${this._renderStatusBadge(this.metricValue)}
+            </div>
+            `;
+        }
 
         return html`
             <div class="sidebar-header">
@@ -227,13 +235,10 @@ export class MetricSidebar extends LitElement {
             <div class="sidebar-content">
                 <div class="info-section">
                     <h3>Current Status</h3>
-                    <div class="info-item">
+                    ${statusBadge}
+                     <div class="info-item">
                         <span class="info-label">Value:</span>
-                        <span class="info-value">${this.metricValue !== null ? this.metricValue : 'N/A'}</span>
-                    </div>
-                    <div class="info-item">
-                        <span class="info-label">Status:</span>
-                        ${this._renderStatusBadge(mockData.status)}
+                        <span class="info-value">${this.metricValue}</span>
                     </div>
                     <div class="info-item">
                         <span class="info-label">Last Updated:</span>
