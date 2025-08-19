@@ -13,6 +13,7 @@ from ...reference.modeling_gpt_oss import GptOssRotaryEmbedding
 from ...tt.ccl import CCLManager
 from ...tt.model import Model
 from ...tt.rope import ApplyRotaryPosEmb
+from ...utils.general_utils import get_decode_mask
 
 local_model_path = "models/demos/gpt_oss/reference"
 tensor_cache_dir = (
@@ -130,16 +131,11 @@ def test_model(
         cur_seq_len = cur_pos + 1
 
         # Prepare inputs for the next iteration
-        mask = torch.triu(torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=1)[..., -1:, :]
-        sliding_mask = (
-            mask
-            + torch.tril(torch.full((1, 1, cur_seq_len, cur_seq_len), -float("inf")), diagonal=-config.sliding_window)[
-                ..., -1:, :
-            ]
-        )  # Only for 1 token because decode is causal
-
         position_ids = torch.tensor([cur_pos]).unsqueeze(0)
         cos, sin = RopeEmbeddings(rope_temp_tensor, position_ids)
+
+        sliding_mask = get_decode_mask(position_ids[0].item(), config.sliding_window)
+        sliding_mask = sliding_mask.repeat(1, config.num_attention_heads // mesh_device.shape[1], 1, 1).transpose(1, 2)
 
         tt_mask = None  # No causal mask needed in decode mode
         tt_sliding_mask = ttnn.from_torch(
@@ -147,6 +143,10 @@ def test_model(
         )
         tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
         tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        tt_position_idx = ttnn.from_torch(
+            position_ids, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32
+        )
+
         rope_stuff = (apply_rope, tt_cos, tt_sin)
 
         tt_input_id = ttnn.from_torch(
@@ -159,7 +159,7 @@ def test_model(
             input_ids=tt_input_id,
             attention_masks={"full_attention": tt_mask, "sliding_attention": tt_sliding_mask},
             position_embeddings=rope_stuff,
-            position_idx=cur_pos if iteration == 0 else None,  # Only for the first iteration
+            position_idx=tt_position_idx,
         )
 
         # Handle output

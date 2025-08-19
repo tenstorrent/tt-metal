@@ -13,6 +13,7 @@ from ...reference.hf_utils import get_state_dict
 from ...reference.modeling_gpt_oss import GptOssAttention, GptOssRotaryEmbedding
 from ...tt.attention import Attention
 from ...tt.ccl import CCLManager
+from ...utils.general_utils import get_decode_mask
 
 local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/gpt-oss/gpt-oss-20b-BF16")
 
@@ -26,11 +27,6 @@ local_weights_path = os.environ.get("GPT_OSS_WEIGHTS_PATH", "/proj_sw/user_dev/g
     ],
 )
 @pytest.mark.parametrize("use_real_weights", [False], ids=["random"])
-# @pytest.mark.parametrize(
-#     "device_params",
-#     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
-#     indirect=True,
-# )
 @pytest.mark.parametrize("layer_idx", [0])
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 @pytest.mark.parametrize(
@@ -86,11 +82,17 @@ def test_attention(
         use_cache=True,
     )
 
+    if seq_len == 1:  # decode
+        mask = get_decode_mask(position_ids[0].item(), sliding_window)
+        mask = mask.repeat(1, config.num_attention_heads // mesh_device.shape[1], 1, 1).transpose(1, 2)
+
     # Convert to TTNN tensors
     tt_hidden_states = ttnn.from_torch(hidden_states, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_mask = ttnn.from_torch(mask, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_cos = ttnn.from_torch(cos.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_sin = ttnn.from_torch(sin.unsqueeze(-2), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+    tt_position_idx = ttnn.from_torch(position_ids, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32)
+
     apply_rope = ApplyRotaryPosEmb(config)
     rope_stuff = (apply_rope, tt_cos, tt_sin)
 
@@ -103,7 +105,7 @@ def test_attention(
         ccl_manager=ccl_manager,
     )
 
-    tt_out = tt_model(tt_hidden_states, tt_mask, rope_stuff)
+    tt_out = tt_model(tt_hidden_states, tt_mask, rope_stuff, tt_position_idx)
 
     tt_out_tensors = ttnn.get_device_tensors(tt_out)
     for i in range(len(tt_out_tensors)):
