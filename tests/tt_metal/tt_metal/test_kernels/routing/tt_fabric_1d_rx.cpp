@@ -5,10 +5,9 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric.h"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
+#include "tests/tt_metal/tt_metal/test_kernels/routing/utils/tt_fabric_traffic_gen.hpp"
 
 // clang-format on
 
@@ -21,18 +20,18 @@ constexpr bool use_dram_dst = get_compile_time_arg_val(3);
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
-    uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    uint32_t num_packets = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    uint32_t time_seed = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t num_packets = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t time_seed = get_arg_val<uint32_t>(rt_args_idx++);
 
     int32_t dest_bank_id;
     uint32_t dest_dram_addr;
     uint32_t notification_mailbox_address;
 
     if constexpr (use_dram_dst) {
-        dest_bank_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-        dest_dram_addr = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-        notification_mailbox_address = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+        dest_bank_id = get_arg_val<uint32_t>(rt_args_idx++);
+        dest_dram_addr = get_arg_val<uint32_t>(rt_args_idx++);
+        notification_mailbox_address = get_arg_val<uint32_t>(rt_args_idx++);
     }
 
     tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_address);
