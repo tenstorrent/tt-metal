@@ -195,7 +195,7 @@ class DistributedLayerNorm:
             cluster_axis=self.mesh_axis,
             mesh_device=x.device(),
             topology=self.ccl_manager.topology,
-            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
             persistent_output_tensor=self.ccl_manager.get_ag_ping_pong_buffer(
                 stats.shape, len(stats.shape) - 1, self.mesh_axis
             ),
