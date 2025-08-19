@@ -501,12 +501,12 @@ void syncAllDevices(chip_id_t host_connected_device) {
             }
             for (auto& timePair : timePairs) {
                 double senderTime = timePair.first - senderBase;
-                double recieverTime = timePair.second - receiverBase;
+                double receiverTime = timePair.second - receiverBase;
 
-                receiverSum += recieverTime;
+                receiverSum += receiverTime;
                 senderSum += senderTime;
-                receiverSquareSum += (recieverTime * recieverTime);
-                senderReceiverProductSum += (senderTime * recieverTime);
+                receiverSquareSum += (receiverTime * receiverTime);
+                senderReceiverProductSum += (senderTime * receiverTime);
             }
 
             uint16_t accumulateSampleCount = timePairs.size();
@@ -594,7 +594,7 @@ void ProfilerSync(ProfilerSyncState state) {
                 }
             }
         }
-        // If at least one sender reciever pair has been found
+        // If at least one sender receiver pair has been found
         if (first_connected_device_id != -1) {
             syncAllDevices(first_connected_device_id);
         }
@@ -606,7 +606,7 @@ void ProfilerSync(ProfilerSyncState state) {
             auto deviceToSync = tt::DevicePool::instance().get_active_device(synced_with_host_device.first);
             syncDeviceHost(deviceToSync, SYNC_CORE, false);
         }
-        //  If at least one sender reciever pair has been found
+        //  If at least one sender receiver pair has been found
         if (first_connected_device_id != -1) {
             syncAllDevices(first_connected_device_id);
         }
@@ -754,7 +754,11 @@ void ReadDeviceProfilerResults(
             !tt::tt_metal::MetalContext::instance().dprint_server(),
             "Debug print server is running, cannot read device profiler data");
 
-        profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+            profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+        } else {
+            profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        }
     }
 #endif
 }
@@ -776,7 +780,11 @@ void ProcessDeviceProfilerResults(
             return;
         }
 
-        profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+            profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+        } else {
+            profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        }
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
             profiler.pushTracyDeviceResults();
         }
@@ -862,13 +870,25 @@ void FreshProfilerDeviceLog() {
 #endif
 }
 
+constexpr uint32_t DEVICE_ID_NUM_BITS = 10;
+constexpr uint32_t DEVICE_OP_ID_NUM_BITS = 31;
+
+// Given the base (host assigned id) for a program running on multiple devices, generate a unique per-device
+// id by coalescing the physical_device id with the program id.
+// For ops running on device, the MSB is 0. For host-fallback ops, the MSB is 1. This avoids aliasing.
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op) {
-    // Given the base (host assigned id) for a program running on multiple devices, generate a unique per-device
-    // id by coalescing the physical_device id with the program id.
-    // For ops running on device, the MSB is 0. For host-fallback ops, the MSB is 1. This avoids aliasing.
-    constexpr uint32_t DEVICE_ID_NUM_BITS = 10;
-    constexpr uint32_t DEVICE_OP_ID_NUM_BITS = 31;
     return (is_host_fallback_op << DEVICE_OP_ID_NUM_BITS) | (base_program_id << DEVICE_ID_NUM_BITS) | device_id;
+}
+
+// Decode per device program ID to get encoded values (base program id, device id, and a flag indicating whether
+// it's a host-fallback op).
+DeviceProgramId DecodePerDeviceProgramID(uint32_t encoded_device_program_id) {
+    DeviceProgramId device_program_id;
+    device_program_id.device_id = encoded_device_program_id & ((1 << DEVICE_ID_NUM_BITS) - 1);
+    device_program_id.base_program_id =
+        (encoded_device_program_id & ((uint32_t)(1 << DEVICE_OP_ID_NUM_BITS) - 1)) >> DEVICE_ID_NUM_BITS;
+    device_program_id.is_host_fallback_op = encoded_device_program_id >> DEVICE_OP_ID_NUM_BITS;
+    return device_program_id;
 }
 
 }  // namespace detail

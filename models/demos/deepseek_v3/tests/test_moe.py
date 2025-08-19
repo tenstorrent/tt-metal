@@ -28,7 +28,7 @@ def reference_model(hf_config):
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
     ],
     indirect=True,
 )
@@ -64,7 +64,7 @@ def test_forward_pass(
         reference_output = reference_model(torch_input)
 
     # Setup: Convert weights and get weight_config
-    weight_config = MoE.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
+    weight_config = MoE.convert_weights(hf_config, [hf_state_dict], tmp_path, mesh_device)
 
     # Generate appropriate config using utility function
     model_config = get_model_config(MoE, mode, hf_config, mesh_device)
@@ -72,8 +72,11 @@ def test_forward_pass(
     # Create a new model state with CCL
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
 
+    # Create a new model shared state
+    model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
+
     # Create RunConfig using both weight_config and model_config
-    run_config = create_run_config(model_config, weight_config, model_state)
+    run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     # Convert input to TTNN, DP=4 and Replicated
     tt_input = ttnn.from_torch(

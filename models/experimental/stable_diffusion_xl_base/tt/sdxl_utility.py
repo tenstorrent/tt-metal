@@ -31,6 +31,18 @@ def prepare_gn_mask(device, C, G, num_cores):
     return input_mask_tensor
 
 
+def prepare_gn_mask_negative_mask(device, C, G, num_cores):
+    input_mask_tensor = ttnn.create_group_norm_input_negative_mask(C, G, num_cores)
+    input_mask_tensor = ttnn.from_torch(
+        input_mask_tensor,
+        dtype=ttnn.DataType.BFLOAT8_B,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    return input_mask_tensor
+
+
 def prepare_gn_beta_gamma(device, weights, bias, num_cores):
     gamma = ttnn.create_group_norm_weight_bias_rm(weights, weights.shape[0], num_cores)
     beta = ttnn.create_group_norm_weight_bias_rm(bias, bias.shape[0], num_cores)

@@ -84,14 +84,14 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, full_grid, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, full_grid, cb_src0_config);
 
         uint32_t src1_cb_index = tt::CBIndex::c_1;
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(
                 num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(src1_cb_index, single_tile_size);
-        auto cb_src1 = tt_metal::CreateCircularBuffer(program, full_grid, cb_src1_config);
+        tt_metal::CreateCircularBuffer(program, full_grid, cb_src1_config);
 
         uint32_t ouput_cb_index = tt::CBIndex::c_16;
         uint32_t num_output_tiles = 2;
@@ -99,7 +99,7 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
             tt_metal::CircularBufferConfig(
                 num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, full_grid, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, full_grid, cb_output_config);
 
         auto binary_reader_kernel = tt_metal::CreateKernel(
             program,
@@ -117,8 +117,6 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
 
         std::vector<uint32_t> compute_kernel_args = {};
 
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
         std::map<std::string, std::string> binary_defines = {
             {"ELTWISE_OP", op_id_to_op_define[eltwise_op]}, {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};
         auto eltwise_binary_kernel = tt_metal::CreateKernel(
@@ -200,13 +198,12 @@ std::vector<std::shared_ptr<Program>> create_random_programs(
         for (uint32_t j = 0; j < NUM_CBS; j++) {
             CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}})
                                                  .set_page_size(j, page_size * (j + 1));
-            auto cb = CreateCircularBuffer(program, cr_set, cb_config);
+            CreateCircularBuffer(program, cr_set, cb_config);
         }
 
         // Create Semaphores
         for (uint32_t j = 0; j < NUM_SEMS; j++) {
             CreateSemaphore(program, cr_set, j + 1);
-            uint32_t curr_idx = 0;
             if (active_eth_cores.size()) {
                 auto active_eth_core = active_eth_cores.begin();
                 for (int k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end();
