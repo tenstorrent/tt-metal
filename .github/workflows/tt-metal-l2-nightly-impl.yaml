@@ -300,7 +300,6 @@ jobs:
         TT_METAL_HOME: /work
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
-        ENABLE_SDPA_STRESS_TESTS: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -312,7 +311,7 @@ jobs:
     name: tt-sdpa-stress tests ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        ((contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
+        (contains('P150b, N150, N300', inputs.runner-label) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
         || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
       }}
     steps:
