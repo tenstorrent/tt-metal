@@ -93,7 +93,14 @@ while [[ "$found" = "false" ]]; do
    fi
    git submodule update --recursive
    build_rc=0
-   ./build_metal.sh --build-all || build_rc=$?
+
+   rm -rf /tmp/ccache
+
+   mkdir -p /tmp/ccache
+
+   ccache -z
+
+   ./build_metal.sh --build-all --debug || build_rc=$?
    echo "::endgroup::"
 
    if [[ $build_rc -ne 0 ]]; then
