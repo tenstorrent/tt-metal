@@ -17,3 +17,35 @@ LOWER THE TIMEOUT FOR HANGS. 120 SECONDS IS WAY TOO LONG, PUT IT TO LIKE 20 PER 
 
 ## Prompt 6:
 Can you output all of the prompts I gave you to a new file
+
+## Prompt 7:
+Let's make a plan for extending Upsample 3d to support height sharded input and output tensors.
+You can find implementation  in this folder ttnn/cpp/ttnn/operations/pool/upsample3d.
+Current op supports just row major interleaved tensors.
+Now we want to do row major height sharded tensors.
+You can take a look at upsample_multi_core_sharded in file ttnn/cpp/ttnn/operations/pool/upsample/device/upsample_program_factory_multicore_sharded.cpp.
+You need to do sharding scheme and work parallelisation from the output tensor perspective.
+You should ignore config tensor in upsample_multi_core_sharded implementation, instead we want to use
+TensorAccessor to fetch height sharded bits of tensor.
+You can learn about TensorAccessor in tech_reports/tensor_accessor/tensor_accessor.md
+You should stick to strict test driven development and layout plan for tests.
+Every test should be saved in in tests/ttnn/unit_tests/operations/test_upsample3d.py
+Keep in mind that test can hang when run on device so run each test with tight timeout.
+When iterating on the solution, stop as soon as first test starts to fail.
+Don't do any work now just make a plan and save it to upsample3d_hs_plan.md
+
+## Prompt 8:
+For this we don't need a reader and writer kernel can you take a deeper look at how it's done in upsample
+op? Checkout ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/writer_upsample_multi_core_sharded.cpp
+only this kernel is enough to implement height sharded upsample2d op. Keep ignoring config tensor since we
+want to stick to TensorAcccessor.
+Let's update the upsample3d_hs_plan.md with this.
+
+## Prompt 9:
+In writer kernel impl you need to it from output perspective.
+You need calculate which input stick/page contributes to current output element.
+Use TensorAccessor to obtain that stick/page.
+
+## Prompt 10:
+You should figure out how to use ttnn.create_sharded_memory_config function to prepare memory config
+in order to produce valid input height sharded tensors for python tests

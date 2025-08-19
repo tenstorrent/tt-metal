@@ -168,4 +168,147 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_interleaved(
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
+tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_height_sharded(
+    const Tensor& input,
+    Tensor& output,
+    const uint32_t scale_factor_d,
+    const uint32_t scale_factor_h,
+    const uint32_t scale_factor_w) {
+    tt::tt_metal::Program program{};
+
+    const auto& input_shape = input.padded_shape();
+    const auto& output_shape = output.padded_shape();
+
+    tt::tt_metal::IDevice* device = output.device();
+
+    const tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
+    const tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
+
+    // Get input and output shard specs for height sharded tensors
+    const auto input_shard_spec = input.shard_spec().value();
+    const auto output_shard_spec = output.shard_spec().value();
+
+    TT_FATAL(
+        input_shard_spec.num_cores() == output_shard_spec.num_cores(),
+        "Input and output shard specs must have the same number of cores for height sharded upsample3d");
+
+    const uint32_t stick_nbytes = input.padded_shape()[-1] * input.element_size();
+    const uint32_t aligned_stick_nbytes = tt::round_up(stick_nbytes, tt::tt_metal::hal::get_dram_alignment());
+
+    // Get all cores used for sharding
+    auto all_cores = input_shard_spec.grid;
+    const uint32_t num_cores = input_shard_spec.num_cores();
+
+    // No circular buffers needed for direct copy approach
+    const uint32_t input_cb_index = 0;  // Dummy values for compile-time args
+    const uint32_t output_cb_index = 1;
+
+    const auto input_buffer = input.buffer();
+    const auto output_buffer = output.buffer();
+
+    // Single kernel compile time arguments (following upsample 2D pattern)
+    std::vector<uint32_t> kernel_compile_time_args = {
+        (std::uint32_t)input_cb_index,
+        (std::uint32_t)output_cb_index,
+        (std::uint32_t)true,  // is_reader flag for NCRISC (will create two instances)
+        (std::uint32_t)aligned_stick_nbytes,
+        (std::uint32_t)scale_factor_d,
+        (std::uint32_t)scale_factor_h,
+        (std::uint32_t)scale_factor_w,
+        (std::uint32_t)output_shape[1],  // output_d
+        (std::uint32_t)output_shape[2],  // output_h
+        (std::uint32_t)output_shape[3],  // output_w
+    };
+
+    // Add input TensorAccessor args
+    tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(kernel_compile_time_args);
+    // Add output TensorAccessor args
+    tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(kernel_compile_time_args);
+
+    // Create separate NCRISC and BRISC kernels
+    std::vector<uint32_t> reader_compile_time_args = kernel_compile_time_args;
+    reader_compile_time_args[2] = true;  // is_reader = true for NCRISC
+
+    std::vector<uint32_t> writer_compile_time_args = kernel_compile_time_args;
+    writer_compile_time_args[2] = false;  // is_reader = false for BRISC
+
+    auto reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/pool/upsample3d/device/kernels/dataflow/writer_upsample3d_height_sharded.cpp",
+        all_cores,
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+
+    auto writer_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/pool/upsample3d/device/kernels/dataflow/writer_upsample3d_height_sharded.cpp",
+        all_cores,
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+
+    // Calculate pages per core for height sharded tensors
+    const auto total_output_pages = output_shape[0] * output_shape[1] * output_shape[2] * output_shape[3];  // N*D*H*W
+    const uint32_t pages_per_core = (total_output_pages + num_cores - 1) / num_cores;
+
+    // Set runtime arguments for all cores
+    std::vector<uint32_t> runtime_arguments{
+        input_buffer->address(),
+        output_buffer->address(),
+        0,  // num_output_pages (will be set per core)
+        0   // start_output_page_id (will be set per core)
+    };
+
+    // Work distribution: each core processes its assigned output pages
+    auto logical_cores = corerange_to_cores(
+        output_shard_spec.grid,
+        output_shard_spec.num_cores(),
+        output_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+
+    for (uint32_t i = 0; i < num_cores; ++i) {
+        const auto& core = logical_cores[i];
+
+        // Calculate pages for this core
+        uint32_t start_page_id = i * pages_per_core;
+        uint32_t end_page_id = std::min((i + 1) * pages_per_core, total_output_pages);
+        uint32_t num_pages_this_core = end_page_id - start_page_id;
+
+        runtime_arguments[2] = num_pages_this_core;  // num_output_pages
+        runtime_arguments[3] = start_page_id;        // start_output_page_id
+
+        tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, runtime_arguments);
+        tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, runtime_arguments);
+    }
+
+    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, num_cores](
+                                              const void* operation,
+                                              tt::tt_metal::Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        const auto input_buffer = input_tensors.at(0).buffer();
+        const auto output_buffer = output_tensors.at(0).buffer();
+
+        const auto output_shard_spec = output_tensors.at(0).shard_spec().value();
+        auto logical_cores = corerange_to_cores(
+            output_shard_spec.grid,
+            output_shard_spec.num_cores(),
+            output_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
+
+        // Update runtime args for all cores
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            const auto& core = logical_cores[i];
+            {
+                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
+                runtime_args[0] = input_buffer->address();
+                runtime_args[1] = output_buffer->address();
+            }
+            {
+                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
+                runtime_args[0] = input_buffer->address();
+                runtime_args[1] = output_buffer->address();
+            }
+        }
+    };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
+}
+
 }  // namespace ttnn::operations::upsample3d

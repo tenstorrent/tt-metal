@@ -16,4 +16,11 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_interleaved(
     const uint32_t scale_factor_h,
     const uint32_t scale_factor_w);
 
+tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_height_sharded(
+    const Tensor& input,
+    Tensor& output,
+    const uint32_t scale_factor_d,
+    const uint32_t scale_factor_h,
+    const uint32_t scale_factor_w);
+
 }  // namespace ttnn::operations::upsample3d

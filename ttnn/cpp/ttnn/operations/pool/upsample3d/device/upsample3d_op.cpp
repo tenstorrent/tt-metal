@@ -33,11 +33,14 @@ void UpSample3D::validate(const std::vector<Tensor>& input_tensors) const {
     // Validate mode
     TT_FATAL(mode_ == "nearest", "Only 'nearest' mode is supported for upsample3d, got '{}'", mode_);
 
-    // For now, require ROW_MAJOR layout and interleaved memory
+    // Require ROW_MAJOR layout
     TT_FATAL(input_tensor_a.layout() == Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for upsample3d input");
+
+    // Support interleaved and height sharded memory layouts
+    const auto memory_layout = input_tensor_a.memory_config().memory_layout();
     TT_FATAL(
-        input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Only interleaved memory layout is supported for upsample3d input");
+        memory_layout == TensorMemoryLayout::INTERLEAVED || memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        "Only interleaved and height sharded memory layouts are supported for upsample3d input");
 
     // Validate data type
     TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Input tensor data type should be BFLOAT16");
@@ -56,8 +59,39 @@ std::vector<TensorSpec> UpSample3D::compute_output_specs(const std::vector<Tenso
         input_shape[4]                     // C
     }};
 
+    // For height sharded tensors, ensure output memory config matches input sharding
+    auto output_memory_config = output_mem_config_;
+
+    if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
+        // Use the input tensor's memory config as basis for output
+        output_memory_config = input_tensor.memory_config();
+
+        // For height sharded tensors, we need to ensure the output shard spec is compatible
+        // with the upsampled dimensions. The output should maintain the same core distribution
+        // but accommodate the increased height dimension.
+        if (input_tensor.shard_spec().has_value()) {
+            auto input_shard_spec = input_tensor.shard_spec().value();
+            auto output_shard_spec = input_shard_spec;
+
+            // For 3D upsampling with height sharding:
+            // The effective "height" being sharded is D*H*W (depth*height*width combined)
+            // When we upsample by (scale_d, scale_h, scale_w), the total volume scales by scale_d*scale_h*scale_w
+            // Each shard should grow proportionally to maintain the same number of shards
+            const uint32_t total_scale_factor = scale_factor_d_ * scale_factor_h_ * scale_factor_w_;
+
+            // Scale the shard shape to accommodate the increased volume while keeping same number of cores
+            output_shard_spec.shape[0] =
+                input_shard_spec.shape[0] * total_scale_factor;      // Scale by total volume increase
+            output_shard_spec.shape[1] = input_shard_spec.shape[1];  // Width (C) unchanged
+
+            // Create new memory config with updated shard spec
+            output_memory_config = MemoryConfig{
+                TensorMemoryLayout::HEIGHT_SHARDED, input_tensor.memory_config().buffer_type(), output_shard_spec};
+        }
+    }
+
     return {TensorSpec(
-        output_shape, TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_mem_config_))};
+        output_shape, TensorLayout(input_tensor.dtype(), PageConfig(input_tensor.layout()), output_memory_config))};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks UpSample3D::create_program(
@@ -119,9 +153,17 @@ tt::tt_metal::operation::ProgramWithCallbacks UpSample3D::create_program(
     - Elements per core: {}
     */
 
-    // Run the program with working kernels
-    return upsample3d_multi_core_interleaved(
-        input_tensor, const_cast<Tensor&>(output_tensor), scale_factor_d_, scale_factor_h_, scale_factor_w_);
+    // Dispatch to appropriate implementation based on memory layout
+    const auto memory_layout = input_tensor.memory_config().memory_layout();
+
+    if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
+        return upsample3d_multi_core_height_sharded(
+            input_tensor, const_cast<Tensor&>(output_tensor), scale_factor_d_, scale_factor_h_, scale_factor_w_);
+    } else {
+        // Default to interleaved implementation
+        return upsample3d_multi_core_interleaved(
+            input_tensor, const_cast<Tensor&>(output_tensor), scale_factor_d_, scale_factor_h_, scale_factor_w_);
+    }
 }
 
 }  // namespace ttnn::operations::upsample3d
