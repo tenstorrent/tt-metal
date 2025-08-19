@@ -204,13 +204,12 @@ void kernel_main() {
     const InterleavedAddrGenFast<is_dram> mask_reader = {
         .bank_base_address = mask_addr, .page_size = mask_tile_bytes, .data_format = mask_data_format};
 
-    const InterleavedAddrGenFast<is_dram> attention_sink_reader = {
-        .bank_base_address = attention_sink_addr,
-        .page_size = attention_sink_tile_bytes,
-        .data_format = attention_sink_data_format};
-
     // Read attention sink
     if constexpr (use_attention_sink) {
+        constexpr auto attention_sink_args = TensorAccessorArgs<27>();
+        const auto attention_sink_reader =
+            TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
+
         cb_reserve_back(cb_attention_sink, PNHt);
         uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
 

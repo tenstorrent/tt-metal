@@ -14,6 +14,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::constants;
@@ -723,6 +724,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         use_half_tile,
         q_chunk_size_bytes,
     };
+    if (use_attention_sink) {
+        tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
+    }
 
     std::vector<uint32_t> writer_compile_time_args_common = {
         B,
