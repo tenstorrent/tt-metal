@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <string>
 
+// look into this file
+#include <set>
+
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -166,7 +169,13 @@ operation::ProgramWithCallbacks argmax_single_core(
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, {src_buffer->address(), dst_buffer->address()});
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id, cores](
+    // Extract buffer address indices from runtime args setup
+    // Reader: runtime_args[0] gets src buffer address, runtime_args[1] gets dst buffer address
+    std::set<uint32_t> reader_buffer_indices_argmax_single;
+    reader_buffer_indices_argmax_single.insert(0);  // src_buffer->address()
+    reader_buffer_indices_argmax_single.insert(1);  // dst_buffer->address()
+
+    auto override_runtime_args_callback = [reader_kernel_id, cores, reader_buffer_indices_argmax_single](
                                               const void* operation,
                                               const Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -176,13 +185,26 @@ operation::ProgramWithCallbacks argmax_single_core(
 
         auto dst_buffer = output_tensors.at(0).buffer();
 
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+
         for (const auto& core : cores) {
             {
                 auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
+                actual_reader_updated_indices.insert(0);
+                actual_reader_updated_indices.insert(1);
             }
         }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_argmax_single,
+            "Argmax single-core reader runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+            "updates: {}",
+            reader_buffer_indices_argmax_single.size(),
+            actual_reader_updated_indices.size());
     };
 
     return {std::move(program), override_runtime_args_callback};
@@ -491,30 +513,63 @@ operation::ProgramWithCallbacks argmax_multi_core(
              (i == num_cores1 - 1) ? red_dim_units_last1 : red_dim_units1});
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id0, reader_kernel_id1, cores_coords0, cores_coords1](
-                                              const void* operation,
-                                              const Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>&,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto src_buffer = input_tensors.at(0).buffer();
+    // Extract buffer address indices from runtime args setup
+    // Both reader kernels: runtime_args[0] gets src buffer address, runtime_args[1] gets dst buffer address
+    std::set<uint32_t> reader_buffer_indices_argmax_multi;
+    reader_buffer_indices_argmax_multi.insert(0);  // src_buffer->address()
+    reader_buffer_indices_argmax_multi.insert(1);  // dst_buffer->address()
 
-        auto dst_buffer = output_tensors.at(0).buffer();
-        for (const auto& core : cores_coords0) {
-            {
-                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id0, core);
-                reader_runtime_args[0] = src_buffer->address();
-                reader_runtime_args[1] = dst_buffer->address();
+    auto override_runtime_args_callback =
+        [reader_kernel_id0, reader_kernel_id1, cores_coords0, cores_coords1, reader_buffer_indices_argmax_multi](
+            const void* operation,
+            const Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>&,
+            const std::vector<Tensor>& output_tensors) {
+            auto src_buffer = input_tensors.at(0).buffer();
+
+            auto dst_buffer = output_tensors.at(0).buffer();
+
+            // Track which indices actually get updated by the EXISTING logic
+            std::set<uint32_t> actual_reader0_updated_indices;
+            std::set<uint32_t> actual_reader1_updated_indices;
+
+            for (const auto& core : cores_coords0) {
+                {
+                    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id0, core);
+                    reader_runtime_args[0] = src_buffer->address();
+                    reader_runtime_args[1] = dst_buffer->address();
+                    actual_reader0_updated_indices.insert(0);
+                    actual_reader0_updated_indices.insert(1);
+                }
             }
-        }
-        for (const auto& core : cores_coords1) {
-            {
-                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id1, core);
-                reader_runtime_args[0] = src_buffer->address();
-                reader_runtime_args[1] = dst_buffer->address();
+            for (const auto& core : cores_coords1) {
+                {
+                    auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id1, core);
+                    reader_runtime_args[0] = src_buffer->address();
+                    reader_runtime_args[1] = dst_buffer->address();
+                    actual_reader1_updated_indices.insert(0);
+                    actual_reader1_updated_indices.insert(1);
+                }
             }
-        }
-    };
+
+            // VALIDATION: Check if existing logic updates all expected indices for both kernels
+            TT_FATAL(
+                actual_reader0_updated_indices == reader_buffer_indices_argmax_multi,
+                "Argmax multi-core reader0 runtime args update logic is incorrect! Expected indices: {}, but actual "
+                "logic updates: {}",
+                reader_buffer_indices_argmax_multi.size(),
+                actual_reader0_updated_indices.size());
+
+            if (!cores_coords1.empty()) {
+                TT_FATAL(
+                    actual_reader1_updated_indices == reader_buffer_indices_argmax_multi,
+                    "Argmax multi-core reader1 runtime args update logic is incorrect! Expected indices: {}, but "
+                    "actual logic updates: {}",
+                    reader_buffer_indices_argmax_multi.size(),
+                    actual_reader1_updated_indices.size());
+            }
+        };
 
     return {std::move(program), override_runtime_args_callback};
 }

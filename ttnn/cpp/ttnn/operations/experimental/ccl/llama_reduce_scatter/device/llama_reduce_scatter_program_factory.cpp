@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "llama_reduce_scatter_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>

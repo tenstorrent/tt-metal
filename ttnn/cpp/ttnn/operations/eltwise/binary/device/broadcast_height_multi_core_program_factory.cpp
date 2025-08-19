@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "binary_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
@@ -11,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/device_operation.hpp"
+#include <set>
 
 namespace ttnn::operations::binary {
 
@@ -262,6 +264,17 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_broadcast_height;
+    std::set<uint32_t> writer_buffer_indices_broadcast_height;
+    reader_buffer_indices_broadcast_height.insert(0);  // src_dram_buffer_a->address()
+    reader_buffer_indices_broadcast_height.insert(4);  // src_dram_buffer_b->address()
+    writer_buffer_indices_broadcast_height.insert(0);  // dst_dram_buffer->address()
+
+    // Track which indices actually get updated by the EXISTING logic
+    std::set<uint32_t> actual_reader_updated_indices;
+    std::set<uint32_t> actual_writer_updated_indices;
+
     auto& cached_reader_args = GetRuntimeArgs(program, binary_reader_kernel_id);
     auto& cached_eltwise_args = GetRuntimeArgs(program, bcast_kernel_id);
     auto& cached_writer_args = GetRuntimeArgs(program, unary_writer_kernel_id);
@@ -303,10 +316,12 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
         uint32_t num_tensor_tiles_per_core = NC * Ht_per_core * Wt;
 
         binary_reader_args[0] = src_dram_buffer_a->address();
+        actual_reader_updated_indices.insert(0);
         // binary_reader_args[1] = 0;
         // binary_reader_args[2] = 0;
         binary_reader_args[3] = num_tensor_tiles_per_core;
         binary_reader_args[4] = src_dram_buffer_b->address();
+        actual_reader_updated_indices.insert(4);
         // binary_reader_args[5] = 0;
         // binary_reader_args[6] = 0;
         binary_reader_args[7] = num_btensor_tiles;
@@ -323,6 +338,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
         bcast_kernel_args[2] = Wt;
 
         unary_writer_args[0] = dst_dram_buffer->address();
+        actual_writer_updated_indices.insert(0);
         // unary_writer_args[1] = 0;
         // unary_writer_args[2] = 0;
         unary_writer_args[3] = Ht_per_core;
@@ -334,6 +350,20 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCore::override_runtime_argument
 
         num_Wtiles_read += Ht_per_core * Wt;
     }
+
+    // VALIDATION: Check if existing logic updates all expected indices
+    TT_FATAL(
+        actual_reader_updated_indices == reader_buffer_indices_broadcast_height,
+        "Broadcast height reader runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+        "updates: {}",
+        reader_buffer_indices_broadcast_height.size(),
+        actual_reader_updated_indices.size());
+    TT_FATAL(
+        actual_writer_updated_indices == writer_buffer_indices_broadcast_height,
+        "Broadcast height writer runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+        "updates: {}",
+        writer_buffer_indices_broadcast_height.size(),
+        actual_writer_updated_indices.size());
 }
 
 }  // namespace ttnn::operations::binary

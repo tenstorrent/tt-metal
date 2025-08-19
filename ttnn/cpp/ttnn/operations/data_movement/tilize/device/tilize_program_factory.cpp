@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include <math.h>
+#include <set>
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
@@ -130,28 +132,55 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_buffer->address(), num_tiles, 0});
 
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_tilize_sc;
+    std::set<uint32_t> writer_buffer_indices_tilize_sc;
+    reader_buffer_indices_tilize_sc.insert(0);  // src_buffer->address()
+    writer_buffer_indices_tilize_sc.insert(0);  // dst_buffer->address()
+
     auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
-                                           writer_kernel_id = unary_writer_kernel_id](
+                                           writer_kernel_id = unary_writer_kernel_id,
+                                           reader_buffer_indices_tilize_sc,
+                                           writer_buffer_indices_tilize_sc](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_tensors,
                                               const std::vector<Tensor>& output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
-
         auto dst_buffer = output_tensors.at(0).buffer();
 
         CoreCoord core = {0, 0};
 
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
+
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
+            actual_reader_updated_indices.insert(0);
         }
 
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
+            actual_writer_updated_indices.insert(0);
         }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_tilize_sc,
+            "Tilize single core reader runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+            "updates: {}",
+            reader_buffer_indices_tilize_sc.size(),
+            actual_reader_updated_indices.size());
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_tilize_sc,
+            "Tilize single core writer runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+            "updates: {}",
+            writer_buffer_indices_tilize_sc.size(),
+            actual_writer_updated_indices.size());
     };
 
     return {std::move(program), override_runtime_args_callback};
@@ -393,29 +422,58 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
         }
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const void* operation,
-            const Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-            auto dst_buffer = output_tensors.at(0).buffer();
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_tilize_mc_block;
+    std::set<uint32_t> writer_buffer_indices_tilize_mc_block;
+    reader_buffer_indices_tilize_mc_block.insert(0);  // src_buffer->address()
+    writer_buffer_indices_tilize_mc_block.insert(0);  // dst_buffer->address()
 
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-            for (const auto& core : cores) {
-                {
-                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = src_buffer->address();
-                }
-                {
-                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = dst_buffer->address();
-                }
+    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
+                                           writer_kernel_id = unary_writer_kernel_id,
+                                           cores = cores,
+                                           reader_buffer_indices_tilize_mc_block,
+                                           writer_buffer_indices_tilize_mc_block](
+                                              const void* operation,
+                                              const Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
+
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
+
+        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+        for (const auto& core : cores) {
+            {
+                auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = src_buffer->address();
+                actual_reader_updated_indices.insert(0);
             }
-        };
+            {
+                auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = dst_buffer->address();
+                actual_writer_updated_indices.insert(0);
+            }
+        }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_tilize_mc_block,
+            "Tilize multi-core block reader runtime args update logic is incorrect! Expected indices: {}, but actual "
+            "logic updates: {}",
+            reader_buffer_indices_tilize_mc_block.size(),
+            actual_reader_updated_indices.size());
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_tilize_mc_block,
+            "Tilize multi-core block writer runtime args update logic is incorrect! Expected indices: {}, but actual "
+            "logic updates: {}",
+            writer_buffer_indices_tilize_mc_block.size(),
+            actual_writer_updated_indices.size());
+    };
 
     return {std::move(program), override_runtime_args_callback};
 }
@@ -581,29 +639,58 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
-            const void* operation,
-            const Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-            auto dst_buffer = output_tensors.at(0).buffer();
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_tilize_mc_interleaved;
+    std::set<uint32_t> writer_buffer_indices_tilize_mc_interleaved;
+    reader_buffer_indices_tilize_mc_interleaved.insert(0);  // src_buffer->address()
+    writer_buffer_indices_tilize_mc_interleaved.insert(0);  // dst_buffer->address()
 
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
-            for (const auto& core : cores) {
-                {
-                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = src_buffer->address();
-                }
-                {
-                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = dst_buffer->address();
-                }
+    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
+                                           writer_kernel_id = unary_writer_kernel_id,
+                                           cores = cores,
+                                           reader_buffer_indices_tilize_mc_interleaved,
+                                           writer_buffer_indices_tilize_mc_interleaved](
+                                              const void* operation,
+                                              const Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
+
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
+
+        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+        for (const auto& core : cores) {
+            {
+                auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = src_buffer->address();
+                actual_reader_updated_indices.insert(0);
             }
-        };
+            {
+                auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = dst_buffer->address();
+                actual_writer_updated_indices.insert(0);
+            }
+        }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_tilize_mc_interleaved,
+            "Tilize multi-core interleaved reader runtime args update logic is incorrect! Expected indices: {}, but "
+            "actual logic updates: {}",
+            reader_buffer_indices_tilize_mc_interleaved.size(),
+            actual_reader_updated_indices.size());
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_tilize_mc_interleaved,
+            "Tilize multi-core interleaved writer runtime args update logic is incorrect! Expected indices: {}, but "
+            "actual logic updates: {}",
+            writer_buffer_indices_tilize_mc_interleaved.size(),
+            actual_writer_updated_indices.size());
+    };
 
     return {std::move(program), override_runtime_args_callback};
 }
@@ -668,20 +755,65 @@ operation::ProgramWithCallbacks tilize_multi_core_sharded(const Tensor& input, T
 
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, {num_tiles_per_shard});
 
+    // Extract CBs that are created with globally allocated addresses from program factory
+    std::vector<std::pair<CBHandle, std::string>> cbs_with_global_address_tilize_sharded;
+    cbs_with_global_address_tilize_sharded.push_back(
+        {cb_src0, "input"});  // set_globally_allocated_address for input buffer
+    cbs_with_global_address_tilize_sharded.push_back(
+        {cb_output, "output"});  // set_globally_allocated_address for output buffer
+
     auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output](
+        [unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output, cbs_with_global_address_tilize_sharded](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<Tensor>& output_tensors) {
             auto src_buffer = input_tensors.at(0).buffer();
-
             auto dst_buffer = output_tensors.at(0).buffer();
 
+            // Track which CBs actually get updated by the EXISTING logic
+            std::set<CBHandle> expected_cb_updates;
+            std::set<CBHandle> actual_cb_updates;
+
+            // Build expected CB updates from program factory analysis
+            for (const auto& [cb_handle, tensor_name] : cbs_with_global_address_tilize_sharded) {
+                expected_cb_updates.insert(cb_handle);
+            }
+
+            // KEEP ORIGINAL LOGIC - just track what CBs get updated
             UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+            actual_cb_updates.insert(cb_src0);
 
             UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            actual_cb_updates.insert(cb_output);
+
+            // VALIDATION: Check if existing CB update logic matches expected from program factory
+            TT_FATAL(
+                actual_cb_updates == expected_cb_updates,
+                "Tilize sharded CB update logic is incorrect! Program factory created {} CBs with "
+                "globally_allocated_address, but override logic updates {} CBs",
+                expected_cb_updates.size(),
+                actual_cb_updates.size());
+
+            // VALIDATION: Check tensor name alignment
+            std::map<std::string, const Buffer*> tensor_buffers = {{"input", src_buffer}, {"output", dst_buffer}};
+
+            for (const auto& [cb_handle, expected_tensor_name] : cbs_with_global_address_tilize_sharded) {
+                bool cb_was_updated = actual_cb_updates.find(cb_handle) != actual_cb_updates.end();
+                TT_FATAL(
+                    cb_was_updated,
+                    "Tilize sharded CB {} was created with globally_allocated_address for tensor '{}' in program "
+                    "factory, but was not updated in override callback!",
+                    cb_handle,
+                    expected_tensor_name);
+
+                TT_FATAL(
+                    tensor_buffers[expected_tensor_name] != nullptr,
+                    "Buffer for tensor '{}' mapped to CB {} is null",
+                    expected_tensor_name,
+                    cb_handle);
+            }
         };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }

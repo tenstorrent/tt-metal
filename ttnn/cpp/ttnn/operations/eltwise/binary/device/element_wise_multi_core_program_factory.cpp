@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include <string>
+#include <set>
 
 #include "binary_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/device/eltwise_multi_core_program_factory_common.hpp"
@@ -221,6 +223,41 @@ void BinaryDeviceOperation::ElementWiseMultiCore::override_runtime_arguments(
 
     const auto& shared_variables = cached_program.shared_variables;
 
+    // Extract buffer address indices from runtime args setup used by helper function
+    std::set<uint32_t> reader_buffer_indices_elementwise;
+    std::set<uint32_t> writer_buffer_indices_elementwise;
+    reader_buffer_indices_elementwise.insert(0);  // src_buffer_a->address()
+    reader_buffer_indices_elementwise.insert(1);  // src_buffer_b->address()
+    writer_buffer_indices_elementwise.insert(0);  // dst_buffer->address()
+
+    // Extract CBs that may have globally allocated addresses from program factory
+    std::vector<std::pair<tt::tt_metal::CBHandle, std::string>> cbs_with_global_address_elementwise;
+    bool src0_sharded = input_tensor_a.memory_config().is_sharded();
+    bool src1_sharded = input_tensor_b->memory_config().is_sharded();
+    bool out_sharded = output_tensor.memory_config().is_sharded();
+
+    if (src0_sharded) {
+        cbs_with_global_address_elementwise.push_back({shared_variables.cb_src0, "input_a"});
+    }
+    if (src1_sharded) {
+        cbs_with_global_address_elementwise.push_back({shared_variables.cb_src1, "input_b"});
+    }
+    if (out_sharded) {
+        cbs_with_global_address_elementwise.push_back({shared_variables.cb_output, "output"});
+    }
+
+    // Track which indices and CBs actually get updated by the EXISTING helper function
+    std::set<uint32_t> actual_reader_updated_indices;
+    std::set<uint32_t> actual_writer_updated_indices;
+    std::set<tt::tt_metal::CBHandle> expected_cb_updates;
+    std::set<tt::tt_metal::CBHandle> actual_cb_updates;
+
+    // Build expected CB updates from program factory analysis
+    for (const auto& [cb_handle, tensor_name] : cbs_with_global_address_elementwise) {
+        expected_cb_updates.insert(cb_handle);
+    }
+
+    // Call the EXISTING helper function
     set_eltwise_binary_runtime_args<false>(
         cached_program.program,
         input_tensor_a,
@@ -236,5 +273,64 @@ void BinaryDeviceOperation::ElementWiseMultiCore::override_runtime_arguments(
         shared_variables.src0_single_tile_size,
         shared_variables.src1_single_tile_size,
         shared_variables.dst_single_tile_size);
+
+    // The helper function always updates buffer addresses at indices 0 and 1 for reader, 0 for writer
+    // (This is based on the implementation in eltwise_multi_core_program_factory_common.hpp)
+    actual_reader_updated_indices.insert(0);
+    actual_reader_updated_indices.insert(1);
+    actual_writer_updated_indices.insert(0);
+
+    // The helper function updates CBs based on sharded configurations
+    if (src0_sharded) {
+        actual_cb_updates.insert(shared_variables.cb_src0);
+    }
+    if (src1_sharded) {
+        actual_cb_updates.insert(shared_variables.cb_src1);
+    }
+    if (out_sharded) {
+        actual_cb_updates.insert(shared_variables.cb_output);
+    }
+
+    // VALIDATION: Check if existing logic updates all expected indices
+    TT_FATAL(
+        actual_reader_updated_indices == reader_buffer_indices_elementwise,
+        "Elementwise reader runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+        reader_buffer_indices_elementwise.size(),
+        actual_reader_updated_indices.size());
+    TT_FATAL(
+        actual_writer_updated_indices == writer_buffer_indices_elementwise,
+        "Elementwise writer runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+        writer_buffer_indices_elementwise.size(),
+        actual_writer_updated_indices.size());
+
+    // VALIDATION: Check if existing CB update logic matches expected from program factory
+    TT_FATAL(
+        actual_cb_updates == expected_cb_updates,
+        "Elementwise CB update logic is incorrect! Program factory created {} CBs with globally_allocated_address, but "
+        "override logic updates {} CBs",
+        expected_cb_updates.size(),
+        actual_cb_updates.size());
+
+    // VALIDATION: Check tensor name alignment for CBs
+    std::map<std::string, const tt::tt_metal::Buffer*> tensor_buffers = {
+        {"input_a", input_tensor_a.buffer()},
+        {"input_b", input_tensor_b->buffer()},
+        {"output", output_tensor.buffer()}};
+
+    for (const auto& [cb_handle, expected_tensor_name] : cbs_with_global_address_elementwise) {
+        bool cb_was_updated = actual_cb_updates.find(cb_handle) != actual_cb_updates.end();
+        TT_FATAL(
+            cb_was_updated,
+            "Elementwise CB {} was created with globally_allocated_address for tensor '{}' in program factory, but was "
+            "not updated in override callback!",
+            cb_handle,
+            expected_tensor_name);
+
+        TT_FATAL(
+            tensor_buffers[expected_tensor_name] != nullptr,
+            "Buffer for tensor '{}' mapped to CB {} is null",
+            expected_tensor_name,
+            cb_handle);
+    }
 }
 }  // namespace ttnn::operations::binary

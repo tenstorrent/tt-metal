@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "where_device_operation.hpp"
 #include "where_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <cmath>
+#include <set>
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -407,11 +409,54 @@ void WhereDeviceOperation::WhereProgramFactory::override_runtime_arguments(
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
+    // Extract buffer address indices from runtime args setup based on variant
+    WhereVariant variant = operation_attributes.where_variant;
+    std::set<uint32_t> reader_buffer_indices_where;
+    std::set<uint32_t> writer_buffer_indices_where;
+
+    // All variants always update predicate (index 0)
+    reader_buffer_indices_where.insert(0);
+
+    if (variant == WhereVariant::TTS) {
+        // TTS: predicate (0) + value_true tensor (1)
+        reader_buffer_indices_where.insert(1);
+    } else if (variant == WhereVariant::TST) {
+        // TST: predicate (0) + value_false tensor (1)
+        reader_buffer_indices_where.insert(1);
+    } else {
+        // TTT: predicate (0) + value_true (1) + value_false (2)
+        reader_buffer_indices_where.insert(1);
+        reader_buffer_indices_where.insert(2);
+    }
+
+    // Writer always updates output address (index 0)
+    writer_buffer_indices_where.insert(0);
+
+    // Track which indices actually get updated by the EXISTING logic
+    std::set<uint32_t> actual_reader_updated_indices;
+    std::set<uint32_t> actual_writer_updated_indices;
+
     auto update_args =
-        [](tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel_id, CoreCoord core, auto&& args) {
+        [&actual_reader_updated_indices, &actual_writer_updated_indices, &cached_program](
+            tt::tt_metal::Program& program, tt::tt_metal::KernelHandle kernel_id, CoreCoord core, auto&& args) {
             auto& all_args = GetRuntimeArgs(program, kernel_id);
             auto& core_args = all_args.at(core.x).at(core.y);
             std::copy(args.begin(), args.end(), core_args.data());
+
+            // Track which kernel this is and which buffer indices get updated
+            if (kernel_id == cached_program.shared_variables.reader_kernel_id) {
+                // For reader kernel, track which buffer addresses are being set
+                for (size_t i = 0; i < args.size(); ++i) {
+                    if (i < 3) {             // First 3 args are buffer addresses (predicate, value_true, value_false)
+                        if (args[i] != 0) {  // Non-zero means buffer address is set
+                            actual_reader_updated_indices.insert(i);
+                        }
+                    }
+                }
+            } else if (kernel_id == cached_program.shared_variables.writer_kernel_id) {
+                // For writer kernel, always index 0 is buffer address
+                actual_writer_updated_indices.insert(0);
+            }
         };
 
     CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
@@ -424,6 +469,20 @@ void WhereDeviceOperation::WhereProgramFactory::override_runtime_arguments(
         tensor_args,
         output,
         update_args);
+
+    // VALIDATION: Check if existing logic updates all expected indices
+    TT_FATAL(
+        actual_reader_updated_indices == reader_buffer_indices_where,
+        "Where {} reader runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+        (variant == WhereVariant::TTS ? "TTS" : (variant == WhereVariant::TST ? "TST" : "TTT")),
+        reader_buffer_indices_where.size(),
+        actual_reader_updated_indices.size());
+    TT_FATAL(
+        actual_writer_updated_indices == writer_buffer_indices_where,
+        "Where {} writer runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+        (variant == WhereVariant::TTS ? "TTS" : (variant == WhereVariant::TST ? "TST" : "TTT")),
+        writer_buffer_indices_where.size(),
+        actual_writer_updated_indices.size());
 }
 
 }  // namespace ttnn::operations::ternary

@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include <optional>
+#include <set>
 
 #include "binary_device_operation.hpp"
 #include <tt-metalium/buffer.hpp>
@@ -337,6 +339,35 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
         core_group_2 = CoreRangeSet();
     }
 
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_broadcast_hw;
+    std::set<uint32_t> writer_buffer_indices_broadcast_hw;
+    reader_buffer_indices_broadcast_hw.insert(0);  // src_buffer_a->address()
+    if (input_tensor_b.has_value()) {
+        reader_buffer_indices_broadcast_hw.insert(1);  // input_tensor_b->buffer()->address()
+    }
+    writer_buffer_indices_broadcast_hw.insert(0);  // dst_buffer->address()
+
+    // Extract CBs that may have globally allocated addresses from program factory
+    std::vector<std::pair<CBHandle, std::string>> cbs_with_global_address_broadcast_hw;
+    if (src0_sharded) {
+        cbs_with_global_address_broadcast_hw.push_back({cb_src0, "input"});
+    }
+    if (out_sharded) {
+        cbs_with_global_address_broadcast_hw.push_back({cb_output, "output"});
+    }
+
+    // Track which indices and CBs actually get updated by the EXISTING logic
+    std::set<uint32_t> actual_reader_updated_indices;
+    std::set<uint32_t> actual_writer_updated_indices;
+    std::set<CBHandle> expected_cb_updates;
+    std::set<CBHandle> actual_cb_updates;
+
+    // Build expected CB updates from program factory analysis
+    for (const auto& [cb_handle, tensor_name] : cbs_with_global_address_broadcast_hw) {
+        expected_cb_updates.insert(cb_handle);
+    }
+
     auto& cached_reader_args = GetRuntimeArgs(program, binary_reader_kernel_id);
     auto& cached_eltwise_args = GetRuntimeArgs(program, bcast_kernel_id);
     auto& cached_writer_args = GetRuntimeArgs(program, unary_writer_kernel_id);
@@ -361,9 +392,11 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
         }
 
         binary_reader_args[0] = src_buffer_a->address();
+        actual_reader_updated_indices.insert(0);
 
         if (input_tensor_b.has_value()) {
             binary_reader_args[1] = input_tensor_b->buffer()->address();
+            actual_reader_updated_indices.insert(1);
         } else {
             class bfloat16 bfloat_scalar(*operation_attributes.scalar);
             uint32_t packed_scalar = pack_two_bfloat16_into_uint32({bfloat_scalar, bfloat_scalar});
@@ -378,20 +411,65 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
         bcast_kernel_args[2] = num_tensor_tiles_per_core;  // Wt
 
         unary_writer_args[0] = dst_buffer->address();
+        actual_writer_updated_indices.insert(0);
         unary_writer_args[1] = num_tensor_tiles_per_core;
         unary_writer_args[2] = num_tiles_read;
 
         num_tiles_read += num_tensor_tiles_per_core;
     }
 
+    // KEEP ORIGINAL LOGIC - just track what CBs get updated
     if (src0_sharded) {
         UpdateDynamicCircularBufferAddressAndTotalSize(
             program, cb_src0, *src_buffer_a, num_tiles_per_core_group_1 * src0_single_tile_size);
+        actual_cb_updates.insert(cb_src0);
     }
 
     if (out_sharded) {
         UpdateDynamicCircularBufferAddressAndTotalSize(
             program, cb_output, *dst_buffer, num_tiles_per_core_group_1 * dst_single_tile_size);
+        actual_cb_updates.insert(cb_output);
+    }
+
+    // VALIDATION: Check if existing logic updates all expected buffer addresses
+    TT_FATAL(
+        actual_reader_updated_indices == reader_buffer_indices_broadcast_hw,
+        "Broadcast HW reader runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: "
+        "{}",
+        reader_buffer_indices_broadcast_hw.size(),
+        actual_reader_updated_indices.size());
+    TT_FATAL(
+        actual_writer_updated_indices == writer_buffer_indices_broadcast_hw,
+        "Broadcast HW writer runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: "
+        "{}",
+        writer_buffer_indices_broadcast_hw.size(),
+        actual_writer_updated_indices.size());
+
+    // VALIDATION: Check if existing CB update logic matches expected from program factory
+    TT_FATAL(
+        actual_cb_updates == expected_cb_updates,
+        "Broadcast HW CB update logic is incorrect! Program factory created {} CBs with globally_allocated_address, "
+        "but override logic updates {} CBs",
+        expected_cb_updates.size(),
+        actual_cb_updates.size());
+
+    // VALIDATION: Check tensor name alignment for CBs
+    std::map<std::string, const Buffer*> tensor_buffers = {{"input", src_buffer_a}, {"output", dst_buffer}};
+
+    for (const auto& [cb_handle, expected_tensor_name] : cbs_with_global_address_broadcast_hw) {
+        bool cb_was_updated = actual_cb_updates.find(cb_handle) != actual_cb_updates.end();
+        TT_FATAL(
+            cb_was_updated,
+            "Broadcast HW CB {} was created with globally_allocated_address for tensor '{}' in program factory, but "
+            "was not updated in override callback!",
+            cb_handle,
+            expected_tensor_name);
+
+        TT_FATAL(
+            tensor_buffers[expected_tensor_name] != nullptr,
+            "Buffer for tensor '{}' mapped to CB {} is null",
+            expected_tensor_name,
+            cb_handle);
     }
 }
 

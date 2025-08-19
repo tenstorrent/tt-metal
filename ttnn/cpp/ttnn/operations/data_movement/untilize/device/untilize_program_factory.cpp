@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "untilize_program_factory.hpp"
 
 #include <math.h>
@@ -177,11 +178,21 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
         offset_within_stick += ntiles_per_core * TILE_WIDTH * output.element_size();
     }
 
+    // Extract buffer address indices from runtime args setup
+    // Reader: runtime_args[0] contains src0_buffer->address()
+    // Writer: runtime_args[0] contains dst_buffer->address()
+    std::set<uint32_t> reader_buffer_indices_sub_core_grids;
+    std::set<uint32_t> writer_buffer_indices_sub_core_grids;
+    reader_buffer_indices_sub_core_grids.insert(0);  // src0_buffer->address()
+    writer_buffer_indices_sub_core_grids.insert(0);  // dst_buffer->address()
+
     auto override_runtime_arguments_callback = [reader_kernel_id = reader_kernel_id,
                                                 writer_kernel_id = writer_kernel_id,
                                                 cb_src0 = cb_src0,
                                                 cb_output = cb_output,
-                                                cores_with_rtargs](
+                                                cores_with_rtargs,
+                                                reader_buffer_indices_sub_core_grids,
+                                                writer_buffer_indices_sub_core_grids](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -189,11 +200,17 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
                                                    const std::vector<Tensor>& output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
+
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
+
         {
             auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             for (const CoreCoord& core : cores_with_rtargs) {
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = src_buffer->address();
+                actual_reader_updated_indices.insert(0);
             }
         }
 
@@ -202,8 +219,23 @@ operation::ProgramWithCallbacks untilize_multi_core_sub_core_grids(
             for (const CoreCoord& core : cores_with_rtargs) {
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = dst_buffer->address();
+                actual_writer_updated_indices.insert(0);
             }
         }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_sub_core_grids,
+            "Untilize sub_core_grids reader runtime args update logic is incorrect! Expected indices: {}, but actual "
+            "logic updates: {}",
+            reader_buffer_indices_sub_core_grids.size(),
+            actual_reader_updated_indices.size());
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_sub_core_grids,
+            "Untilize sub_core_grids writer runtime args update logic is incorrect! Expected indices: {}, but actual "
+            "logic updates: {}",
+            writer_buffer_indices_sub_core_grids.size(),
+            actual_writer_updated_indices.size());
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
@@ -406,11 +438,21 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
         tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
     }
 
+    // Extract buffer address indices from runtime args setup
+    // Reader: runtime_args[0] contains src0_buffer->address()
+    // Writer: runtime_args[0] contains dst_buffer->address()
+    std::set<uint32_t> reader_buffer_indices_parallelize_column;
+    std::set<uint32_t> writer_buffer_indices_parallelize_column;
+    reader_buffer_indices_parallelize_column.insert(0);  // src0_buffer->address()
+    writer_buffer_indices_parallelize_column.insert(0);  // dst_buffer->address()
+
     auto override_runtime_arguments_callback = [reader_kernel_id = unary_reader_kernel_id,
                                                 writer_kernel_id = unary_writer_kernel_id,
                                                 cb_src0 = cb_src0,
                                                 cb_output = cb_output,
-                                                cores_with_rtargs](
+                                                cores_with_rtargs,
+                                                reader_buffer_indices_parallelize_column,
+                                                writer_buffer_indices_parallelize_column](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -418,11 +460,17 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
                                                    const std::vector<Tensor>& output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
+
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
+
         {
             auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
             for (const CoreCoord& core : cores_with_rtargs) {
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = src_buffer->address();
+                actual_reader_updated_indices.insert(0);
             }
         }
 
@@ -431,8 +479,23 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
             for (const CoreCoord& core : cores_with_rtargs) {
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = dst_buffer->address();
+                actual_writer_updated_indices.insert(0);
             }
         }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_parallelize_column,
+            "Untilize parallelize_column reader runtime args update logic is incorrect! Expected indices: {}, but "
+            "actual logic updates: {}",
+            reader_buffer_indices_parallelize_column.size(),
+            actual_reader_updated_indices.size());
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_parallelize_column,
+            "Untilize parallelize_column writer runtime args update logic is incorrect! Expected indices: {}, but "
+            "actual logic updates: {}",
+            writer_buffer_indices_parallelize_column.size(),
+            actual_writer_updated_indices.size());
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
@@ -700,30 +763,61 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
         }
     }
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id = unary_reader_kernel_id, writer_kernel_id = unary_writer_kernel_id, cores = cores](
+    // Extract buffer address indices from runtime args setup
+    // Reader: runtime_args[0] contains src0_buffer->address()
+    // Writer: runtime_args[0] contains dst_buffer->address()
+    std::set<uint32_t> reader_buffer_indices_block;
+    std::set<uint32_t> writer_buffer_indices_block;
+    reader_buffer_indices_block.insert(0);  // src0_buffer->address()
+    writer_buffer_indices_block.insert(0);  // dst_buffer->address()
+
+    auto override_runtime_args_callback = [reader_kernel_id = unary_reader_kernel_id,
+                                           writer_kernel_id = unary_writer_kernel_id,
+                                           cores = cores,
+                                           reader_buffer_indices_block,
+                                           writer_buffer_indices_block](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-            auto src_buffer = input_tensors.at(0).buffer();
-            auto dst_buffer = output_tensors.at(0).buffer();
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
 
-            auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
 
-            for (const auto& core : cores) {
-                {
-                    auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = src_buffer->address();
-                }
-                {
-                    auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                    runtime_args[0] = dst_buffer->address();
-                }
+        auto& reader_runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        auto& writer_runtime_args_by_core = GetRuntimeArgs(program, writer_kernel_id);
+
+        for (const auto& core : cores) {
+            {
+                auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = src_buffer->address();
+                actual_reader_updated_indices.insert(0);
             }
-        };
+            {
+                auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
+                runtime_args[0] = dst_buffer->address();
+                actual_writer_updated_indices.insert(0);
+            }
+        }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_block,
+            "Untilize block reader runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+            "updates: {}",
+            reader_buffer_indices_block.size(),
+            actual_reader_updated_indices.size());
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_block,
+            "Untilize block writer runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+            "updates: {}",
+            writer_buffer_indices_block.size(),
+            actual_writer_updated_indices.size());
+    };
 
     return {std::move(program), override_runtime_args_callback};
 }
@@ -855,8 +949,25 @@ operation::ProgramWithCallbacks untilize_multi_core_input_and_output_shard_type_
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
+        // Track which CBs actually get updated by the EXISTING logic
+        std::set<CBHandle> expected_cb_updates = {cb_src0, cb_output};
+        std::set<CBHandle> actual_cb_updates;
+
+        // KEEP ORIGINAL LOGIC - just track what CBs get updated
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+        actual_cb_updates.insert(cb_src0);
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+        actual_cb_updates.insert(cb_output);
+
+        // VALIDATION: Check if the existing CB update logic matches expected from program factory
+        if (actual_cb_updates != expected_cb_updates) {
+            TT_FATAL(
+                false,
+                "Untilize sharded CB update logic is incorrect! Expected {} CBs with globally_allocated_address, but "
+                "override logic updates {} CBs",
+                expected_cb_updates.size(),
+                actual_cb_updates.size());
+        }
     };
 
     return {std::move(program), override_runtime_args_callback};
@@ -1270,11 +1381,22 @@ operation::ProgramWithCallbacks untilize_multi_core(
     cores_with_run_time_args.insert(cores_with_run_time_args.end(), full_cores.begin(), full_cores.end());
     cores_with_run_time_args.insert(cores_with_run_time_args.end(), cliff_cores.begin(), cliff_cores.end());
 
+    // Extract buffer address indices from runtime args setup for interleaved tensors
+    // When input is sharded: uses UpdateDynamicCircularBufferAddress for cb_src0
+    // When input is interleaved: runtime_args[0] contains src_buffer->address()
+    // Writer: runtime_args[0] contains dst_buffer->address()
+    std::set<uint32_t> reader_buffer_indices_multi_core_interleaved;
+    std::set<uint32_t> writer_buffer_indices_multi_core;
+    reader_buffer_indices_multi_core_interleaved.insert(0);  // src_buffer->address() for interleaved input
+    writer_buffer_indices_multi_core.insert(0);              // dst_buffer->address()
+
     auto override_runtime_arguments_callback = [reader_kernel_id = unary_reader_kernel_id,
                                                 writer_kernel_id = unary_writer_kernel_id,
                                                 cb_src0 = cb_src0,
                                                 cb_output = cb_output,
-                                                cores_with_run_time_args](
+                                                cores_with_run_time_args,
+                                                reader_buffer_indices_multi_core_interleaved,
+                                                writer_buffer_indices_multi_core](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
@@ -1285,9 +1407,13 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
         bool input_is_sharded = input_tensors.at(0).is_sharded();
 
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
+
         // Reader
         if (input_is_sharded) {
-            // Sharded input
+            // Sharded input uses circular buffer updates - no runtime args validation needed
             UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
         } else {
             // Interleaved input
@@ -1295,6 +1421,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
             for (const CoreCoord& core : cores_with_run_time_args) {
                 auto& runtime_args = runtime_args_by_core[core.x][core.y];
                 runtime_args[0] = src_buffer->address();
+                actual_reader_updated_indices.insert(0);
             }
         }
 
@@ -1303,7 +1430,25 @@ operation::ProgramWithCallbacks untilize_multi_core(
         for (const CoreCoord& core : cores_with_run_time_args) {
             auto& runtime_args = runtime_args_by_core[core.x][core.y];
             runtime_args[0] = dst_buffer->address();
+            actual_writer_updated_indices.insert(0);
         }
+
+        // VALIDATION: Only validate runtime args for interleaved input (sharded uses circular buffer updates)
+        if (!input_is_sharded) {
+            TT_FATAL(
+                actual_reader_updated_indices == reader_buffer_indices_multi_core_interleaved,
+                "Untilize multi_core reader runtime args update logic is incorrect for interleaved input! Expected "
+                "indices: {}, but actual logic updates: {}",
+                reader_buffer_indices_multi_core_interleaved.size(),
+                actual_reader_updated_indices.size());
+        }
+
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_multi_core,
+            "Untilize multi_core writer runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+            "updates: {}",
+            writer_buffer_indices_multi_core.size(),
+            actual_writer_updated_indices.size());
     };
 
     return {std::move(program), override_runtime_arguments_callback};

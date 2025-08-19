@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "optional"
+#include <set>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -391,7 +393,17 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
             pages,
         });
 
-    auto override_runtime_arguments_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_slice_strided_sc;
+    std::set<uint32_t> writer_buffer_indices_slice_strided_sc;
+    reader_buffer_indices_slice_strided_sc.insert(0);  // input_buffer->address()
+    writer_buffer_indices_slice_strided_sc.insert(0);  // output_buffer->address()
+
+    auto override_runtime_arguments_callback =
+        [unary_reader_kernel_id,
+         unary_writer_kernel_id,
+         reader_buffer_indices_slice_strided_sc,
+         writer_buffer_indices_slice_strided_sc](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -400,16 +412,36 @@ operation::ProgramWithCallbacks slice_rm_strided_single_core_n_dims(
             auto input_buffer = input_tensors.at(0).buffer();
             auto output_buffer = output_tensors.at(0).buffer();
 
-        CoreCoord core = {0, 0};
+            CoreCoord core = {0, 0};
 
-        {
-            auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            reader_runtime_args[0] = input_buffer->address();
+            // Track which indices actually get updated by the EXISTING logic
+            std::set<uint32_t> actual_reader_updated_indices;
+            std::set<uint32_t> actual_writer_updated_indices;
 
-            auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            writer_runtime_args[0] = output_buffer->address();
-        }
-    };
+            {
+                auto& reader_runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                reader_runtime_args[0] = input_buffer->address();
+                actual_reader_updated_indices.insert(0);
+
+                auto& writer_runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                writer_runtime_args[0] = output_buffer->address();
+                actual_writer_updated_indices.insert(0);
+            }
+
+            // VALIDATION: Check if existing logic updates all expected indices
+            TT_FATAL(
+                actual_reader_updated_indices == reader_buffer_indices_slice_strided_sc,
+                "Slice strided single core reader runtime args update logic is incorrect! Expected indices: {}, but "
+                "actual logic updates: {}",
+                reader_buffer_indices_slice_strided_sc.size(),
+                actual_reader_updated_indices.size());
+            TT_FATAL(
+                actual_writer_updated_indices == writer_buffer_indices_slice_strided_sc,
+                "Slice strided single core writer runtime args update logic is incorrect! Expected indices: {}, but "
+                "actual logic updates: {}",
+                writer_buffer_indices_slice_strided_sc.size(),
+                actual_writer_updated_indices.size());
+        };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
@@ -691,7 +723,13 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
         tt::tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, all_runtime_args[i].first);
     }
 
-    auto override_runtime_args_callback = [cb_src0, cb_output](
+    // Extract CBs that are created with globally allocated addresses from program factory
+    std::vector<std::pair<CBHandle, std::string>> cbs_with_global_address_slice_sharded;
+    cbs_with_global_address_slice_sharded.push_back({cb_src0, "input"});  // set_globally_allocated_address(*a.buffer())
+    cbs_with_global_address_slice_sharded.push_back(
+        {cb_output, "output"});  // set_globally_allocated_address(*output.buffer())
+
+    auto override_runtime_args_callback = [cb_src0, cb_output, cbs_with_global_address_slice_sharded](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -700,8 +738,47 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
         auto src_buffer_a = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
+        // Track which CBs actually get updated by the EXISTING logic
+        std::set<CBHandle> expected_cb_updates;
+        std::set<CBHandle> actual_cb_updates;
+
+        // Build expected CB updates from program factory analysis
+        for (const auto& [cb_handle, tensor_name] : cbs_with_global_address_slice_sharded) {
+            expected_cb_updates.insert(cb_handle);
+        }
+
+        // KEEP ORIGINAL LOGIC - just track what CBs get updated
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
+        actual_cb_updates.insert(cb_src0);
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+        actual_cb_updates.insert(cb_output);
+
+        // VALIDATION: Check if existing CB update logic matches expected from program factory
+        TT_FATAL(
+            actual_cb_updates == expected_cb_updates,
+            "Slice sharded CB update logic is incorrect! Program factory created {} CBs with "
+            "globally_allocated_address, but override logic updates {} CBs",
+            expected_cb_updates.size(),
+            actual_cb_updates.size());
+
+        // VALIDATION: Check tensor name alignment
+        std::map<std::string, const Buffer*> tensor_buffers = {{"input", src_buffer_a}, {"output", dst_buffer}};
+
+        for (const auto& [cb_handle, expected_tensor_name] : cbs_with_global_address_slice_sharded) {
+            bool cb_was_updated = actual_cb_updates.find(cb_handle) != actual_cb_updates.end();
+            TT_FATAL(
+                cb_was_updated,
+                "Slice sharded CB {} was created with globally_allocated_address for tensor '{}' in program factory, "
+                "but was not updated in override callback!",
+                cb_handle,
+                expected_tensor_name);
+
+            TT_FATAL(
+                tensor_buffers[expected_tensor_name] != nullptr,
+                "Buffer for tensor '{}' mapped to CB {} is null",
+                expected_tensor_name,
+                cb_handle);
+        }
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};

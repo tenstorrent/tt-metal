@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
+#include <set>
 
 using namespace tt::tt_metal;
 
@@ -206,35 +208,69 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
         reader_kernel_id,
         writer_kernel_id);
 
-    auto override_runtime_args_callback =
-        [reader_kernel_id, writer_kernel_id, num_cores_r, num_cores_c, start_core_x, start_core_y](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto src_dram_buffer = input_tensors.at(0).buffer();
+    // Extract buffer address indices from runtime args setup
+    // Reader: runtime_args[1] gets src buffer address
+    // Writer: runtime_args[1] gets dst_0 buffer address, runtime_args[2] gets dst_1 buffer address
+    std::set<uint32_t> reader_buffer_indices_split;
+    std::set<uint32_t> writer_buffer_indices_split;
+    reader_buffer_indices_split.insert(1);  // src_dram_buffer->address()
+    writer_buffer_indices_split.insert(1);  // dst_0_dram_buffer->address()
+    writer_buffer_indices_split.insert(2);  // dst_1_dram_buffer->address()
 
-            auto dst_0_dram_buffer = output_tensors.at(0).buffer();
-            auto dst_1_dram_buffer = output_tensors.at(0).buffer();
+    auto override_runtime_args_callback = [reader_kernel_id,
+                                           writer_kernel_id,
+                                           num_cores_r,
+                                           num_cores_c,
+                                           start_core_x,
+                                           start_core_y,
+                                           reader_buffer_indices_split,
+                                           writer_buffer_indices_split](
+                                              const void* operation,
+                                              Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto src_dram_buffer = input_tensors.at(0).buffer();
 
-            for (int core_idx_y = 0; core_idx_y < num_cores_c; core_idx_y++) {
-                for (int core_idx_x = 0; core_idx_x < num_cores_r; core_idx_x++) {
-                    CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
+        auto dst_0_dram_buffer = output_tensors.at(0).buffer();
+        auto dst_1_dram_buffer = output_tensors.at(1).buffer();
 
-                    {
-                        auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-                        runtime_args[1] = src_dram_buffer->address();
-                    }
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
 
-                    {
-                        auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-                        runtime_args[1] = dst_0_dram_buffer->address();
-                        runtime_args[2] = dst_1_dram_buffer->address();
-                    }
+        for (int core_idx_y = 0; core_idx_y < num_cores_c; core_idx_y++) {
+            for (int core_idx_x = 0; core_idx_x < num_cores_r; core_idx_x++) {
+                CoreCoord core = {(std::size_t)start_core_x + core_idx_x, (std::size_t)start_core_y + core_idx_y};
+
+                {
+                    auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
+                    runtime_args[1] = src_dram_buffer->address();
+                    actual_reader_updated_indices.insert(1);
+                }
+
+                {
+                    auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
+                    runtime_args[1] = dst_0_dram_buffer->address();
+                    runtime_args[2] = dst_1_dram_buffer->address();
+                    actual_writer_updated_indices.insert(1);
+                    actual_writer_updated_indices.insert(2);
                 }
             }
-        };
+        }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_split,
+            "Split reader runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+            reader_buffer_indices_split.size(),
+            actual_reader_updated_indices.size());
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_split,
+            "Split writer runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+            writer_buffer_indices_split.size(),
+            actual_writer_updated_indices.size());
+    };
 
     return {std::move(program), override_runtime_args_callback};
 }

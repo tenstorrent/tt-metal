@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
 #include <algorithm>
 #include <numeric>
+#include <set>
 
 #include "ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -219,14 +221,47 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
             .math_approx_mode = false,
             .compile_args = compile_time_args_0});
 
-    auto override_runtime_arguments_callback = [num_input_tensors, cb_inputs, cb_output](
+    // Track circular buffers that have globally allocated addresses from program factory
+    std::vector<std::pair<CBHandle, std::string>> cbs_with_global_address;
+    for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
+        cbs_with_global_address.push_back({cb_inputs[idx], "input_" + std::to_string(idx)});
+    }
+    cbs_with_global_address.push_back({cb_output, "output"});
+
+    auto override_runtime_arguments_callback = [num_input_tensors, cb_inputs, cb_output, cbs_with_global_address](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
+        // Track which CBs actually get updated by the EXISTING logic
+        std::set<CBHandle> expected_cb_updates;
+        std::set<CBHandle> actual_cb_updates;
+
+        printf("going to program cache of concat\n");
+        // Build expected CB updates from the program factory analysis
+        for (const auto& [cb_handle, tensor_name] : cbs_with_global_address) {
+            expected_cb_updates.insert(cb_handle);
+        }
+
+        // KEEP ORIGINAL LOGIC - just track what CBs get updated
         for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
             UpdateDynamicCircularBufferAddress(program, cb_inputs[idx], *input_tensors[idx].buffer());
+            actual_cb_updates.insert(cb_inputs[idx]);
+        }
+        printf("actual size: %zu\n", actual_cb_updates.size());
+        printf("expected size: %zu\n", expected_cb_updates.size());
+        // Note: output CB is not updated in this function variant
+
+        // VALIDATION: Check if the existing CB update logic matches expected from program factory
+        if (actual_cb_updates != expected_cb_updates) {
+            TT_FATAL(
+                false,
+                "S2S tiled concat CB update logic is incorrect! Program factory created {} CBs with "
+                "globally_allocated_address, but "
+                "override logic updates {} CBs",
+                expected_cb_updates.size(),
+                actual_cb_updates.size());
         }
     };
 
@@ -418,16 +453,46 @@ tt_metal::operation::ProgramWithCallbacks s2s_rm_concat_two_tensors_height_multi
             tt_metal::WriterDataMovementConfig(compile_time_args_1));
     }
 
-    auto override_runtime_arguments_callback = [num_input_tensors, cb_input, cb_output](
+    // Track circular buffers that have globally allocated addresses from program factory
+    std::vector<std::pair<CBHandle, std::string>> cbs_with_global_address;
+    for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
+        cbs_with_global_address.push_back({cb_input[input_id], "input_" + std::to_string(input_id)});
+    }
+    cbs_with_global_address.push_back({cb_output, "output"});
+
+    auto override_runtime_arguments_callback = [num_input_tensors, cb_input, cb_output, cbs_with_global_address](
                                                    const void* operation,
                                                    Program& program,
                                                    const std::vector<Tensor>& input_tensors,
                                                    const std::vector<std::optional<const Tensor>>&,
                                                    const std::vector<Tensor>& output_tensors) {
+        // Track which CBs actually get updated by the EXISTING logic
+        std::set<CBHandle> expected_cb_updates;
+        std::set<CBHandle> actual_cb_updates;
+
+        // Build expected CB updates from the program factory analysis
+        for (const auto& [cb_handle, tensor_name] : cbs_with_global_address) {
+            expected_cb_updates.insert(cb_handle);
+        }
+
+        // KEEP ORIGINAL LOGIC - just track what CBs get updated
         for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
             UpdateDynamicCircularBufferAddress(program, cb_input[input_id], *input_tensors[input_id].buffer());
+            actual_cb_updates.insert(cb_input[input_id]);
         }
         UpdateDynamicCircularBufferAddress(program, cb_output, *output_tensors[0].buffer());
+        actual_cb_updates.insert(cb_output);
+
+        // VALIDATION: Check if the existing CB update logic matches expected from program factory
+        if (actual_cb_updates != expected_cb_updates) {
+            TT_FATAL(
+                false,
+                "S2S RM concat CB update logic is incorrect! Program factory created {} CBs with "
+                "globally_allocated_address, but "
+                "override logic updates {} CBs",
+                expected_cb_updates.size(),
+                actual_cb_updates.size());
+        }
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
@@ -549,17 +614,48 @@ tt_metal::operation::ProgramWithCallbacks s2s_concat_multi_core(
     tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, all_cores, runtime_args_0);
     tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, all_cores, runtime_args_1);
 
-    auto override_runtime_arguments_callback = [num_input_tensors, cb_dst_id, cb_inputs, cb_output](
-                                                   const void* operation,
-                                                   Program& program,
-                                                   const std::vector<Tensor>& input_tensors,
-                                                   const std::vector<std::optional<const Tensor>>&,
-                                                   const std::vector<Tensor>& output_tensors) {
-        for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
-            UpdateDynamicCircularBufferAddress(program, cb_inputs[input_id], *input_tensors[input_id].buffer());
-        }
-        UpdateDynamicCircularBufferAddress(program, cb_output, *output_tensors[0].buffer());
-    };
+    // Track circular buffers that have globally allocated addresses from program factory
+    std::vector<std::pair<CBHandle, std::string>> cbs_with_global_address;
+    for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
+        cbs_with_global_address.push_back({cb_inputs[input_id], "input_" + std::to_string(input_id)});
+    }
+    cbs_with_global_address.push_back({cb_output, "output"});
+
+    auto override_runtime_arguments_callback =
+        [num_input_tensors, cb_dst_id, cb_inputs, cb_output, cbs_with_global_address](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>&,
+            const std::vector<Tensor>& output_tensors) {
+            // Track which CBs actually get updated by the EXISTING logic
+            std::set<CBHandle> expected_cb_updates;
+            std::set<CBHandle> actual_cb_updates;
+
+            // Build expected CB updates from the program factory analysis
+            for (const auto& [cb_handle, tensor_name] : cbs_with_global_address) {
+                expected_cb_updates.insert(cb_handle);
+            }
+
+            // KEEP ORIGINAL LOGIC - just track what CBs get updated
+            for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
+                UpdateDynamicCircularBufferAddress(program, cb_inputs[input_id], *input_tensors[input_id].buffer());
+                actual_cb_updates.insert(cb_inputs[input_id]);
+            }
+            UpdateDynamicCircularBufferAddress(program, cb_output, *output_tensors[0].buffer());
+            actual_cb_updates.insert(cb_output);
+
+            // VALIDATION: Check if the existing CB update logic matches expected from program factory
+            if (actual_cb_updates != expected_cb_updates) {
+                TT_FATAL(
+                    false,
+                    "S2S concat CB update logic is incorrect! Program factory created {} CBs with "
+                    "globally_allocated_address, but "
+                    "override logic updates {} CBs",
+                    expected_cb_updates.size(),
+                    actual_cb_updates.size());
+            }
+        };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 
@@ -645,8 +741,13 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
         core_id++;
     }
 
+    // Extract buffer address indices from runtime args setup
+    // Writer: runtime_args[0] contains dst_buffer->address()
+    std::set<uint32_t> writer_buffer_indices_s2i_rm;
+    writer_buffer_indices_s2i_rm.insert(0);  // dst_buffer->address()
+
     auto override_runtime_arguments_callback =
-        [unary_reader_kernel_id, unary_writer_kernel_id, all_cores, num_input_tensors](
+        [unary_reader_kernel_id, unary_writer_kernel_id, all_cores, num_input_tensors, writer_buffer_indices_s2i_rm](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -658,6 +759,10 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
             auto input_cores = input_tensors[0].shard_spec().value().grid;
             uint32_t num_output_rows = output_tensors[0].padded_shape()[-1];
             uint32_t num_output_rows_per_core = div_up(num_output_rows, input_cores.num_cores());
+
+            // Track which indices actually get updated by the EXISTING logic
+            std::set<uint32_t> actual_writer_updated_indices;
+
             for (auto core : cores) {
                 uint32_t curr_num_input_tensors;
                 uint32_t curr_num_output_rows;
@@ -672,6 +777,8 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
                 std::vector<uint32_t> reader_runtime_args = {curr_num_input_tensors};
                 std::vector<uint32_t> writer_runtime_args = {
                     dst_buffer->address(), curr_num_input_tensors, curr_num_output_rows};
+                actual_writer_updated_indices.insert(0);
+
                 for (uint32_t input_id = 0; input_id < num_input_tensors; input_id++) {
                     UpdateDynamicCircularBufferAddress(program, input_id, *dst_buffer);
                     auto input_shard_spec = input_tensors[input_id].shard_spec().value();
@@ -680,9 +787,17 @@ tt_metal::operation::ProgramWithCallbacks s2i_rm_concat_multi_core(
                     writer_runtime_args.push_back(input_id);
                 }
                 tt_metal::SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
-
                 tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
             }
+
+            // VALIDATION: Check if existing logic updates all expected indices
+            // Note: This function uses both UpdateDynamicCircularBufferAddress and runtime args
+            TT_FATAL(
+                actual_writer_updated_indices == writer_buffer_indices_s2i_rm,
+                "S2I RM concat writer runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+                "updates: {}",
+                writer_buffer_indices_s2i_rm.size(),
+                actual_writer_updated_indices.size());
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
@@ -919,7 +1034,16 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
         num_pages_written += num_pages_per_core;
     }
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cores](
+    // Extract buffer address indices from runtime args setup
+    // Reader: buffer addresses start at index 3 (dynamic count based on input_tensors.size())
+    // Writer: buffer address at index 0
+    std::set<uint32_t> writer_buffer_indices_concat;
+    writer_buffer_indices_concat.insert(0);  // dst_buffer->address()
+
+    auto override_runtime_args_callback = [unary_reader_kernel_id,
+                                           unary_writer_kernel_id,
+                                           cores,
+                                           writer_buffer_indices_concat](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -932,17 +1056,45 @@ tt_metal::operation::ProgramWithCallbacks concat_multi_core(
 
         auto dst_buffer = output_tensors.at(0).buffer();
 
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
+
+        // Expected reader indices: 3, 4, 5, ... based on input_tensors.size()
+        std::set<uint32_t> reader_buffer_indices_concat;
+        for (uint32_t i = 0; i < input_tensors.size(); ++i) {
+            reader_buffer_indices_concat.insert(3 + i);
+        }
+
         for (const auto& core : cores) {
             {
                 auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                 std::copy(src_addrs.begin(), src_addrs.end(), runtime_args.data() + 3);
+
+                // Track reader indices that were updated
+                for (uint32_t i = 0; i < input_tensors.size(); ++i) {
+                    actual_reader_updated_indices.insert(3 + i);
+                }
             }
 
             {
                 auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
+                actual_writer_updated_indices.insert(0);
             }
         }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_concat,
+            "Concat reader runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+            reader_buffer_indices_concat.size(),
+            actual_reader_updated_indices.size());
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_concat,
+            "Concat writer runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+            writer_buffer_indices_concat.size(),
+            actual_writer_updated_indices.size());
     };
 
     return {std::move(program), override_runtime_args_callback};

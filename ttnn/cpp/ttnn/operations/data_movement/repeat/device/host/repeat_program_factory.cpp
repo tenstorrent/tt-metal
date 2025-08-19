@@ -2,8 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <math.h>
+
+// look into this file
 #include <optional>
 #include <variant>
+#include <set>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
@@ -109,7 +112,13 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
             }
         }
     }
-    auto override_runtime_args_callback = [reader_kernel_id, total_cores](
+
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_repeat_last_dim;
+    reader_buffer_indices_repeat_last_dim.insert(0);  // input buffer address
+    reader_buffer_indices_repeat_last_dim.insert(1);  // output buffer address
+
+    auto override_runtime_args_callback = [reader_kernel_id, total_cores, reader_buffer_indices_repeat_last_dim](
                                               const void* operation,
                                               const tt::tt_metal::Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -117,12 +126,26 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
                                               const std::vector<Tensor>& output_tensors) {
         const auto& input = input_tensors.at(0);
         const auto& output = output_tensors.at(0);
+
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+
         auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const auto& core : total_cores) {
             auto& runtime_args = runtime_args_by_core[core.x][core.y];
             runtime_args.at(0) = input.buffer()->address();
             runtime_args.at(1) = output.buffer()->address();
+            actual_reader_updated_indices.insert(0);
+            actual_reader_updated_indices.insert(1);
         }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_repeat_last_dim,
+            "Repeat last dim runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: "
+            "{}",
+            reader_buffer_indices_repeat_last_dim.size(),
+            actual_reader_updated_indices.size());
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
@@ -245,7 +268,13 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
             }
         }
     }
-    auto override_runtime_args_callback = [reader_kernel_id, total_cores](
+
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_repeat_higher_dim;
+    reader_buffer_indices_repeat_higher_dim.insert(0);  // input buffer address
+    reader_buffer_indices_repeat_higher_dim.insert(1);  // output buffer address
+
+    auto override_runtime_args_callback = [reader_kernel_id, total_cores, reader_buffer_indices_repeat_higher_dim](
                                               const void* operation,
                                               const tt::tt_metal::Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -253,12 +282,26 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
                                               const std::vector<Tensor>& output_tensors) {
         const auto& input = input_tensors.at(0);
         const auto& output = output_tensors.at(0);
+
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+
         auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const auto& core : total_cores) {
             auto& runtime_args = runtime_args_by_core[core.x][core.y];
             runtime_args.at(0) = input.buffer()->address();
             runtime_args.at(1) = output.buffer()->address();
+            actual_reader_updated_indices.insert(0);
+            actual_reader_updated_indices.insert(1);
         }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_repeat_higher_dim,
+            "Repeat higher dim runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: "
+            "{}",
+            reader_buffer_indices_repeat_higher_dim.size(),
+            actual_reader_updated_indices.size());
     };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }

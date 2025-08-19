@@ -2,8 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_op.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include <set>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -128,7 +130,11 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
         tile_offset += local_num_2d_tensors * tiles_per_2d_tensor;
     }
 
-    auto override_runtime_args_callback = [writer_kernel_id, cores](
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> writer_buffer_indices_fill_pad;
+    writer_buffer_indices_fill_pad.insert(0);  // tens_buffer->address()
+
+    auto override_runtime_args_callback = [writer_kernel_id, cores, writer_buffer_indices_fill_pad](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -136,14 +142,26 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
                                               const std::vector<Tensor>& output_tensors) {
         auto tens_buffer = input_tensors.at(0).buffer();
 
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_writer_updated_indices;
+
         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id);
 
         for (const auto& core : cores) {
             {
                 auto& runtime_args = writer_runtime_args[core.x][core.y];
                 runtime_args[0] = tens_buffer->address();
+                actual_writer_updated_indices.insert(0);
             }
         }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_fill_pad,
+            "Fill pad writer runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: "
+            "{}",
+            writer_buffer_indices_fill_pad.size(),
+            actual_writer_updated_indices.size());
     };
 
     return {std::move(program), override_runtime_args_callback};

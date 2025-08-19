@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "binary_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
@@ -11,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 // #include "ttnn/device_operation.hpp"
+#include <set>
 
 namespace ttnn::operations::binary {
 
@@ -231,8 +233,33 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
 
     auto src_buffer = input_tensor_a.buffer();
     auto dst_buffer = output_tensor.buffer();
+
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_broadcast_height_sharded;
+    reader_buffer_indices_broadcast_height_sharded.insert(0);  // b->buffer()->address()
+
+    // Extract CBs that are created with globally allocated addresses from program factory
+    std::vector<std::pair<CBHandle, std::string>> cbs_with_global_address_broadcast_height_sharded;
+    cbs_with_global_address_broadcast_height_sharded.push_back(
+        {cb_src0, "input"});  // set_globally_allocated_address for input buffer
+    cbs_with_global_address_broadcast_height_sharded.push_back(
+        {out_cb, "output"});  // set_globally_allocated_address for output buffer
+
+    // Track which indices and CBs actually get updated by the EXISTING logic
+    std::set<uint32_t> actual_reader_updated_indices;
+    std::set<CBHandle> expected_cb_updates;
+    std::set<CBHandle> actual_cb_updates;
+
+    // Build expected CB updates from program factory analysis
+    for (const auto& [cb_handle, tensor_name] : cbs_with_global_address_broadcast_height_sharded) {
+        expected_cb_updates.insert(cb_handle);
+    }
+
+    // KEEP ORIGINAL LOGIC - just track what CBs get updated
     UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+    actual_cb_updates.insert(cb_src0);
     UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+    actual_cb_updates.insert(out_cb);
     auto a = input_tensor_a;
     auto b = input_tensor_b;
     auto shard_spec = a.shard_spec().value();
@@ -290,6 +317,7 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
                 Ht_per_core,             // 4
                 tile_offset,             // 5
             });
+        actual_reader_updated_indices.insert(0);
 
         tt_metal::SetRuntimeArgs(
             program,
@@ -300,6 +328,41 @@ void BinaryDeviceOperation ::BroadcastHeightMultiCoreSharded::override_runtime_a
                 Ht,  // Ht
                 Wt,  // Wt
             });
+    }
+
+    // VALIDATION: Check if existing logic updates all expected buffer addresses
+    TT_FATAL(
+        actual_reader_updated_indices == reader_buffer_indices_broadcast_height_sharded,
+        "Broadcast height sharded reader runtime args update logic is incorrect! Expected indices: {}, but actual "
+        "logic updates: {}",
+        reader_buffer_indices_broadcast_height_sharded.size(),
+        actual_reader_updated_indices.size());
+
+    // VALIDATION: Check if existing CB update logic matches expected from program factory
+    TT_FATAL(
+        actual_cb_updates == expected_cb_updates,
+        "Broadcast height sharded CB update logic is incorrect! Program factory created {} CBs with "
+        "globally_allocated_address, but override logic updates {} CBs",
+        expected_cb_updates.size(),
+        actual_cb_updates.size());
+
+    // VALIDATION: Check tensor name alignment
+    std::map<std::string, const Buffer*> tensor_buffers = {{"input", src_buffer}, {"output", dst_buffer}};
+
+    for (const auto& [cb_handle, expected_tensor_name] : cbs_with_global_address_broadcast_height_sharded) {
+        bool cb_was_updated = actual_cb_updates.find(cb_handle) != actual_cb_updates.end();
+        TT_FATAL(
+            cb_was_updated,
+            "Broadcast height sharded CB {} was created with globally_allocated_address for tensor '{}' in program "
+            "factory, but was not updated in override callback!",
+            cb_handle,
+            expected_tensor_name);
+
+        TT_FATAL(
+            tensor_buffers[expected_tensor_name] != nullptr,
+            "Buffer for tensor '{}' mapped to CB {} is null",
+            expected_tensor_name,
+            cb_handle);
     }
 }
 

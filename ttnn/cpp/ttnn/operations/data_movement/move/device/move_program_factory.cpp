@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include <math.h>
+#include <set>
 
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/move/device/move_device_operation.hpp"
@@ -178,7 +180,12 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
         pages_handled_per_core += num_pages_per_core;
     }
 
-    auto override_runtime_args_callback = [kernel_id, num_cores, num_cores_y](
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_move_overlap;
+    reader_buffer_indices_move_overlap.insert(0);  // src_buffer->address()
+    reader_buffer_indices_move_overlap.insert(1);  // dst_buffer->address()
+
+    auto override_runtime_args_callback = [kernel_id, num_cores, num_cores_y, reader_buffer_indices_move_overlap](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -187,14 +194,27 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+
         for (uint32_t i = 0; i < num_cores; i++) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
             {
                 auto& runtime_args = GetRuntimeArgs(program, kernel_id, core);
                 runtime_args[0] = src_buffer->address();
                 runtime_args[1] = dst_buffer->address();
+                actual_reader_updated_indices.insert(0);
+                actual_reader_updated_indices.insert(1);
             }
         }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_move_overlap,
+            "Move multi-core with overlap runtime args update logic is incorrect! Expected indices: {}, but actual "
+            "logic updates: {}",
+            reader_buffer_indices_move_overlap.size(),
+            actual_reader_updated_indices.size());
     };
 
     return {std::move(program), override_runtime_args_callback};
@@ -260,12 +280,21 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
     SetRuntimeArgs(program, kernel_id, shard_grid, runtime_args);
 
     const auto& cores = corerange_to_cores(shard_grid, std::nullopt, true);
+
+    // Extract CBs that are created with globally allocated addresses from program factory
+    std::vector<std::pair<CBHandle, std::string>> cbs_with_global_address_move_sharded;
+    cbs_with_global_address_move_sharded.push_back(
+        {src_sharded_cb, "input"});  // set_globally_allocated_address(*input.buffer())
+    cbs_with_global_address_move_sharded.push_back(
+        {dst_sharded_cb, "output"});  // set_globally_allocated_address(*output.buffer())
+
     auto override_runtime_args_callback = [shard_grid = shard_grid,
                                            kernel_id = kernel_id,
                                            src_sharded_cb = src_sharded_cb,
                                            dst_sharded_cb = dst_sharded_cb,
                                            total_size_bytes = total_size_bytes,
-                                           cores = cores](
+                                           cores = cores,
+                                           cbs_with_global_address_move_sharded](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -273,8 +302,49 @@ operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Ten
                                               const std::vector<Tensor>& output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
+
+        // Track which CBs actually get updated by the EXISTING logic
+        std::set<CBHandle> expected_cb_updates;
+        std::set<CBHandle> actual_cb_updates;
+
+        // Build expected CB updates from program factory analysis
+        for (const auto& [cb_handle, tensor_name] : cbs_with_global_address_move_sharded) {
+            expected_cb_updates.insert(cb_handle);
+        }
+
+        // KEEP ORIGINAL LOGIC - just track what CBs get updated
         UpdateDynamicCircularBufferAddress(program, src_sharded_cb, *src_buffer);
+        actual_cb_updates.insert(src_sharded_cb);
         UpdateDynamicCircularBufferAddress(program, dst_sharded_cb, *dst_buffer);
+        actual_cb_updates.insert(dst_sharded_cb);
+
+        // VALIDATION: Check if existing CB update logic matches expected from program factory
+        TT_FATAL(
+            actual_cb_updates == expected_cb_updates,
+            "Move sharded CB update logic is incorrect! Program factory created {} CBs with "
+            "globally_allocated_address, but override logic updates {} CBs",
+            expected_cb_updates.size(),
+            actual_cb_updates.size());
+
+        // VALIDATION: Check tensor name alignment
+        std::map<std::string, const Buffer*> tensor_buffers = {{"input", src_buffer}, {"output", dst_buffer}};
+
+        for (const auto& [cb_handle, expected_tensor_name] : cbs_with_global_address_move_sharded) {
+            bool cb_was_updated = actual_cb_updates.find(cb_handle) != actual_cb_updates.end();
+            TT_FATAL(
+                cb_was_updated,
+                "Move sharded CB {} was created with globally_allocated_address for tensor '{}' in program factory, "
+                "but was not updated in override callback!",
+                cb_handle,
+                expected_tensor_name);
+
+            TT_FATAL(
+                tensor_buffers[expected_tensor_name] != nullptr,
+                "Buffer for tensor '{}' mapped to CB {} is null",
+                expected_tensor_name,
+                cb_handle);
+        }
+
         auto input_buffer_address = src_buffer->address();
         auto output_buffer_address = dst_buffer->address();
         uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;

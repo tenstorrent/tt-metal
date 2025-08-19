@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "sdpa_program_factory.hpp"
 #include "sdpa_op.hpp"
 
 #include <optional>
 #include <string>
 #include <cmath>
+#include <set>
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
@@ -645,64 +647,105 @@ operation::ProgramWithCallbacks sdpa_multi_core(
              chunked_q_chunk_offset});
     }
 
-    auto override_runtime_arguments_callback =
-        [num_cores,
-         grid_size,
-         reader_kernels_id,
-         writer_kernels_id,
-         compute_kernels_id,
-         is_chunked,
-         q_chunk_size,
-         use_mla](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
-            auto q_buffer = input_tensors.at(0).buffer();
-            auto k_buffer = input_tensors.at(1).buffer();
-            auto v_buffer = use_mla ? input_tensors.at(1).buffer() : input_tensors.at(2).buffer();
-            auto mask_buffer =
-                optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer() : nullptr;
+    // Extract buffer address indices from runtime args setup
+    // Reader: indices 0-4 for q/k/v/mask/page_table addresses
+    // Writer: index 0 for output address
+    std::set<uint32_t> reader_buffer_indices_sdpa;
+    std::set<uint32_t> writer_buffer_indices_sdpa;
+    reader_buffer_indices_sdpa.insert(0);  // q_addr
+    reader_buffer_indices_sdpa.insert(1);  // k_addr
+    reader_buffer_indices_sdpa.insert(2);  // v_addr
+    reader_buffer_indices_sdpa.insert(3);  // mask_addr
+    if (is_chunked) {
+        reader_buffer_indices_sdpa.insert(4);  // page_table_addr
+    }
+    writer_buffer_indices_sdpa.insert(0);  // out_addr
 
-            auto out0_buffer = output_tensors.at(0).buffer();
-            uint32_t q_addr = q_buffer->address();
-            uint32_t k_addr = k_buffer->address();
-            uint32_t v_addr = v_buffer->address();
-            uint32_t mask_addr = mask_buffer != nullptr ? mask_buffer->address() : 0;
-            uint32_t out_addr = out0_buffer->address();
+    auto override_runtime_arguments_callback = [num_cores,
+                                                grid_size,
+                                                reader_kernels_id,
+                                                writer_kernels_id,
+                                                compute_kernels_id,
+                                                is_chunked,
+                                                q_chunk_size,
+                                                use_mla,
+                                                reader_buffer_indices_sdpa,
+                                                writer_buffer_indices_sdpa](
+                                                   const void* operation,
+                                                   Program& program,
+                                                   const std::vector<Tensor>& input_tensors,
+                                                   const std::vector<std::optional<const Tensor>>&
+                                                       optional_input_tensors,
+                                                   const std::vector<Tensor>& output_tensors) {
+        auto q_buffer = input_tensors.at(0).buffer();
+        auto k_buffer = input_tensors.at(1).buffer();
+        auto v_buffer = use_mla ? input_tensors.at(1).buffer() : input_tensors.at(2).buffer();
+        auto mask_buffer =
+            optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer() : nullptr;
 
-            uint32_t page_table_addr = 0;
-            uint32_t chunked_q_chunk_offset = 0;
+        auto out0_buffer = output_tensors.at(0).buffer();
+        uint32_t q_addr = q_buffer->address();
+        uint32_t k_addr = k_buffer->address();
+        uint32_t v_addr = v_buffer->address();
+        uint32_t mask_addr = mask_buffer != nullptr ? mask_buffer->address() : 0;
+        uint32_t out_addr = out0_buffer->address();
+
+        uint32_t page_table_addr = 0;
+        uint32_t chunked_q_chunk_offset = 0;
+        if (is_chunked) {
+            page_table_addr = optional_input_tensors.at(1).value().buffer()->address();
+            chunked_q_chunk_offset =
+                static_cast<const ScaledDotProductAttention*>(operation)->chunk_start_idx.value() / q_chunk_size;
+        }
+
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
+
+        auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
+        auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
+        auto& compute_args_by_core = GetRuntimeArgs(program, compute_kernels_id);
+        // Set reader rt args
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            CoreCoord core = {i % grid_size.x, i / grid_size.x};
+
+            auto& reader_args = reader_args_by_core[core.x][core.y];
+            auto& writer_args = writer_args_by_core[core.x][core.y];
+            auto& compute_args = compute_args_by_core[core.x][core.y];
+            reader_args[0] = q_addr;
+            reader_args[1] = k_addr;
+            reader_args[2] = v_addr;
+            reader_args[3] = mask_addr;
+            actual_reader_updated_indices.insert(0);
+            actual_reader_updated_indices.insert(1);
+            actual_reader_updated_indices.insert(2);
+            actual_reader_updated_indices.insert(3);
+
             if (is_chunked) {
-                page_table_addr = optional_input_tensors.at(1).value().buffer()->address();
-                chunked_q_chunk_offset =
-                    static_cast<const ScaledDotProductAttention*>(operation)->chunk_start_idx.value() / q_chunk_size;
-            }
-
-            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
-            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
-            auto& compute_args_by_core = GetRuntimeArgs(program, compute_kernels_id);
-            // Set reader rt args
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                CoreCoord core = {i % grid_size.x, i / grid_size.x};
-
-                auto& reader_args = reader_args_by_core[core.x][core.y];
-                auto& writer_args = writer_args_by_core[core.x][core.y];
-                auto& compute_args = compute_args_by_core[core.x][core.y];
-                reader_args[0] = q_addr;
-                reader_args[1] = k_addr;
-                reader_args[2] = v_addr;
-                reader_args[3] = mask_addr;
                 reader_args[4] = page_table_addr;
-                reader_args[12] = chunked_q_chunk_offset;
-
-                writer_args[0] = out_addr;
-                writer_args[8] = chunked_q_chunk_offset;
-
-                compute_args[7] = chunked_q_chunk_offset;
+                actual_reader_updated_indices.insert(4);
             }
-        };
+            reader_args[12] = chunked_q_chunk_offset;
+
+            writer_args[0] = out_addr;
+            actual_writer_updated_indices.insert(0);
+            writer_args[8] = chunked_q_chunk_offset;
+
+            compute_args[7] = chunked_q_chunk_offset;
+        }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_sdpa,
+            "SDPA reader runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+            reader_buffer_indices_sdpa.size(),
+            actual_reader_updated_indices.size());
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_sdpa,
+            "SDPA writer runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+            writer_buffer_indices_sdpa.size(),
+            actual_writer_updated_indices.size());
+    };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }

@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 #include <tt-metalium/constants.hpp>
+#include <set>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
@@ -28,6 +30,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     const ttnn::Shape& input_tensor_start,
     const float pad_value) {
     Program program{};
+
+    printf("pad_rm_reader_writer\n");
 
     auto output_shape = output_padded_shape;
 
@@ -147,7 +151,21 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, cores, reader_rt_args);
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, cores, writer_rt_args);
 
-    auto override_runtime_args_callback = [reader_kernel_id = reader_kernel_id, writer_kernel_id = writer_kernel_id](
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices;
+    std::set<uint32_t> writer_buffer_indices;
+
+    // From reader_rt_args: index 0 contains src0_buffer->address(), index 1 contains dst_buffer->address()
+    reader_buffer_indices.insert(0);  // src0_buffer->address()
+    reader_buffer_indices.insert(1);  // dst_buffer->address()
+    // From writer_rt_args: index 0 contains src0_buffer->address(), index 1 contains dst_buffer->address()
+    writer_buffer_indices.insert(0);  // src0_buffer->address()
+    writer_buffer_indices.insert(1);  // dst_buffer->address()
+
+    auto override_runtime_args_callback = [reader_kernel_id = reader_kernel_id,
+                                           writer_kernel_id = writer_kernel_id,
+                                           reader_buffer_indices,
+                                           writer_buffer_indices](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -156,14 +174,42 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
         CoreCoord core = {0, 0};
+
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
+
+        printf("In program cache of pad\n");
+        for (auto i : reader_buffer_indices) {
+            printf("reader_buffer_indices: %d\n", i);
+        }
+
         {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
+            runtime_args[1] = dst_buffer->address();
+            actual_reader_updated_indices.insert(0);
+            actual_reader_updated_indices.insert(1);
         }
         {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = src_buffer->address();
+            runtime_args[1] = dst_buffer->address();
+            actual_writer_updated_indices.insert(0);
+            actual_writer_updated_indices.insert(1);
         }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices,
+            "Reader runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+            reader_buffer_indices.size(),
+            actual_reader_updated_indices.size());
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices,
+            "Writer runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+            writer_buffer_indices.size(),
+            actual_writer_updated_indices.size());
     };
 
     return {std::move(program), override_runtime_args_callback};
@@ -276,28 +322,58 @@ operation::ProgramWithCallbacks pad_tile(
 
     tt::tt_metal::SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_kernel_args);
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
-                                              const void* operation,
-                                              Program& program,
-                                              const std::vector<Tensor>& input_tensors,
-                                              const std::vector<std::optional<const Tensor>>& optional_tensors,
-                                              const std::vector<Tensor>& output_tensors) {
-        auto src_dram_buffer = input_tensors.at(0).buffer();
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_tile;
+    std::set<uint32_t> writer_buffer_indices_tile;
 
-        auto dst_dram_buffer = output_tensors.at(0).buffer();
+    // From reader_kernel_args: index 0 contains src0_buffer->address()
+    reader_buffer_indices_tile.insert(0);
+    // From writer_kernel_args: index 0 contains dst_buffer->address()
+    writer_buffer_indices_tile.insert(0);
 
-        CoreCoord core = {0, 0};
+    auto override_runtime_args_callback =
+        [unary_reader_kernel_id, unary_writer_kernel_id, reader_buffer_indices_tile, writer_buffer_indices_tile](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto src_dram_buffer = input_tensors.at(0).buffer();
 
-        {
-            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer->address();
-        }
+            auto dst_dram_buffer = output_tensors.at(0).buffer();
 
-        {
-            auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
-        }
-    };
+            CoreCoord core = {0, 0};
+
+            // Track which indices actually get updated by the EXISTING logic
+            std::set<uint32_t> actual_reader_updated_indices;
+            std::set<uint32_t> actual_writer_updated_indices;
+
+            {
+                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                runtime_args[0] = src_dram_buffer->address();
+                actual_reader_updated_indices.insert(0);
+            }
+
+            {
+                auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                runtime_args[0] = dst_dram_buffer->address();
+                actual_writer_updated_indices.insert(0);
+            }
+
+            // VALIDATION: Check if existing logic updates all expected indices
+            TT_FATAL(
+                actual_reader_updated_indices == reader_buffer_indices_tile,
+                "Pad tile reader runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+                "updates: {}",
+                reader_buffer_indices_tile.size(),
+                actual_reader_updated_indices.size());
+            TT_FATAL(
+                actual_writer_updated_indices == writer_buffer_indices_tile,
+                "Pad tile writer runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+                "updates: {}",
+                writer_buffer_indices_tile.size(),
+                actual_writer_updated_indices.size());
+        };
 
     return {std::move(program), override_runtime_args_callback};
 }
@@ -648,10 +724,22 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
         }  // for ncores_h
     }
 
+    // Extract buffer address indices from runtime args setup for multi-core pad
+    std::set<uint32_t> reader_buffer_indices_mc;
+    std::set<uint32_t> writer_buffer_indices_mc;
+
+    // This multi-core callback updates indices 0 and 1 for both kernels
+    reader_buffer_indices_mc.insert(0);  // src_buffer->address()
+    reader_buffer_indices_mc.insert(1);  // dst_buffer->address()
+    writer_buffer_indices_mc.insert(0);  // src_buffer->address()
+    writer_buffer_indices_mc.insert(1);  // dst_buffer->address()
+
     auto override_runtime_args_callback = [reader_kernel_id = reader_kernel_id,
                                            writer_kernel_id = writer_kernel_id,
                                            ncores_h = ncores_h,
-                                           ncores_w = ncores_w](
+                                           ncores_w = ncores_w,
+                                           reader_buffer_indices_mc,
+                                           writer_buffer_indices_mc](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -660,6 +748,10 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
         auto src_buffer = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
+
         for (uint32_t j = 0; j < ncores_h; ++j) {
             for (uint32_t i = 0; i < ncores_w; ++i) {
                 CoreCoord core = {i, j};
@@ -667,14 +759,32 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
                     auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
                     runtime_args[0] = src_buffer->address();
                     runtime_args[1] = dst_buffer->address();
+                    actual_reader_updated_indices.insert(0);
+                    actual_reader_updated_indices.insert(1);
                 }
                 {
                     auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
                     runtime_args[0] = src_buffer->address();
                     runtime_args[1] = dst_buffer->address();
+                    actual_writer_updated_indices.insert(0);
+                    actual_writer_updated_indices.insert(1);
                 }
             }
         }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_mc,
+            "Multi-core pad reader runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+            "updates: {}",
+            reader_buffer_indices_mc.size(),
+            actual_reader_updated_indices.size());
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_mc,
+            "Multi-core pad writer runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+            "updates: {}",
+            writer_buffer_indices_mc.size(),
+            actual_writer_updated_indices.size());
     };
 
     return {std::move(program), override_runtime_args_callback};
@@ -1312,7 +1422,12 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
     }
 
-    auto override_runtime_args_callback = [cb_src0, cb_output](
+    // Extract CBs that are created with set_globally_allocated_address
+    std::vector<std::pair<CBHandle, std::string>> cbs_with_global_address_pad;
+    cbs_with_global_address_pad.push_back({cb_src0, "input"});     // set_globally_allocated_address(*a.buffer())
+    cbs_with_global_address_pad.push_back({cb_output, "output"});  // set_globally_allocated_address(*output.buffer())
+
+    auto override_runtime_args_callback = [cb_src0, cb_output, cbs_with_global_address_pad](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -1321,8 +1436,49 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
         auto src_buffer_a = input_tensors.at(0).buffer();
         auto dst_buffer = output_tensors.at(0).buffer();
 
+        // Track which CBs actually get updated by the EXISTING logic
+        std::set<CBHandle> expected_cb_updates;
+        std::set<CBHandle> actual_cb_updates;
+
+        // Build expected CB updates from program factory analysis
+        for (const auto& [cb_handle, tensor_name] : cbs_with_global_address_pad) {
+            expected_cb_updates.insert(cb_handle);
+        }
+
+        // KEEP ORIGINAL LOGIC - just track what CBs get updated
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
         UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+
+        // Track what CBs were actually updated by original logic
+        actual_cb_updates.insert(cb_src0);
+        actual_cb_updates.insert(cb_output);
+
+        // VALIDATION: Check if existing CB update logic matches expected from program factory
+        TT_FATAL(
+            actual_cb_updates == expected_cb_updates,
+            "Pad CB update logic is incorrect! Program factory created {} CBs with globally_allocated_address, but "
+            "override logic updates {} CBs",
+            expected_cb_updates.size(),
+            actual_cb_updates.size());
+
+        // VALIDATION: Check tensor name alignment
+        std::map<std::string, const Buffer*> tensor_buffers = {{"input", src_buffer_a}, {"output", dst_buffer}};
+
+        for (const auto& [cb_handle, expected_tensor_name] : cbs_with_global_address_pad) {
+            bool cb_was_updated = actual_cb_updates.find(cb_handle) != actual_cb_updates.end();
+            TT_FATAL(
+                cb_was_updated,
+                "Pad CB {} was created with globally_allocated_address for tensor '{}' in program factory, but was not "
+                "updated in override callback!",
+                cb_handle,
+                expected_tensor_name);
+
+            TT_FATAL(
+                tensor_buffers[expected_tensor_name] != nullptr,
+                "Buffer for tensor '{}' mapped to CB {} is null",
+                expected_tensor_name,
+                cb_handle);
+        }
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
@@ -1448,7 +1604,14 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, all_cores_padded, {});
     tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores_padded, {});
 
-    auto override_runtime_args_callback = [input_shard_cb, output_shard_cb](
+    // Extract CBs that are created with set_globally_allocated_address
+    std::vector<std::pair<CBHandle, std::string>> cbs_with_global_address_sharded;
+    cbs_with_global_address_sharded.push_back(
+        {input_shard_cb, "input"});  // set_globally_allocated_address(*input_tensor.buffer())
+    cbs_with_global_address_sharded.push_back(
+        {output_shard_cb, "output"});  // set_globally_allocated_address(*output.buffer())
+
+    auto override_runtime_args_callback = [input_shard_cb, output_shard_cb, cbs_with_global_address_sharded](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -1457,8 +1620,49 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
         auto input_buffer = input_tensors.at(0).buffer();
         auto output_buffer = output_tensors.at(0).buffer();
 
+        // Track which CBs actually get updated by the EXISTING logic
+        std::set<CBHandle> expected_cb_updates;
+        std::set<CBHandle> actual_cb_updates;
+
+        // Build expected CB updates from program factory analysis
+        for (const auto& [cb_handle, tensor_name] : cbs_with_global_address_sharded) {
+            expected_cb_updates.insert(cb_handle);
+        }
+
+        // KEEP ORIGINAL LOGIC - just track what CBs get updated
         UpdateDynamicCircularBufferAddress(program, input_shard_cb, *input_buffer);
         UpdateDynamicCircularBufferAddress(program, output_shard_cb, *output_buffer);
+
+        // Track what CBs were actually updated by original logic
+        actual_cb_updates.insert(input_shard_cb);
+        actual_cb_updates.insert(output_shard_cb);
+
+        // VALIDATION: Check if existing CB update logic matches expected from program factory
+        TT_FATAL(
+            actual_cb_updates == expected_cb_updates,
+            "Sharded pad CB update logic is incorrect! Program factory created {} CBs with globally_allocated_address, "
+            "but override logic updates {} CBs",
+            expected_cb_updates.size(),
+            actual_cb_updates.size());
+
+        // VALIDATION: Check tensor name alignment
+        std::map<std::string, const Buffer*> tensor_buffers = {{"input", input_buffer}, {"output", output_buffer}};
+
+        for (const auto& [cb_handle, expected_tensor_name] : cbs_with_global_address_sharded) {
+            bool cb_was_updated = actual_cb_updates.find(cb_handle) != actual_cb_updates.end();
+            TT_FATAL(
+                cb_was_updated,
+                "Sharded pad CB {} was created with globally_allocated_address for tensor '{}' in program factory, but "
+                "was not updated in override callback!",
+                cb_handle,
+                expected_tensor_name);
+
+            TT_FATAL(
+                tensor_buffers[expected_tensor_name] != nullptr,
+                "Buffer for tensor '{}' mapped to CB {} is null",
+                expected_tensor_name,
+                cb_handle);
+        }
     };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }

@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "unary_sharded_program_factory.hpp"
 
 #include <algorithm>
+#include <set>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
@@ -191,8 +193,55 @@ void UnaryShardedProgramFactory::override_runtime_arguments(
 
     auto src_buffer = tensor_args.input.buffer();
     auto dst_buffer = output.buffer();
+
+    // Extract CBs that are created with globally allocated addresses from program factory
+    std::vector<std::pair<CBHandle, std::string>> cbs_with_global_address_unary_sharded;
+    cbs_with_global_address_unary_sharded.push_back(
+        {cb_src0, "input"});  // set_globally_allocated_address for input buffer
+    cbs_with_global_address_unary_sharded.push_back(
+        {out_cb, "output"});  // set_globally_allocated_address for output buffer
+
+    // Track which CBs actually get updated by the EXISTING logic
+    std::set<CBHandle> expected_cb_updates;
+    std::set<CBHandle> actual_cb_updates;
+
+    // Build expected CB updates from program factory analysis
+    for (const auto& [cb_handle, tensor_name] : cbs_with_global_address_unary_sharded) {
+        expected_cb_updates.insert(cb_handle);
+    }
+
+    // KEEP ORIGINAL LOGIC - just track what CBs get updated
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
+    actual_cb_updates.insert(cb_src0);
     tt::tt_metal::UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+    actual_cb_updates.insert(out_cb);
+
+    // VALIDATION: Check if existing CB update logic matches expected from program factory
+    TT_FATAL(
+        actual_cb_updates == expected_cb_updates,
+        "Unary sharded CB update logic is incorrect! Program factory created {} CBs with globally_allocated_address, "
+        "but override logic updates {} CBs",
+        expected_cb_updates.size(),
+        actual_cb_updates.size());
+
+    // VALIDATION: Check tensor name alignment
+    std::map<std::string, const Buffer*> tensor_buffers = {{"input", src_buffer}, {"output", dst_buffer}};
+
+    for (const auto& [cb_handle, expected_tensor_name] : cbs_with_global_address_unary_sharded) {
+        bool cb_was_updated = actual_cb_updates.find(cb_handle) != actual_cb_updates.end();
+        TT_FATAL(
+            cb_was_updated,
+            "Unary sharded CB {} was created with globally_allocated_address for tensor '{}' in program factory, but "
+            "was not updated in override callback!",
+            cb_handle,
+            expected_tensor_name);
+
+        TT_FATAL(
+            tensor_buffers[expected_tensor_name] != nullptr,
+            "Buffer for tensor '{}' mapped to CB {} is null",
+            expected_tensor_name,
+            cb_handle);
+    }
 }
 
 }  // namespace ttnn::operations::unary::program

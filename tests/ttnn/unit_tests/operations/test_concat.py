@@ -235,37 +235,38 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
     ),
 )
 def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, groups, dtype, core_grid, layout):
-    torch_input_tensors = [random_torch_tensor(dtype, shapes) for idx, shapes in enumerate(input_shapes)]
+    for i in range(10):
+        torch_input_tensors = [random_torch_tensor(dtype, shapes) for idx, shapes in enumerate(input_shapes)]
 
-    if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("Cannot use bfloat8 with RM layout")
+        if dtype == ttnn.bfloat8_b and layout == ttnn.ROW_MAJOR_LAYOUT:
+            pytest.skip("Cannot use bfloat8 with RM layout")
 
-    if layout == ttnn.TILE_LAYOUT and (input_shapes[0][-1] // groups < 16 or input_shapes[1][-1] // groups < 16):
-        pytest.xfail("Group size < 16 is currently not supported for tiled inputs")
+        if layout == ttnn.TILE_LAYOUT and (input_shapes[0][-1] // groups < 16 or input_shapes[1][-1] // groups < 16):
+            pytest.xfail("Group size < 16 is currently not supported for tiled inputs")
 
-    expected = ttnn.concat.golden_function(torch_input_tensors, dim, groups)
+        expected = ttnn.concat.golden_function(torch_input_tensors, dim, groups)
 
-    sharded_memory_configs = [
-        ttnn.create_sharded_memory_config(
-            x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR
+        sharded_memory_configs = [
+            ttnn.create_sharded_memory_config(
+                x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR
+            )
+            for x in torch_input_tensors
+        ]
+        ttnn_input_tensors = [
+            ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+            for x, memory_config in zip(torch_input_tensors, sharded_memory_configs)
+        ]
+
+        output_memory_config = ttnn.create_sharded_memory_config(output_shape, core_grid, ttnn.ShardStrategy.HEIGHT)
+        z = ttnn.concat(
+            [ttnn_input_tensors[0], ttnn_input_tensors[1]], dim=dim, memory_config=output_memory_config, groups=groups
         )
-        for x in torch_input_tensors
-    ]
-    ttnn_input_tensors = [
-        ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
-        for x, memory_config in zip(torch_input_tensors, sharded_memory_configs)
-    ]
 
-    output_memory_config = ttnn.create_sharded_memory_config(output_shape, core_grid, ttnn.ShardStrategy.HEIGHT)
-    z = ttnn.concat(
-        [ttnn_input_tensors[0], ttnn_input_tensors[1]], dim=dim, memory_config=output_memory_config, groups=groups
-    )
-
-    actual = ttnn.to_torch(z)
-    if dtype == ttnn.bfloat8_b:
-        assert_with_pcc(expected, actual, 0.99)
-    else:
-        assert torch.equal(expected, actual)
+        actual = ttnn.to_torch(z)
+        if dtype == ttnn.bfloat8_b:
+            assert_with_pcc(expected, actual, 0.99)
+        else:
+            assert torch.equal(expected, actual)
 
 
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])

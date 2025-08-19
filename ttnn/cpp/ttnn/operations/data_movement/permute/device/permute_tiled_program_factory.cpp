@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
+#include <set>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
@@ -238,14 +240,40 @@ void PermuteDeviceOperation::MultiCoreTileInvariant::override_runtime_arguments(
     auto dst_buffer = output_tensor.buffer();
     auto& all_cores = cached_program.shared_variables.core_range;
 
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_permute_tile_invariant;
+    std::set<uint32_t> writer_buffer_indices_permute_tile_invariant;
+    reader_buffer_indices_permute_tile_invariant.insert(0);  // src_buffer->address()
+    writer_buffer_indices_permute_tile_invariant.insert(0);  // dst_buffer->address()
+
+    // Track which indices actually get updated by the EXISTING logic
+    std::set<uint32_t> actual_reader_updated_indices;
+    std::set<uint32_t> actual_writer_updated_indices;
+
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     for (const auto& core : cores) {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
         runtime_args[0] = src_buffer->address();
+        actual_reader_updated_indices.insert(0);
 
         auto& runtime_args_writer = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
         runtime_args_writer[0] = dst_buffer->address();
+        actual_writer_updated_indices.insert(0);
     }
+
+    // VALIDATION: Check if existing logic updates all expected indices
+    TT_FATAL(
+        actual_reader_updated_indices == reader_buffer_indices_permute_tile_invariant,
+        "Permute tile invariant reader runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+        "updates: {}",
+        reader_buffer_indices_permute_tile_invariant.size(),
+        actual_reader_updated_indices.size());
+    TT_FATAL(
+        actual_writer_updated_indices == writer_buffer_indices_permute_tile_invariant,
+        "Permute tile invariant writer runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+        "updates: {}",
+        writer_buffer_indices_permute_tile_invariant.size(),
+        actual_writer_updated_indices.size());
 }
 
 PermuteDeviceOperation::MultiCoreTileRowInvariant::cached_program_t
@@ -510,13 +538,40 @@ void PermuteDeviceOperation::MultiCoreTileRowInvariant::override_runtime_argumen
     auto dst_buffer = output_tensor.buffer();
     auto& all_cores = cached_program.shared_variables.core_range;
 
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_permute_tile_row_invariant;
+    std::set<uint32_t> writer_buffer_indices_permute_tile_row_invariant;
+    reader_buffer_indices_permute_tile_row_invariant.insert(0);  // src_buffer->address()
+    writer_buffer_indices_permute_tile_row_invariant.insert(0);  // dst_buffer->address()
+
+    // Track which indices actually get updated by the EXISTING logic
+    std::set<uint32_t> actual_reader_updated_indices;
+    std::set<uint32_t> actual_writer_updated_indices;
+
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     for (const auto& core : cores) {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
         runtime_args[0] = src_buffer->address();
+        actual_reader_updated_indices.insert(0);
+
         auto& runtime_args_writer = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
         runtime_args_writer[0] = dst_buffer->address();
+        actual_writer_updated_indices.insert(0);
     }
+
+    // VALIDATION: Check if existing logic updates all expected indices
+    TT_FATAL(
+        actual_reader_updated_indices == reader_buffer_indices_permute_tile_row_invariant,
+        "Permute tile row invariant reader runtime args update logic is incorrect! Expected indices: {}, but actual "
+        "logic updates: {}",
+        reader_buffer_indices_permute_tile_row_invariant.size(),
+        actual_reader_updated_indices.size());
+    TT_FATAL(
+        actual_writer_updated_indices == writer_buffer_indices_permute_tile_row_invariant,
+        "Permute tile row invariant writer runtime args update logic is incorrect! Expected indices: {}, but actual "
+        "logic updates: {}",
+        writer_buffer_indices_permute_tile_row_invariant.size(),
+        actual_writer_updated_indices.size());
 }
 
 PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOperation::MultiCoreTiledGeneric::create(
@@ -867,13 +922,40 @@ void PermuteDeviceOperation::MultiCoreTiledGeneric::override_runtime_arguments(
     auto dst_buffer = output_tensor.buffer();
     auto& all_cores = cached_program.shared_variables.core_range;
 
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_permute_tiled_generic;
+    std::set<uint32_t> writer_buffer_indices_permute_tiled_generic;
+    reader_buffer_indices_permute_tiled_generic.insert(0);  // src_buffer->address()
+    writer_buffer_indices_permute_tiled_generic.insert(0);  // dst_buffer->address()
+
+    // Track which indices actually get updated by the EXISTING logic
+    std::set<uint32_t> actual_reader_updated_indices;
+    std::set<uint32_t> actual_writer_updated_indices;
+
     auto cores = corerange_to_cores(all_cores, std::nullopt);
     for (const auto& core : cores) {
         auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, unary_reader_kernel_id, core);
         runtime_args[0] = src_buffer->address();
+        actual_reader_updated_indices.insert(0);
+
         auto& runtime_args_writer = tt::tt_metal::GetRuntimeArgs(program, unary_writer_kernel_id, core);
         runtime_args_writer[0] = dst_buffer->address();
+        actual_writer_updated_indices.insert(0);
     }
+
+    // VALIDATION: Check if existing logic updates all expected indices
+    TT_FATAL(
+        actual_reader_updated_indices == reader_buffer_indices_permute_tiled_generic,
+        "Permute tiled generic reader runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+        "updates: {}",
+        reader_buffer_indices_permute_tiled_generic.size(),
+        actual_reader_updated_indices.size());
+    TT_FATAL(
+        actual_writer_updated_indices == writer_buffer_indices_permute_tiled_generic,
+        "Permute tiled generic writer runtime args update logic is incorrect! Expected indices: {}, but actual logic "
+        "updates: {}",
+        writer_buffer_indices_permute_tiled_generic.size(),
+        actual_writer_updated_indices.size());
 }
 
 }  // namespace ttnn::operations::data_movement

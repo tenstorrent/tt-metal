@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include "full_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <set>
 
 using namespace tt;
 using namespace tt::constants;
@@ -120,12 +122,29 @@ void FullOperation::ProgramFactory::override_runtime_arguments(
     auto& writer_kernel_id = cached_program.shared_variables.writer_id;
     auto& num_cores = cached_program.shared_variables.num_cores;
     auto& num_cores_y = cached_program.shared_variables.core_h;
+
+    // Extract buffer address indices from program factory setup
+    // Writer: runtime_args[0] gets output buffer address
+    std::set<uint32_t> writer_buffer_indices_full;
+    writer_buffer_indices_full.insert(0);  // output.buffer()->address()
+
+    // Track which indices actually get updated by the EXISTING logic
+    std::set<uint32_t> actual_writer_updated_indices;
+
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
             runtime_args[0] = output.buffer()->address();
+            actual_writer_updated_indices.insert(0);
         }
     }
+
+    // VALIDATION: Check if existing logic updates all expected indices
+    TT_FATAL(
+        actual_writer_updated_indices == writer_buffer_indices_full,
+        "Full writer runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+        writer_buffer_indices_full.size(),
+        actual_writer_updated_indices.size());
 }
 }  // namespace ttnn::operations::full

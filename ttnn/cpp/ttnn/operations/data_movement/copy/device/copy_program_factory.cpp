@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include <math.h>
+#include <set>
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/util.hpp>
@@ -178,27 +180,54 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
         }
     }
 
-    auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id, cores](
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_copy;
+    std::set<uint32_t> writer_buffer_indices_copy;
+    reader_buffer_indices_copy.insert(0);  // src_buffer->address()
+    writer_buffer_indices_copy.insert(0);  // dst_buffer->address()
+
+    auto override_runtime_args_callback = [unary_reader_kernel_id,
+                                           unary_writer_kernel_id,
+                                           cores,
+                                           reader_buffer_indices_copy,
+                                           writer_buffer_indices_copy](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
         auto src_buffer = input_tensors.at(0).buffer();
-
         auto dst_buffer = output_tensors.at(0).buffer();
+
+        // Track which indices actually get updated by the EXISTING logic
+        std::set<uint32_t> actual_reader_updated_indices;
+        std::set<uint32_t> actual_writer_updated_indices;
 
         for (const auto& core : cores) {
             {
                 auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
                 runtime_args[0] = src_buffer->address();
+                actual_reader_updated_indices.insert(0);
             }
 
             {
                 auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
                 runtime_args[0] = dst_buffer->address();
+                actual_writer_updated_indices.insert(0);
             }
         }
+
+        // VALIDATION: Check if existing logic updates all expected indices
+        TT_FATAL(
+            actual_reader_updated_indices == reader_buffer_indices_copy,
+            "Copy reader runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+            reader_buffer_indices_copy.size(),
+            actual_reader_updated_indices.size());
+        TT_FATAL(
+            actual_writer_updated_indices == writer_buffer_indices_copy,
+            "Copy writer runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+            writer_buffer_indices_copy.size(),
+            actual_writer_updated_indices.size());
     };
 
     return {std::move(program), override_runtime_args_callback};

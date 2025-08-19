@@ -2,7 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// look into this file
 #include <algorithm>
+#include <set>
 
 #include "unary_program_factory.hpp"
 
@@ -197,19 +199,43 @@ void UnaryProgramFactory::override_runtime_arguments(
     auto src_buffer = input.buffer();
     auto dst_buffer = output.buffer();
 
+    // Extract buffer address indices from runtime args setup
+    std::set<uint32_t> reader_buffer_indices_unary;
+    std::set<uint32_t> writer_buffer_indices_unary;
+    reader_buffer_indices_unary.insert(0);  // src_buffer->address()
+    writer_buffer_indices_unary.insert(0);  // dst_buffer->address()
+
+    // Track which indices actually get updated by the EXISTING logic
+    std::set<uint32_t> actual_reader_updated_indices;
+    std::set<uint32_t> actual_writer_updated_indices;
+
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         {
             auto& runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
             runtime_args[0] = src_buffer->address();
+            actual_reader_updated_indices.insert(0);
         }
 
         {
             auto& runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
             runtime_args[0] = dst_buffer->address();
+            actual_writer_updated_indices.insert(0);
         }
     }
+
+    // VALIDATION: Check if existing logic updates all expected indices
+    TT_FATAL(
+        actual_reader_updated_indices == reader_buffer_indices_unary,
+        "Unary reader runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+        reader_buffer_indices_unary.size(),
+        actual_reader_updated_indices.size());
+    TT_FATAL(
+        actual_writer_updated_indices == writer_buffer_indices_unary,
+        "Unary writer runtime args update logic is incorrect! Expected indices: {}, but actual logic updates: {}",
+        writer_buffer_indices_unary.size(),
+        actual_writer_updated_indices.size());
 }
 
 }  // namespace ttnn::operations::unary::program

@@ -44,16 +44,16 @@ def random_torch_tensor(dtype, shape):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
 def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
     torch.manual_seed(0)
+    for i in range(10):
+        torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
+        torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
 
-    torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
-    torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
+        input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
+        output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
+        output_tensor = ttnn.to_torch(output_tensor)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=dtype)
-    output_tensor = ttnn.pad(input_tensor, padding=padding, value=value)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert output_tensor.shape == torch_output_tensor.shape
-    assert torch.equal(torch_output_tensor, output_tensor)
+        assert output_tensor.shape == torch_output_tensor.shape
+        assert torch.equal(torch_output_tensor, output_tensor)
 
 
 def run_pad_rm_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype):
@@ -442,16 +442,17 @@ def test_pad_for_tensor_in_tile_layout(device, h, w, padding, value):
     ],
 )
 def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
-    torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
+    for i in range(3):
+        torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
 
-    in_torch = torch.randint(-5, 5, shape, dtype=torch_dtype).float()
-    in_ttnn = ttnn.from_torch(in_torch, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=device, dtype=dtype)
+        in_torch = torch.randint(-5, 5, shape, dtype=torch_dtype).float()
+        in_ttnn = ttnn.from_torch(in_torch, memory_config=ttnn.DRAM_MEMORY_CONFIG, device=device, dtype=dtype)
 
-    out_ttnn = ttnn.pad(in_ttnn, padded_shape, [0, 0, 0, 0], 0, use_multicore=use_multicore)
-    out_torch = out_ttnn.cpu().to_torch().float()
+        out_ttnn = ttnn.pad(in_ttnn, padded_shape, [0, 0, 0, 0], 0, use_multicore=use_multicore)
+        out_torch = out_ttnn.cpu().to_torch().float()
 
-    out_torch = out_torch[: shape[0], : shape[1], : shape[2], : shape[3]]
-    assert torch.equal(in_torch, out_torch)
+        out_torch = out_torch[: shape[0], : shape[1], : shape[2], : shape[3]]
+        assert torch.equal(in_torch, out_torch)
 
 
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32, ttnn.uint32])
