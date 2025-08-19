@@ -140,12 +140,10 @@ void MAIN {
 
                 if constexpr (fuse_pre_add) {
                     // Fuse in = in + b
-                    cb_wait_front(cb_inb, blk);
                     for (uint32_t j = 0; j < blk; j++) {
                         binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
                         binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, j);
                     }
-                    cb_pop_front(cb_inb, blk);
                 }
 
                 // Square tiles in dst regs
