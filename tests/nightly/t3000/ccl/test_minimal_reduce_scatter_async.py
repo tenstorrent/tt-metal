@@ -89,7 +89,7 @@ def run_reduce_scatter_impl(
         for _ in range(num_iters)
     ]
     rs_output_shape = rs_input_shape[:]
-    rs_output_shape[3] //= num_devices
+    rs_output_shape[dim] //= num_devices
     persistent_output_buffers = [
         ttnn.from_torch(
             torch.zeros(rs_output_shape),
@@ -196,14 +196,14 @@ def run_reduce_scatter_impl(
         ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
         for tt_tensor in tt_reduce_scatter_output_trace_list:
             tt_rs_out = ttnn.from_device(tt_tensor)
-            tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))
+            tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=dim))
             tt_tensor.deallocate(True)
             tt_reduce_scatter_output_list.append(tt_rs_out)
     else:
         for i in range(num_iters):
             tt_reduce_scatter_output_tensor = run_op(i)
             tt_rs_out = ttnn.from_device(tt_reduce_scatter_output_tensor)
-            tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=3))
+            tt_rs_out = ttnn.to_torch(tt_rs_out, mesh_composer=ttnn.ConcatMeshToTensor(t3k_mesh_device, dim=dim))
             tt_reduce_scatter_output_tensor.deallocate(True)
             tt_reduce_scatter_output_list.append(tt_rs_out)
 
@@ -217,7 +217,7 @@ def run_reduce_scatter_impl(
         tt_rs_out = tt_reduce_scatter_output_list[i]
         torch_rs_out_tensor = torch_reduce_scatter_output_list[i]
 
-        torch_rs_out = torch.cat(torch_rs_out_tensor, 3)
+        torch_rs_out = torch.cat(torch_rs_out_tensor, dim)
 
         if ones_tensor:
             eq, output = comp_equal(tt_rs_out, torch_rs_out)
@@ -384,7 +384,7 @@ def test_reduce_scatter_async(
     ],
 )
 @pytest.mark.parametrize(
-    "mem_config_input, mem_config_ag",
+    "mem_config_input, mem_config_rs",
     [
         (
             ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
@@ -399,6 +399,14 @@ def test_reduce_scatter_async(
         (False, 1),
     ],
     ids=["perf", "check"],
+)
+@pytest.mark.parametrize(
+    "ones_tensor",
+    [
+        True,
+        False,
+    ],
+    ids=["ones", "random"],
 )
 @pytest.mark.parametrize(
     "device_params, rs_topology",
@@ -418,10 +426,11 @@ def test_reduce_scatter_async_training_shapes(
     rs_input_dtype,
     layout,
     mem_config_input,
-    mem_config_ag,
+    mem_config_rs,
     enable_trace,
     rs_topology,
     num_iters,
+    ones_tensor,
 ):
     if enable_trace:
         pytest.skip("We've seen ND PCC when running the composite-RS with trace")
@@ -435,10 +444,11 @@ def test_reduce_scatter_async_training_shapes(
         rs_input_dtype,
         layout,
         mem_config_input,
-        mem_config_ag,
+        mem_config_rs,
         rs_topology=rs_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
+        ones_tensor=ones_tensor,
         use_barrier=True,
         use_persistent_buffers=False,
     )
