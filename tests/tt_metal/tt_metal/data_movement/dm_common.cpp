@@ -58,12 +58,4 @@ std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(
     return {bytes_per_page, static_cast<uint32_t>(max_transmittable_bytes), max_transmittable_pages};
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> compute_physical_constraints(
-    const tt::ARCH arch, const std::shared_ptr<distributed::MeshDevice> mesh_device) {
-    auto [_, max_transmittable_bytes] = get_l1_address_and_size(mesh_device);
-    uint32_t bytes_per_page = obtain_page_size_bytes(arch);
-    uint32_t max_transmittable_pages = max_transmittable_bytes / bytes_per_page;
-
-    return {bytes_per_page, static_cast<uint32_t>(max_transmittable_bytes), max_transmittable_pages};
-}
 }  // namespace tt::tt_metal::unit_tests::dm

@@ -56,14 +56,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const AllFromAllCon
     /* ================ SETUP ================ */
 
     // Program
-    auto& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    auto zero_coord = distributed::MeshCoordinate(0, 0);
-    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
-    auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices()[0];
 
     // Initialize core sets //
     /*
@@ -100,7 +93,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const AllFromAllCon
 
     vector<uint32_t> sub_worker_coordinates = {};
     for (auto& sub_logical_core : corerange_to_cores(sub_logical_core_set)) {
-        CoreCoord sub_worker_core = mesh_device->worker_core_from_logical_core(sub_logical_core);
+        CoreCoord sub_worker_core = device->worker_core_from_logical_core(sub_logical_core);
         sub_worker_coordinates.push_back(sub_worker_core.x);
         sub_worker_coordinates.push_back(sub_worker_core.y);
     }
@@ -137,7 +130,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const AllFromAllCon
 
     // Create kernels
     auto requestor_kernel = CreateKernel(
-        program_,
+        program,
         "tests/tt_metal/tt_metal/data_movement/all_from_all/kernels/requestor.cpp",
         mst_logical_core_set,
         DataMovementConfig{
@@ -148,12 +141,12 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const AllFromAllCon
     // Run-time Arguments for kernels
     vector<uint32_t> requestor_runtime_args = sub_worker_coordinates;
     for (auto& mst_logical_core : corerange_to_cores(mst_logical_core_set)) {
-        SetRuntimeArgs(program_, requestor_kernel, mst_logical_core, requestor_runtime_args);
+        SetRuntimeArgs(program, requestor_kernel, mst_logical_core, requestor_runtime_args);
     }
 
     // Assign unique id
     log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
-    program_.set_runtime_id(unit_tests::dm::runtime_host_id++);
+    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     /* ================ RUNNING THE PROGRAM ================ */
 
