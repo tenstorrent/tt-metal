@@ -495,6 +495,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto& b = tensor_args.input_tensor_b;
     const bool is_sfpu_op = operation_attributes.is_sfpu;
     const bool is_quant_op = operation_attributes.is_quant_op;
+    // TODO: For mixed dtypes we need to set this value to the appropriate dtype depending on which LLK is meant to be
+    // used.
+    const auto input_dtype = operation_attributes.input_dtype;
     if (is_quant_op) {
         TT_FATAL(is_sfpu_op, "Quantization op is SFPU-only");
     }
@@ -575,10 +578,10 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";
                 unary::utils::update_macro_defines(unary::UnaryOpType::ZERO_POINT, compute_kernel_defines);
             } else {
-                add_activation_defines(compute_kernel_defines, post_activations, "POST", c.dtype());
+                add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
             }
         } else {
-            add_activation_defines(compute_kernel_defines, post_activations, "POST", c.dtype());
+            add_activation_defines(compute_kernel_defines, post_activations, "POST", input_dtype);
         }
     }
 

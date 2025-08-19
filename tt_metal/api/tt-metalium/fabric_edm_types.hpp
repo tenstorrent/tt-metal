@@ -14,6 +14,8 @@ struct WorkerXY {
     uint16_t x;
     uint16_t y;
 
+    constexpr WorkerXY() : x(0), y(0) {}
+
     constexpr WorkerXY(uint16_t x, uint16_t y) : x(x), y(y) {}
 
     constexpr uint32_t to_uint32() const { return (y << 16) | x; }

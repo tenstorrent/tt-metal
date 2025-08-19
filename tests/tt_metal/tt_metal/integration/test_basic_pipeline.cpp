@@ -111,7 +111,7 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
         tt_metal::CircularBufferConfig cb_config =
             tt_metal::CircularBufferConfig(cb_size_bytes, {{cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_index, single_tile_size);
-        auto cb = tt_metal::CreateCircularBuffer(program, core, cb_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_config);
     }
 
     uint32_t src_address;
