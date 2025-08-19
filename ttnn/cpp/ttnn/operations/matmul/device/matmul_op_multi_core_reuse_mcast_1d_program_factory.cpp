@@ -405,7 +405,9 @@ process_mcast_in0_program_and_create_override_variables(
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for sparsity
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_sender_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias_buffer).append_to(in1_sender_writer_compile_time_args);
+    if (bias_buffer != nullptr) {
+        tt::tt_metal::TensorAccessorArgs(*bias_buffer).append_to(in1_sender_writer_compile_time_args);
+    }
 
     std::vector<uint32_t> in0_receiver_compile_time_args = {
         // in0 block args
@@ -1168,7 +1170,9 @@ process_mcast_in1_program_and_create_override_variables(
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for sparsity
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_sender_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias_buffer).append_to(in1_sender_writer_compile_time_args);
+    if (bias_buffer != nullptr) {
+        tt::tt_metal::TensorAccessorArgs(*bias_buffer).append_to(in1_sender_writer_compile_time_args);
+    }
 
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
         // READER

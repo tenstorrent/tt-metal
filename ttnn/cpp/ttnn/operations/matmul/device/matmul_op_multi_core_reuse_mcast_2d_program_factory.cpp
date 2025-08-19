@@ -452,7 +452,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
     tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(in1_sender_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs().append_to(in1_sender_writer_compile_time_args);  // placeholder for sparsity
     tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(in1_sender_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(bias_buffer).append_to(in1_sender_writer_compile_time_args);
+    if (bias_buffer != nullptr) {
+        tt::tt_metal::TensorAccessorArgs(*bias_buffer).append_to(in1_sender_writer_compile_time_args);
+    }
 
     if (in1_is_sharded and in1_is_dram) {
         in1_sender_writer_compile_time_args.push_back((std::uint32_t)per_core_N_storage * in0_block_w);
