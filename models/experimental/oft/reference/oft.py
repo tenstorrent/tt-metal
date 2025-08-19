@@ -15,8 +15,12 @@ def perspective(matrix, vector):
     """
     Applies perspective projection to a vector using projection matrix
     """
+    print(f"TORCH: matrix shape: {matrix.shape}, dtype: {matrix.dtype}")
+    print(f"TORCH: vector shape: {vector.shape}, dtype: {vector.dtype}")
     vector = vector.unsqueeze(-1)
+    print(f"TORCH: after unsqueeze vector shape: {vector.shape}, dtype: {vector.dtype}")
     homogenous = torch.matmul(matrix[..., :-1], vector) + matrix[..., [-1]]
+    print(f"TORCH: homogenous shape: {homogenous.shape}, dtype: {homogenous.dtype}")
     homogenous = homogenous.squeeze(-1)
     return homogenous[..., :-1] / homogenous[..., [-1]]
 
@@ -26,19 +30,25 @@ class OFT(nn.Module):
         super().__init__()
 
         y_corners = torch.arange(0, grid_height, cell_size) - grid_height / 2.0
+        print(f"y_corners: {y_corners}, shape: {y_corners.shape}, dtype: {y_corners.dtype}")
         y_corners = F.pad(y_corners.view(-1, 1, 1, 1), [1, 1])
+        print(f"padded y_corners: {y_corners}, shape: {y_corners.shape}, dtype: {y_corners.dtype}")
         self.register_buffer("y_corners", y_corners)
 
         # self.conv3d = nn.Conv2d((len(y_corners)-1) * channels, channels,1)
         self.conv3d = nn.Linear((len(y_corners) - 1) * channels, channels)
+        print(f"{(len(y_corners) - 1) * channels}, channels: {channels}")
         self.scale = scale
 
     def forward(self, features, calib, grid):
+        print(f"TORCH: features shape: {features.shape}, dtype: {features.dtype}")
         corners = grid.unsqueeze(1) + self.y_corners.view(-1, 1, 1, 3)
+        print(f"corners shape: {corners.shape}, dtype: {corners.dtype}")
 
         img_corners = perspective(
             calib.view(-1, 1, 1, 1, 3, 4), corners
         )  # utils.perspective(calib.view(-1, 1, 1, 1, 3, 4), corners)
+        print(f"TORCH: img_corners shape: {img_corners.shape}, dtype: {img_corners.dtype}")
         # Normalize to [-1, 1]
         img_height, img_width = features.size()[2:]
         img_size = corners.new([img_width, img_height]) / self.scale
@@ -52,9 +62,11 @@ class OFT(nn.Module):
             ],
             dim=-1,
         )
+        print(f"TORCH: bbox_corners shape: {bbox_corners.shape}, dtype: {bbox_corners.dtype}")
+
         batch, _, depth, width, _ = bbox_corners.size()
         bbox_corners = bbox_corners.flatten(2, 3)
-
+        print(f"TORCH: bbox_corners after flatten shape: {bbox_corners.shape}, dtype: {bbox_corners.dtype}")
         # Compute the area of each bounding box
         area = (
             (bbox_corners[..., 2:] - bbox_corners[..., :2]).prod(dim=-1) * img_height * img_width * 0.25 + EPSILON
@@ -91,15 +103,19 @@ def integral_image(features):
 @pytest.mark.parametrize(
     "batch,channels,cell_size,grid_height,depth,width",
     [
-        (2, 256, 0.5, 6.0, 4, 4),
+        (2, 128, 0.5, 6.0, 4, 4),
     ],
 )
 def test_oft_forward(batch, channels, cell_size, grid_height, depth, width):
     # Create dummy inputs
-    features = torch.randn(batch, channels, 16, 16)
-    calib = torch.randn(batch, 3, 4)
-    grid = torch.randn(batch, depth, width, 3)
+    # features = torch.randn(batch, channels, 16, 16)
+    # calib = torch.randn(batch, 3, 4)
+    # grid = torch.randn(batch, depth, width, 3)
 
+    torch.manual_seed(0)
+    features = torch.randn(1, 128, 48, 160)
+    calib = torch.randn(1, 3, 4)
+    grid = torch.randn(1, 160, 160, 3)
     oft = OFT(channels, cell_size, grid_height, scale=1 / 8.0)
     output = oft(features, calib, grid)
 
