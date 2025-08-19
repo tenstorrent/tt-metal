@@ -113,96 +113,672 @@ For input page at coordinate `(n, d, h, w)` containing `C` elements:
          copy_page(input_page[input_page_idx], output_page[output_page_idx])
    ```
 
-## 4. Minimal Implementation Strategy (Test-Driven Development)
+## 4. STRICT Test-Driven Development Implementation Strategy
+
+### CRITICAL REQUIREMENTS:
+- **BUILD COMMAND:** `./build_metal.sh`
+- **PYTHON ENV:** `source python_env/bin/activate`
+- **ALL INTERMEDIATE TESTS:** Must be in `test_progress_upsample3d/` folder (will be deleted later)
+- **FINAL TEST:** Must be in official `tests/` folder of repo
+- **SET TIMEOUTS:** All tests must have 20 second timeouts to quickly catch device hangs
+- **NO SKIPPING STEPS:** Each step must be completed in order, no jumping ahead
+- **EVERY TEST IN PYTHON FILES:** All tests must be written as Python files that can be executed
+
+### Test Directory Structure:
+```
+test_progress_upsample3d/              # Temporary test folder (will be deleted)
+├── step1_test_api_exists.py
+├── step2_test_parameter_validation.py
+├── step3_test_operation_registration.py
+├── step4_test_device_operation.py
+├── step5_test_program_factory.py
+├── step6_test_kernel_compilation.py
+├── step7_test_minimal_working.py
+├── step8_test_full_implementation.py
+└── utils.py                           # Shared test utilities
+
+tests/ttnn/unit_tests/operations/      # Final test location
+└── test_upsample3d.py                 # Final PCC comparison test
+```
 
 ### Step 1: Python API Stub + Test
+**Test File:** `test_progress_upsample3d/step1_test_api_exists.py`
 **Implementation:**
 - Create basic Python binding that just exists and is callable
 - Return "not implemented" error for now
 
-**Test:** `test_upsample3d_api_exists()`
-**Build & Test:** Verify API exists and can be called
+**Required Test Content:**
+```python
+import pytest
+import ttnn
+import torch
+import sys
+import os
+sys.path.append(os.path.dirname(__file__))
+
+@pytest.mark.timeout(30)  # 30 second timeout
+def test_upsample3d_api_exists():
+    """Test that ttnn.upsample3d exists and is callable"""
+    assert hasattr(ttnn, 'upsample3d'), "ttnn.upsample3d does not exist"
+
+    # Try to call it and expect NotImplementedError
+    input_tensor = torch.randn(1, 2, 2, 2, 4, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(input_tensor, device=None, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    with pytest.raises(NotImplementedError):
+        ttnn.upsample3d(input_tensor, (2, 2, 2))
+
+if __name__ == "__main__":
+    test_upsample3d_api_exists()
+    print("Step 1: API exists test PASSED")
+```
+
+**Build & Test Protocol:**
+1. `./build_metal.sh`
+2. `source python_env/bin/activate`
+3. `python test_progress_upsample3d/step1_test_api_exists.py`
+4. Test MUST pass before proceeding to Step 2
 
 ### Step 2: Parameter Validation Stub + Test
+**Test File:** `test_progress_upsample3d/step2_test_parameter_validation.py`
 **Implementation:**
 - Add parameter validation in Python binding
 - Parse scale factors, validate tensor dimensionality
-- Still return "not implemented"
+- Still return "not implemented" but with proper validation
 
-**Test:** `test_upsample3d_parameter_validation()`
-**Build & Test:** Verify parameter validation works
+**Required Test Content:**
+```python
+import pytest
+import ttnn
+import torch
+import sys
+import os
+sys.path.append(os.path.dirname(__file__))
+
+@pytest.mark.timeout(30)
+def test_upsample3d_parameter_validation():
+    """Test parameter validation for upsample3d"""
+
+    # Test invalid tensor dimensions (should fail)
+    invalid_tensor_4d = torch.randn(1, 2, 2, 4, dtype=torch.bfloat16)
+    invalid_tensor_4d = ttnn.from_torch(invalid_tensor_4d, device=None, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    with pytest.raises((ValueError, RuntimeError)):  # Accept either error type
+        ttnn.upsample3d(invalid_tensor_4d, (2, 2, 2))
+
+    # Test invalid scale factors (should fail)
+    valid_tensor = torch.randn(1, 2, 2, 2, 4, dtype=torch.bfloat16)
+    valid_tensor = ttnn.from_torch(valid_tensor, device=None, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    with pytest.raises((ValueError, RuntimeError)):
+        ttnn.upsample3d(valid_tensor, (0, 2, 2))  # Zero scale factor
+
+    with pytest.raises((ValueError, RuntimeError)):
+        ttnn.upsample3d(valid_tensor, (-1, 2, 2))  # Negative scale factor
+
+    # Test valid parameters (should get NotImplementedError)
+    with pytest.raises(NotImplementedError):
+        ttnn.upsample3d(valid_tensor, (2, 2, 2))
+
+if __name__ == "__main__":
+    test_upsample3d_parameter_validation()
+    print("Step 2: Parameter validation test PASSED")
+```
+
+**Build & Test Protocol:**
+1. `./build_metal.sh`
+2. `source python_env/bin/activate`
+3. `python test_progress_upsample3d/step2_test_parameter_validation.py`
+4. Test MUST pass before proceeding to Step 3
 
 ### Step 3: C++ Operation Registration + Test
+**Test File:** `test_progress_upsample3d/step3_test_operation_registration.py`
 **Implementation:**
 - Create minimal `UpSample3D` struct with scale factors only
 - Register operation in TTNN (stub invoke method)
 - Return dummy tensor with correct output shape
 
-**Test:** `test_upsample3d_operation_registered()`, `test_upsample3d_output_shape_computation()`
-**Build & Test:** Verify operation is registered and shape computation works
+**Required Test Content:**
+```python
+import pytest
+import ttnn
+import torch
+import sys
+import os
+sys.path.append(os.path.dirname(__file__))
+
+@pytest.mark.timeout(20)  # Short timeout to catch hangs
+def test_upsample3d_operation_registered():
+    """Test that UpSample3D operation is registered in TTNN"""
+    device = ttnn.open_device(device_id=0)
+    try:
+        input_tensor = torch.randn(1, 2, 2, 2, 4, dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # Should not raise NotImplementedError anymore, should return tensor
+        result = ttnn.upsample3d(input_tensor, (2, 2, 2))
+        assert result is not None
+
+    finally:
+        ttnn.close_device(device)
+
+@pytest.mark.timeout(20)
+def test_upsample3d_output_shape_computation():
+    """Test output shape computation without actual upsampling logic"""
+    device = ttnn.open_device(device_id=0)
+    try:
+        input_shape = [1, 2, 3, 4, 8]  # N, D, H, W, C
+        scale_factors = (2, 3, 4)      # scale_d, scale_h, scale_w
+        expected_shape = [1, 4, 9, 16, 8]  # N, D*2, H*3, W*4, C
+
+        input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        result = ttnn.upsample3d(input_tensor, scale_factors)
+        result_torch = ttnn.to_torch(result)
+
+        assert list(result_torch.shape) == expected_shape, f"Expected shape {expected_shape}, got {list(result_torch.shape)}"
+
+    finally:
+        ttnn.close_device(device)
+
+if __name__ == "__main__":
+    test_upsample3d_operation_registered()
+    test_upsample3d_output_shape_computation()
+    print("Step 3: Operation registration tests PASSED")
+```
+
+**Build & Test Protocol:**
+1. `./build_metal.sh`
+2. `source python_env/bin/activate`
+3. `python test_progress_upsample3d/step3_test_operation_registration.py`
+4. Both tests MUST pass before proceeding to Step 4
 
 ### Step 4: Device Operation + Coordinate Logic + Test
+**Test File:** `test_progress_upsample3d/step4_test_device_operation.py`
 **Implementation:**
 - Add `validate()` method to `UpSample3D`
 - Check 5D tensor, positive scale factors, "nearest" mode
 - Implement coordinate mapping functions (no actual kernel execution)
 - Add buffer size calculations
-- Test mathematical correctness of coordinate transformations
 - Stub `create_program()` method
+- **ADD DEBUG PRINTS:** Add temporary debug prints in device operation to show validation steps (DELETE THESE LATER)
 
-**Test:** `test_upsample3d_input_validation()`, `test_upsample3d_struct_creation()`, `test_upsample3d_coordinate_mapping()`, `test_upsample3d_buffer_sizing()`
-**Build & Test:** Verify validation logic and coordinate math works correctly
+**Required Test Content:**
+```python
+import pytest
+import ttnn
+import torch
+import sys
+import os
+sys.path.append(os.path.dirname(__file__))
+
+@pytest.mark.timeout(20)
+def test_upsample3d_input_validation():
+    """Test input validation in UpSample3D device operation"""
+    device = ttnn.open_device(device_id=0)
+    try:
+        # Test unsupported mode (only "nearest" should be supported initially)
+        input_tensor = torch.randn(1, 2, 2, 2, 4, dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # This should raise error for unsupported mode (if we add mode parameter)
+        # For now, just test that valid case works
+        result = ttnn.upsample3d(input_tensor, (2, 2, 2))
+        assert result is not None
+
+    finally:
+        ttnn.close_device(device)
+
+@pytest.mark.timeout(20)
+def test_upsample3d_various_scale_factors():
+    """Test that device operation can handle various scale factor combinations"""
+    device = ttnn.open_device(device_id=0)
+    try:
+        # Test different scale factor combinations to exercise validation logic
+        test_cases = [
+            ([1, 1, 2, 2, 4], (1, 1, 1)),    # No scaling
+            ([1, 2, 1, 3, 4], (2, 3, 1)),    # Mixed scale factors
+            ([1, 1, 1, 1, 8], (3, 2, 4)),    # Large scale factors
+        ]
+
+        for input_shape, scale_factors in test_cases:
+            input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+            input_tensor = ttnn.from_torch(input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+            # This should work without crashing and return correct output shape
+            result = ttnn.upsample3d(input_tensor, scale_factors)
+            result_torch = ttnn.to_torch(result)
+
+            expected_shape = [
+                input_shape[0],
+                input_shape[1] * scale_factors[0],
+                input_shape[2] * scale_factors[1],
+                input_shape[3] * scale_factors[2],
+                input_shape[4]
+            ]
+
+            assert list(result_torch.shape) == expected_shape, f"Failed for {input_shape} with {scale_factors}"
+
+    finally:
+        ttnn.close_device(device)
+
+if __name__ == "__main__":
+    test_upsample3d_input_validation()
+    test_upsample3d_various_scale_factors()
+    print("Step 4: Device operation tests PASSED")
+```
+
+**Build & Test Protocol:**
+1. `./build_metal.sh`
+2. `source python_env/bin/activate`
+3. `python test_progress_upsample3d/step4_test_device_operation.py`
+4. All tests MUST pass before proceeding to Step 5
 
 ### Step 5: Minimal Program Factory + Test
+**Test File:** `test_progress_upsample3d/step5_test_program_factory.py`
 **Implementation:**
 - Create program factory that creates empty program
 - Add dummy reader/writer kernel files that compile but do nothing
 - Calculate work distribution correctly
+- **ADD DEBUG PRINTS:** Add temporary debug prints in program factory to show work distribution (DELETE THESE LATER)
 
-**Test:** `test_upsample3d_program_creation()`, `test_upsample3d_work_distribution()`
-**Build & Test:** Verify program creation and work splitting works
+**Required Test Content:**
+```python
+import pytest
+import ttnn
+import torch
+import sys
+import os
+sys.path.append(os.path.dirname(__file__))
+
+@pytest.mark.timeout(20)  # Short timeout to quickly catch hangs
+def test_upsample3d_program_creation():
+    """Test that program factory creates programs without crashing"""
+    device = ttnn.open_device(device_id=0)
+    try:
+        # Small test case to verify program creation
+        input_tensor = torch.randn(1, 1, 2, 2, 4, dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # This should create and run a program (even if it does nothing useful yet)
+        result = ttnn.upsample3d(input_tensor, (2, 2, 2))
+
+        # Just verify we got a result tensor with correct shape
+        result_torch = ttnn.to_torch(result)
+        expected_shape = [1, 2, 4, 4, 4]
+        assert list(result_torch.shape) == expected_shape
+
+    finally:
+        ttnn.close_device(device)
+
+@pytest.mark.timeout(20)
+def test_upsample3d_edge_cases():
+    """Test edge cases that exercise work distribution and program creation"""
+    device = ttnn.open_device(device_id=0)
+    try:
+        # Test edge cases that will exercise the work distribution logic
+        edge_cases = [
+            ([1, 1, 1, 1, 4], (2, 2, 2)),    # Very small tensor - few work units
+            ([1, 4, 4, 4, 4], (1, 1, 1)),    # Large tensor, no scaling
+            ([2, 1, 1, 8, 16], (1, 2, 1)),   # Wide tensor
+            ([1, 8, 1, 1, 4], (2, 1, 2)),    # Tall tensor
+        ]
+
+        for input_shape, scale_factors in edge_cases:
+            input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+            input_tensor = ttnn.from_torch(input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+            # This exercises the work distribution logic in program factory
+            result = ttnn.upsample3d(input_tensor, scale_factors)
+            result_torch = ttnn.to_torch(result)
+
+            expected_shape = [
+                input_shape[0],
+                input_shape[1] * scale_factors[0],
+                input_shape[2] * scale_factors[1],
+                input_shape[3] * scale_factors[2],
+                input_shape[4]
+            ]
+
+            assert list(result_torch.shape) == expected_shape, f"Edge case failed for {input_shape}"
+            print(f"✓ Edge case passed: {input_shape} -> {expected_shape}")
+
+    finally:
+        ttnn.close_device(device)
+
+if __name__ == "__main__":
+    test_upsample3d_program_creation()
+    test_upsample3d_edge_cases()
+    print("Step 5: Program factory tests PASSED")
+```
+
+**Build & Test Protocol:**
+1. `./build_metal.sh`
+2. `source python_env/bin/activate`
+3. `python test_progress_upsample3d/step5_test_program_factory.py`
+4. All tests MUST pass before proceeding to Step 6
 
 ### Step 6: Kernel Compilation + Test
+**Test File:** `test_progress_upsample3d/step6_test_kernel_compilation.py`
 **Implementation:**
 - Create actual reader/writer kernel files with real logic
 - Implement circular buffer setup
 - Add runtime argument setup
 
-**Test:** `test_upsample3d_kernels_compile()`, `test_upsample3d_kernel_argument_setup()`
-**Build & Test:** Verify kernels compile and link successfully
+**Required Test Content:**
+```python
+import pytest
+import ttnn
+import torch
+import sys
+import os
+sys.path.append(os.path.dirname(__file__))
+
+@pytest.mark.timeout(20)  # Short timeout to quickly catch hangs
+def test_upsample3d_kernels_compile():
+    """Test that kernels compile and programs can be executed"""
+    device = ttnn.open_device(device_id=0)
+    try:
+        # Very small test case to minimize chance of hanging
+        input_tensor = torch.randn(1, 1, 1, 2, 4, dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        # This should now execute actual kernels (even if logic is minimal)
+        result = ttnn.upsample3d(input_tensor, (2, 2, 2))
+
+        # Verify we can convert result back to torch without crashes
+        result_torch = ttnn.to_torch(result)
+        expected_shape = [1, 2, 2, 4, 4]
+        assert list(result_torch.shape) == expected_shape
+
+        print(f"Kernel compilation test passed, result shape: {result_torch.shape}")
+
+    finally:
+        ttnn.close_device(device)
+
+@pytest.mark.timeout(20)
+def test_upsample3d_different_tensor_sizes():
+    """Test kernel execution with different tensor sizes"""
+    device = ttnn.open_device(device_id=0)
+    try:
+        test_shapes = [
+            ([1, 1, 1, 1, 4], (2, 2, 2)),
+            ([1, 1, 2, 1, 4], (1, 2, 3)),
+            ([1, 2, 1, 1, 8], (2, 1, 2)),
+        ]
+
+        for input_shape, scale_factors in test_shapes:
+            input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+            input_tensor = ttnn.from_torch(input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+            result = ttnn.upsample3d(input_tensor, scale_factors)
+            result_torch = ttnn.to_torch(result)
+
+            expected_shape = [
+                input_shape[0],
+                input_shape[1] * scale_factors[0],
+                input_shape[2] * scale_factors[1],
+                input_shape[3] * scale_factors[2],
+                input_shape[4]
+            ]
+
+            assert list(result_torch.shape) == expected_shape, f"Failed for {input_shape} with scales {scale_factors}"
+
+    finally:
+        ttnn.close_device(device)
+
+if __name__ == "__main__":
+    test_upsample3d_kernels_compile()
+    test_upsample3d_different_tensor_sizes()
+    print("Step 6: Kernel compilation tests PASSED")
+```
+
+**Build & Test Protocol:**
+1. `./build_metal.sh`
+2. `source python_env/bin/activate`
+3. `python test_progress_upsample3d/step6_test_kernel_compilation.py`
+4. All tests MUST pass before proceeding to Step 7
 
 ### Step 7: Minimal Working Implementation + Test
+**Test File:** `test_progress_upsample3d/step7_test_minimal_working.py`
 **Implementation:**
 - Implement actual upsampling logic in kernels
 - Start with very simple case (small tensors, scale factor 2)
 
-**Test:** `test_upsample3d_small_tensor()`
-**Build & Test:** Verify basic functionality works for simple cases
+**Required Test Content:**
+```python
+import pytest
+import ttnn
+import torch
+import torch.nn.functional as F
+import sys
+import os
+sys.path.append(os.path.dirname(__file__))
+
+@pytest.mark.timeout(20)
+def test_upsample3d_small_tensor():
+    """Test basic upsampling functionality with small tensors"""
+    device = ttnn.open_device(device_id=0)
+    try:
+        # Create small input tensor with known values
+        input_data = torch.arange(1, 17, dtype=torch.bfloat16).reshape(1, 2, 2, 2, 2)
+        input_tensor = ttnn.from_torch(input_data, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        scale_factors = (2, 2, 2)
+
+        # Get TTNN result
+        ttnn_result = ttnn.upsample3d(input_tensor, scale_factors)
+        ttnn_result_torch = ttnn.to_torch(ttnn_result)
+
+        # Get PyTorch reference result
+        # Convert NDHWC to NCDHW for PyTorch
+        input_pytorch = input_data.permute(0, 4, 1, 2, 3)  # NDHWC -> NCDHW
+        pytorch_result = F.interpolate(input_pytorch, scale_factor=scale_factors, mode='nearest')
+        pytorch_result = pytorch_result.permute(0, 2, 3, 4, 1)  # NCDHW -> NDHWC
+
+        # For now, just check that shapes match (content verification in step 8)
+        assert ttnn_result_torch.shape == pytorch_result.shape, f"Shape mismatch: TTNN {ttnn_result_torch.shape} vs PyTorch {pytorch_result.shape}"
+
+        print(f"Shape test passed: {ttnn_result_torch.shape}")
+
+    finally:
+        ttnn.close_device(device)
+
+@pytest.mark.timeout(20)
+def test_upsample3d_simple_scale_factor_2():
+    """Test specifically with scale factor 2 in all dimensions"""
+    device = ttnn.open_device(device_id=0)
+    try:
+        # Simple 1x1x2x2x4 tensor
+        input_data = torch.randn(1, 1, 2, 2, 4, dtype=torch.bfloat16)
+        input_tensor = ttnn.from_torch(input_data, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        result = ttnn.upsample3d(input_tensor, (2, 2, 2))
+        result_torch = ttnn.to_torch(result)
+
+        expected_shape = [1, 2, 4, 4, 4]
+        assert list(result_torch.shape) == expected_shape
+
+        # Basic sanity check: result should not be all zeros
+        assert torch.any(result_torch != 0), "Result tensor is all zeros"
+
+    finally:
+        ttnn.close_device(device)
+
+if __name__ == "__main__":
+    test_upsample3d_small_tensor()
+    test_upsample3d_simple_scale_factor_2()
+    print("Step 7: Minimal working implementation tests PASSED")
+```
+
+**Build & Test Protocol:**
+1. `./build_metal.sh`
+2. `source python_env/bin/activate`
+3. `python test_progress_upsample3d/step7_test_minimal_working.py`
+4. All tests MUST pass before proceeding to Step 8
 
 ### Step 8: Full Implementation + Test
+**Test File:** `test_progress_upsample3d/step8_test_full_implementation.py`
 **Implementation:**
 - Handle all scale factor combinations
 - Optimize for larger tensors
 - Add edge case handling
 
-**Test:** `test_upsample3d_various_scale_factors()`, `test_upsample3d_coordinate_correctness()`
-**Build & Test:** Verify full functionality against PyTorch reference
+**Required Test Content:**
+```python
+import pytest
+import ttnn
+import torch
+import torch.nn.functional as F
+import sys
+import os
+sys.path.append(os.path.dirname(__file__))
 
-### Testing Protocol for Each Step:
-1. **Write minimal test first** (if not already written)
-2. **Implement minimal code** to pass the test
-3. **Build the project** (`make` or equivalent)
-4. **Run the specific test** for this step
-5. **If test fails:** Debug and refine implementation (do NOT change test)
-6. **Repeat build/test cycle** until test passes
-7. **Only then move to next step**
+@pytest.mark.timeout(20)  # Short timeout to quickly catch hangs
+def test_upsample3d_various_scale_factors():
+    """Test upsample3d with various scale factor combinations"""
+    device = ttnn.open_device(device_id=0)
+    try:
+        test_cases = [
+            ([1, 2, 3, 4, 8], (1, 1, 1)),    # No scaling
+            ([1, 2, 3, 4, 8], (2, 1, 3)),    # Mixed scale factors
+            ([1, 3, 2, 2, 4], (3, 4, 2)),    # Different combinations
+            ([2, 1, 4, 6, 16], (1, 2, 1)),   # Batch size > 1
+        ]
 
-### Key Principles:
-- **Never skip a test** - each test must pass before moving forward
-- **Implement only what's needed** to pass the current test
-- **Build frequently** - catch compilation issues early
-- **Trust the tests** - if test fails, fix implementation not test
-- **One step at a time** - don't jump ahead even if you think you know what's needed
+        for input_shape, scale_factors in test_cases:
+            input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+            input_ttnn = ttnn.from_torch(input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+            # TTNN result
+            ttnn_result = ttnn.upsample3d(input_ttnn, scale_factors)
+            ttnn_result_torch = ttnn.to_torch(ttnn_result)
+
+            # PyTorch reference
+            input_pytorch = input_tensor.permute(0, 4, 1, 2, 3)  # NDHWC -> NCDHW
+            pytorch_result = F.interpolate(input_pytorch, scale_factor=scale_factors, mode='nearest')
+            pytorch_result = pytorch_result.permute(0, 2, 3, 4, 1)  # NCDHW -> NDHWC
+
+            # Shape verification
+            assert ttnn_result_torch.shape == pytorch_result.shape, f"Shape mismatch for {input_shape} with scales {scale_factors}"
+
+            print(f"✓ Passed shape test for input {input_shape} with scales {scale_factors}")
+
+    finally:
+        ttnn.close_device(device)
+
+@pytest.mark.timeout(20)
+def test_upsample3d_coordinate_correctness():
+    """Test that each output position contains the correct input value"""
+    device = ttnn.open_device(device_id=0)
+    try:
+        # Create input with unique values to verify coordinate mapping
+        input_shape = [1, 2, 2, 3, 4]  # Small but with unique pattern
+        scale_factors = (2, 3, 2)
+
+        # Create tensor where each position has a unique value based on coordinates
+        input_data = torch.zeros(input_shape, dtype=torch.bfloat16)
+        for n in range(input_shape[0]):
+            for d in range(input_shape[1]):
+                for h in range(input_shape[2]):
+                    for w in range(input_shape[3]):
+                        # Unique value based on coordinates
+                        value = n*1000 + d*100 + h*10 + w
+                        input_data[n, d, h, w, :] = value
+
+        input_ttnn = ttnn.from_torch(input_data, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        result = ttnn.upsample3d(input_ttnn, scale_factors)
+        result_torch = ttnn.to_torch(result)
+
+        # Verify coordinate correctness using nearest neighbor logic
+        output_shape = result_torch.shape
+        for n in range(output_shape[0]):
+            for d_out in range(output_shape[1]):
+                for h_out in range(output_shape[2]):
+                    for w_out in range(output_shape[3]):
+                        # Calculate source coordinates for nearest neighbor
+                        d_in = d_out // scale_factors[0]
+                        h_in = h_out // scale_factors[1]
+                        w_in = w_out // scale_factors[2]
+
+                        expected_value = n*1000 + d_in*100 + h_in*10 + w_in
+                        actual_values = result_torch[n, d_out, h_out, w_out, :]
+
+                        # All channel values should match expected
+                        for c in range(actual_values.shape[0]):
+                            assert abs(actual_values[c] - expected_value) < 1e-3, \
+                                f"Coordinate error at output ({n},{d_out},{h_out},{w_out},{c}): expected {expected_value}, got {actual_values[c]}"
+
+        print("✓ Coordinate correctness verification passed")
+
+    finally:
+        ttnn.close_device(device)
+
+if __name__ == "__main__":
+    test_upsample3d_various_scale_factors()
+    test_upsample3d_coordinate_correctness()
+    print("Step 8: Full implementation tests PASSED")
+```
+
+**Build & Test Protocol:**
+1. `./build_metal.sh`
+2. `source python_env/bin/activate`
+3. `python test_progress_upsample3d/step8_test_full_implementation.py`
+4. All tests MUST pass before creating final test
+
+### FINAL TEST (Official Repository Test)
+**Test File:** `tests/ttnn/unit_tests/operations/test_upsample3d.py`
+**Required Content:**
+```python
+import pytest
+import torch
+import torch.nn.functional as F
+import ttnn
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
+@pytest.mark.timeout(20)
+@pytest.mark.parametrize("input_shape", [
+    [1, 2, 3, 4, 8],
+    [1, 1, 4, 4, 16],
+    [2, 3, 2, 2, 8],
+])
+@pytest.mark.parametrize("scale_factors", [
+    (2, 2, 2),
+    (1, 3, 2),
+    (3, 1, 4),
+    (2, 2, 1),
+])
+def test_upsample3d_pcc(device, input_shape, scale_factors):
+    """Official PCC test for upsample3d against PyTorch reference"""
+
+    # Create input tensor
+    input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
+    input_ttnn = ttnn.from_torch(input_tensor, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    # TTNN result
+    ttnn_result = ttnn.upsample3d(input_ttnn, scale_factors)
+    ttnn_result_torch = ttnn.to_torch(ttnn_result)
+
+    # PyTorch reference
+    input_pytorch = input_tensor.permute(0, 4, 1, 2, 3)  # NDHWC -> NCDHW
+    pytorch_result = F.interpolate(input_pytorch, scale_factor=scale_factors, mode='nearest')
+    pytorch_result = pytorch_result.permute(0, 2, 3, 4, 1)  # NCDHW -> NDHWC
+
+    # PCC comparison
+    pcc_passed, pcc_message = assert_with_pcc(pytorch_result, ttnn_result_torch, pcc=0.99999)
+    assert pcc_passed, f"PCC test failed: {pcc_message}"
+```
+
+### MANDATORY TESTING PROTOCOL FOR IMPLEMENTATION:
+1. **CREATE TEST DIRECTORY FIRST:** `mkdir -p test_progress_upsample3d/`
+2. **NO STEP SKIPPING:** Each step test file must be created and must pass before proceeding
+3. **BUILD BETWEEN STEPS:** Always run `./build_metal.sh` between steps
+4. **ACTIVATE ENV:** Always run `source python_env/bin/activate` before testing
+5. **TIMEOUT ENFORCEMENT:** All tests have 20 second timeouts to quickly catch hangs
+6. **STEP COMPLETION VERIFICATION:** Each step must print "PASSED" message before moving to next step
+7. **FINAL TEST CREATION:** Only create official test after all 8 steps pass
 
 ## 5. Key Technical Considerations
 
