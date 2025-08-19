@@ -200,11 +200,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input_tensor);
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
-    TT_FATAL(
-        output_row_size_bytes % num_cores_channels == 0,
-        "Output row size {} should be divisible by num_cores_channels {}",
-        output_row_size_bytes,
-        num_cores_channels);
     uint32_t input_row_size_bytes = input_shard_shape[1] * input_tensor.element_size();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
