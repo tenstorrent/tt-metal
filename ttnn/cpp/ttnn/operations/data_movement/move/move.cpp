@@ -126,7 +126,7 @@ static inline Tensor move_sharded(
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     auto input_mem_config = input_tensor.memory_config();
     TT_FATAL(input_mem_config.is_sharded(), "Expected input tensor to be sharded");
-    auto input_address = input_tensor.buffer()->address();
+    [[maybe_unused]] auto input_address = input_tensor.buffer()->address();
     auto output_mem_config = mem_config.value_or(input_mem_config);
     TT_FATAL(output_mem_config.is_sharded(), "Expected output tensor memory config to be sharded");
     if (not can_deallocate(input_tensor)) {

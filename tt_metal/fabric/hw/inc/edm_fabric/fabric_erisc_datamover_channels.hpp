@@ -21,13 +21,6 @@
 #include "edm_fabric_worker_adapters.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
 
-// !!! TODO: delete this once push/pull 2D tests/code is deprecated !!!
-#if (ROUTING_MODE & ROUTING_MODE_PULL) || (ROUTING_MODE & ROUTING_MODE_PUSH)
-namespace tt::tt_fabric {
-static constexpr uint8_t worker_handshake_noc = 0;
-}  // namespace tt::tt_fabric
-#endif
-
 namespace tt::tt_fabric {
 
 template <typename T>
@@ -35,7 +28,7 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
     return (val == max - 1) ? 0 : val + 1;
 }
 
-template <uint8_t NUM_BUFFERS>
+template <typename HEADER_TYPE, uint8_t NUM_BUFFERS>
 class EthChannelBuffer final {
 public:
     // The channel structure is as follows:
@@ -61,7 +54,7 @@ public:
             this->buffer_addresses[i] = channel_base_address + i * this->max_eth_payload_size_in_bytes;
 // need to avoid unrolling to keep code size within limits
 #pragma GCC unroll 1
-            for (size_t j = 0; j < sizeof(PACKET_HEADER_TYPE) / sizeof(uint32_t); j++) {
+            for (size_t j = 0; j < sizeof(HEADER_TYPE) / sizeof(uint32_t); j++) {
                 reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
             }
         }
@@ -113,11 +106,10 @@ private:
     uint8_t channel_id;
 };
 
-
 // A tuple of EthChannelBuffer
-template <size_t... BufferSizes>
+template <typename HEADER_TYPE, size_t... BufferSizes>
 struct EthChannelBufferTuple {
-    std::tuple<tt::tt_fabric::EthChannelBuffer<BufferSizes>...> channel_buffers;
+    std::tuple<tt::tt_fabric::EthChannelBuffer<HEADER_TYPE, BufferSizes>...> channel_buffers;
 
     void init(
         const size_t channel_base_address[],
@@ -145,11 +137,11 @@ struct EthChannelBufferTuple {
     }
 };
 
-template <auto& ChannelBuffers>
+template <typename HEADER_TYPE, auto& ChannelBuffers>
 struct EthChannelBuffers {
     template <size_t... Is>
     static auto make(std::index_sequence<Is...>) {
-        return EthChannelBufferTuple<ChannelBuffers[Is]...>{};
+        return EthChannelBufferTuple<HEADER_TYPE, ChannelBuffers[Is]...>{};
     }
 };
 
@@ -161,7 +153,7 @@ struct EthChannelBuffers {
 // Additionally, a nice to have would be if we could further create types for different credit
 // storage mechanisms (e.g. L1 vs stream registers)
 //
-template <uint8_t NUM_BUFFERS>
+template <uint8_t WORKER_HANDSHAKE_NOC, uint8_t NUM_BUFFERS>
 struct EdmChannelWorkerInterface {
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
@@ -200,21 +192,18 @@ struct EdmChannelWorkerInterface {
     }
 
     // Only used for persistent connections (i.e. upstream is EDM)
-    template <bool enable_ring_support>
+    template <bool enable_deadlock_avoidance>
     FORCE_INLINE void update_persistent_connection_copy_of_free_slots(int32_t inc_val) {
         noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
             this->cached_worker_semaphore_address,
             inc_val << REMOTE_DEST_BUF_WORDS_FREE_INC,
             0xf,
-            tt::tt_fabric::worker_handshake_noc);
+            WORKER_HANDSHAKE_NOC);
     }
 
     FORCE_INLINE void notify_worker_of_read_counter_update() {
         noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
-            this->cached_worker_semaphore_address,
-            local_read_counter.counter,
-            0xf,
-            tt::tt_fabric::worker_handshake_noc);
+            this->cached_worker_semaphore_address, local_read_counter.counter, 0xf, WORKER_HANDSHAKE_NOC);
     }
 
     FORCE_INLINE void increment_local_read_counter(int32_t inc_val) {
@@ -241,7 +230,7 @@ struct EdmChannelWorkerInterface {
 
         this->copy_read_counter_to_worker_location_info();
 
-        noc_semaphore_inc<posted>(worker_semaphore_address, 1, tt::tt_fabric::worker_handshake_noc);
+        noc_semaphore_inc<posted>(worker_semaphore_address, 1, WORKER_HANDSHAKE_NOC);
     }
 
     template <uint8_t MY_ETH_CHANNEL = USE_DYNAMIC_CREDIT_ADDR>
@@ -273,10 +262,11 @@ struct EdmChannelWorkerInterface {
 };
 
 // A tuple of EDM channel worker interfaces
-template <size_t... BufferSizes>
+template <uint8_t WORKER_HANDSHAKE_NOC, size_t... BufferSizes>
 struct EdmChannelWorkerInterfaceTuple {
     // tuple of EdmChannelWorkerInterface<BufferSizes>...
-    std::tuple<tt::tt_fabric::EdmChannelWorkerInterface<BufferSizes>...> channel_worker_interfaces;
+    std::tuple<tt::tt_fabric::EdmChannelWorkerInterface<WORKER_HANDSHAKE_NOC, BufferSizes>...>
+        channel_worker_interfaces;
 
     template <size_t I>
     auto& get() {
@@ -284,11 +274,11 @@ struct EdmChannelWorkerInterfaceTuple {
     }
 };
 
-template <auto& ChannelBuffers>
+template <uint8_t WORKER_HANDSHAKE_NOC, auto& ChannelBuffers>
 struct EdmChannelWorkerInterfaces {
     template <size_t... Is>
     static auto make(std::index_sequence<Is...>) {
-        return EdmChannelWorkerInterfaceTuple<ChannelBuffers[Is]...>{};
+        return EdmChannelWorkerInterfaceTuple<WORKER_HANDSHAKE_NOC, ChannelBuffers[Is]...>{};
     }
 };
 

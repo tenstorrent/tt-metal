@@ -30,7 +30,9 @@ from tracy import signpost
 )
 @pytest.mark.parametrize("trace_mode", [False])
 @pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((8, 4), (8, 4), id="8x4_grid")], indirect=["mesh_device"]
+    "mesh_shape, mesh_device",
+    [pytest.param((8, 4), (8, 4), id="8x4_grid"), pytest.param((8, 8), (8, 8), id="8x8_grid")],
+    indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize("batches_per_device", [16])
@@ -44,7 +46,7 @@ from tracy import signpost
     ],
     ids=["s2"],
 )
-@pytest.mark.parametrize("num_links", [4])
+@pytest.mark.parametrize("num_links", [4, 1])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
