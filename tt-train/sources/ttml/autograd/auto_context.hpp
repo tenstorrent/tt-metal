@@ -8,6 +8,7 @@
 #include <memory>
 #include <random>
 
+#include "core/distributed/ccl_resources.hpp"
 #include "core/mesh_device.hpp"
 #include "core/tt_profiler.hpp"
 #include "graph.hpp"
@@ -62,6 +63,8 @@ public:
     core::TTProfiler& get_profiler();
     void close_profiler();
 
+    [[nodiscard]] core::distributed::CCLResources& get_ccl_resources();
+
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
@@ -75,6 +78,8 @@ private:
 
     std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> m_distributed_context;
     std::unique_ptr<core::TTProfiler> m_profiler;
+
+    std::unique_ptr<core::distributed::CCLResources> m_ccl_resources{};
 
     friend class ttsl::Indestructible<AutoContext>;
 };
