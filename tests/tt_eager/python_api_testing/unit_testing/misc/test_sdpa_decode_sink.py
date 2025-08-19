@@ -4,10 +4,8 @@
 
 import torch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_allclose,
     comp_pcc,
 )
-from models.utility_functions import nearest_y
 
 import ttnn
 from loguru import logger
@@ -117,51 +115,6 @@ def flash_decode_sdpa(Q, K_cache, V_cache, sink, sm_scale, sliding_window=0, blo
     return O
 
 
-def scaled_dot_product_attention_reference(Q, K, V, S, sm_scale, sliding_window=0):
-    # sliding_window == 0 means no sliding window
-    batch_size, n_tokens, n_heads, q_mult, d_head = Q.shape
-    assert K.shape == (batch_size, n_tokens, n_heads, d_head)
-    assert V.shape == (batch_size, n_tokens, n_heads, d_head)
-
-    # Expand K and V to match Q's q_mult dimension
-    K = K[:, :, :, None, :].expand(-1, -1, -1, q_mult, -1)  # [batch, n_tokens, n_heads, q_mult, d_head]
-    V = V[:, :, :, None, :].expand(-1, -1, -1, q_mult, -1)  # [batch, n_tokens, n_heads, q_mult, d_head]
-
-    # Expand S to match the required dimensions
-    S = S.reshape(batch_size, n_heads, q_mult, 1, 1).expand(
-        -1, -1, -1, n_tokens, -1
-    )  # [batch, n_heads, q_mult, n_tokens, 1]
-
-    # Create causal mask
-    mask = torch.triu(Q.new_full((n_tokens, n_tokens), -float("inf")), diagonal=1)
-
-    # Add sliding window mask if specified
-    if sliding_window > 0:
-        mask += torch.tril(mask.new_full((n_tokens, n_tokens), -float("inf")), diagonal=-sliding_window)
-
-    # Compute attention scores QK^T
-    QK = torch.einsum("bqhmd,bkhmd->bhmqk", Q, K)  # [batch, n_heads, q_mult, n_tokens, n_tokens]
-    QK *= sm_scale
-
-    # Apply mask (broadcast across batch and head dimensions)
-    QK += mask[None, None, None, :, :]  # broadcast mask to [batch, n_heads, q_mult, n_tokens, n_tokens]
-
-    # Concatenate with S
-    QK = torch.cat([QK, S], dim=-1)  # [batch, n_heads, q_mult, n_tokens, n_tokens+1]
-
-    # Apply softmax
-    W = torch.softmax(QK, dim=-1)
-
-    # Remove the extra dimension added by S
-    W = W[..., :-1]  # [batch, n_heads, q_mult, n_tokens, n_tokens]
-
-    # Compute attention output
-    attn = torch.einsum("bhmqk,bkhmd->bqhmd", W, V)  # [batch, n_tokens, n_heads, q_mult, d_head]
-
-    # Reshape to [batch, n_tokens, n_heads * q_mult, d_head]
-    return attn.reshape(batch_size, n_tokens, n_heads * q_mult, d_head)
-
-
 def run_sdpa_decode_impl(
     device,
     batch,
@@ -211,7 +164,7 @@ def run_sdpa_decode_impl(
     start_indices = batch * [seq_len - 1]
 
     # Setup sink for TTNN
-    tt_sink_in = sink[:1, ...].reshape(1, 1, nh, 1)
+    tt_sink_in = sink[:1, ...].reshape(nh, 1)
     tt_sink_in = torch.nn.functional.pad(tt_sink_in, (0, ttnn.TILE_SIZE - 1), "constant", 0)
     tt_sink_in /= scale  # Important!! GPT-OSS expects sink to not be scaled
 
@@ -340,9 +293,11 @@ def run_sdpa_decode_impl(
     "batch, seq_len, nh, nkv, dim",
     [
         (1, 256, 32, 4, 64),  # GPT-OSS 20B TP=2
-        (64, 4 * 1024, 32, 8, 64),
+        (64, 1024, 32, 8, 64),
         (16, 1024, 32, 1, 64),
         (32, 256, 32, 1, 128),
+        (32, 128, 8, 1, 128),
+        (32, 128, 8, 8, 128),
         # (1, 256, 64, 8, 64),  # GPT-OSS 20B TP=1 (FIXME: Fails)
     ],
 )
@@ -351,6 +306,7 @@ def run_sdpa_decode_impl(
     [
         (ttnn.bfloat16, ttnn.bfloat8_b),
         (ttnn.bfloat16, ttnn.bfloat4_b),
+        (ttnn.bfloat8_b, ttnn.bfloat8_b),
     ],
 )
 def test_sdpa_decode(
@@ -365,6 +321,9 @@ def test_sdpa_decode(
     function_level_defaults,
     reset_seeds,
 ):
+    if nkv > 1 and q_dtype != ttnn.bfloat16:
+        pytest.skip("Only bfloat16 is supported for multi-head queries")
+
     run_sdpa_decode_impl(
         device,
         batch,

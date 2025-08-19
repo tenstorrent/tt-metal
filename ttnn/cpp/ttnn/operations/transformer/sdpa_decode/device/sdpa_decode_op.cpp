@@ -233,7 +233,33 @@ void ScaledDotProductAttentionDecode::validate(
             k_shape[1]);
     }
 
-    // TODO: Add validation for attention_sink
+    // Check attention sink
+    if (optional_input_tensors.at(3).has_value()) {
+        const auto& attention_sink = optional_input_tensors.at(3).value();
+
+        const auto& sink_shape = attention_sink.padded_shape();
+        TT_FATAL(sink_shape.size() == 2, "Attention sink must have 2 dimensions");
+        TT_FATAL(
+            sink_shape[0] == q_shape[2],
+            "Attention sink must have the same padded num heads as Q but got {}",
+            sink_shape[0]);
+        TT_FATAL(
+            sink_shape[1] == tt::constants::TILE_WIDTH,
+            "Attention sink must be a single tile wide, but got {}",
+            sink_shape[1]);
+        TT_FATAL(
+            attention_sink.dtype() == DataType::BFLOAT16,
+            "Attention sink must by a BF16 tensor, but got {}",
+            attention_sink.dtype());
+        TT_FATAL(
+            attention_sink.layout() == Layout::TILE,
+            "Attention sink must be in TILE layout, but got {}",
+            attention_sink.layout());
+        TT_FATAL(
+            attention_sink.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "Attention sink must be in DRAM memory, but got {}",
+            attention_sink.memory_config().buffer_type());
+    }
 }
 
 std::vector<TensorSpec> ScaledDotProductAttentionDecode::compute_output_specs(
@@ -311,7 +337,8 @@ operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
         has_cur_pos,
         input_tensors,
         // Hash on page_table_tensor to properly size page table CB
-        optional_input_tensors.at(1));
+        optional_input_tensors.at(1),
+        optional_input_tensors.at(3));
 }
 
 }  // namespace ttnn::operations::transformer
