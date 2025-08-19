@@ -240,3 +240,75 @@ class PatchEmbed:
 
         out = ttnn.reshape(out, (1, batch_size, patches_h * patches_w, -1))
         return out
+
+
+class MochiPatchEmbed:
+    def __init__(
+        self,
+        patch_size,
+        in_channels,
+        embed_dim,
+        mesh_device=None,
+        init=False,
+    ):
+        self.patch_size = patch_size
+        self.in_channels = in_channels
+        self.embed_dim = embed_dim
+        self.mesh_device = mesh_device
+
+        # Conv2d projection weights (unfolded)
+        # Weight shape: (kernel_h * kernel_w * in_channels, out_channels)
+        conv_in_features = patch_size * patch_size * in_channels
+        self.proj_weight = None
+        self.proj_bias = None
+
+        assert not init, "MochiPatchEmbed does not support initialization"
+
+        # Compute kernel config for linear operations
+        self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+    def load_state_dict(self, state_dict):
+        """Load weights from PyTorch state dict."""
+        # Load conv2d projection weights
+        conv_weight = state_dict["proj.weight"]
+        # Convert from (out_channels, in_channels, kh, kw) to (kh*kw*in_channels, out_channels)
+        out_channels, in_c, kh, kw = conv_weight.shape
+        conv_weight = conv_weight.permute(2, 3, 1, 0)  # (kh, kw, in_c, out_channels)
+        conv_weight = conv_weight.reshape(kh * kw * in_c, out_channels)
+
+        self.proj_weight = bf16_tensor(
+            conv_weight,
+            device=self.mesh_device,
+        )
+
+        if "proj.bias" in state_dict:
+            bias = state_dict["proj.bias"].reshape(1, 1, 1, -1)
+            self.proj_bias = bf16_tensor(
+                bias,
+                device=self.mesh_device,
+            )
+
+    def __call__(self, latent_1BNI):
+        """
+        latent_1BNI: (1, batch, T * patches_height * patches_width, patch_size * patch_size * in_channels
+
+        returns:
+        latent_1BND: (1, batch, T * patches_height * patches_width, embed_dim)
+        """
+
+        # Apply unfolded conv2d projection
+        latent_1BND = ttnn.linear(
+            latent_1BNI,
+            self.proj_weight,
+            bias=self.proj_bias,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+
+        return latent_1BND
