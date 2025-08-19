@@ -35,10 +35,6 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     auto value_buffer = output_tensors.at(0).buffer();
     auto index_buffer = output_tensors.at(1).buffer();
 
-    const bool input_tensor_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool value_tensor_is_dram = value_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool index_tensor_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
     const uint32_t Wt = input_shape[3] / tt::constants::TILE_WIDTH;
@@ -316,10 +312,6 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     auto value_buffer = output_tensors.at(0).buffer();
     auto index_buffer = output_tensors.at(1).buffer();
 
-    const bool input_tensor_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool value_tensor_is_dram = value_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool index_tensor_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
 
@@ -433,8 +425,6 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     const tt::DataFormat physical_core_lookup_table_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(physical_core_lookup_table_tensor.dtype());
     const uint32_t physical_core_lookup_table_tile_size = tile_size(physical_core_lookup_table_cb_data_format);
-    const bool physical_core_lookup_table_is_dram =
-        physical_core_lookup_table_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // Circular buffers
     constexpr uint32_t cb_scale_factor = 2;
@@ -709,10 +699,6 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     const auto input_buffer = tensor_args.input_tensor.buffer();
     const auto value_buffer = output_tensors.at(0).buffer();
     const auto index_buffer = output_tensors.at(1).buffer();
-
-    const bool input_tensor_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool value_tensor_is_dram = value_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool index_tensor_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();

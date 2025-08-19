@@ -107,6 +107,9 @@ class RunTimeOptions {
     std::string kernel_dir;
     std::string system_kernel_dir;
 
+    bool is_core_grid_override_todeprecate_env_var_set = false;
+    std::string core_grid_override_todeprecate;
+
     bool is_visible_devices_env_var_set = false;
     std::vector<uint32_t> visible_devices;
 
@@ -218,6 +221,11 @@ public:
     const std::string& get_kernel_dir() const;
     // Location where kernels are installed via package manager.
     const std::string& get_system_kernel_dir() const;
+
+    inline bool is_core_grid_override_todeprecate() const {
+        return this->is_core_grid_override_todeprecate_env_var_set;
+    }
+    const std::string& get_core_grid_override_todeprecate() const;
 
     inline bool is_visible_devices_specified() const { return this->is_visible_devices_env_var_set; }
     inline const std::vector<uint32_t>& get_visible_devices() const { return this->visible_devices; }

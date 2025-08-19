@@ -30,11 +30,17 @@ on:
         required: false
         type: boolean
         default: false
+      run_train_tests:
+        description: 'Run TTNN nightly train tests'
+        required: false
+        type: boolean
+        default: false
       timeout:
         description: 'Test timeout in minutes'
         required: false
         type: number
         default: 120
+
 
 jobs:
   build-artifact:
@@ -44,6 +50,7 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
+      skip-tt-train: false
       version: 22.04
   tt-metal-l2-tests:
     needs: build-artifact
@@ -70,6 +77,7 @@ jobs:
       run_matmul_tests: ${{ github.event_name == 'schedule' || inputs.run_matmul_tests }}
       run_pool_tests: ${{ github.event_name == 'schedule' || inputs.run_pool_tests }}
       run_sdxl_tests: ${{ github.event_name == 'schedule' || inputs.run_sdxl_tests }}
+      run_train_tests: ${{ github.event_name == 'schedule' || inputs.run_train_tests }}
   didt-tests:
     if: ${{ github.event_name == 'schedule' || inputs.run_didt_tests }}
     needs: build-artifact

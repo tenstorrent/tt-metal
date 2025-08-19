@@ -57,9 +57,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     auto mesh_device = input_tensor.mesh_device();
     const auto& mesh_view = mesh_device->get_view();
-    const auto src_physical_device_id = mesh_device->get_device(mesh_coordinate)->id();
 
-    const auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
+    const auto fabric_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
     const uint32_t src_chip_id = (uint32_t)fabric_node_id.chip_id;
 
     const auto& mapping_shape = mapping_tensor.tensor_spec().logical_shape();
@@ -162,7 +161,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     CreateCircularBuffer(program, sender_core_grid, cb_metadata_config);
     CreateCircularBuffer(program, sender_core_grid, client_interface_cb_config);
 
-    const uint32_t flat_mesh_idx = mesh_coordinate[0] * mesh_view.num_cols() + mesh_coordinate[1];
+    const uint32_t flat_mesh_idx = common::get_linearized_index(mesh_coordinate, mesh_view);
 
     const std::vector<uint32_t> reader_compile_time_args = {
         mapping_tensor_cb_id,
@@ -182,7 +181,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         mapping_is_dram,
         metadata_is_dram,
         operation_attributes.locally_reduced,
-        common::get_linearized_index(mesh_coordinate, mesh_view)};
+    };
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
@@ -224,8 +223,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     // fabric routing info
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;
     for (const auto& coord : all_mesh_coordinates) {
-        auto device = mesh_device->get_device(coord);
-        auto fabric_node_id = get_fabric_node_id_from_physical_chip_id(device->id());
+        const auto fabric_node_id = mesh_device->get_fabric_node_id(coord);
         dest_mesh_id.push_back(*fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)fabric_node_id.chip_id);
     }
@@ -267,13 +265,14 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         std::vector<uint32_t> writer_runtime_args = {
             output_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
             (uint32_t)operation_attributes.cross_device_semaphore->address(),
+            (uint32_t)operation_attributes.init_semaphore->address(),
             0,
             0,
         };
         reader_runtime_args[3] = tokens_per_core_start;
         reader_runtime_args[4] = std::min(tokens_per_core_start + tokens_per_core, tokens_per_device);
-        writer_runtime_args[2] = tokens_per_core_start;
-        writer_runtime_args[3] = reader_runtime_args[4];
+        writer_runtime_args[3] = tokens_per_core_start;
+        writer_runtime_args[4] = reader_runtime_args[4];
         tokens_per_core_start = reader_runtime_args[4];
         log_debug(
             tt::LogOp,
@@ -324,6 +323,7 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
 
             writer_runtime_args.at(0) = tensor_return_value.mesh_buffer()->get_device_buffer(coord)->address();
             writer_runtime_args.at(1) = (uint32_t)operation_attributes.cross_device_semaphore->address();
+            writer_runtime_args.at(2) = (uint32_t)operation_attributes.init_semaphore->address();
         }
     }
 }
