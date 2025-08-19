@@ -33,6 +33,9 @@ autograd::TensorPtr RowParallelLinear::operator()(const autograd::TensorPtr& ten
     auto x = tensor;
     if (!m_input_is_parallel) {
         x = ops::distributed::reduce_scatter(x, tensor->get_rank() - 1U);
+
+        auto num_devices = autograd::ctx().get_device().num_devices();
+        x = ops::mul(x, 1.F / static_cast<float>(num_devices));
     }
     // do not pass bias
     x = ops::linear_op(x, m_weight, /* bias */ nullptr);
