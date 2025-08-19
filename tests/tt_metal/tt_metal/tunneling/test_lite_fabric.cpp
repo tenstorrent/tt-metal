@@ -14,6 +14,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/fabric.hpp>
 
 #include "context/metal_context.hpp"
 #include "core_coord.hpp"
@@ -27,6 +29,9 @@
 #include "build.hpp"
 
 #define CHECK_TEST_REQS()                                                                       \
+    if (!std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {                                          \
+        GTEST_SKIP() << "Slow dispatch is required for this test";                              \
+    }                                                                                           \
     if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) { \
         GTEST_SKIP() << "Blackhole only";                                                       \
     }                                                                                           \
@@ -34,26 +39,11 @@
         GTEST_SKIP() << "2 Devices are required";                                               \
     }
 
-TEST(Tunneling, DISABLED_LiteFabricInitWithMetal) {
-    CHECK_TEST_REQS();
-
-    auto devices = tt::tt_metal::detail::CreateDevices({0, 1});
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
-
-    auto lite_fabric = lite_fabric::LaunchLiteFabricWithMetal(devices, desc);
-    lite_fabric::TerminateLiteFabricWithMetal(tt::tt_metal::MetalContext::instance().get_cluster(), desc);
-    tt::tt_metal::detail::WaitProgramDone(devices[0], *lite_fabric);
-    tt::tt_metal::detail::CloseDevices(devices);
-}
-
-TEST(Tunneling, LiteFabricBuildOnly) {
+TEST(LiteFabric, BuildOnly) {
     auto home_directory = std::filesystem::path(std::getenv("TT_METAL_HOME"));
     auto output_directory = home_directory / "lite_fabric";
-    auto rtoptions = tt::llrt::RunTimeOptions();
-    auto hal = tt::tt_metal::Hal(tt::ARCH::BLACKHOLE, false);
-    auto cluster = std::make_shared<tt::Cluster>(rtoptions, hal);
-
-    if (lite_fabric::CompileLiteFabric(*cluster.get(), home_directory, output_directory)) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    if (lite_fabric::CompileLiteFabric(cluster, home_directory, output_directory)) {
         throw std::runtime_error("Failed to compile lite fabric");
     }
     if (lite_fabric::LinkLiteFabric(home_directory, output_directory, output_directory / "lite_fabric.elf")) {
@@ -61,32 +51,28 @@ TEST(Tunneling, LiteFabricBuildOnly) {
     }
 }
 
-TEST(Tunneling, LiteFabricInit) {
-    auto rtoptions = tt::llrt::RunTimeOptions();
-    auto hal = tt::tt_metal::Hal(tt::ARCH::BLACKHOLE, false);
-    auto cluster = std::make_shared<tt::Cluster>(rtoptions, hal);
-
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
+TEST(LiteFabric, Init) {
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
 
     auto home_directory = std::filesystem::path(std::getenv("TT_METAL_HOME"));
     auto output_directory = home_directory / "lite_fabric";
-    lite_fabric::LaunchLiteFabric(*cluster.get(), hal, desc);
-    lite_fabric::TerminateLiteFabricWithMetal(*cluster.get(), desc);
-    lite_fabric::SetResetState(*cluster.get(), desc, true);
+    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
+    lite_fabric::TerminateLiteFabricWithMetal(cluster, desc);
+    lite_fabric::SetResetState(cluster, desc, true);
 }
 
-TEST(Tunneling, LiteFabricWriteAllCores) {
+TEST(LiteFabric, Writes) {
     CHECK_TEST_REQS();
 
-    auto rtoptions = tt::llrt::RunTimeOptions();
-    auto hal = tt::tt_metal::Hal(tt::ARCH::BLACKHOLE, false);
-    auto cluster = std::make_shared<tt::Cluster>(rtoptions, hal);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
 
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
+    auto grid_size = cluster.get_soc_desc(1).get_grid_size(CoreType::TENSIX);
 
-    auto grid_size = cluster->get_soc_desc(1).get_grid_size(CoreType::TENSIX);
-
-    lite_fabric::LaunchLiteFabric(*cluster.get(), hal, desc);
+    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
     const auto& tunnel = desc.tunnels_from_mmio[0];
     log_info(tt::LogTest, "Tunnel: {} -> {}", tunnel.mmio_cxy_virtual().str(), tunnel.connected_cxy_virtual().str());
 
@@ -102,9 +88,9 @@ TEST(Tunneling, LiteFabricWriteAllCores) {
     for (int worker_x = 0; worker_x < grid_size.x; ++worker_x) {
         for (int worker_y = 0; worker_y < grid_size.y; ++worker_y) {
             CoreCoord logical_worker{worker_x, worker_y};
-            log_info(tt::LogMetal, "Writing to worker {}", logical_worker.str());
+            log_debug(tt::LogMetal, "Writing to worker {}", logical_worker.str());
             CoreCoord virtual_worker =
-                cluster->get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
+                cluster.get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
             const uint64_t dest_noc_upper =
                 (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
             uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
@@ -126,7 +112,7 @@ TEST(Tunneling, LiteFabricWriteAllCores) {
         for (int worker_y = 0; worker_y < grid_size.y; ++worker_y) {
             CoreCoord logical_worker{worker_x, worker_y};
             CoreCoord virtual_worker =
-                cluster->get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
+                cluster.get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
             std::vector<uint32_t> read_data(payload_size_bytes / sizeof(uint32_t));
 
             tt::tt_metal::MetalContext::instance().get_cluster().read_core(
@@ -136,19 +122,17 @@ TEST(Tunneling, LiteFabricWriteAllCores) {
         }
     }
 
-    lite_fabric::TerminateLiteFabric(*cluster.get(), desc);
+    lite_fabric::TerminateLiteFabric(cluster, desc);
 }
 
-TEST(Tunneling, LiteFabricReads) {
+TEST(LiteFabric, Reads) {
     CHECK_TEST_REQS();
 
-    auto rtoptions = tt::llrt::RunTimeOptions();
-    auto hal = tt::tt_metal::Hal(tt::ARCH::BLACKHOLE, false);
-    auto cluster = std::make_shared<tt::Cluster>(rtoptions, hal);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
 
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
-
-    lite_fabric::LaunchLiteFabric(*cluster.get(), hal, desc);
+    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
     const auto& tunnel = desc.tunnels_from_mmio[0];
     log_info(tt::LogTest, "Tunnel: {} -> {}", tunnel.mmio_cxy_virtual().str(), tunnel.connected_cxy_virtual().str());
 
@@ -159,12 +143,12 @@ TEST(Tunneling, LiteFabricReads) {
     uint32_t num_pages = payload_size_bytes / max_payload_size;
 
     uint32_t l1_base = 0x10000;
-    log_info(tt::LogMetal, "Device 1 Grid {}", cluster->get_soc_desc(1).get_grid_size(CoreType::TENSIX).str());
+    log_info(tt::LogMetal, "Device 1 Grid {}", cluster.get_soc_desc(1).get_grid_size(CoreType::TENSIX).str());
 
     std::unordered_map<CoreCoord, std::vector<uint32_t>> test_data_per_worker;
     CoreCoord logical_worker{0, 0};
     CoreCoord virtual_worker =
-        cluster->get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
+        cluster.get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
     const uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
     uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
 
@@ -212,44 +196,40 @@ TEST(Tunneling, LiteFabricReads) {
         ASSERT_EQ(read_data, allTwos);
     }
 
-    lite_fabric::TerminateLiteFabric(*cluster.get(), desc);
+    lite_fabric::TerminateLiteFabric(cluster, desc);
 }
 
-TEST(Tunneling, LiteFabricBarrier) {
+TEST(LiteFabric, Barrier) {
     CHECK_TEST_REQS();
 
-    auto rtoptions = tt::llrt::RunTimeOptions();
-    auto hal = tt::tt_metal::Hal(tt::ARCH::BLACKHOLE, false);
-    auto cluster = std::make_shared<tt::Cluster>(rtoptions, hal);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
 
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
-
-    lite_fabric::LaunchLiteFabric(*cluster.get(), hal, desc);
+    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
     const auto& tunnel = desc.tunnels_from_mmio[0];
 
     auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
 
     host_interface.barrier(tunnel.mmio_cxy_virtual());
-    lite_fabric::TerminateLiteFabric(*cluster.get(), desc);
+    lite_fabric::TerminateLiteFabric(cluster, desc);
 }
 
-TEST(Tunneling, LiteFabricSmallWrites) {
+TEST(LiteFabric, WritesSmall) {
     CHECK_TEST_REQS();
 
-    auto rtoptions = tt::llrt::RunTimeOptions();
-    auto hal = tt::tt_metal::Hal(tt::ARCH::BLACKHOLE, false);
-    auto cluster = std::make_shared<tt::Cluster>(rtoptions, hal);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
 
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
-
-    lite_fabric::LaunchLiteFabric(*cluster.get(), hal, desc);
+    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
     const auto& tunnel = desc.tunnels_from_mmio[0];
 
     auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
 
     CoreCoord logical_worker{0, 0};
     CoreCoord virtual_worker =
-        cluster->get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
+        cluster.get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
     uint32_t l1_base = 0x10000;
     uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
     uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
@@ -274,26 +254,24 @@ TEST(Tunneling, LiteFabricSmallWrites) {
         ASSERT_EQ(read_data[0], write_data[i]);
     }
 
-    lite_fabric::TerminateLiteFabric(*cluster.get(), desc);
+    lite_fabric::TerminateLiteFabric(cluster, desc);
 }
 
-TEST(Tunneling, LiteFabricUnalignedWrites) {
+TEST(LiteFabric, WritesUnaligned) {
     CHECK_TEST_REQS();
 
-    auto rtoptions = tt::llrt::RunTimeOptions();
-    auto hal = tt::tt_metal::Hal(tt::ARCH::BLACKHOLE, false);
-    auto cluster = std::make_shared<tt::Cluster>(rtoptions, hal);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
 
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
-
-    lite_fabric::LaunchLiteFabric(*cluster.get(), hal, desc);
+    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
     const auto& tunnel = desc.tunnels_from_mmio[0];
 
     auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
 
     CoreCoord logical_worker{0, 0};
     CoreCoord virtual_worker =
-        cluster->get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
+        cluster.get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
     uint32_t l1_base = 0x10000;
 
     // Make destination not aligned by various amounts
@@ -315,26 +293,24 @@ TEST(Tunneling, LiteFabricUnalignedWrites) {
         ASSERT_EQ(read_data, test_data);
     }
 
-    lite_fabric::TerminateLiteFabric(*cluster.get(), desc);
+    lite_fabric::TerminateLiteFabric(cluster, desc);
 }
 
-TEST(Tunneling, LiteFabricUnalignedReads) {
+TEST(LiteFabric, ReadsUnaligned) {
     CHECK_TEST_REQS();
 
-    auto rtoptions = tt::llrt::RunTimeOptions();
-    auto hal = tt::tt_metal::Hal(tt::ARCH::BLACKHOLE, false);
-    auto cluster = std::make_shared<tt::Cluster>(rtoptions, hal);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
 
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
-
-    lite_fabric::LaunchLiteFabric(*cluster.get(), hal, desc);
+    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
     const auto& tunnel = desc.tunnels_from_mmio[0];
 
     auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
 
     CoreCoord logical_worker{0, 0};
     CoreCoord virtual_worker =
-        cluster->get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
+        cluster.get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
     uint32_t l1_base = 0x10000;
     uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
     uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
@@ -361,35 +337,47 @@ TEST(Tunneling, LiteFabricUnalignedReads) {
 
     ASSERT_EQ(read_bytes, expected_bytes);
 
-    lite_fabric::TerminateLiteFabric(*cluster.get(), desc);
+    lite_fabric::TerminateLiteFabric(cluster, desc);
 }
 
-TEST(Tunneling, LiteFabricP300) {
+TEST(LiteFabric, FunctionPointerTable) {
     CHECK_TEST_REQS();
-    auto rtoptions = tt::llrt::RunTimeOptions();
-    auto hal = tt::tt_metal::Hal(tt::ARCH::BLACKHOLE, false);
-    auto cluster = std::make_shared<tt::Cluster>(rtoptions, hal);
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
+    const auto& tunnel = desc.tunnels_from_mmio[0];
 
-    if (cluster->get_board_type(0) != BoardType::P300)  {
-        GTEST_SKIP() << "P300 board type is required";
+    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
+
+    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
+    auto service_func_offset = lite_fabric::LiteFabricMemoryMap::get_service_channel_func_addr();
+    // This value can be read from the MMIO device. It's the same across all devices
+    {
+        uint32_t service_func = 0;
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            (void*)&service_func, sizeof(uint32_t), tunnel.mmio_cxy_virtual(), service_func_offset);
+        // Service function is expected to be somewhere in L1 but Local
+        ASSERT_TRUE(service_func > 0x60000 && service_func < 0x70000) << "Expected service function to be in L1 range";
+        // First instruction should be a stack allocation
+        // fd010113          	addi	sp,sp,-48
     }
 
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(0, 1);
-    for (const auto& tunnel : desc.tunnels_from_mmio) {
-        log_info(
-            tt::LogTest,
-            "Tunnel from device {} core {} (virtual={}) to device {} core {} (virtual={})",
-            tunnel.mmio_id,
-            tunnel.mmio_core_logical.str(),
-            tunnel.mmio_cxy_virtual().str(),
-            tunnel.connected_id,
-            tunnel.connected_core_logical.str(),
-            tunnel.connected_cxy_virtual().str());
-    }
-    for (const auto& [device_id, channel_mask] : desc.enabled_eth_channels) {
-        log_info(tt::LogTest, "Device {} enabled eth channel mask {:0b}", device_id, channel_mask);
-    }
+    lite_fabric::TerminateLiteFabric(cluster, desc);
+}
 
-    lite_fabric::LaunchLiteFabric(*cluster.get(), hal, desc);
-    lite_fabric::TerminateLiteFabric(*cluster.get(), desc);
+TEST(LiteFabric, FullFabric) {
+    // put lite fabric binaries on the device
+    auto desc = []() {
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        auto& hal = tt::tt_metal::MetalContext::instance().hal();
+        auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
+        lite_fabric::LaunchLiteFabric(cluster, hal, desc);
+        lite_fabric::TerminateLiteFabric(cluster, desc);
+        return desc;
+    }();
+
+    // Now launch full fabric
+    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    auto mesh_device = tt::tt_metal::distributed::MeshDevice::create(
+        tt::tt_metal::distributed::MeshDeviceConfig(tt::tt_metal::distributed::MeshShape{2, 1}));
 }

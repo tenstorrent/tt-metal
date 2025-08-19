@@ -5,6 +5,7 @@
 #include "lite_fabric_host_util.hpp"
 #include <enchantum/entries.hpp>
 #include <tt-logger/tt-logger.hpp>
+#include <fstream>
 #include "lite_fabric_memory_config.h"
 #include "build.hpp"
 #include "lite_fabric.hpp"
@@ -35,9 +36,8 @@ uint32_t GetEthChannelMask(chip_id_t device_id) {
     return mask;
 }
 
-SystemDescriptor GetSystemDescriptor2Devices(chip_id_t mmio_device_id, chip_id_t connected_device_id) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-
+SystemDescriptor GetSystemDescriptor2Devices(
+    tt::Cluster& cluster, chip_id_t mmio_device_id, chip_id_t connected_device_id) {
     SystemDescriptor desc;
 
     // Get the eth mask for each device
@@ -256,7 +256,7 @@ void LaunchLiteFabric(
     tt::Cluster& cluster,
     const tt::tt_metal::Hal& hal,
     const SystemDescriptor& desc,
-    const std::filesystem::path& elf_path) {
+    const std::filesystem::path& bin_path) {
     constexpr uint32_t k_FirmwareStart = LITE_FABRIC_TEXT_START;
     constexpr uint32_t k_PcResetAddress = LITE_FABRIC_RESET_PC;
 
@@ -277,27 +277,33 @@ void LaunchLiteFabric(
         lite_fabric::SetResetState(cluster, tunnel_1x.mmio_cxy_virtual(), true);
         lite_fabric::SetPC(cluster, tunnel_1x.mmio_cxy_virtual(), k_PcResetAddress, k_FirmwareStart);
 
-        const ll_api::memory& bin = ll_api::memory(elf_path.string(), ll_api::memory::Loading::DISCRETE);
+        std::ifstream bin_file(bin_path, std::ios::binary);
+        if (!bin_file) {
+            throw std::runtime_error(fmt::format("Failed to open binary file: {}", bin_path));
+        }
 
-        bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
-            // Note
-            // First write is assumed to be binary.
-            // Second write is assumed to be data.
-            if (addr == LITE_FABRIC_TEXT_START) {
-                config.binary_addr = addr;
-                config.binary_size = len_words * sizeof(uint32_t);
-                config.binary_size = (config.binary_size + 15) & ~0xF;
+        // Get file size
+        bin_file.seekg(0, std::ios::end);
+        size_t bin_size = bin_file.tellg();
+        bin_file.seekg(0, std::ios::beg);
 
-                cluster.write_core(
-                    (void*)&config, sizeof(lite_fabric::LiteFabricConfig), tunnel_1x.mmio_cxy_virtual(), config_addr);
+        // Read entire binary into memory
+        std::vector<uint8_t> binary_data(bin_size);
+        bin_file.read(reinterpret_cast<char*>(binary_data.data()), bin_size);
+        bin_file.close();
 
-                log_info(tt::LogMetal, "Writing binary to {:#x} size {} B", addr, len_words * sizeof(uint32_t));
-                cluster.write_core(&*mem_ptr, len_words * sizeof(uint32_t), tunnel_1x.mmio_cxy_virtual(), addr);
-            } else {
-                log_info(tt::LogMetal, "Writing data to {:#x} size {} B", addr, len_words * sizeof(uint32_t));
-                cluster.write_core(&*mem_ptr, len_words * sizeof(uint32_t), tunnel_1x.mmio_cxy_virtual(), addr);
-            }
-        });
+        log_info(tt::LogMetal, "Loaded flat binary {} size {} B", bin_path, bin_size);
+
+        // Set up configuration
+        config.binary_addr = LITE_FABRIC_TEXT_START;
+        config.binary_size = (bin_size + 15) & ~0xF;  // Align to 16 bytes
+
+        cluster.write_core(
+            (void*)&config, sizeof(lite_fabric::LiteFabricConfig), tunnel_1x.mmio_cxy_virtual(), config_addr);
+
+        // Write entire binary as single operation to device memory
+        log_info(tt::LogMetal, "Writing flat binary to {:#x} size {} B", LITE_FABRIC_TEXT_START, bin_size);
+        cluster.write_core(binary_data.data(), bin_size, tunnel_1x.mmio_cxy_virtual(), LITE_FABRIC_TEXT_START);
 
         log_info(
             tt::LogMetal,
@@ -321,10 +327,9 @@ void LaunchLiteFabric(
             cluster, tunnel_1x.mmio_cxy_virtual(), GetStateAddress(), lite_fabric::InitState::READY);
         log_info(
             tt::LogMetal,
-            "Lite Fabric {} {} (virtual={}) is ready",
-            tunnel_1x.mmio_core_logical,
-            tunnel_1x.mmio_core_virtual.y,
-            tunnel_1x.mmio_core_virtual.x);
+            "Lite Fabric {} (virtual={}) is ready",
+            tunnel_1x.mmio_core_logical.str(),
+            tunnel_1x.mmio_core_virtual.str());
     }
 }
 
@@ -339,9 +344,9 @@ void LaunchLiteFabric(tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const 
         throw std::runtime_error("Failed to link lite fabric");
     }
 
-    std::filesystem::path elf_path{output_directory / "lite_fabric.elf"};
+    std::filesystem::path bin_path{output_directory / "lite_fabric.bin"};
 
-    lite_fabric::LaunchLiteFabric(cluster, hal, desc, elf_path);
+    lite_fabric::LaunchLiteFabric(cluster, hal, desc, bin_path);
 }
 
 void TerminateLiteFabricWithMetal(tt::Cluster& cluster, const SystemDescriptor& desc) {

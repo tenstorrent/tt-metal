@@ -160,6 +160,8 @@ struct HostToLiteFabricInterface {
     uint32_t tensix_barrier_addr = 0;
     uint32_t l1_alignment_bytes = 0;  // Assumed to be 16B
 
+    explicit HostToLiteFabricInterface() = default;
+
     inline void init() volatile {
         h2d.sender_host_write_index = 0;
         h2d.receiver_host_read_index = 0;
@@ -370,7 +372,7 @@ struct HostToLiteFabricInterface {
         header.unaligned_offset = src_noc_addr & (l1_alignment_bytes - 1);
 
         uint32_t receiver_header_address = get_next_receiver_buffer_slot_address(receiver_channel_base);
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Reading data from {} {:#x} unaligned {}",
             receiver_core.str(),
@@ -432,15 +434,21 @@ struct LiteFabricMemoryMap {
     unsigned char padding1[12];
     uint32_t worker_semaphore;
     unsigned char padding2[12];
-    unsigned char sender_channel_buffer[SENDER_NUM_BUFFERS_ARRAY[0] * CHANNEL_BUFFER_SIZE];
-    unsigned char receiver_channel_buffer[RECEIVER_NUM_BUFFERS_ARRAY[0] * CHANNEL_BUFFER_SIZE];
-    unsigned char padding3[16];
+    unsigned char sender_channel_buffer[lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0] * lite_fabric::CHANNEL_BUFFER_SIZE];
+    unsigned char
+        receiver_channel_buffer[lite_fabric::RECEIVER_NUM_BUFFERS_ARRAY[0] * lite_fabric::CHANNEL_BUFFER_SIZE];
+    // L1 address of the service_lite_fabric function
+    uint32_t service_lite_fabric_addr;
+    unsigned char padding3[12];
     // Must be last because it has members that are only stored on the host
-    HostToLiteFabricInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE> host_interface;
+    HostToLiteFabricInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>
+        host_interface;
 
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
     static auto make_host_interface() {
-        lite_fabric::HostToLiteFabricInterface<SENDER_NUM_BUFFERS_ARRAY[0], CHANNEL_BUFFER_SIZE> host_interface;
+        lite_fabric::
+            HostToLiteFabricInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>
+                host_interface;
         host_interface.host_interface_on_device_addr = lite_fabric::LiteFabricMemoryMap::get_host_interface_addr();
         host_interface.sender_channel_base = lite_fabric::LiteFabricMemoryMap::get_send_channel_addr();
         host_interface.receiver_channel_base = lite_fabric::LiteFabricMemoryMap::get_receiver_channel_addr();
@@ -470,6 +478,10 @@ struct LiteFabricMemoryMap {
     static uint32_t get_receiver_channel_addr() {
         return get_address() + offsetof(lite_fabric::LiteFabricMemoryMap, receiver_channel_buffer);
     }
+
+    static uint32_t get_service_channel_func_addr() {
+        return get_address() + offsetof(lite_fabric::LiteFabricMemoryMap, service_lite_fabric_addr);
+    }
 #endif
 };
 
@@ -479,5 +491,16 @@ static_assert(offsetof(LiteFabricMemoryMap, worker_semaphore) % 16 == 0);
 static_assert(offsetof(LiteFabricMemoryMap, sender_channel_buffer) % 16 == 0);
 static_assert(offsetof(LiteFabricMemoryMap, receiver_channel_buffer) % 16 == 0);
 static_assert(offsetof(LiteFabricMemoryMap, host_interface) % 16 == 0);
+
+#if (defined(KERNEL_BUILD) || defined(FW_BUILD))
+
+void service_lite_fabric_channels() {
+#if defined(LITE_FABRIC_CONFIG_START) && LITE_FABRIC_CONFIG_START != 0
+    auto config = reinterpret_cast<volatile lite_fabric::LiteFabricMemoryMap*>(LITE_FABRIC_CONFIG_START);
+    reinterpret_cast<uint32_t (*)()>(config->service_lite_fabric_addr)();
+#endif
+}
+
+#endif
 
 }  // namespace lite_fabric
