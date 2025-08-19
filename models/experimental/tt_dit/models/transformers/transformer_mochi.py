@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
 import ttnn
 from ...layers.normalization import RMSNorm
 from ...layers.linear import ColParallelLinear
 from ...utils.substate import substate
+from ...layers.feedforward import ParallelFeedForward
+from .attention_mochi import MochiAttention
 
 
 class MochiTransformerBlock:
@@ -27,13 +28,15 @@ class MochiTransformerBlock:
         self.context_pre_only = context_pre_only
         self.ff_inner_dim = (4 * dim * 2) // 3
         self.ff_context_inner_dim = (4 * pooled_projection_dim * 2) // 3
+        self.dim = dim
+        self.text_dim = pooled_projection_dim
 
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
         rms_zero_kwargs = {
-            "embedding_dim": head_dim,
+            "embedding_dim": dim,
             "norm_eps": eps,
             "norm_elementwise_affine": False,
             "bias": False,
@@ -118,204 +121,218 @@ class MochiTransformerBlock:
                 init=init,
             )
 
-        self.norm4 = RMSNorm(**rms_zero_kwargs)
-        self.norm4_context = RMSNorm(**rms_zero_kwargs)
+        self.norm4_norm = RMSNorm(**rms_zero_kwargs)
+        self.norm4_context_norm = RMSNorm(**rms_zero_kwargs) if not self.context_pre_only else None
+
+        self.temb_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        self.ff_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+        # Found that HiFi4 RMSNorm hurts accuracy, so let RMSNorm use default
+        # self.rms_compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        #     mesh_device.arch(),
+        #     math_fidelity=ttnn.MathFidelity.HiFi4,
+        #     math_approx_mode=False,
+        #     fp32_dest_acc_en=True,
+        #     packer_l1_acc=True,
+        # )
+        self.rms_compute_kernel_config = None
+
+        device_grid = self.mesh_device.compute_with_storage_grid_size()
+        self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
     def load_state_dict(self, state_dict):
-        def reshape_and_merge_qkv(q_state, k_state, v_state):
-            # Rearrange QKV projections such column-fracturing shards the heads
-            def _merge_tensors(q, k, v):
-                n_dev = self.parallel_config.tensor_parallel.factor
-                q, k, v = q.T, k.T, v.T
-                q = q.reshape(q.shape[0], n_dev, self.n_local_heads, self.head_dim)
-                k = k.reshape(k.shape[0], n_dev, self.n_local_heads, self.head_dim)
-                v = v.reshape(v.shape[0], n_dev, self.n_local_heads, self.head_dim)
-                qkv = torch.cat([q, k, v], dim=2)
-                qkv = qkv.reshape(qkv.shape[0], 3 * self.heads * self.head_dim)
-                qkv = qkv.T
-                return qkv
+        self.norm1_linear.load_state_dict(substate(state_dict, "norm1.linear"))
+        context_linear_key = "norm1_context.linear" if not self.context_pre_only else "norm1_context.linear_1"
+        self.norm1_context_linear.load_state_dict(substate(state_dict, context_linear_key))
+        self.attn1.load_state_dict(substate(state_dict, "attn1"))
 
-            weight = _merge_tensors(q_state["weight"], k_state["weight"], v_state["weight"])
-
-            out_state = {"weight": weight}
-            if "bias" in q_state:
-                bias = _merge_tensors(
-                    q_state["bias"].unsqueeze(-1), k_state["bias"].unsqueeze(-1), v_state["bias"].unsqueeze(-1)
-                )
-                bias = bias.squeeze(-1)
-                out_state["bias"] = bias
+        def rename_ff_state(state):
+            out_state = {
+                f"{replacement}{k[len(prefix):]}": v
+                for k, v in state.items()
+                for prefix, replacement in [("net.0.proj", "ff1"), ("net.2", "ff2")]
+                if prefix in k
+            }
             return out_state
 
-        self.norm_q.load_state_dict(substate(state_dict, "norm_q"))
-        self.norm_k.load_state_dict(substate(state_dict, "norm_k"))
-        self.norm_added_q.load_state_dict(substate(state_dict, "norm_added_q"))
-        self.norm_added_k.load_state_dict(substate(state_dict, "norm_added_k"))
-
-        qkv_state = reshape_and_merge_qkv(
-            substate(state_dict, "to_q"), substate(state_dict, "to_k"), substate(state_dict, "to_v")
-        )
-        self.to_qkv.load_state_dict(qkv_state)
-
-        add_qkv_state = reshape_and_merge_qkv(
-            substate(state_dict, "add_q_proj"), substate(state_dict, "add_k_proj"), substate(state_dict, "add_v_proj")
-        )
-        self.add_qkv_proj.load_state_dict(add_qkv_state)
-
-        self.to_out.load_state_dict(substate(state_dict, "to_out.0"))
+        self.ff.load_state_dict(rename_ff_state(substate(state_dict, "ff")))
         if not self.context_pre_only:
-            self.to_add_out.load_state_dict(substate(state_dict, "to_add_out"))
+            self.ff_context.load_state_dict(rename_ff_state(substate(state_dict, "ff_context")))
 
-    def __call__(self, spatial_1BND, prompt_1BLP, N, rope_cos, rope_sin, trans_mat):
+    def __call__(self, spatial_1BND, prompt_1BLP, temb_11BD, N, rope_cos, rope_sin, trans_mat):
         """
-        spatial_1BND: fractured N on SP, fractured D on TP
-        prompt_1BLP: replicated on SP, fractured D on TP
+        spatial_1BND: fractured N on SP, replicated D on TP
+        prompt_1BLP: replicated on SP, replicated D on TP
+        temb_11BD: replicated on SP, replicated D on TP
+        N: logical sequence length of the spatial input
+        rope_cos_BANH: fractured N on SP, A (num_heads) on TP
+        rope_sin_BANH: fractured N on SP, A (num_heads) on TP
+        trans_mat: replicated on SP, replicated D on TP
 
         Outputs:
         spatial_1BND: fractured N on SP, fractured D on TP
         prompt_1BLP: replicated on SP, fractured D on TP
         """
 
-        # First gather spatial and prompt on TP axis before attention
+        # NOTE: SILU is not very accurate, should try to move to host?
+        silu_temb_11BD = ttnn.silu(temb_11BD)
+
+        # Returns 4*dim fractured on TP
+        mod_spatial_11BZ = self.norm1_linear(
+            silu_temb_11BD, core_grid=self.core_grid, compute_kernel_config=self.temb_compute_kernel_config
+        )
         if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_1BND = ttnn.experimental.all_gather_async(
-                spatial_1BND,
+            mod_spatial_11BZ = ttnn.experimental.all_gather_async(
+                mod_spatial_11BZ,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    spatial_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                    mod_spatial_11BZ.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                # **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
             )
 
-            prompt_1BLP = ttnn.experimental.all_gather_async(
-                prompt_1BLP,
-                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    prompt_1BLP.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
-                ),
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
-                num_links=self.ccl_manager.num_links,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                # **self.ccl_manager.get_ag_hyperparams(prompt_1BLP.shape),
-            )
+        scale_msa_11BD = mod_spatial_11BZ[:, :, :, : self.dim]
+        gate_msa_11BD = mod_spatial_11BZ[:, :, :, self.dim : 2 * self.dim]
+        scale_mlp_11BD = mod_spatial_11BZ[:, :, :, 2 * self.dim : 3 * self.dim]
+        gate_mlp_11BD = mod_spatial_11BZ[:, :, :, 3 * self.dim :]
 
-        # Project spatial
-        qkv_1BNF = self.to_qkv(
-            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-        )
-        q_BHNE, k_BHNE, v_BHNE = ttnn.transformer.split_query_key_value_and_split_heads(
-            ttnn.squeeze(qkv_1BNF, 0), num_heads=self.n_local_heads, transpose_key=False
+        # Norm spatial input (MochiRMSNormZero)
+        spatial_normed_1BND = self.norm1_norm(spatial_1BND, compute_kernel_config=self.rms_compute_kernel_config) * (
+            1.0 + scale_msa_11BD
         )
 
-        # Norm spatial
-        q_BHNE = self.norm_q(q_BHNE, compute_kernel_config=self.rmsnorm_compute_kernel_config)
-        k_BHNE = self.norm_k(k_BHNE, compute_kernel_config=self.rmsnorm_compute_kernel_config)
-
-        # Project prompt
-        add_qkv_1BLF = self.add_qkv_proj(
-            prompt_1BLP, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
+        # Returns 4*dim if not context_pre_only, dim if context_pre_only, fractured TP
+        mod_prompt_11BZ = self.norm1_context_linear(
+            silu_temb_11BD, core_grid=self.core_grid, compute_kernel_config=self.temb_compute_kernel_config
         )
-        add_q_BHLE, add_k_BHLE, add_v_BHLE = ttnn.transformer.split_query_key_value_and_split_heads(
-            ttnn.squeeze(add_qkv_1BLF, 0), num_heads=self.n_local_heads, transpose_key=False
-        )
-
-        # Norm prompt
-        add_q_BHLE = self.norm_added_q(add_q_BHLE, compute_kernel_config=self.rmsnorm_compute_kernel_config)
-        add_k_BHLE = self.norm_added_k(add_k_BHLE, compute_kernel_config=self.rmsnorm_compute_kernel_config)
-
-        # Rope
-        q_BHNE = ttnn.experimental.rotary_embedding_llama(
-            q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-        )
-        k_BHNE = ttnn.experimental.rotary_embedding_llama(
-            k_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-        )
-
-        if self.parallel_config.sequence_parallel.factor > 1:
-            spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-                q_BHNE,
-                k_BHNE,
-                v_BHNE,
-                add_q_BHLE,
-                add_k_BHLE,
-                add_v_BHLE,
-                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
-                ),
-                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v_BHNE.shape, 2, self.parallel_config.sequence_parallel.mesh_axis
-                ),
-                joint_strategy="rear",
-                logical_n=N,
-                program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-                dim=2,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
-                num_links=self.ccl_manager.num_links,
-                cluster_axis=self.parallel_config.sequence_parallel.mesh_axis,
-                mesh_device=self.mesh_device,
-                topology=self.ccl_manager.topology,
-                subdevice_id=self.ccl_manager.ccl_sub_device_id,
-                ccl_core_grid_offset=(0, self.sdpa_worker_grid[1]),
-            )
-        else:
-            spatial_BHNE, prompt_BHLE = ttnn.transformer.joint_scaled_dot_product_attention(
-                q_BHNE,
-                k_BHNE,
-                v_BHNE,
-                add_q_BHLE,
-                add_k_BHLE,
-                add_v_BHLE,
-                joint_strategy="rear",
-                program_config=self.sdpa_program_config,
-                compute_kernel_config=self.sdpa_compute_kernel_config,
-            )
-
-        spatial_1BND = ttnn.transformer.concatenate_heads(spatial_BHNE)
-        spatial_1BND = ttnn.unsqueeze(spatial_1BND, 0)
-
         if self.parallel_config.tensor_parallel.factor > 1:
-            spatial_1BND = ttnn.experimental.all_gather_async(
-                spatial_1BND,
+            mod_prompt_11BZ = ttnn.experimental.all_gather_async(
+                mod_prompt_11BZ,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    spatial_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                    mod_prompt_11BZ.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                **self.ccl_manager.get_ag_hyperparams(spatial_1BND.shape),
             )
 
-        spatial_1BND = self.to_out(
-            spatial_1BND, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-        )
-
-        prompt_out = None
         if not self.context_pre_only:
-            prompt_1BLD = ttnn.transformer.concatenate_heads(prompt_BHLE)
-            prompt_1BLD = ttnn.unsqueeze(prompt_1BLD, 0)
+            prompt_scale_msa_11BD = mod_prompt_11BZ[:, :, :, : self.text_dim]
+            prompt_gate_msa_11BD = mod_prompt_11BZ[:, :, :, self.text_dim : 2 * self.text_dim]
+            prompt_scale_mlp_11BD = mod_prompt_11BZ[:, :, :, 2 * self.text_dim : 3 * self.text_dim]
+            prompt_gate_mlp_11BD = mod_prompt_11BZ[:, :, :, 3 * self.text_dim :]
+        else:
+            prompt_scale_msa_11BD = mod_prompt_11BZ
+
+        # Norm prompt input (MochiRMSNormZero)
+        prompt_normed_1BLP = self.norm1_context_norm(
+            prompt_1BLP, compute_kernel_config=self.rms_compute_kernel_config
+        ) * (1.0 + prompt_scale_msa_11BD)
+
+        spatial_attn_1BND, prompt_attn_1BLP = self.attn1(
+            spatial_1BND=spatial_normed_1BND,
+            prompt_1BLP=prompt_normed_1BLP,
+            N=N,
+            rope_cos=rope_cos,
+            rope_sin=rope_sin,
+            trans_mat=trans_mat,
+        )
+
+        # ModulatedRMSNorm
+        spatial_attn_mod_1BND = self.norm2_norm(
+            spatial_attn_1BND, compute_kernel_config=self.rms_compute_kernel_config
+        ) * ttnn.tanh(gate_msa_11BD, accuracy=True)
+
+        # Residual
+        spatial_1BND = spatial_1BND + spatial_attn_mod_1BND
+
+        # Norm spatial input (MochiRMSNormZero) for FF
+        spatial_normed_1BND = self.norm3_norm(spatial_1BND, compute_kernel_config=self.rms_compute_kernel_config) * (
+            1.0 + scale_mlp_11BD
+        )
+
+        # TODO: Pass core_grid, compute_kernel_config for correctness check
+        spatial_ff_1BND = self.ff(
+            spatial_normed_1BND, core_grid=self.core_grid, compute_kernel_config=self.ff_compute_kernel_config
+        )
+
+        # Gather spatial FF output
+        if self.parallel_config.tensor_parallel.factor > 1:
+            spatial_ff_1BND = ttnn.experimental.all_gather_async(
+                spatial_ff_1BND,
+                persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
+                    spatial_ff_1BND.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                ),
+                dim=3,
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                num_links=self.ccl_manager.num_links,
+                topology=self.ccl_manager.topology,
+                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            )
+
+        spatial_ff_mod_1BND = self.norm4_norm(
+            spatial_ff_1BND, compute_kernel_config=self.rms_compute_kernel_config
+        ) * ttnn.tanh(gate_mlp_11BD, accuracy=True)
+
+        # Residual
+        spatial_1BND = spatial_1BND + spatial_ff_mod_1BND
+
+        if not self.context_pre_only:
+            # Norm attention output (MochiRMSNormZero)
+            prompt_attn_mod_1BLP = self.norm2_context_norm(
+                prompt_attn_1BLP, compute_kernel_config=self.rms_compute_kernel_config
+            ) * ttnn.tanh(prompt_gate_msa_11BD, accuracy=True)
+
+            # Residual
+            prompt_1BLP = prompt_1BLP + prompt_attn_mod_1BLP
+
+            # Norm prompt input (MochiRMSNormZero) for FF
+            prompt_normed_1BLP = self.norm3_context_norm(
+                prompt_1BLP, compute_kernel_config=self.rms_compute_kernel_config
+            ) * (1.0 + prompt_scale_mlp_11BD)
+
+            # TODO: Pass core_grid, compute_kernel_config for correctness check
+            prompt_ff_1BLP = self.ff_context(
+                prompt_normed_1BLP, core_grid=self.core_grid, compute_kernel_config=self.ff_compute_kernel_config
+            )
+
+            # Gather prompt FF output
             if self.parallel_config.tensor_parallel.factor > 1:
-                prompt_1BLD = ttnn.experimental.all_gather_async(
-                    prompt_1BLD,
+                prompt_ff_1BLP = ttnn.experimental.all_gather_async(
+                    prompt_ff_1BLP,
                     persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                        prompt_1BLD.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                        prompt_ff_1BLP.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                     ),
                     dim=3,
                     multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
                     num_links=self.ccl_manager.num_links,
                     topology=self.ccl_manager.topology,
                     cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                    # **self.ccl_manager.get_ag_hyperparams(prompt_1BLD.shape),
                 )
-            prompt_1BLP = self.to_add_out(
-                prompt_1BLD, core_grid=self.core_grid, compute_kernel_config=self.mm_compute_kernel_config
-            )
-            prompt_out = prompt_1BLP
 
-        return spatial_1BND, prompt_out
+            prompt_ff_mod_1BLP = self.norm4_context_norm(
+                prompt_ff_1BLP, compute_kernel_config=self.rms_compute_kernel_config
+            ) * ttnn.tanh(prompt_gate_mlp_11BD, accuracy=True)
+
+            # Residual
+            prompt_1BLP = prompt_1BLP + prompt_ff_mod_1BLP
+
+        return spatial_1BND, prompt_1BLP
