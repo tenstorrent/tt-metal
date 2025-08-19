@@ -69,9 +69,12 @@ void kernel_main() {
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // First pass
-        // Layernorm: Calculate E[x] and Var[x]
-        // RMS norm: Calculate (∑x^2)/n
+#ifndef RMSNORM
+        // Data for Calculating E[X]
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+        }  // wt loop
+#ifdef FUSE_PRE_ADD
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
@@ -79,8 +82,7 @@ void kernel_main() {
 #endif
         }  // wt loop
 
-        // Second pass
-        // Calculate final output
+        // Data for calculating the final value
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
@@ -88,13 +90,13 @@ void kernel_main() {
 #endif
 #ifdef FUSE_GAMMA
             {
-                read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
+                read_row_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
             }
 #endif
 
 #ifdef FUSE_BETA
             {
-                read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
+                read_row_to_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
             }
 #endif
         }  // wt loop
