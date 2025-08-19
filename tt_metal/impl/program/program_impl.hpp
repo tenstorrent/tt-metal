@@ -70,7 +70,6 @@ struct KernelGroup {
     uint32_t rta_sizes[DISPATCH_CLASS_MAX];
     uint32_t total_rta_size;
     uint32_t kernel_text_offsets[NUM_PROCESSORS_PER_CORE_TYPE];
-    uint32_t kernel_bin_sizes[NUM_PROCESSORS_PER_CORE_TYPE];
     launch_msg_t launch_msg;
     go_msg_t go_msg;
 

@@ -306,13 +306,11 @@ uint32_t finalize_kernel_bins(
                     uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
 
                     if (class_id == DISPATCH_CLASS_TENSIX_DM0) {
-                        kg->kernel_bin_sizes[0] = binary_packed_size;
                         kg->kernel_text_offsets[0] = offset;
                         kg->launch_msg.kernel_config.kernel_text_offset[0] = offset;
                         offset += binary_packed_size;
                         offset = tt::align(offset, l1_alignment);
                     } else if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
-                        kg->kernel_bin_sizes[1] = binary_packed_size;
                         kg->kernel_text_offsets[1] = offset;
                         kg->launch_msg.kernel_config.kernel_text_offset[1] = offset;
                         offset += binary_packed_size;
@@ -326,7 +324,6 @@ uint32_t finalize_kernel_bins(
                         for (uint32_t proc_type_index = 0; proc_type_index < max_math_processors_count;
                              proc_type_index++) {
                             uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, proc_type_index);
-                            kg->kernel_bin_sizes[2 + proc_type_index] = binary_packed_size;
                             kg->kernel_text_offsets[2 + proc_type_index] = offset;
                             kg->launch_msg.kernel_config.kernel_text_offset[2 + proc_type_index] = offset;
                             offset += binary_packed_size;
@@ -335,7 +332,6 @@ uint32_t finalize_kernel_bins(
                     }
                 } else {
                     uint32_t binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
-                    kg->kernel_bin_sizes[class_id] = binary_packed_size;
 
                     // No kernel config buffer on active eth yet
                     if (hal.get_programmable_core_type(kg->programmable_core_type_index) ==
