@@ -1238,14 +1238,12 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                                             min_size_l1_usage.CB_allocation_size);
     }
     return output_size_margin * std::max(
-                                    std::max<uint32_t>(
-                                        min_size_approx_max_halo_size + min_size_l1_usage.tensor_allocation_size +
-                                            min_size_l1_usage.CB_allocation_size,
-                                        min_size_input_size + min_size_approx_max_halo_size),
-                                    std::max<uint32_t>(
-                                        max_size_approx_max_halo_size + max_size_l1_usage.tensor_allocation_size +
-                                            max_size_l1_usage.CB_allocation_size,
-                                        max_size_input_size + max_size_approx_max_halo_size));
+                                    {min_size_approx_max_halo_size + min_size_l1_usage.tensor_allocation_size +
+                                         min_size_l1_usage.CB_allocation_size,
+                                     min_size_input_size + min_size_approx_max_halo_size,
+                                     max_size_approx_max_halo_size + max_size_l1_usage.tensor_allocation_size +
+                                         max_size_l1_usage.CB_allocation_size,
+                                     max_size_input_size + max_size_approx_max_halo_size});
 }
 
 conv_op_l1_usage conv2d::calculate_L1_usage(
