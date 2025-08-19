@@ -3,6 +3,41 @@
  *
  * Sysfs metrics discovery and printing functionality.
  * Equivalent to the Python sysfs scraping code for discovering Tenstorrent card metrics.
+ *
+ * TODO:
+ * -----
+ * - Joel Smith mentioned an issue that could occur:
+
+Joel Smith
+  7 minutes ago
+If you're working with WH 6U and telemetry there are two things you should know regarding reset:
+if you reset the chips, you'll lose telemetry: https://tenstorrent.atlassian.net/browse/SYS-1920
+you cannot assume /dev/tenstorrent/x will still be the same ASIC pre- and post-reset
+I have solutions/workarounds for both of these, but they are not deployed anywhere.  Just prototypes.
+
+
+
+
+
+Joel Smith
+  6 minutes ago
+Quick workaround for the first one is to wait about a minute after reset, then unload/reload the driver.  Happy to chat if you run into any issues here.
+
+
+Bart Trzynadlowski
+  3 minutes ago
+Ah I won’t be aware of a reset
+
+
+Bart Trzynadlowski
+  3 minutes ago
+Should I just always read the corresponding serial as well and match at sample time?
+New
+
+
+Joel Smith
+  Just now
+There's an attribute named asic_id that will show up if your FW is new enough.  I think it's guaranteed to be unique.  I am not sure if you can/should rely on serial being unique, although maybe it's a reasonable assumption for 6U.
  */
 
 #include <iostream>
@@ -80,7 +115,7 @@ const std::map<DataType, DataTypeInfo> DATA_TYPE_INFO = {
 // Card information structure
 struct CardInfo {
     fs::path tt_dir;
-    fs::path hwmon_dir;
+    std::optional<fs::path> hwmon_dir;  // Optional - not all cards have hwmon
     std::string pci_path;
 };
 
@@ -151,14 +186,14 @@ std::optional<std::string> extract_pci_path(const fs::path& sys_dir) {
     return std::nullopt;
 }
 
-std::optional<std::string> read_data_type(DataType data_type, const fs::path& tt_dir, const fs::path& hwmon_dir) {
+std::optional<std::string> read_data_type(DataType data_type, const fs::path& tt_dir, const std::optional<fs::path>& hwmon_dir) {
     try {
         switch (data_type) {
             case DataType::HOST_NAME:
                 return get_hostname();
                 
             case DataType::CARD_NAME:
-                return read_file(hwmon_dir / "name");
+                return hwmon_dir ? read_file(*hwmon_dir / "name") : std::nullopt;
                 
             case DataType::CARD_TYPE:
                 return read_file(tt_dir / "tt_card_type");
@@ -189,16 +224,16 @@ std::optional<std::string> read_data_type(DataType data_type, const fs::path& tt
                 return read_file(tt_dir / "tt_arcclk");
                 
             case DataType::CURRENT:
-                return read_file(hwmon_dir / "curr1_input");
+                return hwmon_dir ? read_file(*hwmon_dir / "curr1_input") : std::nullopt;
                 
             case DataType::POWER:
-                return read_file(hwmon_dir / "power1_input");
+                return hwmon_dir ? read_file(*hwmon_dir / "power1_input") : std::nullopt;
                 
             case DataType::VOLTAGE:
-                return read_file(hwmon_dir / "in0_input");
+                return hwmon_dir ? read_file(*hwmon_dir / "in0_input") : std::nullopt;
                 
             case DataType::TEMPERATURE:
-                return read_file(hwmon_dir / "temp1_input");
+                return hwmon_dir ? read_file(*hwmon_dir / "temp1_input") : std::nullopt;
                 
             default:
                 return std::nullopt;
@@ -256,12 +291,12 @@ std::vector<CardInfo> discover_cards() {
         std::cerr << "Error scanning hwmon directory: " << e.what() << std::endl;
     }
     
-    // Match tenstorrent and hwmon directories by PCI path
+    // Create CardInfo for all tenstorrent directories, with optional hwmon
     for (const auto& [pci_path, tt_dir] : tt_dirs_by_pci) {
         auto hwmon_it = hwmon_dirs_by_pci.find(pci_path);
-        if (hwmon_it != hwmon_dirs_by_pci.end()) {
-            cards.push_back({tt_dir, hwmon_it->second, pci_path});
-        }
+        std::optional<fs::path> hwmon_dir = (hwmon_it != hwmon_dirs_by_pci.end()) ? 
+            std::optional<fs::path>(hwmon_it->second) : std::nullopt;
+        cards.push_back({tt_dir, hwmon_dir, pci_path});
     }
     
     return cards;
@@ -284,7 +319,7 @@ void print_sysfs_metrics() {
         
         std::cout << "\n--- Card " << (card_idx + 1) << " ---" << std::endl;
         std::cout << "TT Directory: " << card.tt_dir << std::endl;
-        std::cout << "HWMON Directory: " << card.hwmon_dir << std::endl;
+        std::cout << "HWMON Directory: " << (card.hwmon_dir ? card.hwmon_dir->string() : "<not available>") << std::endl;
         std::cout << "PCI Path: " << card.pci_path << std::endl;
         
         // Print all data types
@@ -317,7 +352,7 @@ void print_sysfs_metrics() {
                     std::cout << "    Source: hostname()" << std::endl;
                     break;
                 case DataType::CARD_NAME:
-                    std::cout << "    Source: " << (card.hwmon_dir / "name") << std::endl;
+                    std::cout << "    Source: " << (card.hwmon_dir ? (*card.hwmon_dir / "name").string() : "<hwmon not available>") << std::endl;
                     break;
                 case DataType::CARD_TYPE:
                     std::cout << "    Source: " << (card.tt_dir / "tt_card_type") << std::endl;
@@ -344,20 +379,41 @@ void print_sysfs_metrics() {
                     std::cout << "    Source: " << (card.tt_dir / "tt_arcclk") << std::endl;
                     break;
                 case DataType::CURRENT:
-                    std::cout << "    Source: " << (card.hwmon_dir / "curr1_input") << std::endl;
+                    std::cout << "    Source: " << (card.hwmon_dir ? (*card.hwmon_dir / "curr1_input").string() : "<hwmon not available>") << std::endl;
                     break;
                 case DataType::POWER:
-                    std::cout << "    Source: " << (card.hwmon_dir / "power1_input") << std::endl;
+                    std::cout << "    Source: " << (card.hwmon_dir ? (*card.hwmon_dir / "power1_input").string() : "<hwmon not available>") << std::endl;
                     break;
                 case DataType::VOLTAGE:
-                    std::cout << "    Source: " << (card.hwmon_dir / "in0_input") << std::endl;
+                    std::cout << "    Source: " << (card.hwmon_dir ? (*card.hwmon_dir / "in0_input").string() : "<hwmon not available>") << std::endl;
                     break;
                 case DataType::TEMPERATURE:
-                    std::cout << "    Source: " << (card.hwmon_dir / "temp1_input") << std::endl;
+                    std::cout << "    Source: " << (card.hwmon_dir ? (*card.hwmon_dir / "temp1_input").string() : "<hwmon not available>") << std::endl;
                     break;
             }
             std::cout << std::endl;
         }
+    }
+    
+    // Print summary
+    size_t cards_with_hwmon = 0;
+    size_t cards_without_hwmon = 0;
+    for (const auto& card : cards) {
+        if (card.hwmon_dir) {
+            cards_with_hwmon++;
+        } else {
+            cards_without_hwmon++;
+        }
+    }
+    
+    std::cout << "\n--- Summary ---" << std::endl;
+    std::cout << "Total Tenstorrent devices found: " << cards.size() << std::endl;
+    std::cout << "Devices with hwmon data: " << cards_with_hwmon << std::endl;
+    std::cout << "Devices without hwmon data: " << cards_without_hwmon << std::endl;
+    
+    if (cards_without_hwmon > 0) {
+        std::cout << "\nNote: Devices without hwmon data will not have power/thermal metrics available." << std::endl;
+        std::cout << "This is normal for some Tenstorrent device configurations." << std::endl;
     }
     
     std::cout << "=== End Sysfs Metrics Discovery ===\n" << std::endl;
