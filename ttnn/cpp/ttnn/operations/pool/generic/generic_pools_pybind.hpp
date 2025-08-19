@@ -12,6 +12,8 @@ namespace ttnn::operations::pool {
 
 void bind_max_pool2d_operation(py::module& module);
 void bind_avg_pool2d_operation(py::module& module);
+void bind_adaptive_avg_pool2d_operation(py::module& module);
+void bind_adaptive_max_pool2d_operation(py::module& module);
 void py_module(py::module& module);
 
 }  // namespace ttnn::operations::pool
