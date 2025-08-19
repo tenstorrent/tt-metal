@@ -9,10 +9,12 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/conv_hardcoded/test_conv_hardcoded.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/one_to_one/test_one_to_one.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/one_from_one/test_one_from_one.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_bidirectional/test_core_bidirectional.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/one_from_all/test_one_from_all.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_to_all/test_all_to_all.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_from_all/test_all_from_all.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/interleaved/test_interleaved.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/one_packet/test_one_packet.cpp
 )
 
 add_executable(unit_tests_data_movement ${UNIT_TESTS_DATA_MOVEMENT_SRC})
