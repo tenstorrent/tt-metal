@@ -348,6 +348,11 @@ std::pair<std::unordered_map<chip_id_t, std::vector<chip_id_t>>, chip_id_t> sort
     const IntraMeshAdjacencyMap& topology_info) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto eth_coords = cluster.get_user_chip_ethernet_coordinates();
+    if (eth_coords.size() != topology_info.adjacency_map.size()) {
+        return {
+            topology_info.adjacency_map,
+            std::min_element(topology_info.adjacency_map.begin(), topology_info.adjacency_map.end())->first};
+    }
     auto min_eth_chip = std::min_element(eth_coords.begin(), eth_coords.end(), [](const auto& a, const auto& b) {
         if (a.second.y != b.second.y) {
             return a.second.y < b.second.y;
@@ -369,7 +374,9 @@ std::pair<std::unordered_map<chip_id_t, std::vector<chip_id_t>>, chip_id_t> sort
     return {adjacency_map, min_eth_chip->first};
 }
 
-std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(const IntraMeshAdjacencyMap& topology_info) {
+std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(
+    const IntraMeshAdjacencyMap& topology_info,
+    std::optional<std::function<std::pair<AdjacencyMap, chip_id_t>(const IntraMeshAdjacencyMap&)>> graph_sorter) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     chip_id_t first_chip = 0;
     auto adj_map = topology_info.adjacency_map;
@@ -380,7 +387,13 @@ std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(const Intra
         // the current infra tightly coupling logical and physical representations.
         // This will not be an issue once we have MGD 2.0 in logical space and algorithms to bind logical connections
         // in the MGD to physical ethernet channels.
-        std::tie(adj_map, first_chip) = sort_adjacency_map_by_eth_coords(topology_info);
+        if (!graph_sorter.has_value()) {
+            // Default behavior: sort adjacency map by Ethernet coordinates
+            std::tie(adj_map, first_chip) = sort_adjacency_map_by_eth_coords(topology_info);
+        } else {
+            // User provided a sorting function. This is primarily done for testing.
+            std::tie(adj_map, first_chip) = graph_sorter.value()(topology_info);
+        }
     } else {
         first_chip = std::min_element(topology_info.adjacency_map.begin(), topology_info.adjacency_map.end())->first;
     }
