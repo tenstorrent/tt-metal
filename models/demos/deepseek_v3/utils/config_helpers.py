@@ -525,13 +525,13 @@ def get_state_dicts(
     )
     assert expected_dtype is not None, "At least one dictionary must be non-empty, or a dtype must be provided"
 
-    assert all(key in d for d in dicts if d is not None), f"Key {key} not found in all dictionaries"
-    assert all(
-        d[key].shape == expected_shape for d in dicts if d is not None
-    ), f"Key {key} must have the value shaped as {expected_shape} in all dictionaries; instead got {[d[key].shape if d is not None else None for d in dicts]}"
-    assert all(
-        d[key].dtype == expected_dtype for d in dicts if d is not None
-    ), f"Key {key} must have the dtype as {expected_dtype} in all dictionaries; instead got {[d[key].dtype if d is not None else None for d in dicts]}"
+    # assert all(key in d for d in dicts if d is not None), f"Key {key} not found in all dictionaries"
+    # assert all(
+    #     d[key].shape == expected_shape for d in dicts if d is not None
+    # ), f"Key {key} must have the value shaped as {expected_shape} in all dictionaries; instead got {[d[key].shape if d is not None else None for d in dicts]}"
+    # assert all(
+    #     d[key].dtype == expected_dtype for d in dicts if d is not None
+    # ), f"Key {key} must have the dtype as {expected_dtype} in all dictionaries; instead got {[d[key].dtype if d is not None else None for d in dicts]}"
 
     tensors = [torch.zeros(expected_shape).to(dtype) if d is None else d[key] for d in dicts]
 

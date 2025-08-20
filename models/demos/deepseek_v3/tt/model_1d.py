@@ -247,7 +247,7 @@ class Model1D(AbstractModule):
                 )
 
             # Transfer rows
-            x = cls.transfer_row(x, row_idx, (row_idx + 1) % cls.NUM_MLP_ROWS, cfg)
+            x = cls.transfer_row(x, row_idx, (row_idx + 1) % 4, cfg)
 
         x = ttnn.to_memory_config(x, **cfg["norm_reshard"])
         x = DistributedRMSNorm.forward_decode(x, cfg["norm"])

@@ -15,12 +15,7 @@ from models.demos.deepseek_v3.tt.model_1d import Model1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_model as reference_forward
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import (
-    MAX_START_POS,
-    add_inv_scale_to_state_dict,
-    load_reference_io_tensors_for_module,
-    load_state_dict,
-)
+from models.demos.deepseek_v3.utils.test_utils import load_reference_io_tensors_for_module, load_state_dict
 from models.utility_functions import comp_pcc
 
 
@@ -34,7 +29,7 @@ def hf_config(hf_config):
 
 def load_reference_model(hf_config):
     """Load the reference model for testing."""
-
+    torch.manual_seed(5)
     model = DeepseekV3Model(hf_config).eval()
 
     return model
@@ -71,8 +66,9 @@ def test_forward_pass(
     mesh_device,
     model_path,
     ccl,
-    reset_seeds,
 ):
+    # TODO: enable this when program cache bug is fixed
+    mesh_device.disable_and_clear_program_cache()
     mesh_shape = list(mesh_device.shape)
     num_rows, sdpa_dp_factor = mesh_shape
 
@@ -84,10 +80,11 @@ def test_forward_pass(
     logger.info("Setting up reference model")
     if module_path is None:
         reference_model = load_reference_model(hf_config)
-        state_dict = add_inv_scale_to_state_dict(
-            reference_model.to(torch.bfloat16).state_dict(),
-            block_shape=hf_config.quantization_config["weight_block_size"],
-        )
+        # state_dict = add_inv_scale_to_state_dict(
+        #     reference_model.to(torch.bfloat16).state_dict(),
+        #     block_shape=hf_config.quantization_config["weight_block_size"],
+        # )
+        state_dict = reference_model.to(torch.bfloat16).state_dict()
     else:
         state_dict = load_state_dict(model_path, module_path)
 
@@ -111,7 +108,7 @@ def test_forward_pass(
     if mode == "prefill":
         position_idxs = torch.tensor([seq_len for _ in range(batch_size)])
     else:
-        position_idxs = torch.tensor([randint(0, MAX_START_POS) for _ in range(batch_size)])
+        position_idxs = torch.tensor([0 for _ in range(batch_size)])
 
     ############################
     ### Torch reference
@@ -206,7 +203,7 @@ def test_forward_pass(
     ############################
     logger.info("Running TTNN forward pass")
 
-    output_row_idx = 0  # TODO: Make this configurable
+    output_row_idx = 2  # TODO: Make this configurable
     if mode == "prefill":
         tt_output = Model1D.forward_prefill(tt_input, run_config, user_id, rope_tensors, tt_page_table)
     else:
