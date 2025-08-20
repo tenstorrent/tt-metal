@@ -561,15 +561,12 @@ class TtTransformer(LightweightModule):
             x = x[:, :, get_last_token:, :]
         # move AG_MM persistent buffers to DRAM
         self.tt_ccl.all_gather_buffers["AG_MM"] = ttnn.to_memory_config(
-            self.tt_ccl.all_gather_buffers["AG_MM"], ttnn.DRAM_MEMORY_CONFIG
+            self.tt_ccl.all_gather_buffers["AG_MM"],
+            ttnn.DRAM_MEMORY_CONFIG,
         )
-        try:
-            lm_head_output = self.lm_head(
-                x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode
-            )
-        except Exception as e:
-            print(f"Error in lm_head: {e}")
-            raise e
+        lm_head_output = self.lm_head(
+            x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode
+        )
         self.tt_ccl.all_gather_buffers["AG_MM"] = ttnn.to_memory_config(
             self.tt_ccl.all_gather_buffers["AG_MM"],
             self.model_config["AG_MM_RECV_MEMCFG"],

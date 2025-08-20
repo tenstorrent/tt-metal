@@ -57,7 +57,7 @@ class TtLlamaMLP(LightweightModule):
         w4 = self.state_dict[w2_name]
 
         self.state_dict[w4_name] = F.pad(w4, (0, 8 * 3840 - w4.shape[-1]), mode="constant", value=0)
-        print(f"w2: {self.state_dict[w4_name].shape}")
+        # print(f"w2: {self.state_dict[w4_name].shape}")
 
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         if args.dummy_weights:
@@ -103,7 +103,7 @@ class TtLlamaMLP(LightweightModule):
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
 
         self.w2 = as_sharded_tensor("w4_sharded", ttnn.bfloat8_b, dim=w2_dim)  #
-        print(f"w2: {self.w2.shape}")
+        # print(f"w2:")
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
 
         self.w1_interleaved = as_interleaved_tensor(
@@ -171,10 +171,13 @@ class TtLlamaMLP(LightweightModule):
 
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
-        print(f"w2: {self.w2.shape}")
-        print(f"ff1ff3: {ff1ff3.shape}")
+        # print(f"w2:")
+        # print(f"ff1ff3:")
         # Use all gather + matmul op that will be defined in tt_ccl.py
         # ttnn.synchronize_device(self.mesh_device)
+        # if self.iter in {0, 9, 10}:
+        #     ttnn.device.dump_device_memory_state(self.mesh_device, prefix=f"iter_{self.iter}_before_all_gather_matmul")
+
         w2_out = self.tt_ccl.all_gather_matmul(
             ff1ff3,
             self.w2,
@@ -189,7 +192,10 @@ class TtLlamaMLP(LightweightModule):
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             buffer_key="AG_MM",
         )
-        print(f"w2_out: {w2_out.shape}")
+        # if self.iter in {0, 9, 10}:
+        #     ttnn.device.dump_device_memory_state(self.mesh_device, prefix=f"iter_{self.iter}_after_all_gather_matmul")
+        # self.iter += 1
+        # print(f"w2_out:")
         ttnn.deallocate(ff1ff3)
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
@@ -199,7 +205,7 @@ class TtLlamaMLP(LightweightModule):
             memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             use_optimal_ccl_for_llama=True,
         )
-        print(f"w2_out_reduced: {w2_out_reduced.shape}")
+        # print(f"w2_out_reduced:")
         ttnn.deallocate(w2_out)
 
         return w2_out_reduced

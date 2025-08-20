@@ -330,9 +330,9 @@ class TT_CCL:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
         # print all buffer shapes before returning
-        print("Persistent buffers shapes:")
-        for i, buffer in enumerate(persistent_buffers):
-            print(f"Buffer {i}: {buffer.shape}")
+        # print("Persistent buffers shapes:")
+        # for i, buffer in enumerate(persistent_buffers):
+        #     print(f"Buffer {i}: {buffer.shape}")
         return persistent_buffers
 
     def get_decode_reduce_scatter_buffers(self):
