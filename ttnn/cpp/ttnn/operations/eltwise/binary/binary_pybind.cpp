@@ -61,17 +61,42 @@ uint32_t write_operation_info_to_file(const std::string& callstack, const std::s
     uint32_t stack_id = generate_hash(combined);
 
     // Create filename
-    std::string filename = "op_" + std::to_string(stack_id) + ".txt";
+    std::string filename = "op_" + std::to_string(stack_id) + ".json";
 
-    // Write to file
+    // Write to JSON file
     std::ofstream file(filename);
     if (file.is_open()) {
-        file << "****CALLSTACK****\n";
-        file << callstack;
-        file << "**** END CALLSTACK ****\n";
-        file << "****ARGS****\n";
-        file << args_info;
-        file << "**** END ARGS ***\n";
+        file << "{\n";
+        file << "  \"operation_id\": " << stack_id << ",\n";
+        file << "  \"callstack\": \"";
+        // Escape quotes and newlines in callstack
+        for (char c : callstack) {
+            if (c == '"') {
+                file << "\\\"";
+            } else if (c == '\n') {
+                file << "\\n";
+            } else if (c == '\\') {
+                file << "\\\\";
+            } else {
+                file << c;
+            }
+        }
+        file << "\",\n";
+        file << "  \"arguments\": \"";
+        // Escape quotes and newlines in args
+        for (char c : args_info) {
+            if (c == '"') {
+                file << "\\\"";
+            } else if (c == '\n') {
+                file << "\\n";
+            } else if (c == '\\') {
+                file << "\\\\";
+            } else {
+                file << c;
+            }
+        }
+        file << "\"\n";
+        file << "}\n";
         file.close();
 
         std::cout << "Operation dispatched with stack_id: " << stack_id << " -> " << filename << std::endl;
