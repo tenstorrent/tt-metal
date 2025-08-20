@@ -4223,79 +4223,39 @@ def test_conv_sharded_rm_input(
 )
 
 @pytest.mark.parametrize(
-    "stride, padding, dilation, act_block_h_override, enable_split_reader, act_db, w_db, weights_dtype, output_dtype, input_layout, output_layout, has_bias, device_params",
+    "stride, padding, dilation, act_block_h_override, weights_dtype, output_dtype, input_layout, output_layout",
     [
-        (2, 0, 1, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 0, 2, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 0, 3, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 1, 1, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 1, 2, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 1, 3, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 2, 1, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 2, 2, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 2, 3, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 0, 1, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 0, 2, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 0, 3, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 1, 1, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 1, 2, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 1, 3, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 2, 1, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 2, 2, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 2, 3, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 0, 1, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 1, 1, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 2, 1, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 0, 2, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 1, 2, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 2, 2, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 0, 3, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 1, 3, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (2, 2, 3, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 1, 0, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 2, 0, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 3, 0, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 1, 0, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 2, 0, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 3, 0, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 1, 0, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 2, 0, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 3, 0, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 1, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 2, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 3, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 1, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 2, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 3, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 1, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 2, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 3, 32, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 1, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 2, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 3, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 1, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 2, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 3, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 1, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 2, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 3, 64, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 2, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 3, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 2, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 3, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 1, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 2, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 3, 128, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 2, 256, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 0, 3, 256, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 2, 256, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 1, 3, 256, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 1, 256, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 2, 256, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-        (3, 2, 3, 256, True, True, True, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, True, {"l1_small_size": 16384}),
-    ],
-    indirect=["device_params"],
+        (2, 3, 1, 32 * 8, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (2, 0, 1, 32 * 15, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (2, 0, 2, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (2, 0, 3, 32 * 12, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+
+        (2, 1, 1, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (2, 1, 2, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (2, 1, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+
+        (2, 2, 1, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (2, 2, 2, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (2, 2, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+
+        (3, 0, 1, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (3, 0, 2, 32 * 13, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (3, 0, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+
+        (3, 1, 1, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (3, 1, 2, 32 * 13, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (3, 1, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+
+        (3, 2, 1, 32 * 13, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (3, 2, 2, 32 * 12, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (3, 2, 3, 32 * 16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+    ]
 )
+@pytest.mark.parametrize("has_bias", [True])
+@pytest.mark.parametrize("enable_split_reader", [True])
+@pytest.mark.parametrize("act_db", [True])
+@pytest.mark.parametrize("w_db", [True])
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_resnet50_1kX1k(
     device,
     torch_tensor_map,
@@ -4310,26 +4270,25 @@ def test_resnet50_1kX1k(
     stride,
     padding,
     dilation,
-    enable_split_reader,
-    act_db,
-    w_db,
     act_block_h_override,
     weights_dtype,
     output_dtype,
     input_layout,
     output_layout,
     has_bias,
+    enable_split_reader,
+    act_db,
+    w_db,
 ):
 
     config_override = {}
-    sharded_cfg = None
     config_override["act_block_h"] = act_block_h_override
 
     run_conv(
         device=device,
         torch_tensor_map=torch_tensor_map,
         math_fidelity=math_fidelity,
-        input_dtype=ttnn.bfloat16,
+        input_dtype=ttnn.bfloat16, # keep input dtype as bfloat16 since resnet50 uses bfloat16 as first layer's input dtype
         output_dtype=output_dtype,
         weights_dtype=weights_dtype,
         batch_size=batch,
@@ -4341,7 +4300,7 @@ def test_resnet50_1kX1k(
         filter_width=kernel[1],
         stride_h=stride,
         stride_w=stride,
-        padding=padding,
+        padding=(padding, padding),
         config_override=config_override,
         dilation_h=dilation,
         dilation_w=dilation,
@@ -4358,36 +4317,31 @@ def test_resnet50_1kX1k(
         input_layout=input_layout,
         enable_act_double_buffer=act_db,
         enable_weights_double_buffer=w_db,
-        sharded_cfg=sharded_cfg,
-        # slice_config=slice_config,
     )
 
 
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, kernel, deallocate_activation, math_fidelity",
     (
-        (1, 3, 64, 1024, 1024, (7, 7), True, ttnn.MathFidelity.LoFi), # optimum
+        (1, 3, 64, 1024, 1024, (7, 7), True, ttnn.MathFidelity.LoFi),
     ),
 )
-
 @pytest.mark.parametrize("stride", [1])
-@pytest.mark.parametrize("padding", [3, 4, 5])
-@pytest.mark.parametrize("dilation", [4, 5, 6])
+@pytest.mark.parametrize(
+    "padding, dilation, act_block_h_override, weights_dtype, output_dtype, input_layout, output_layout",
+    [
+        (3, 4, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
+        (4, 4, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
+        (5, 4, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
+        (3, 5, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
+        (4, 5, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
+        (5, 5, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
+    ]
+)
+@pytest.mark.parametrize("has_bias", [True])
 @pytest.mark.parametrize("enable_split_reader", [True])
 @pytest.mark.parametrize("act_db", [True])
 @pytest.mark.parametrize("w_db", [True])
-@pytest.mark.parametrize("act_block_h_override", [0])
-@pytest.mark.parametrize(
-    "weights_dtype",
-    [ttnn.bfloat8_b],
-)
-@pytest.mark.parametrize(
-    "output_dtype",
-    [ttnn.bfloat8_b],
-)
-@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("has_bias", [True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_resnet50_1kX1k_dram_slicing(
     device,
@@ -4403,25 +4357,25 @@ def test_resnet50_1kX1k_dram_slicing(
     stride,
     padding,
     dilation,
-    enable_split_reader,
-    act_db,
-    w_db,
     act_block_h_override,
     weights_dtype,
     output_dtype,
     input_layout,
     output_layout,
     has_bias,
+    enable_split_reader,
+    act_db,
+    w_db,
+    device_params,
 ):
     config_override = {}
-    sharded_cfg = None
     config_override["act_block_h"] = act_block_h_override
 
     run_conv(
         device=device,
         torch_tensor_map=torch_tensor_map,
         math_fidelity=math_fidelity,
-        input_dtype=ttnn.bfloat16,
+        input_dtype=ttnn.bfloat16, # keep input dtype as bfloat16 since resnet50 uses bfloat16 as first layer's input dtype
         output_dtype=output_dtype,
         weights_dtype=weights_dtype,
         batch_size=batch,
@@ -4433,7 +4387,7 @@ def test_resnet50_1kX1k_dram_slicing(
         filter_width=kernel[1],
         stride_h=stride,
         stride_w=stride,
-        padding=padding,
+        padding=(padding, padding),
         config_override=config_override,
         dilation_h=dilation,
         dilation_w=dilation,
@@ -4450,104 +4404,5 @@ def test_resnet50_1kX1k_dram_slicing(
         input_layout=input_layout,
         enable_act_double_buffer=act_db,
         enable_weights_double_buffer=w_db,
-        sharded_cfg=sharded_cfg,
         slice_config = ttnn.Conv2dSliceConfig(slice_type=SliceWidth)
-    )
-
-
-@pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, kernel, deallocate_activation, math_fidelity",
-    (
-        (1, 3, 64, 1024, 1024, (7, 7), True, ttnn.MathFidelity.LoFi), # optimum
-    ),
-)
-@pytest.mark.parametrize("stride", [3, 4, 5])
-@pytest.mark.parametrize("padding", [2, 4, 5])
-@pytest.mark.parametrize("dilation", [3, 4, 5])
-@pytest.mark.parametrize("enable_split_reader", [False])
-@pytest.mark.parametrize("act_db", [False])
-@pytest.mark.parametrize("w_db", [False])
-@pytest.mark.parametrize("act_block_h_override", [0, 32, 64, 128, 256])
-@pytest.mark.parametrize(
-    "weights_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
-)
-@pytest.mark.parametrize(
-    "output_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
-)
-@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("has_bias", [False])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_resnet50_1kX1k_l1(
-    device,
-    torch_tensor_map,
-    batch,
-    input_channels,
-    output_channels,
-    input_height,
-    input_width,
-    kernel,
-    deallocate_activation,
-    math_fidelity,
-    stride,
-    padding,
-    dilation,
-    enable_split_reader,
-    act_db,
-    w_db,
-    act_block_h_override,
-    weights_dtype,
-    output_dtype,
-    input_layout,
-    output_layout,
-    has_bias,
-):
-
-    config_override = {}
-    sharded_cfg = None
-    config_override["act_block_h"] = act_block_h_override
-    core_x = core_y = 8
-    sharded_cfg = ttnn.create_sharded_memory_config(
-        shape=(1, 1, batch * input_height * input_width, input_channels),
-        core_grid=ttnn.CoreGrid(x=core_x,y=core_y),
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
-
-    run_conv(
-        device=device,
-        torch_tensor_map=torch_tensor_map,
-        math_fidelity=math_fidelity,
-        input_dtype=ttnn.bfloat16,
-        output_dtype=output_dtype,
-        weights_dtype=weights_dtype,
-        batch_size=batch,
-        output_channels=output_channels,
-        input_channels=input_channels,
-        input_height=input_height,
-        input_width=input_width,
-        filter_height=kernel[0],
-        filter_width=kernel[1],
-        stride_h=stride,
-        stride_w=stride,
-        padding=padding,
-        config_override=config_override,
-        dilation_h=dilation,
-        dilation_w=dilation,
-        output_layout=output_layout,
-        deallocate_activation=deallocate_activation,
-        has_bias=has_bias,
-        shard_layout=HS,
-        auto_shard=False,
-        memory_config=None,
-        input_mesh_mapper=None,
-        weight_mesh_mapper=None,
-        output_mesh_composer=None,
-        enable_split_reader=enable_split_reader,
-        input_layout=input_layout,
-        enable_act_double_buffer=act_db,
-        enable_weights_double_buffer=w_db,
-        sharded_cfg=sharded_cfg,
     )
