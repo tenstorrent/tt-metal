@@ -512,7 +512,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id_1,
         out_cb_id,
         one_scalar_per_core,
-        temp_cb_id};
+        temp_cb_id,
+        is_output_tiled};  // Add output layout flag (1 = TILED, 0 = ROW_MAJOR)
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,
