@@ -166,14 +166,25 @@ void DistributedHostBuffer::emplace_shards(
     const std::vector<distributed::MeshCoordinate>& coords,
     const ProduceBufferFn& produce_buffer,
     ProcessShardExecutionPolicy policy) {
+    std::for_each(coords.begin(), coords.end(), [&](const auto& coord) { shard_coords_.insert(coord); });
+
     if (policy == ProcessShardExecutionPolicy::SEQUENTIAL || coords.size() < 2) {
         for (const auto& coord : coords) {
-            emplace_shard(coord, produce_buffer);
+            auto& shard = shards_.at(coord);
+            if (shard.is_local()) {
+                shard->buffer = produce_buffer();
+                shard->is_populated = true;
+            }
         }
     } else {
         tf::Taskflow taskflow;
-        taskflow.for_each(
-            coords.begin(), coords.end(), [&](const auto& coord) { emplace_shard(coord, produce_buffer); });
+        taskflow.for_each(coords.begin(), coords.end(), [&](const auto& coord) {
+            auto& shard = shards_.at(coord);
+            if (shard.is_local()) {
+                shard->buffer = produce_buffer();
+                shard->is_populated = true;
+            }
+        });
         detail::GetExecutor().run(taskflow).wait();
     }
 }
