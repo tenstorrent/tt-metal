@@ -29,9 +29,10 @@ class ResetUtil:
             if executable is not None:
 
                 self.command = executable
-                self.args = args
+                self.args = ["-r"]
 
-                self.reset()
+                # TODO this is broken on multi-chip machines
+                # self.reset()
                 return
 
         if self.command is None:

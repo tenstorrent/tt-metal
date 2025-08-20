@@ -15,6 +15,10 @@ on:
           - tilize_with_val_padding
           - untilize
           - untilize_with_unpadding
+          - ccl.line_all_gather
+          - ccl.all_gather_n300
+          - ccl.all_gather_n300_focused
+          - ccl.generality.all_gather
           - creation.zeros.zeros
           - creation.empty.empty
           - creation.zeros_like.zeros_like
