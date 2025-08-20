@@ -47,7 +47,7 @@ static Tensor create_config_tensor(
     uint16_t stick_offset_start =
         0;  // Tracks starting stick offset within the core before adding in_w sticks, used when scale_factor_h > 1
     uint32_t stick_cnt =
-        0;  // Counts the number of sticks processed, used for splitting output sticks accross NCRISC and BRISC
+        0;  // Counts the number of sticks processed, used for splitting output sticks across NCRISC and BRISC
     uint16_t ch_start_core = 0;   // Starting core index where channels are distributed
     uint16_t ch_end_core = 0;     // Ending core index where channels are distributed
     uint16_t nhw_start_core = 0;  // Starting core index for NHW distribution
@@ -249,7 +249,7 @@ operation::ProgramWithCallbacks upsample_multi_core_sharded(
 
     uint32_t next_cb_index = CBIndex::c_0;
     const uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
-    const uint32_t aligned_input_stick_nbytes = round_up_to_mul32(input_stick_nbytes);
+    const uint32_t aligned_input_stick_nbytes = tt::round_up(input_stick_nbytes, input.buffer()->alignment());
     const uint32_t in_cb_pagesize = aligned_input_stick_nbytes;
     const uint32_t in_cb_npages = input_nsticks_per_core * buffering_factor;
 
@@ -257,7 +257,8 @@ operation::ProgramWithCallbacks upsample_multi_core_sharded(
         next_cb_index++, program, all_cores, in_cb_pagesize, in_cb_npages, input_cb_data_format, input.buffer());
 
     // output sharded CB with upsampled data
-    uint32_t out_cb_pagesize = round_up_to_mul32(output_stick_nbytes);  // aligned output stick n bytes
+    uint32_t out_cb_pagesize =
+        tt::round_up(output_stick_nbytes, output.buffer()->alignment());  // aligned output stick n bytes
     uint32_t out_cb_npages = output_nsticks_per_core * buffering_factor;
 
     auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(

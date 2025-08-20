@@ -5,6 +5,7 @@
 #include <string>
 
 #include "ttnn/operations/moreh/moreh_softmax/device/moreh_softmax_device_operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_softmax {
@@ -41,6 +42,12 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
+    if (input.dtype() == DataType::FLOAT32 && fp32_dest_acc_en != true) {
+        TT_THROW(
+            "FP32 destination accumulation must be enabled when input tensor has FLOAT32 data type. Please update the "
+            "compute kernel configuration.");
+    }
+
     Program program = Program();
 
     // create circular buffers
@@ -62,23 +69,25 @@ MorehSoftmaxOperation::MorehSoftmaxCLargeFactory::create(
         });
 
     // create read/wrtie kernel
-    bool src_is_dram = input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool dst_is_dram = output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
 
+    std::vector<uint32_t> reader_ct_args = {};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
     auto reader_kernel_id = CreateReadKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/reader_moreh_softmax_c_large.cpp",
         all_cores,
-        {src_is_dram},
+        reader_ct_args,
         reader_defines);
+    std::vector<uint32_t> writer_ct_args = {};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
     auto writer_kernel_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_softmax/device/kernels/writer_moreh_softmax_c_large.cpp",
         all_cores,
-        {dst_is_dram},
+        writer_ct_args,
         writer_defines);
 
     auto outer_stride = Ht * Wt;

@@ -325,7 +325,7 @@ int main(int argc, char** argv) {
         tt_metal::CircularBufferConfig cb_config =
             tt_metal::CircularBufferConfig(page_size_g * page_count_g, {{0, tt::DataFormat::Float32}})
                 .set_page_size(0, page_size_g);
-        auto cb = tt_metal::CreateCircularBuffer(program, worker_g, cb_config);
+        tt_metal::CreateCircularBuffer(program, worker_g, cb_config);
 
         auto dm0 = tt_metal::CreateKernel(
             program,
@@ -387,7 +387,7 @@ int main(int argc, char** argv) {
         }
 
         vector<uint32_t> blank(page_size_g / sizeof(uint32_t));
-        std::chrono::duration<double> elapsed_seconds;
+        std::chrono::duration<double> elapsed_seconds{};
         if (source_mem_g < 4 || source_mem_g == 6) {
             // Cache stuff
             for (int i = 0; i < warmup_iterations_g; i++) {

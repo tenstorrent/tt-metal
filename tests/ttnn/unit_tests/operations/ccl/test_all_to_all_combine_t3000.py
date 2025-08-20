@@ -265,7 +265,11 @@ def trace_all_to_all_combine(
         local_reduce=local_reduce,
     )
 
-    ccl_semaphore_handle = ttnn.create_global_semaphore(mesh_device, subdevice_shard_cores_grid, 0)
+    # create global semaphore handles
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, subdevice_shard_cores_grid, 0) for _ in range(2)]
+    init_semaphore_handles = [
+        ttnn.create_global_semaphore(mesh_device, subdevice_shard_cores_grid, 0) for _ in range(2)
+    ]
 
     tt_input_contribs = ttnn.from_torch(
         input_contrib,
@@ -295,7 +299,7 @@ def trace_all_to_all_combine(
     )
 
     def run_op(n):
-        for _ in range(n):
+        for i in range(n):
             tt_out_tensor = ttnn.all_to_all_combine(
                 tt_input_contribs,
                 tt_expert_mapping,
@@ -304,8 +308,9 @@ def trace_all_to_all_combine(
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
-                global_semaphore=ccl_semaphore_handle,
+                global_semaphore=ccl_semaphore_handles[i % 2],
                 axis=axis,
+                init_semaphore=init_semaphore_handles[i % 2],
             )
 
     # compile run:
@@ -520,7 +525,8 @@ def run_all_to_all_combine_test(
     )
 
     # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+    init_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
 
     tt_out_tensor_list = []
 
@@ -535,9 +541,10 @@ def run_all_to_all_combine_test(
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
-                global_semaphore=ccl_semaphore_handles[i],
+                global_semaphore=ccl_semaphore_handles[i % 2],
                 local_reduce=local_reduce,
                 axis=axis,
+                init_semaphore=init_semaphore_handles[i % 2],
             )
 
             ttnn.synchronize_device(mesh_device)
@@ -575,23 +582,73 @@ def check_results(test_tensor, ref_tensor, data_map):
 
 
 @pytest.mark.parametrize(
-    "device_params",
+    "device_params, mesh_shape, mesh_device, axis, num_links",
     [
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "trace_region_size": 500000,
-        },
-        {
-            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 500000,
-        },
+        # FABRIC_2D tests with both axis=0 and axis=1
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "trace_region_size": 500000,
+            },
+            (2, 4),
+            (2, 4),
+            0,
+            2,
+            id="fabric_2d_axis_0",
+        ),
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "trace_region_size": 500000,
+            },
+            (2, 4),
+            (2, 4),
+            1,
+            1,
+            id="fabric_2d_axis_1",
+        ),
+        # FABRIC_1D tests with both axis=0 and axis=1
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 500000,
+            },
+            (2, 4),
+            (2, 4),
+            0,
+            2,
+            id="fabric_1d_line_axis_0",
+        ),
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": 500000,
+            },
+            (2, 4),
+            (2, 4),
+            1,
+            1,
+            id="fabric_1d_line_axis_1",
+        ),
+        # FABRIC_1D_RING tests with only axis=1 (excluding axis=0)
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "trace_region_size": 500000,
+            },
+            (1, 8),
+            (1, 8),
+            1,
+            1,
+            id="fabric_1d_ring_axis_1",
+        ),
     ],
-    indirect=True,
-)
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+    indirect=["device_params", "mesh_device"],
 )
 @pytest.mark.parametrize("batches_per_device", [8])
 @pytest.mark.parametrize("experts_per_device", [8])
@@ -603,7 +660,6 @@ def check_results(test_tensor, ref_tensor, data_map):
 @pytest.mark.parametrize("num_iters", [2])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-@pytest.mark.parametrize("axis, num_links", [(0, 2), (1, 1)])
 @pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_combine_no_trace(

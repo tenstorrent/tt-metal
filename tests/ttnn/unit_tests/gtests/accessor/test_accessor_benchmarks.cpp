@@ -42,7 +42,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
     const auto host_size_in_bytes = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
     const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
 
-    // Mirrors allocate_mesh_buffer_on_device in ttnn
+    // Mirrors allocate_device_buffer in ttnn
     const tt::tt_metal::distributed::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
 
     // Create input mesh buffer

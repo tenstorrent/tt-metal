@@ -142,7 +142,7 @@ int main(int argc, char** argv) {
                         tt_metal::CircularBufferConfig(
                             cb_tiles * single_tile_size, {{cb_index, tt::DataFormat::Float16_b}})
                             .set_page_size(cb_index, single_tile_size);
-                    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_config);
+                    tt_metal::CreateCircularBuffer(program, core, cb_config);
                 }
             }
 
@@ -171,7 +171,7 @@ int main(int argc, char** argv) {
                     .compile_args = writer_compile_args});
 
             vector<uint32_t> compute_compile_args = {uint32_t(core_group_idx)};
-            auto compute_kernel = tt_metal::CreateKernel(
+            tt_metal::CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/perf_microbenchmark/7_kernel_launch/"
                 "kernels/"
@@ -184,8 +184,8 @@ int main(int argc, char** argv) {
                     CoreCoord core = {(std::size_t)j, (std::size_t)i};
                     int core_index = i * num_cores_c + j;
 
-                    std::array<uint32_t, 255> reader_runtime_args;
-                    std::array<uint32_t, 255> writer_runtime_args;
+                    std::array<uint32_t, 255> reader_runtime_args{};
+                    std::array<uint32_t, 255> writer_runtime_args{};
                     for (uint32_t k = 0; k < 255; ++k) {
                         reader_runtime_args[k] = core_index + k;
                         writer_runtime_args[k] = core_index + k;

@@ -31,14 +31,14 @@ private:
     size_t hlk_args_size;  // size of hlk_args_t in bytes (result of sizeof())
 
 public:
-    DataFormat buf_dataformat_arr[NUM_CIRCULAR_BUFFERS];
-    uint32_t buf_num_faces_arr[NUM_CIRCULAR_BUFFERS];
-    uint32_t buf_partial_face_arr[NUM_CIRCULAR_BUFFERS];
-    uint32_t buf_face_r_dim_arr[NUM_CIRCULAR_BUFFERS];
-    uint32_t buf_narrow_tile_arr[NUM_CIRCULAR_BUFFERS];
-    uint32_t buf_tile_r_dim_arr[NUM_CIRCULAR_BUFFERS];
-    uint32_t buf_tile_c_dim_arr[NUM_CIRCULAR_BUFFERS];
-    uint32_t buf_tile_size_arr[NUM_CIRCULAR_BUFFERS];
+    DataFormat buf_dataformat_arr[NUM_CIRCULAR_BUFFERS]{};
+    uint32_t buf_num_faces_arr[NUM_CIRCULAR_BUFFERS]{};
+    uint32_t buf_partial_face_arr[NUM_CIRCULAR_BUFFERS]{};
+    uint32_t buf_face_r_dim_arr[NUM_CIRCULAR_BUFFERS]{};
+    uint32_t buf_narrow_tile_arr[NUM_CIRCULAR_BUFFERS]{};
+    uint32_t buf_tile_r_dim_arr[NUM_CIRCULAR_BUFFERS]{};
+    uint32_t buf_tile_c_dim_arr[NUM_CIRCULAR_BUFFERS]{};
+    uint32_t buf_tile_size_arr[NUM_CIRCULAR_BUFFERS]{};
 
     tt_hlk_desc() {
         math_fidelity = MathFidelity::Invalid;

@@ -13,9 +13,10 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
+from models.demos.deepseek_v3.utils.config_helpers import dequantize_state_dict
 from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_mla as reference_forward
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import MAX_START_POS
+from models.demos.deepseek_v3.utils.test_utils import MAX_START_POS, load_state_dict
 from models.utility_functions import comp_pcc
 
 
@@ -71,6 +72,10 @@ def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.Mes
     [True],
 )
 @pytest.mark.parametrize(
+    "weights_type",
+    ["random", "real"],
+)
+@pytest.mark.parametrize(
     "device_params",
     [
         {
@@ -78,6 +83,10 @@ def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.Mes
         }
     ],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "module_path",
+    ["model.layers.0.self_attn"],
 )
 def test_forward_pass(
     mode,
@@ -89,6 +98,9 @@ def test_forward_pass(
     tmp_path,
     mesh_device,
     ccl,
+    weights_type,
+    model_path,
+    module_path,
 ):
     # Hang workaround for large shapes
     if seq_len > 1024:
@@ -101,6 +113,10 @@ def test_forward_pass(
     paged_config = MLA1D.get_valid_paged_config(hf_config.max_seq_len, MLA1D.MAX_BATCH_SIZE, dp_factor)
 
     reference_model = reference
+    if weights_type == "real":
+        state_dict = load_state_dict(model_path, module_path)
+        dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
+        reference_model.load_state_dict(dequantized_state_dict)
 
     if mode == "prefill":
         assert batch_size == 1, "Prefill mode only supports batch size of 1"
@@ -124,8 +140,11 @@ def test_forward_pass(
     # Create a new model state
     model_state = MLA1D.create_state(hf_config, mesh_device, paged_config, ccl)
 
+    # Create a new model shared state
+    model_shared_state = MLA1D.create_shared_state(hf_config, mesh_device)
+
     # Create RunConfig using both weight_config and model_config
-    run_config = create_run_config(model_config, weight_config, model_state)
+    run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     ############################
     ### Torch inputs
