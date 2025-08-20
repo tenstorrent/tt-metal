@@ -230,12 +230,16 @@ class ASPP(nn.Module):
                     "Input size: {} `pool_kernel_size`: {}".format(size, self.pool_kernel_size)
                 )
         res = []
+
         for conv in self.convs:
             res.append(conv(x))
+
         res[-1] = F.interpolate(res[-1], size=size, mode="bilinear", align_corners=False)
 
         res = torch.cat(res, dim=1)
+
         res = self.project(res)
+
         res = F.dropout(res, self.dropout, training=self.training) if self.dropout > 0 else res
 
         return res
