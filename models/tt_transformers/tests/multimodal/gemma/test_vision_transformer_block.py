@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.load_checkpoints import convert_vision_hf_to_meta  # convert_vision_hf_to_meta,
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.multimodal.gemma.gemma_image_block import TtGemmaImageTransformerBlock
@@ -32,6 +33,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, gated):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
@@ -59,6 +61,7 @@ def test_block_inference(batch, num_chunks, mesh_device, reset_seeds, gated):
 
     tt_model = TtGemmaImageTransformerBlock(
         mesh_device,
+        tt_ccl=TT_CCL(mesh_device),
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=model_args.weight_cache_path(dtype),

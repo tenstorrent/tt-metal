@@ -47,6 +47,7 @@ class TtGemmaModel(Transformer):
         self.vision_model = TtGemmaTransformerVision(
             mesh_device=mesh_device,
             state_dict=state_dict,
+            tt_ccl=self.tt_ccl,
             state_dict_prefix="model.vision_tower.vision_model.",
             dtype=dtype,
             configuration=args,
