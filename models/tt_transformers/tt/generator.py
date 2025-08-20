@@ -660,8 +660,8 @@ class Generator:
     # Note: This function is called by vLLM
     def process_decode_output_host(self, tt_out, is_tokens=False):
         """
-        Converts the input ttnn host tensor to a torch tensor. The input can be logits (if is_tokens=False) or tokens (if is_tokens=True).
-        If read_from_device=False, the input is expected to be a host tensor; otherwise, it is a device tensor.
+        Converts the input ttnn host tensors to a torch tensor.
+        The input can be logits (if is_tokens=False) or tokens (if is_tokens=True).
         """
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
