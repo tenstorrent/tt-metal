@@ -131,11 +131,11 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             // Run operation on cq 0
             Tensor output_tensor = ttnn::sqrt(workload_dispatch_cq, input_tensor);
             auto dummy_buffer_0 =
-                tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device_, TensorSpec(shape, tensor_layout));
+                tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
             output_tensor = ttnn::neg(workload_dispatch_cq, output_tensor);
             // Allocate this buffer to stress test async allocation across op execution and explicit allocation
             auto dummy_buffer_1 =
-                tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device_, TensorSpec(shape, tensor_layout));
+                tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
             // Record cq 0 prog execution
             auto workload_event = ttnn::record_event(device_->mesh_command_queue(*workload_dispatch_cq));
             // Wait until cq 0 prog execution is done
@@ -164,7 +164,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeBufferDestructor) {
     TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
     TensorSpec tensor_spec(shape, tensor_layout);
     for (int loop = 0; loop < 100000; loop++) {
-        auto input_buffer_dummy = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device_, tensor_spec);
+        auto input_buffer_dummy = tt::tt_metal::tensor_impl::allocate_device_buffer(device_, tensor_spec);
     }
 }
 }  // namespace

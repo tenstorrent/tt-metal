@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from models.utility_functions import skip_for_grayskull
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 
@@ -59,32 +60,36 @@ def run_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.reduce_scatter(
-        input_tensor,
-        dim=dim,
-        cluster_axis=cluster_axis,
-        mesh_device=mesh_device,
-        math_op=math_op,
-        num_links=num_links,
-        memory_config=output_mem_config,
-        topology=ttnn.Topology.Linear,
-    )
+    pytest.skip(LEGACY_CCL_SKIP)
+    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+    # tt_out_tensor = ttnn.reduce_scatter(
+    #     input_tensor,
+    #     dim=dim,
+    #     cluster_axis=cluster_axis,
+    #     mesh_device=mesh_device,
+    #     math_op=math_op,
+    #     num_links=num_links,
+    #     memory_config=output_mem_config,
+    #     topology=ttnn.Topology.Linear,
+    # )
     ttnn.synchronize_device(mesh_device)
 
     # Capture trace
     logger.info("Capturing trace")
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
-        tt_out_tensor = ttnn.reduce_scatter(
-            input_tensor,
-            dim=dim,
-            cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
-            math_op=math_op,
-            num_links=num_links,
-            memory_config=output_mem_config,
-            topology=ttnn.Topology.Linear,
-        )
+        pytest.skip(LEGACY_CCL_SKIP)
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+        # tt_out_tensor = ttnn.reduce_scatter(
+        #     input_tensor,
+        #     dim=dim,
+        #     cluster_axis=cluster_axis,
+        #     mesh_device=mesh_device,
+        #     math_op=math_op,
+        #     num_links=num_links,
+        #     memory_config=output_mem_config,
+        #     topology=ttnn.Topology.Linear,
+        # )
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
 
@@ -287,16 +292,18 @@ def run_line_reduce_scatter_on_TG_with_mesh_tensor_along_rows(
                     subdevice_id=worker_sub_device_id,
                 )
             else:
-                ttnn_tensor_out = ttnn.reduce_scatter(
-                    ttnn_tensor,
-                    dim=dim,
-                    cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
-                    math_op=math_op,
-                    num_links=num_links,
-                    memory_config=output_mem_config,
-                    topology=ttnn.Topology.Linear,
-                )
+                pytest.skip(LEGACY_CCL_SKIP)
+                # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+                # ttnn_tensor_out = ttnn.reduce_scatter(
+                #     ttnn_tensor,
+                #     dim=dim,
+                #     cluster_axis=cluster_axis,
+                #     mesh_device=mesh_device,
+                #     math_op=math_op,
+                #     num_links=num_links,
+                #     memory_config=output_mem_config,
+                #     topology=ttnn.Topology.Linear,
+                # )
 
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
         ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)

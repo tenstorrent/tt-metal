@@ -344,8 +344,8 @@ void MetalContext::clear_dram_state(chip_id_t device_id) {
 }
 
 void MetalContext::clear_launch_messages_on_eth_cores(chip_id_t device_id) {
-    launch_msg_t launch_msg;
-    go_msg_t go_msg;
+    launch_msg_t launch_msg{};
+    go_msg_t go_msg{};
     go_msg.signal = RUN_MSG_INIT;
     std::memset(&launch_msg, 0, sizeof(launch_msg_t));
     std::vector<launch_msg_t> init_launch_msg_data(launch_msg_buffer_num_entries, launch_msg);
@@ -420,7 +420,8 @@ void MetalContext::teardown_fabric_config() {
 void MetalContext::set_fabric_config(
     const tt_fabric::FabricConfig fabric_config,
     tt_fabric::FabricReliabilityMode reliability_mode,
-    std::optional<uint8_t> num_routing_planes) {
+    std::optional<uint8_t> num_routing_planes,
+    tt_fabric::FabricTensixConfig fabric_tensix_config) {
     if (is_2d_fabric_config(fabric_config) && cluster_->get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
         const auto fabric_type = get_fabric_type(fabric_config);
         if (fabric_type == tt::tt_fabric::FabricType::TORUS_X || fabric_type == tt::tt_fabric::FabricType::TORUS_Y ||
@@ -429,7 +430,8 @@ void MetalContext::set_fabric_config(
         }
     }
 
-    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch config, not through this function exposed in the detail API.
+    // Changes to fabric force a re-init. TODO: We should supply the fabric config in the same way as the dispatch
+    // config, not through this function exposed in the detail API.
     force_reinit_ = true;
 
     if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED ||
@@ -480,6 +482,9 @@ void MetalContext::set_fabric_config(
             new_val);
     }
     this->num_fabric_active_routing_planes_ = new_val;
+
+    // Set the fabric tensix config
+    this->set_fabric_tensix_config(fabric_tensix_config);
 }
 
 void MetalContext::initialize_fabric_config() {
@@ -497,7 +502,25 @@ void MetalContext::initialize_fabric_config() {
         this->fabric_config_, this->fabric_reliability_mode_);
 }
 
+void MetalContext::initialize_fabric_tensix_datamover_config() {
+    if (this->fabric_config_ == tt_fabric::FabricConfig::DISABLED) {
+        return;
+    }
+
+    // Initialize fabric tensix config after routing tables are configured and devices are available
+    if (tt::tt_fabric::is_tt_fabric_config(this->fabric_config_)) {
+        auto& control_plane = this->get_control_plane();
+        control_plane.initialize_fabric_tensix_datamover_config();
+    }
+}
+
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const { return fabric_config_; }
+
+void MetalContext::set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config) {
+    fabric_tensix_config_ = fabric_tensix_config;
+}
+
+tt_fabric::FabricTensixConfig MetalContext::get_fabric_tensix_config() const { return fabric_tensix_config_; }
 
 void MetalContext::construct_control_plane(const std::filesystem::path& mesh_graph_desc_path) {
     if (logical_mesh_chip_id_to_physical_chip_id_mapping_.size()) {
@@ -585,7 +608,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
 
     // Send exit_erisc_kernel to the launch message
     auto erisc_send_exit_signal = [&](CoreCoord virtual_core, bool is_idle_eth) {
-        go_msg_t go_msg;
+        go_msg_t go_msg{};
         std::memset(&go_msg, 0, sizeof(go_msg_t));
         log_info(
             tt::LogMetal,
@@ -957,8 +980,8 @@ void MetalContext::initialize_firmware(
 void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
     ZoneScoped;
 
-    launch_msg_t launch_msg;
-    go_msg_t go_msg;
+    launch_msg_t launch_msg{};
+    go_msg_t go_msg{};
     std::memset(&launch_msg, 0, sizeof(launch_msg_t));
     go_msg.signal = RUN_MSG_INIT;
 

@@ -88,7 +88,7 @@ std::vector<T> get_broadcasted_vec(std::vector<T>& src, const std::vector<uint32
             int tile_offset = tile_elem_count * t;
             for (int i = 0; i < num_rows; i++) {
                 for (int j = 0; j < num_cols; j++) {
-                    T broadcast_value;
+                    T broadcast_value{};
                     switch (dim) {
                         case BroadcastDim::ROW: {
                             broadcast_value = src[tile_offset + j];

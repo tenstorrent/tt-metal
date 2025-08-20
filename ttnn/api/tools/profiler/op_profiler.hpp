@@ -4,22 +4,23 @@
 
 #pragma once
 
-#include <filesystem>
 #include <mutex>
 #include <reflect>
 #include <stack>
-#include <tuple>
-#include <type_traits>
 
-#include "ttnn/tensor/tensor.hpp"
-#include <nlohmann/json.hpp>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/kernel.hpp>
-#include "ttnn/operation.hpp"
-#include <tt-metalium/tt_metal.hpp>
+#include <fmt/format.h>
+#include <nlohmann/json.hpp>
+#include <tracy/Tracy.hpp>
+#include <tracy/TracyC.h>
+
+#include <tt-metalium/base_types.hpp>
 #include <tt-metalium/device_pool.hpp>
-#include "tracy/Tracy.hpp"
-#include "tracy/TracyC.h"
+#include <tt-metalium/kernel.hpp>
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operation.hpp"
 
 using json = nlohmann::json;
 
@@ -212,59 +213,54 @@ static inline json get_kernels_json(chip_id_t device_id, const Program& program)
         device = tt::DevicePool::instance().get_active_device(device_id);
     }
     json kernelSizes;
-    kernelSizes["brisc_max_kernel_size"] = 0;
-    kernelSizes["ncrisc_max_kernel_size"] = 0;
-    kernelSizes["erisc_max_kernel_size"] = 0;
-    kernelSizes["trisc_0_max_kernel_size"] = 0;
-    kernelSizes["trisc_1_max_kernel_size"] = 0;
-    kernelSizes["trisc_2_max_kernel_size"] = 0;
+    // TODO(HalProcessorClassType): all the combinations can be queried from HAL instead of hardcoded here, but
+    // currently HAL does not correctly report the number of processors under DM.
+    // It should report (DM, 0) and (DM, 1), but instead it currently reports (DM, 0) and (DM+1, 0).
+    // So hardcode for now, this is on par with previously hardcoded brisc, ncrisc, etc.
+    kernelSizes["TENSIX_DM_0_max_kernel_size"] = 0;
+    kernelSizes["TENSIX_DM_1_max_kernel_size"] = 0;
+    kernelSizes["TENSIX_COMPUTE_0_max_kernel_size"] = 0;
+    kernelSizes["TENSIX_COMPUTE_1_max_kernel_size"] = 0;
+    kernelSizes["TENSIX_COMPUTE_2_max_kernel_size"] = 0;
+    kernelSizes["ACTIVE_ETH_DM_0_max_kernel_size"] = 0;
+    kernelSizes["ACTIVE_ETH_DM_1_max_kernel_size"] = 0;
+    kernelSizes["IDLE_ETH_DM_0_max_kernel_size"] = 0;
+    kernelSizes["IDLE_ETH_DM_1_max_kernel_size"] = 0;
 
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = tt::tt_metal::detail::GetKernel(program, kernel_id).get();
-        if (kernel->processor() == RISCV::COMPUTE) {
+        auto core_type = kernel->get_kernel_programmable_core_type();
+        auto processor_class = kernel->get_kernel_processor_class();
+        auto num_binaries = kernel->expected_num_binaries();
+        json kernelObj;
+        kernelObj["source"] = kernel->kernel_source().source_;
+        kernelObj["name"] = kernel->get_full_kernel_name();
+        if (processor_class == HalProcessorClassType::COMPUTE) {
             MathFidelity mathFidelity = std::get<ComputeConfig>(kernel->config()).math_fidelity;
-            json computeKernelObj;
-            computeKernelObj["math_fidelity"] = fmt::format("{}", enchantum::to_string(mathFidelity));
-            computeKernelObj["source"] = kernel->kernel_source().source_;
-            computeKernelObj["name"] = kernel->get_full_kernel_name();
-            computeKernels.push_back(computeKernelObj);
-            if (device != nullptr) {
-                if (kernelSizes["trisc_0_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
-                    kernelSizes["trisc_0_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
-                }
-                if (kernelSizes["trisc_1_max_kernel_size"] < kernel->get_binary_packed_size(device, 1)) {
-                    kernelSizes["trisc_1_max_kernel_size"] = kernel->get_binary_packed_size(device, 1);
-                }
-                if (kernelSizes["trisc_2_max_kernel_size"] < kernel->get_binary_packed_size(device, 2)) {
-                    kernelSizes["trisc_2_max_kernel_size"] = kernel->get_binary_packed_size(device, 2);
-                }
-            }
+            kernelObj["math_fidelity"] = enchantum::to_string(mathFidelity);
+            computeKernels.push_back(std::move(kernelObj));
         } else {
-            json datamovementKernelObj;
-            datamovementKernelObj["source"] = kernel->kernel_source().source_;
-            datamovementKernelObj["name"] = kernel->get_full_kernel_name();
-            datamovementKernels.push_back(datamovementKernelObj);
-            if (device != nullptr) {
-                if (kernel->processor() == RISCV::BRISC) {
-                    if (kernelSizes["brisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
-                        kernelSizes["brisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
-                    }
-                } else if (kernel->processor() == RISCV::NCRISC) {
-                    if (kernelSizes["ncrisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
-                        kernelSizes["ncrisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
-                    }
-                } else if (kernel->processor() == RISCV::ERISC or kernel->processor() == RISCV::ERISC1) {
-                    if (kernelSizes["erisc_max_kernel_size"] < kernel->get_binary_packed_size(device, 0)) {
-                        kernelSizes["erisc_max_kernel_size"] = kernel->get_binary_packed_size(device, 0);
-                    }
+            datamovementKernels.push_back(std::move(kernelObj));
+        }
+        if (device != nullptr) {
+            auto core_type_name = enchantum::to_string(core_type);
+            auto processor_class_name = enchantum::to_string(processor_class);
+            for (int i = 0; i < num_binaries; i++) {
+                auto key = fmt::format(
+                    "{}_{}_{}_max_kernel_size",
+                    core_type_name,
+                    processor_class_name,
+                    kernel->get_kernel_processor_type(i));
+                if (kernelSizes.value(key, 0) < kernel->get_binary_packed_size(device, i)) {
+                    kernelSizes[key] = kernel->get_binary_packed_size(device, i);
                 }
             }
         }
     }
     json ret;
-    ret["compute_kernels"] = computeKernels;
-    ret["datamovement_kernels"] = datamovementKernels;
-    ret["kernel_sizes"] = kernelSizes;
+    ret["compute_kernels"] = std::move(computeKernels);
+    ret["datamovement_kernels"] = std::move(datamovementKernels);
+    ret["kernel_sizes"] = std::move(kernelSizes);
     return ret;
 }
 
