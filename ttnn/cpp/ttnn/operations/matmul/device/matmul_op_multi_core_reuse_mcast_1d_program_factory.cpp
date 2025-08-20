@@ -2538,7 +2538,10 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
     if (bias.has_value()) {
         auto& c = bias.value();
-        TT_FATAL(c.storage_type() == StorageType::DEVICE, "Error");
+        TT_FATAL(
+            c.storage_type() == StorageType::DEVICE,
+            "Bias tensor must be on device, got storage type: {}",
+            c.storage_type());
         TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
         TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
 
@@ -2553,16 +2556,40 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
     uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
     tt_metal::Buffer* in0_buffer = a.buffer();
     tt_metal::Buffer* in1_buffer = b.buffer();
-    TT_FATAL(in0_buffer->size() % in0_single_tile_size == 0, "Error");
-    TT_FATAL(in1_buffer->size() % in1_single_tile_size == 0, "Error");
+    TT_FATAL(
+        in0_buffer->size() % in0_single_tile_size == 0,
+        "Input A buffer size ({}) must be divisible by single tile size ({})",
+        in0_buffer->size(),
+        in0_single_tile_size);
+    TT_FATAL(
+        in1_buffer->size() % in1_single_tile_size == 0,
+        "Input B buffer size ({}) must be divisible by single tile size ({})",
+        in1_buffer->size(),
+        in1_single_tile_size);
 
     TT_FATAL(
         ashape[-1] == bshape[-2],
         "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
-    TT_FATAL(ashape[-2] % in0_tile_shape[0] == 0, "Error");
-    TT_FATAL(ashape[-1] % in0_tile_shape[1] == 0, "Error");
-    TT_FATAL(bshape[-2] % in1_tile_shape[0] == 0, "Error");
-    TT_FATAL(bshape[-1] % in1_tile_shape[1] == 0, "Error");
+    TT_FATAL(
+        ashape[-2] % in0_tile_shape[0] == 0,
+        "A.shape[-2] ({}) must be divisible by tile shape[0] ({})",
+        ashape[-2],
+        in0_tile_shape[0]);
+    TT_FATAL(
+        ashape[-1] % in0_tile_shape[1] == 0,
+        "A.shape[-1] ({}) must be divisible by tile shape[1] ({})",
+        ashape[-1],
+        in0_tile_shape[1]);
+    TT_FATAL(
+        bshape[-2] % in1_tile_shape[0] == 0,
+        "B.shape[-2] ({}) must be divisible by tile shape[0] ({})",
+        bshape[-2],
+        in1_tile_shape[0]);
+    TT_FATAL(
+        bshape[-1] % in1_tile_shape[1] == 0,
+        "B.shape[-1] ({}) must be divisible by tile shape[1] ({})",
+        bshape[-1],
+        in1_tile_shape[1]);
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -2581,7 +2608,7 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         Mt = B * Mt;
         B = 1;
     }
-    TT_FATAL(Kt % in0_block_w == 0, "Error");
+    TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
     // This should allocate a DRAM buffer on the device
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
