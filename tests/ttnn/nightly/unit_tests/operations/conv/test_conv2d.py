@@ -4,7 +4,6 @@
 
 import math
 from loguru import logger
-import time
 
 import torch
 import pytest
@@ -248,7 +247,6 @@ def run_conv(
     if config_override and "act_block_w_div" in config_override and not auto_shard:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
 
-    start_time = time.time_ns()
     [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
@@ -272,6 +270,7 @@ def run_conv(
         return_weights_and_bias=True,
         dtype=output_dtype,
     )
+
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
