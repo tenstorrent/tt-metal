@@ -246,9 +246,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
         tt::tt_metal::TensorAccessorArgs(sin_buffer).append_to(reader_compile_time_args);
     }
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    if (!out_sharded) {
-        tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
-    }
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 
     if (token_idx.has_value()) {
         writer_compile_time_args.insert(
@@ -256,9 +254,7 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
             {untilized_cos_interm_cb_index,
              untilized_cos_sync_cb_index,
              untilized_sin_interm_cb_index,
-             untilized_sin_sync_cb_index,
-             Wt,
-             Wbytes});
+             untilized_sin_sync_cb_index});
     }
 
     if (out_sharded) {
