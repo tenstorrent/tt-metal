@@ -94,20 +94,6 @@ while [[ "$found" = "false" ]]; do
 
    rm -rf .cpmcache  build_Release build_Debug build
 
-   # Find the tokenizers-cpp source directory in CPM cache
-   TOKENIZERS_CPP_DIR=$(find .cpmcache/tokenizers-cpp -type d -name "tokenizers-cpp*" | head -n 1)
-   if [ -d "$TOKENIZERS_CPP_DIR" ]; then
-      echo "Checking if tokenizers-cpp.patch is applied..."
-      if grep -q '0.21.4' "$TOKENIZERS_CPP_DIR/rust/Cargo.lock"; then
-         echo "Patch appears to be applied (tokenizers v0.21.4 found in Cargo.lock)"
-      else
-         echo "Patch NOT applied; applying now..."
-         patch -p1 -d "$TOKENIZERS_CPP_DIR" < tt-train/cmake/tokenizers-cpp.patch
-      fi
-   else
-      echo "tokenizers-cpp source directory not found in CPM cache."
-   fi
-
    build_rc=0
    ./build_metal.sh --build-all || build_rc=$?
    echo "::endgroup::"
