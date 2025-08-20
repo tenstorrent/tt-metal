@@ -47,8 +47,6 @@ struct WriteTransactionIdTracker {
     static constexpr bool BOTH_PARAMS_ARE_EQUAL = NUM_CHANNELS_PARAM == MAX_TRANSACTION_IDS_PARAM;
     static_assert(OFFSET_PARAM + MAX_TRANSACTION_IDS - 1 <= NOC_MAX_TRANSACTION_ID, "Invalid transaction ID");
 
-    explicit WriteTransactionIdTracker() = default;
-
     FORCE_INLINE void init() {
         if constexpr (!(BOTH_PARAMS_ARE_EQUAL || BOTH_PARAMS_ARE_POW2)) {
             for (size_t i = 0; i < NUM_CHANNELS_PARAM; i++) {
@@ -62,6 +60,7 @@ struct WriteTransactionIdTracker {
         this->write_buffer_index = tt::tt_fabric::BufferIndex{0};
         this->completion_buffer_index = tt::tt_fabric::BufferIndex{0};
     }
+    WriteTransactionIdTracker() { this->init(); }
 
     FORCE_INLINE uint8_t update_buffer_slot_to_next_trid_and_advance_trid_counter() {
         if constexpr (BOTH_PARAMS_ARE_EQUAL) {
