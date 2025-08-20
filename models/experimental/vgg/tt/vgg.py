@@ -33,7 +33,8 @@ class TtVGG(nn.Module):
         self.device = device
         self.base_address = base_address
         self.features = features
-        self.avgpool = fallback_ops.AdaptiveAvgPool2d((7, 7))
+        # Using TTNN adaptive average pooling instead of fallback operation
+        self.output_size = (7, 7)
 
         self.output_mem_config = ttnn.L1_MEMORY_CONFIG
 
@@ -86,9 +87,21 @@ class TtVGG(nn.Module):
                 tt_x = layer(tt_x)
 
         batch, c, w, h = tt_x.padded_shape
-        tt_x = self.avgpool(tt_x)
+        # Convert tensor format for TTNN adaptive pooling (expects NHWC format)
+        tt_x = ttnn.to_layout(tt_x, ttnn.ROW_MAJOR_LAYOUT, memory_config=self.output_mem_config)
+        tt_x = ttnn.adaptive_avg_pool2d(
+            input_tensor=tt_x,
+            batch_size=batch,
+            input_h=h,
+            input_w=w,
+            channels=c,
+            output_size=self.output_size,
+            memory_config=self.output_mem_config,
+        )
 
-        tt_x = fallback_ops.reshape(tt_x, batch, 1, 1, c * w * h)
+        # After adaptive pooling, output size is 7x7
+        out_h, out_w = self.output_size
+        tt_x = fallback_ops.reshape(tt_x, batch, 1, 1, c * out_h * out_w)
         tt_x = format_tensor(tt_x, ttnn.TILE_LAYOUT, self.device, self.output_mem_config)
         for layer in self.classifier:
             tt_x = layer(tt_x)

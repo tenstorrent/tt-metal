@@ -244,7 +244,18 @@ class MBConvBlock:
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.global_avg_pool2d(x)
+
+        # Replace global_avg_pool2d hack with proper TTNN adaptive average pooling
+        batch, c, h, w = x.shape
+        x = ttnn.adaptive_avg_pool2d(
+            input_tensor=x,
+            batch_size=batch,
+            input_h=h,
+            input_w=w,
+            channels=c,
+            output_size=(1, 1),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
         x = self._se_reduce(x)
 
@@ -455,7 +466,18 @@ class Efficientnetb0:
 
         x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.global_avg_pool2d(x)
+
+        # Replace global_avg_pool2d hack with proper TTNN adaptive average pooling
+        batch, c, h, w = x.shape
+        x = ttnn.adaptive_avg_pool2d(
+            input_tensor=x,
+            batch_size=batch,
+            input_h=h,
+            input_w=w,
+            channels=c,
+            output_size=(1, 1),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
         x = ttnn.reshape(x, (1, -1))
 
