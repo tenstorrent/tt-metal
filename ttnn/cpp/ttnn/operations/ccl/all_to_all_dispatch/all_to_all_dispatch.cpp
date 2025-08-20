@@ -13,6 +13,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/fabric.hpp>
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -31,7 +32,8 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
-    uint32_t num_links_ = num_links.value_or(1);
+    uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, axis));
+    log_debug(tt::LogOp, "num_links: {}", num_links_);
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
 

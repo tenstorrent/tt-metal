@@ -939,7 +939,7 @@ def test_all_to_all_dispatch_ring_trace(
     ids=["b2s2"],
 )
 @pytest.mark.parametrize("topology", [ttnn.Topology.Ring])
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
