@@ -18,10 +18,11 @@ DEFAULT_TENSOR_SIZE = (8096, 8096)
     [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
 )
 @pytest.mark.parametrize("dtype", [(torch.bfloat16, ttnn.float32), (torch.float32, ttnn.bfloat16)])
-def test_benchmark_from_torch_with_format_conversion(benchmark, to_layout, dtype):
+@pytest.mark.parametrize("device_id", ttnn.get_device_ids())
+def test_benchmark_from_torch_with_format_conversion(benchmark, to_layout, dtype, device_id):
     from_dtype, to_dtype = dtype
 
-    device = ttnn.open_device(device_id=0)
+    device = ttnn.open_device(device_id=device_id)
     torch_tensor = torch.rand(DEFAULT_TENSOR_SIZE, dtype=from_dtype)
 
     def run():
@@ -37,10 +38,11 @@ def test_benchmark_from_torch_with_format_conversion(benchmark, to_layout, dtype
     [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
 )
 @pytest.mark.parametrize("dtype", [(ttnn.bfloat16, torch.float32), (ttnn.float32, torch.bfloat16)])
-def test_benchmark_to_torch(benchmark, from_layout, dtype):
+@pytest.mark.parametrize("device_id", ttnn.get_device_ids())
+def test_benchmark_to_torch(benchmark, from_layout, dtype, device_id):
     from_dtype, to_dtype = dtype
 
-    device = ttnn.open_device(device_id=0)
+    device = ttnn.open_device(device_id=device_id)
     ttnn_tensor = ttnn.rand(DEFAULT_TENSOR_SIZE, dtype=from_dtype, layout=from_layout, device=device)
 
     def run():
@@ -50,8 +52,9 @@ def test_benchmark_to_torch(benchmark, from_layout, dtype):
     benchmark(run)
 
 
-def test_benchmark_from_device(benchmark):
-    device = ttnn.open_device(device_id=0)
+@pytest.mark.parametrize("device_id", ttnn.get_device_ids())
+def test_benchmark_from_device(benchmark, device_id):
+    device = ttnn.open_device(device_id=device_id)
     ttnn_tensor = ttnn.rand(DEFAULT_TENSOR_SIZE, dtype=DEFAULT_DTYPE, layout=DEFAULT_LAYOUT, device=device)
 
     def run():
@@ -61,8 +64,9 @@ def test_benchmark_from_device(benchmark):
     benchmark(run)
 
 
-def test_benchmark_copy_host_to_device_tensor(benchmark):
-    device = ttnn.open_device(device_id=0)
+@pytest.mark.parametrize("device_id", ttnn.get_device_ids())
+def test_benchmark_copy_host_to_device_tensor(benchmark, device_id):
+    device = ttnn.open_device(device_id=device_id)
     ttnn_tensor = ttnn.rand(DEFAULT_TENSOR_SIZE, dtype=DEFAULT_DTYPE, layout=DEFAULT_LAYOUT, device=device)
     host_tensor = ttnn.allocate_tensor_on_host(ttnn_tensor.spec, device)
 
@@ -73,8 +77,9 @@ def test_benchmark_copy_host_to_device_tensor(benchmark):
     benchmark(run)
 
 
-def test_benchmark_copy_device_to_host_tensor(benchmark):
-    device = ttnn.open_device(device_id=0)
+@pytest.mark.parametrize("device_id", ttnn.get_device_ids())
+def test_benchmark_copy_device_to_host_tensor(benchmark, device_id):
+    device = ttnn.open_device(device_id=device_id)
     device_tensor = ttnn.rand(DEFAULT_TENSOR_SIZE, dtype=DEFAULT_DTYPE, layout=DEFAULT_LAYOUT, device=device)
     host_tensor = ttnn.allocate_tensor_on_host(device_tensor.spec, device)
 
