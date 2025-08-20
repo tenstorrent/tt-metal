@@ -39,6 +39,15 @@ FORCE_INLINE void send_next_data(
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
     volatile auto* pkt_header = reinterpret_cast<volatile lite_fabric::LiteFabricHeader*>(src_addr);
+
+    if (pkt_header->get_base_send_type() == lite_fabric::NocSendTypeEnum::WRITE_REG) {
+        const uint32_t reg_address = pkt_header->command_fields.write_reg.reg_address;
+        const uint32_t reg_value = pkt_header->command_fields.write_reg.reg_value;
+        while (internal_::eth_txq_is_busy(sender_txq_id));
+        internal_::eth_write_remote_reg(sender_txq_id, reg_address, reg_value);
+        // Continue to forward the packet to ensure pointers are synced
+    }
+
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
     // Actual payload may be offset by an unaligned offset. Ensure we include this in the payload size
     // Buffer slots have 16B padding at the end which is unused.
@@ -144,9 +153,11 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
                 host_interface->h2d.sender_host_write_index =
                     tt::tt_fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[0]>(
                         host_interface->h2d.sender_host_write_index);
-            } else {
             }
+        } break;
 
+        case lite_fabric::NocSendTypeEnum::WRITE_REG: {
+            // Do nothing. Sender directly wrote to us with eth_write_remote_reg
         } break;
 
         default: {
