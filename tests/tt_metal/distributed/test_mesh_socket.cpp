@@ -139,13 +139,6 @@ void test_single_connection_single_device_socket(
     bool use_cbs) {
     auto sender_logical_coord = CoreCoord(0, 0);
     auto recv_logical_coord = CoreCoord(0, 1);
-    log_info(LogTest, "chip device id: {}", md0->get_devices()[0]->id());
-    auto sender_virtual_coord = md0->worker_core_from_logical_core(sender_logical_coord);
-    log_info(LogTest, "Sender virtual coord: {} {}", sender_virtual_coord.x, sender_virtual_coord.y);
-    auto recv_virtual_coord = md0->worker_core_from_logical_core(recv_logical_coord);
-    log_info(LogTest, "Receiver virtual coord: {} {}", recv_virtual_coord.x, recv_virtual_coord.y);
-
-    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
 
     SocketConnection socket_connection = {
         .sender_core = {MeshCoordinate(0, 0), sender_logical_coord},
