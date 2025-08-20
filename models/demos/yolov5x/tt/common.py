@@ -137,6 +137,7 @@ class TtYOLOv5xConv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=ttnn.bfloat8_b,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
         return x
 

@@ -106,6 +106,7 @@ class TtYOLOv12xConv2D:
             return_output_dim=True,
             return_weights_and_bias=True,
             dtype=self.activation_dtype,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
         hw = output_height * output_width
         if x.shape[2] != hw:

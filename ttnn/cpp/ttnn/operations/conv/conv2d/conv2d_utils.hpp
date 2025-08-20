@@ -253,6 +253,9 @@ uint32_t estimate_halo_output_elems(
     std::array<uint32_t, 2> dilation,
     std::array<uint32_t, 4> padding);
 
+Conv2dSliceConfig::SliceType determine_conv_slice_type(
+    uint32_t input_height, uint32_t input_width, Layout output_layout);
+
 uint32_t calculate_conv_dram_slice_L1_usage(
     const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config);
 

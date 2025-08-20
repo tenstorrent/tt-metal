@@ -416,8 +416,8 @@ def test_prepare_bias(
     assert passing
 
 
-SliceHeight = ttnn.Conv2dSliceHeight
-SliceWidth = ttnn.Conv2dSliceWidth
+SliceHeight = ttnn.Conv2dDRAMSliceHeight
+SliceWidth = ttnn.Conv2dDRAMSliceWidth
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
