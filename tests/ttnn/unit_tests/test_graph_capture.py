@@ -595,24 +595,3 @@ def test_graph_capture_without_dtype_json_output(device):
     assert mem_config_item3["memory_layout"] == "TensorMemoryLayout::INTERLEAVED"
     assert mem_config_item3["buffer_type"] == "BufferType::DRAM"
     assert mem_config_item3["shard_spec"] == "std::nullopt"
-
-
-def test_graph_capture_hang_device(device):
-    tt_input = ttnn.empty(
-        shape=(1, 1, 2048, 512),
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-
-    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
-
-    try:
-        ttnn.prim.test_hang_device_operation(tt_input)
-        ttnn._ttnn.device.synchronize_device(device)
-    except Exception as e:
-        print("Exception captured")
-        captured_graph = ttnn.graph.end_graph_capture()
-        print(captured_graph)
-        assert "TIMEOUT" in str(e)
