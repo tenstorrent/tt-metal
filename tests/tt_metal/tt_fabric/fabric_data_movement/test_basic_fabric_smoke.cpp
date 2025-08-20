@@ -45,8 +45,6 @@
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
-std::random_device rd;  // Non-deterministic seed source
-std::mt19937 global_rng(rd());
 
 struct WorkerMemMap {
     uint32_t source_l1_buffer_address;
