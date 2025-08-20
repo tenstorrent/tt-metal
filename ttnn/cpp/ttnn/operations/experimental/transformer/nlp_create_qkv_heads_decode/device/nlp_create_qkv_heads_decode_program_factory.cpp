@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt;
@@ -123,7 +124,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
         num_kv_heads,
         head_tiles,
         1,  // read the first phase
-        is_dram ? 1 : 0};
+    };
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"
@@ -343,11 +345,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             process_qv,                        // read and write q and v heads
             process_k,                         // read and write k heads
             batch_offset.has_value() ? 1 : 0,  // use_batch_offset
-            batch_offset.has_value() && batch_offset->buffer()->buffer_type() == tt_metal::BufferType::DRAM
-                ? (uint32_t)1
-                : (uint32_t)0,
+            (uint32_t)batch_offset_index_stick_size,
             batch_offset_index_stick_size,
             batch_offset_cb_index_reader};
+        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(q_reader_compile_time_args);
         auto q_reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
