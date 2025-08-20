@@ -4,7 +4,6 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "socket_api.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
     // Get this value from MeshSocket struct on host
@@ -28,7 +27,15 @@ void kernel_main() {
         // Issuing the write requires the wptr from the socket itself
         // The user can get the wptr directly from the sender_socket, or
         // we can add wrappers issue the write itself
-        socket_async_write(sender_socket, data_addr, page_size);
+
+        for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
+            sender_downstream_encoding* downstream_enc = get_downstream_encoding(sender_socket, i);
+            noc_async_write(
+                data_addr,
+                get_noc_addr(downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, 0) |
+                    sender_socket.write_ptr,
+                page_size);
+        }
         data_addr += page_size;
         outstanding_data_size -= page_size;
         socket_push_pages(sender_socket, 1);

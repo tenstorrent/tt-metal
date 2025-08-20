@@ -38,8 +38,7 @@ void kernel_main() {
         uint32_t data_addr = get_read_ptr(out_cb_id);
 
         for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
-            sender_downstream_encoding* downstream_enc = reinterpret_cast<sender_downstream_encoding*>(
-                sender_socket.downstream_enc_addr + i * align_up(sizeof(sender_downstream_encoding)));
+            sender_downstream_encoding* downstream_enc = get_downstream_encoding(sender_socket, i);
             uint64_t receiver_noc_coord_addr =
                 get_noc_addr(downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, 0);
             fabric_set_unicast_route(data_packet_header_addr, *downstream_enc);

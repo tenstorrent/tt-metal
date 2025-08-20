@@ -38,6 +38,7 @@ enum class RoutingType : uint32_t {
 enum class PatternType : uint32_t {
     AllToAllDevices = 0,
     AllHostsRandomSockets = 1,
+    AllDeviceBroadcast = 2,
 };
 
 // Data structures for parsed YAML configuration
@@ -162,6 +163,8 @@ private:
     static std::vector<TestSocketConfig> expand_all_to_all_devices_pattern(
         const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context);
     static std::vector<TestSocketConfig> expand_all_hosts_random_sockets_pattern(
+        const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context);
+    static std::vector<TestSocketConfig> expand_all_device_broadcast_pattern(
         const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context);
 
     // Memory config expansion methods

@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
+#include <chrono>
 #include <random>
 #include "gmock/gmock.h"
 #include <tt-metalium/fabric.hpp>
@@ -841,7 +842,7 @@ void test_single_connection_multi_device_socket_with_workers(
     auto output_buffer = MeshBuffer::create(buffer_config, output_device_local_config, md1.get());
 
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
-    std::iota(src_vec.begin(), src_vec.end(), 0);
+    std::iota(src_vec.begin(), src_vec.end(), std::chrono::system_clock::now().time_since_epoch().count());
 
     WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
 

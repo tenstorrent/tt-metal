@@ -179,6 +179,7 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_pattern(
     switch (pattern.type) {
         case PatternType::AllToAllDevices: return expand_all_to_all_devices_pattern(pattern, test_context);
         case PatternType::AllHostsRandomSockets: return expand_all_hosts_random_sockets_pattern(pattern, test_context);
+        case PatternType::AllDeviceBroadcast: return expand_all_device_broadcast_pattern(pattern, test_context);
         default: TT_THROW("Unknown pattern type");
     }
 }
@@ -266,6 +267,53 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_hosts_random_sock
     }
 
     log_info(tt::LogTest, "Generated {} sockets for all_hosts_random_sockets pattern", sockets.size());
+    return sockets;
+}
+
+/* Create broadcast sockets where each device on every host acts as a sender to all devices on other hosts.
+ * For each device coordinate on each rank, create sockets to all other ranks where the sender is that
+ * specific device and the receivers are all devices on the target rank.
+ */
+std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_device_broadcast_pattern(
+    const PatternExpansionConfig& pattern, const MeshSocketTestContext& test_context) {
+    std::vector<TestSocketConfig> sockets;
+
+    const auto& mesh_graph = test_context.get_mesh_graph();
+    const auto& rank_to_mesh_id = test_context.get_rank_to_mesh_mapping();
+    const CoreCoord& core_coord = pattern.core_coord;
+
+    for (const auto& [sender_rank, sender_mesh_id] : rank_to_mesh_id) {
+        auto sender_coord_range = mesh_graph.get_coord_range(sender_mesh_id);
+        for (const auto& sender_coord : sender_coord_range) {
+            for (const auto& [receiver_rank, recv_mesh_id] : rank_to_mesh_id) {
+                if (sender_rank == receiver_rank) {
+                    continue;  // Skip self-connections
+                }
+                auto recv_coord_range = mesh_graph.get_coord_range(recv_mesh_id);
+                std::vector<SocketConnectionConfig> connections;
+
+                for (const auto& recv_coord : recv_coord_range) {
+                    connections.push_back(SocketConnectionConfig{
+                        .sender = EndpointConfig(sender_coord, core_coord),
+                        .receiver = EndpointConfig(recv_coord, core_coord)});
+                }
+
+                sockets.push_back(TestSocketConfig{
+                    .connections = connections,
+                    .sender_rank = Rank{*sender_rank},
+                    .receiver_rank = Rank{*receiver_rank}});
+                log_info(
+                    tt::LogTest,
+                    "Generated broadcast socket: device {} on rank {} -> all {} devices on rank {}",
+                    sender_coord,
+                    *sender_rank,
+                    connections.size(),
+                    *receiver_rank);
+            }
+        }
+    }
+
+    log_info(tt::LogTest, "Generated {} sockets for all_device_broadcast pattern", sockets.size());
     return sockets;
 }
 
@@ -481,9 +529,12 @@ PatternType MeshSocketYamlParser::parse_pattern_type(const std::string& pattern_
         return PatternType::AllToAllDevices;
     } else if (pattern_string == "all_hosts_random_sockets") {
         return PatternType::AllHostsRandomSockets;
+    } else if (pattern_string == "all_device_broadcast") {
+        return PatternType::AllDeviceBroadcast;
     } else {
         TT_THROW(
-            "Invalid pattern type: '{}'. Valid types are: all_to_all_devices, all_hosts_random_sockets",
+            "Invalid pattern type: '{}'. Valid types are: all_to_all_devices, all_hosts_random_sockets, "
+            "all_device_broadcast",
             pattern_string);
     }
 }
@@ -590,8 +641,6 @@ void MeshSocketYamlParser::validate_socket_config(
 
         // Check for duplicate sender endpoints
         auto sender_insert_result = sender_endpoints.insert(sender_mesh_coord);
-        // TT_FATAL(
-        //     sender_insert_result.second, "Duplicate sender endpoint found at mesh coordinate {}", sender_mesh_coord);
 
         // Check for duplicate receiver endpoints
         auto receiver_insert_result = receiver_endpoints.insert(receiver_mesh_coord);
@@ -710,6 +759,7 @@ void MeshSocketYamlParser::print_test_configuration(const MeshSocketTestConfigur
                 switch (pattern.type) {
                     case PatternType::AllToAllDevices: pattern_type = "all_to_all_devices"; break;
                     case PatternType::AllHostsRandomSockets: pattern_type = "all_hosts_random_sockets"; break;
+                    case PatternType::AllDeviceBroadcast: pattern_type = "all_device_broadcast"; break;
                     default: TT_THROW("Invalid pattern type: {}", static_cast<int>(pattern.type));
                 }
                 if (pattern.num_sockets.has_value()) {

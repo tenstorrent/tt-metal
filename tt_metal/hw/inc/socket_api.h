@@ -11,7 +11,6 @@
 #include "risc_attribs.h"
 #include "socket.h"
 #include "utils/utils.h"
-#include "debug/dprint.h"
 #ifndef COMPILE_FOR_TRISC
 #include <type_traits>
 #include "dataflow_api.h"
@@ -46,7 +45,9 @@ void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_head
 }
 #endif
 
-uint32_t align_up(uint32_t v) { return ((v + L1_ALIGNMENT - 1) / L1_ALIGNMENT) * L1_ALIGNMENT; }
+constexpr uint32_t sender_socket_md_size_bytes = align(sizeof(sender_socket_md), L1_ALIGNMENT);
+constexpr uint32_t bytes_acked_size_bytes = align(sizeof(uint32_t), L1_ALIGNMENT);
+constexpr uint32_t downstream_encoding_size_bytes = align(sizeof(sender_downstream_encoding), L1_ALIGNMENT);
 
 SocketSenderInterface create_sender_socket_interface(uint32_t config_addr) {
     tt_l1_ptr sender_socket_md* socket_config = reinterpret_cast<tt_l1_ptr sender_socket_md*>(config_addr);
@@ -55,14 +56,19 @@ SocketSenderInterface create_sender_socket_interface(uint32_t config_addr) {
     socket.write_ptr = socket_config->write_ptr;
     socket.num_downstreams = socket_config->num_downstreams;
     socket.bytes_sent = socket_config->bytes_sent;
-    socket.bytes_acked_base_addr = config_addr + align_up(sizeof(sender_socket_md));
+    socket.bytes_acked_base_addr = config_addr + sender_socket_md_size_bytes;
     socket.downstream_fifo_addr = socket_config->downstream_fifo_addr;
     socket.downstream_bytes_sent_addr = socket_config->downstream_bytes_sent_addr;
     socket.downstream_fifo_total_size = socket_config->downstream_fifo_total_size;
     socket.downstream_enc_addr =
-        config_addr + align_up(sizeof(sender_socket_md) + socket_config->num_downstreams * align_up(sizeof(uint32_t)));
+        config_addr + sender_socket_md_size_bytes + socket_config->num_downstreams * bytes_acked_size_bytes;
 
     return socket;
+}
+
+sender_downstream_encoding* get_downstream_encoding(const SocketSenderInterface& socket, uint32_t downstream_id) {
+    return reinterpret_cast<sender_downstream_encoding*>(
+        socket.downstream_enc_addr + downstream_id * downstream_encoding_size_bytes);
 }
 
 void set_sender_socket_page_size(SocketSenderInterface& socket, uint32_t page_size) {
@@ -90,14 +96,14 @@ void socket_reserve_pages(const SocketSenderInterface& socket, uint32_t num_page
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
 
     while (reinterpret_cast<uint32_t>(bytes_acked_ptr) <
-           socket.bytes_acked_base_addr + socket.num_downstreams * align_up(sizeof(uint32_t))) {
+           socket.bytes_acked_base_addr + socket.num_downstreams * bytes_acked_size_bytes) {
         uint32_t bytes_free;
         do {
             invalidate_l1_cache();
             // bytes_acked will never be ahead of bytes_sent, so this is safe
             bytes_free = socket.downstream_fifo_total_size - (socket.bytes_sent - *bytes_acked_ptr);
         } while (bytes_free < num_bytes);
-        bytes_acked_ptr += align_up(sizeof(uint32_t));
+        bytes_acked_ptr += bytes_acked_size_bytes;
     }
 }
 
@@ -117,8 +123,7 @@ void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
 void socket_notify_receiver(const SocketSenderInterface& socket) {
     // TODO: Store noc encoding in struct?
     for (uint32_t i = 0; i < socket.num_downstreams; i++) {
-        sender_downstream_encoding* downstream_enc = reinterpret_cast<sender_downstream_encoding*>(
-            socket.downstream_enc_addr + i * align_up(sizeof(sender_downstream_encoding)));
+        sender_downstream_encoding* downstream_enc = get_downstream_encoding(socket, i);
         auto downstream_bytes_sent_noc_addr = get_noc_addr(
             downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, socket.downstream_bytes_sent_addr);
         noc_inline_dw_write(downstream_bytes_sent_noc_addr, socket.bytes_sent);
@@ -130,8 +135,7 @@ void fabric_socket_notify_receiver(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
     for (uint32_t i = 0; i < socket.num_downstreams; i++) {
-        sender_downstream_encoding* downstream_enc = reinterpret_cast<sender_downstream_encoding*>(
-            socket.downstream_enc_addr + i * align_up(sizeof(sender_downstream_encoding)));
+        sender_downstream_encoding* downstream_enc = get_downstream_encoding(socket, i);
         auto downstream_bytes_sent_noc_addr = get_noc_addr(
             downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, socket.downstream_bytes_sent_addr);
         fabric_set_unicast_route(fabric_header_addr, *downstream_enc);
@@ -148,9 +152,9 @@ void socket_barrier(const SocketSenderInterface& socket) {
     volatile tt_l1_ptr uint32_t* bytes_acked_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
     while (reinterpret_cast<uint32_t>(bytes_acked_ptr) <
-           socket.bytes_acked_base_addr + socket.num_downstreams * align_up(sizeof(uint32_t))) {
+           socket.bytes_acked_base_addr + socket.num_downstreams * bytes_acked_size_bytes) {
         while (socket.bytes_sent != *bytes_acked_ptr);
-        bytes_acked_ptr += align_up(sizeof(uint32_t));
+        bytes_acked_ptr += bytes_acked_size_bytes;
     }
 }
 
@@ -254,16 +258,6 @@ void assign_local_cb_to_socket(const SocketReceiverInterface& socket, uint32_t c
 }
 
 #ifndef COMPILE_FOR_TRISC
-void socket_async_write(SocketSenderInterface& socket, uint32_t data_addr, uint32_t data_size) {
-    for (uint32_t i = 0; i < socket.num_downstreams; i++) {
-        sender_downstream_encoding* downstream_enc = reinterpret_cast<sender_downstream_encoding*>(
-            socket.downstream_enc_addr + i * align_up(sizeof(sender_downstream_encoding)));
-        noc_async_write(
-            data_addr,
-            get_noc_addr(downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, 0) | socket.write_ptr,
-            data_size);
-    }
-}
 
 void socket_notify_sender(const SocketReceiverInterface& socket) {
     // TODO: Store noc encoding in struct?
