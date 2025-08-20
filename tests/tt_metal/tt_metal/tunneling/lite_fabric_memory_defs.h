@@ -21,6 +21,8 @@
 /* Same as dev_mem_map.h */
 #define MEM_ERISC_FABRIC_LITE_BARRIER (MEM_ERISC_RESERVED1 + MEM_ERISC_RESERVED1_SIZE)
 
+// NOTE: Base firmware data is starting at 0x70000.
+// We need to ensure that the Lite Fabric memory does not overlap with it or Metal
 #define MEM_LITE_FABRIC_MEMORY_BASE 0x6A000
 #define MEM_LITE_FABRIC_MEMORY_SIZE (24 * 1024)
 #define MEM_LITE_FABRIC_MEMORY_END (MEM_LITE_FABRIC_MEMORY_BASE + MEM_LITE_FABRIC_MEMORY_SIZE)
@@ -43,10 +45,11 @@
 #define LITE_FABRIC_CONFIG_SIZE 0x2400
 
 /* Stack configuration */
-#define LITE_FABRIC_STACK_MIN_SIZE 0x200
+#define LITE_FABRIC_STACK_START (LITE_FABRIC_CONFIG_START + LITE_FABRIC_CONFIG_SIZE)
+#define LITE_FABRIC_STACK_SIZE 1024
 
 /* Reset PC for ERISC1 (running lite fabric) */
 #define LITE_FABRIC_RESET_PC (MEM_LOCAL_BASE | 0x14008)
 
 /* Static assert in bh_hal_eth_asserts.hpp */
-#define MEMORY_LAYOUT_END (LITE_FABRIC_CONFIG_START + LITE_FABRIC_CONFIG_SIZE)
+#define MEMORY_LAYOUT_END (LITE_FABRIC_STACK_START + LITE_FABRIC_STACK_SIZE)

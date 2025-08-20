@@ -84,9 +84,14 @@ ReceiverChannelPointersTupleImpl receiver_channel_pointers_tuple __attribute__((
 // object_init is expected to be called before this
 __attribute__((noinline)) void service_lite_fabric() {
     invalidate_l1_cache();
+    if (!reinterpret_cast<volatile lite_fabric::LiteFabricMemoryMap*>(LITE_FABRIC_CONFIG_START)
+             ->config.routing_enabled) {
+        return;
+    }
+    reinterpret_cast<uint32_t*>(0x20000)[1]++;
+    reinterpret_cast<uint32_t*>(0x20000)[2] = (uint32_t)host_interface;
+    reinterpret_cast<uint32_t*>(0x20000)[3] = (uint32_t)&host_interface;
     lite_fabric::run_sender_channel_step();
-
-    invalidate_l1_cache();
     lite_fabric::run_receiver_channel_step();
 }
 
@@ -178,7 +183,7 @@ int main() {
     lite_fabric::routing_init(&structs->config);
 
     invalidate_l1_cache();
-    while (structs->config.routing_enabled) {
+    while (true) {
         lite_fabric::service_lite_fabric();
     }
 
