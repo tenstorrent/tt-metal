@@ -187,7 +187,6 @@ bool test_socket_send_recv(
             auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device_.get());
 
             auto recv_mesh_workload = CreateMeshWorkload();
-
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 auto recv_core = connection.receiver_core.core_coord;
                 auto sender_fabric_node_id =

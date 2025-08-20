@@ -37,7 +37,6 @@ void kernel_main() {
     constexpr uint32_t local_l1_buffer_addr = get_compile_time_arg_val(1);
     constexpr uint32_t page_size = get_compile_time_arg_val(2);
     constexpr uint32_t data_size = get_compile_time_arg_val(3);
-
     // Setup Fabric Headers and Connections
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender fabric_connection =
@@ -58,16 +57,13 @@ void kernel_main() {
     uint32_t data_addr = local_l1_buffer_addr;
 
     uint32_t outstanding_data_size = data_size;
-    uint32_t pages_sent = 0;
 
     // Sends 1 page at a time and does handshake with receiver, can be optimized
     // to notify receiver after writing larger chunks
     while (outstanding_data_size) {
-        pages_sent++;
         socket_reserve_pages(sender_socket, 1);
         for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
             sender_downstream_encoding* downstream_enc = get_downstream_encoding(sender_socket, i);
-            // Write Data over Fabric
             uint64_t receiver_noc_coord_addr =
                 get_noc_addr(downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, 0);
             fabric_write_any_len(
@@ -85,7 +81,6 @@ void kernel_main() {
         fabric_socket_notify_receiver(sender_socket, fabric_connection, socket_packet_header_addr);
     }
     socket_barrier(sender_socket);
-
     // Write updated socket configs to the L1 config buffer (were cached on stack during kernel execution)
     update_socket_config(sender_socket);
     fabric_connection.close();

@@ -11,6 +11,7 @@
 #include "risc_attribs.h"
 #include "socket.h"
 #include "utils/utils.h"
+
 #ifndef COMPILE_FOR_TRISC
 #include <type_traits>
 #include "dataflow_api.h"
@@ -258,7 +259,6 @@ void assign_local_cb_to_socket(const SocketReceiverInterface& socket, uint32_t c
 }
 
 #ifndef COMPILE_FOR_TRISC
-
 void socket_notify_sender(const SocketReceiverInterface& socket) {
     // TODO: Store noc encoding in struct?
     auto upstream_bytes_acked_noc_addr =

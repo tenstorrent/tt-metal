@@ -27,7 +27,6 @@ void kernel_main() {
         // Issuing the write requires the wptr from the socket itself
         // The user can get the wptr directly from the sender_socket, or
         // we can add wrappers issue the write itself
-
         for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
             sender_downstream_encoding* downstream_enc = get_downstream_encoding(sender_socket, i);
             noc_async_write(
