@@ -4,6 +4,7 @@
 
 #include "full_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 using namespace tt;
@@ -83,13 +84,14 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
         }
     }
 
+    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_index};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+
     auto writer_id = CreateWriteKernel(
         program,
         "ttnn/cpp/ttnn/operations/full/device/kernels/writer_full.cpp",
         all_cores,
-        {
-            (uint32_t)cb_index,
-        },
+        writer_compile_time_args,
         reader_defines);
 
     // Set runtime arguments

@@ -12,19 +12,14 @@ void kernel_main() {
     uint32_t start_id = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram1 = get_compile_time_arg_val(1) == 1;
-    constexpr bool dst_is_dram2 = get_compile_time_arg_val(2) == 1;
+    constexpr auto dst1_args = TensorAccessorArgs<1>();
+    constexpr auto dst2_args = TensorAccessorArgs<dst1_args.next_compile_time_args_offset()>();
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
-    const DataFormat data_format = get_dataformat(cb_id_out);
-
-    const InterleavedAddrGenFast<dst_is_dram1> s1 = {
-        .bank_base_address = dst_addr1, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGenFast<dst_is_dram2> s2 = {
-        .bank_base_address = dst_addr2, .page_size = tile_bytes, .data_format = data_format};
+    const auto s1 = TensorAccessor(dst1_args, dst_addr1, tile_bytes);
+    const auto s2 = TensorAccessor(dst2_args, dst_addr2, tile_bytes);
 
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {

@@ -11,14 +11,14 @@ void kernel_main() {
     const uint32_t num_tiles = get_arg_val<uint32_t>(1);
     const uint32_t start_id = get_arg_val<uint32_t>(2);
 
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto src_args = TensorAccessorArgs<0>();
     constexpr uint32_t cb_id_in0 = 0;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
 
     const uint32_t page_bytes = get_arg_val<uint32_t>(3);
-    const InterleavedAddrGen<src_is_dram> s = {.bank_base_address = src_addr, .page_size = page_bytes};
+    const auto s = TensorAccessor(src_args, src_addr, page_bytes);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t end_id = start_id + num_tiles;
