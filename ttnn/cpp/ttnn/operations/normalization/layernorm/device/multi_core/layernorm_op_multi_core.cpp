@@ -455,7 +455,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     union {
         float f;
         uint32_t u;
-    } e;
+    } e{};
     e.f = eps;  // epsilon
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -1494,7 +1494,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     union {
         float f;
         uint32_t u;
-    } e;
+    } e{};
     e.f = eps;
 
     std::vector<uint32_t> in0_mcast_noc_x;
