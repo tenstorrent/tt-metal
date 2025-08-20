@@ -54,6 +54,13 @@ target_precompile_headers(
 
 target_link_libraries(metal_common_pch PRIVATE tt_stl)
 
+set_target_properties(
+    tt_stl
+    PROPERTIES
+        INSTALL_RPATH
+            "${CMAKE_BINARY_DIR}/lib;$ORIGIN"
+)
+
 install(TARGETS tt_stl EXPORT Metalium LIBRARY COMPONENT metalium-runtime FILE_SET api COMPONENT metalium-dev)
 
 if(TT_METAL_BUILD_TESTS)
