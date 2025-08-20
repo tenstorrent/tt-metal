@@ -72,6 +72,7 @@ void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& next_hop_destinations,
     tt::tt_metal::Program& worker_program,
+    tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER,

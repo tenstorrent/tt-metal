@@ -147,7 +147,6 @@ public:
     void initialize_fabric_context(tt_fabric::FabricConfig fabric_config);
 
     FabricContext& get_fabric_context() const;
-    FabricContext* get_fabric_context_ptr() const;
 
     void clear_fabric_context();
 

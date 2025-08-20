@@ -1792,8 +1792,6 @@ FabricContext& ControlPlane::get_fabric_context() const {
     return *this->fabric_context_.get();
 }
 
-FabricContext* ControlPlane::get_fabric_context_ptr() const { return this->fabric_context_.get(); }
-
 void ControlPlane::clear_fabric_context() { this->fabric_context_.reset(nullptr); }
 
 void ControlPlane::initialize_fabric_tensix_datamover_config() {

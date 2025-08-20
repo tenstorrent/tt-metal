@@ -18,6 +18,7 @@
 #include <optional>
 #include <set>
 #include <vector>
+#include <tt-metalium/kernel.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.h>
@@ -220,6 +221,7 @@ void append_routing_plane_connection_manager_rt_args(
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& next_hop_destinations,
     tt::tt_metal::Program& worker_program,
+    tt::tt_metal::KernelHandle& kernel_id,
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type,
@@ -257,6 +259,12 @@ void append_routing_plane_connection_manager_rt_args(
 
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
+        auto kernel = tt::tt_metal::detail::GetKernel(worker_program, kernel_id);
+        kernel->add_defines({{"FABRIC_2D", "1"}});
+        if (fabric_context.is_dynamic_routing_enabled()) {
+            kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});
+        }
+
         auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
         uint32_t ew_dim = mesh_shape[1];
         uint32_t my_dev_id = src_fabric_node_id.chip_id;

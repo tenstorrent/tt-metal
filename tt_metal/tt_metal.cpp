@@ -1052,13 +1052,6 @@ KernelHandle CreateDataMovementKernel(
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
     }
-    auto fabric_context = control_plane.get_fabric_context_ptr();
-    if (fabric_context && fabric_context->is_2D_routing_enabled()) {
-        kernel->add_defines({{"FABRIC_2D", "1"}});
-        if (fabric_context->is_dynamic_routing_enabled()) {
-            kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});
-        }
-    }
     return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
 }
 
@@ -1086,13 +1079,6 @@ KernelHandle CreateEthernetKernel(
     auto mode = control_plane.get_routing_mode();
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
-    }
-    auto fabric_context = control_plane.get_fabric_context_ptr();
-    if (fabric_context && fabric_context->is_2D_routing_enabled()) {
-        kernel->add_defines({{"FABRIC_2D", "1"}});
-        if (fabric_context->is_dynamic_routing_enabled()) {
-            kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});
-        }
     }
 
     TT_FATAL(

@@ -2132,7 +2132,12 @@ void FabricUnicastCommon(
     }
 
     append_routing_plane_connection_manager_rt_args(
-        src_fabric_node_id, next_hop_destinations, sender_program, {sender_logical_core}, sender_runtime_args);
+        src_fabric_node_id,
+        next_hop_destinations,
+        sender_program,
+        sender_kernel,
+        {sender_logical_core},
+        sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
@@ -2299,7 +2304,12 @@ void FabricMulticastCommon(
     }
 
     append_routing_plane_connection_manager_rt_args(
-        src_fabric_node_id, next_hop_destinations, sender_program, {sender_logical_core}, sender_runtime_args);
+        src_fabric_node_id,
+        next_hop_destinations,
+        sender_program,
+        sender_kernel,
+        {sender_logical_core},
+        sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
