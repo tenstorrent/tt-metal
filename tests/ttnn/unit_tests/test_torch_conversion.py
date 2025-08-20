@@ -21,42 +21,34 @@ FLOAT_TYPES = [dtype for dtype, _ in ttnn.DataType.__entries.values() if is_ttnn
 TTNN_MUST_TILE_TYPES = [ttnn.bfloat8_b, ttnn.bfloat4_b]
 
 
-def get_expected_conversion_pcc(
-    ttnn_dtype,
-    torch_dtype,
-    pcc_override=None,
-):
+def get_expected_conversion_pcc(ttnn_dtype, torch_dtype):
     ttnn_is_float = ttnn_dtype in [ttnn.float32, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b]
     torch_is_float = torch_dtype in TORCH_FLOAT_TYPES
 
-    if pcc_override:
-        return pcc_override
+    if (ttnn_dtype == ttnn.float32 and torch_dtype == torch.float32) or (
+        ttnn_dtype == ttnn.int32 and torch_dtype == torch.int32
+    ):
+        return 1
 
-    else:
-        if (ttnn_dtype == ttnn.float32 and torch_dtype == torch.float32) or (
-            ttnn_dtype == ttnn.int32 and torch_dtype == torch.int32
-        ):
-            return 1
+    elif ttnn_dtype == ttnn.bfloat4_b:
+        return 0.960
 
+    elif ttnn_is_float != torch_is_float:
+        return 0.98
+
+    elif torch_dtype == torch.bfloat16:
+        if ttnn_dtype == ttnn.bfloat16 or ttnn_dtype == ttnn.bfloat8_b:
+            return 0.9999
         elif ttnn_dtype == ttnn.bfloat4_b:
-            return 0.960
-
-        elif ttnn_is_float != torch_is_float:
-            return 0.98
-
-        elif torch_dtype == torch.bfloat16:
-            if ttnn_dtype == ttnn.bfloat16 or ttnn_dtype == ttnn.bfloat8_b:
-                return 0.9999
-            elif ttnn_dtype == ttnn.bfloat4_b:
-                return 0.989
-            else:
-                return 0.999
-
+            return 0.989
         else:
             return 0.999
 
+    else:
+        return 0.999
 
-def run_from_torch_tensor_conversion_test(
+
+def create_from_torch_test_tensors(
     device,
     shape,
     ttnn_dtype,
@@ -65,7 +57,7 @@ def run_from_torch_tensor_conversion_test(
     convert_with_device,
     min_range=0,
     max_range=100,
-    pcc_override=None,
+    memory_config=None,
 ):
     if torch_dtype in TORCH_FLOAT_TYPES:
         torch_input_tensor = torch.rand(shape, dtype=torch_dtype) * max_range
@@ -78,17 +70,14 @@ def run_from_torch_tensor_conversion_test(
         device=device if convert_with_device else None,
         dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT if (ttnn_dtype in TTNN_MUST_TILE_TYPES) else ttnn_layout,
+        memory_config=memory_config,
     )
 
     assert (
         ttnn_result_tensor.dtype == ttnn_dtype
     ), f"Expected result {ttnn_dtype}, got result tensor {ttnn_result_tensor.dtype} when converting torch tensor {torch_input_tensor.dtype}"
 
-    assert_with_pcc(
-        expected_pytorch_result=torch_input_tensor,
-        actual_pytorch_result=ttnn_result_tensor.cpu().to_torch(),
-        pcc=get_expected_conversion_pcc(ttnn_dtype, torch_dtype, pcc_override),
-    )
+    return torch_input_tensor, ttnn_result_tensor
 
 
 @pytest.mark.parametrize(
@@ -126,7 +115,8 @@ def run_from_torch_tensor_conversion_test(
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("convert_with_device", [True, False])
 def test_from_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layout, convert_with_device):
-    run_from_torch_tensor_conversion_test(
+    torch.manual_seed(205)
+    torch_input_tensor, ttnn_result_tensor = create_from_torch_test_tensors(
         device,
         shape,
         ttnn_dtype,
@@ -135,6 +125,12 @@ def test_from_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layo
         convert_with_device,
         min_range=0,
         max_range=10 if torch_dtype in TORCH_FLOAT_TYPES else 100,
+    )
+
+    assert_with_pcc(
+        expected_pytorch_result=torch_input_tensor,
+        actual_pytorch_result=ttnn_result_tensor.cpu().to_torch(),
+        pcc=get_expected_conversion_pcc(ttnn_dtype, torch_dtype),
     )
 
 
@@ -196,31 +192,42 @@ def test_to_torch_conversion(device, shape, ttnn_dtype, torch_dtype, ttnn_layout
         assert_with_pcc(
             expected_pytorch_result=torch_result_tensor,
             actual_pytorch_result=ttnn_input_tensor.cpu().to_torch(),
-            pcc=get_expected_conversion_pcc(
-                ttnn_dtype, torch_dtype, get_expected_conversion_pcc(ttnn_dtype, torch_dtype)
-            ),
+            pcc=get_expected_conversion_pcc(ttnn_dtype, torch_dtype),
         )
 
 
+@pytest.mark.parametrize("seed", list(range(6)))
 @pytest.mark.parametrize(
-    "shape,ttnn_dtype,torch_dtype,ttnn_layout,convert_with_device,value_ranges,pcc_override",
+    "shape,ttnn_dtype,torch_dtype,ttnn_layout,convert_with_device,value_ranges,pcc_override,memory_config",
     [
-        ((4, 4), ttnn.float32, torch.float64, ttnn.TILE_LAYOUT, True, (0, 100), None),
-        ((32, 32), ttnn.bfloat16, torch.int64, ttnn.ROW_MAJOR_LAYOUT, False, (0, 255), None),
-        ((32, 32, 64, 64), ttnn.bfloat8_b, torch.float16, ttnn.TILE_LAYOUT, True, (0, 127), None),
-        ((32, 32, 64, 64), ttnn.int32, torch.int32, ttnn.TILE_LAYOUT, True, (0, 123123), 1),
-        ((32, 32, 64, 64), ttnn.int32, torch.int32, ttnn.TILE_LAYOUT, True, (-2147482786, 2147482213), 1),
-        ((32, 32, 64, 64), ttnn.int32, torch.int32, ttnn.ROW_MAJOR_LAYOUT, True, (-2147482786, 2147482213), 1),
-        ((1, 1, 32, 1024), ttnn.float32, torch.float32, ttnn.TILE_LAYOUT, True, (0, 123123), 1),
+        ((4, 4), ttnn.float32, torch.float64, ttnn.TILE_LAYOUT, True, (0, 100), None, None),
+        ((32, 32), ttnn.bfloat16, torch.int64, ttnn.ROW_MAJOR_LAYOUT, False, (0, 255), None, None),
+        ((32, 32, 64, 64), ttnn.bfloat8_b, torch.float16, ttnn.TILE_LAYOUT, True, (0, 127), None, None),
+        ((32, 32, 64, 64), ttnn.int32, torch.int32, ttnn.TILE_LAYOUT, True, (0, 123123), 1, None),
+        ((32, 32, 64, 64), ttnn.int32, torch.int32, ttnn.TILE_LAYOUT, True, (-2147482786, 2147482213), 1, None),
+        ((32, 32, 64, 64), ttnn.int32, torch.int32, ttnn.ROW_MAJOR_LAYOUT, True, (-2147482786, 2147482213), 1, None),
+        ((1, 1, 32, 1024), ttnn.float32, torch.float32, ttnn.TILE_LAYOUT, True, (0, 123123), 1, None),
+        ((2, 256, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, True, (-100, 100), 1, None),
+        ((2, 256, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, True, (-100, 100), 1, ttnn.L1_MEMORY_CONFIG),
     ],
 )
 def test_from_torch_conversion_with_fixed_edge_case_params(
-    device, shape, ttnn_dtype, torch_dtype, ttnn_layout, convert_with_device, value_ranges, pcc_override
+    seed,
+    device,
+    shape,
+    ttnn_dtype,
+    torch_dtype,
+    ttnn_layout,
+    convert_with_device,
+    value_ranges,
+    pcc_override,
+    memory_config,
 ):
     """
     Test `from_torch` conversion with a fixed set of parameters for various edge cases
     """
-    run_from_torch_tensor_conversion_test(
+    torch.manual_seed(seed)
+    torch_input_tensor, ttnn_result_tensor = create_from_torch_test_tensors(
         device,
         shape,
         ttnn_dtype,
@@ -229,8 +236,56 @@ def test_from_torch_conversion_with_fixed_edge_case_params(
         convert_with_device,
         min_range=value_ranges[0],
         max_range=value_ranges[1],
-        pcc_override=pcc_override,
+        memory_config=memory_config,
     )
+
+    assert_with_pcc(
+        expected_pytorch_result=torch_input_tensor,
+        actual_pytorch_result=ttnn_result_tensor.cpu().to_torch(),
+        pcc=pcc_override or get_expected_conversion_pcc(ttnn_dtype, torch_dtype),
+    )
+
+
+@pytest.mark.parametrize("seed", list(range(6)))
+@pytest.mark.parametrize(
+    "shape,ttnn_dtype,torch_dtype,ttnn_layout,convert_with_device,value_ranges,memory_config",
+    [
+        ((4, 4), ttnn.float32, torch.float64, ttnn.TILE_LAYOUT, True, (0, 100), None),
+        ((32, 32), ttnn.bfloat16, torch.int64, ttnn.ROW_MAJOR_LAYOUT, False, (0, 255), None),
+        ((32, 32, 64, 64), ttnn.int32, torch.int32, ttnn.TILE_LAYOUT, True, (0, 123123), None),
+        ((32, 32, 64, 64), ttnn.int32, torch.int32, ttnn.TILE_LAYOUT, True, (-2147482786, 2147482213), None),
+        ((32, 32, 64, 64), ttnn.int32, torch.int32, ttnn.ROW_MAJOR_LAYOUT, True, (-2147482786, 2147482213), None),
+        ((1, 1, 32, 1024), ttnn.float32, torch.float32, ttnn.TILE_LAYOUT, True, (0, 123123), None),
+        ((2, 256, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, True, (-100, 100), None),
+        ((2, 256, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, False, (-100, 100), None),
+        ((2, 256, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, True, (-100, 100), ttnn.L1_MEMORY_CONFIG),
+        ((2, 256, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, False, (-100, 100), ttnn.L1_MEMORY_CONFIG),
+        ((2, 64, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, True, (-100, 100), None),
+        ((2, 64, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, False, (-100, 100), None),
+        ((2, 64, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, True, (-100, 100), ttnn.L1_MEMORY_CONFIG),
+        ((2, 64, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, False, (-100, 100), ttnn.L1_MEMORY_CONFIG),
+    ],
+)
+def test_from_torch_conversion_close(
+    seed, device, shape, ttnn_dtype, torch_dtype, ttnn_layout, convert_with_device, value_ranges, memory_config
+):
+    """
+    Test `from_torch` conversion with a fixed set of parameters for various edge cases
+    """
+    torch.manual_seed(seed)
+    torch_tensor, ttnn_tensor = create_from_torch_test_tensors(
+        device,
+        shape,
+        ttnn_dtype,
+        torch_dtype,
+        ttnn_layout,
+        convert_with_device,
+        min_range=value_ranges[0],
+        max_range=value_ranges[1],
+        memory_config=memory_config,
+    )
+
+    torch.testing.assert_close(torch.Tensor(torch_tensor.tolist()), torch.Tensor(ttnn_tensor.to_list()))
 
 
 def random_torch_tensor(dtype, shape):
