@@ -272,11 +272,6 @@ def run_conv(
         return_weights_and_bias=True,
         dtype=output_dtype,
     )
-    print(f"ttn.conv2d time in ms: {(time.time_ns() - start_time) / 1e6}")
-
-    print(f"tt_output_tensor_on_device.shape: {tt_output_tensor_on_device.shape}")
-    print(f"tt_output_tensor_on_device.memory_config: {tt_output_tensor_on_device.memory_config()}")
-    print(f"tt_output_tensor_on_device.get_layout: {tt_output_tensor_on_device.get_layout()}")
     if run_twice:
         [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
             input_tensor=tt_input_tensor,
@@ -4222,34 +4217,40 @@ def test_conv_sharded_rm_input(
         (1, 3, 64, 1024, 1024, (7, 7), True, ttnn.MathFidelity.LoFi), # optimum
     ),
 )
-
 @pytest.mark.parametrize(
-    "stride, padding, dilation, act_block_h_override, weights_dtype, output_dtype, input_layout, output_layout",
+    "stride, padding, dilation, act_block_h_override, weights_dtype, output_dtype, input_layout, output_layout, slice_type",
     [
-        (2, 3, 1, 32 * 8, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (2, 0, 1, 32 * 15, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (2, 0, 2, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (2, 0, 3, 32 * 12, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (2, 3, 1, 32 * 8, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 0, 1, 32 * 15, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 0, 2, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 0, 3, 32 * 12, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
 
-        (2, 1, 1, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (2, 1, 2, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (2, 1, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (2, 1, 1, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 1, 2, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 1, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
 
-        (2, 2, 1, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (2, 2, 2, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (2, 2, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (2, 2, 1, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 2, 2, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 2, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
 
-        (3, 0, 1, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (3, 0, 2, 32 * 13, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (3, 0, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (3, 0, 1, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 0, 2, 32 * 13, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 0, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
 
-        (3, 1, 1, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (3, 1, 2, 32 * 13, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (3, 1, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (3, 1, 1, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 1, 2, 32 * 13, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 1, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
 
-        (3, 2, 1, 32 * 13, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (3, 2, 2, 32 * 12, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
-        (3, 2, 3, 32 * 16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT),
+        (3, 2, 1, 32 * 13, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 2, 2, 32 * 12, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 2, 3, 32 * 16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        # dram slicing
+        (1, 3, 4, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
+        (1, 4, 4, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
+        (1, 5, 4, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
+        (1, 3, 5, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
+        (1, 4, 5, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
+        (1, 5, 5, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
     ]
 )
 @pytest.mark.parametrize("has_bias", [True])
@@ -4257,7 +4258,7 @@ def test_conv_sharded_rm_input(
 @pytest.mark.parametrize("act_db", [True])
 @pytest.mark.parametrize("w_db", [True])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_resnet50_1kX1k(
+def test_conv_1kX1k(
     device,
     torch_tensor_map,
     batch,
@@ -4276,6 +4277,7 @@ def test_resnet50_1kX1k(
     output_dtype,
     input_layout,
     output_layout,
+    slice_type,
     has_bias,
     enable_split_reader,
     act_db,
@@ -4284,6 +4286,10 @@ def test_resnet50_1kX1k(
 
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
+    slice_config = None
+
+    if slice_type != None:
+        slice_config = ttnn.Conv2dSliceConfig(slice_type=slice_type)
 
     run_conv(
         device=device,
@@ -4318,92 +4324,5 @@ def test_resnet50_1kX1k(
         input_layout=input_layout,
         enable_act_double_buffer=act_db,
         enable_weights_double_buffer=w_db,
-    )
-
-
-@pytest.mark.parametrize(
-    "batch, input_channels, output_channels, input_height, input_width, kernel, deallocate_activation, math_fidelity",
-    (
-        (1, 3, 64, 1024, 1024, (7, 7), True, ttnn.MathFidelity.LoFi),
-    ),
-)
-@pytest.mark.parametrize("stride", [1])
-@pytest.mark.parametrize(
-    "padding, dilation, act_block_h_override, weights_dtype, output_dtype, input_layout, output_layout",
-    [
-        (3, 4, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
-        (4, 4, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
-        (5, 4, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
-        (3, 5, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
-        (4, 5, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
-        (5, 5, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT),
-    ]
-)
-@pytest.mark.parametrize("has_bias", [True])
-@pytest.mark.parametrize("enable_split_reader", [True])
-@pytest.mark.parametrize("act_db", [True])
-@pytest.mark.parametrize("w_db", [True])
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-def test_resnet50_1kX1k_dram_slicing(
-    device,
-    torch_tensor_map,
-    batch,
-    input_channels,
-    output_channels,
-    input_height,
-    input_width,
-    kernel,
-    deallocate_activation,
-    math_fidelity,
-    stride,
-    padding,
-    dilation,
-    act_block_h_override,
-    weights_dtype,
-    output_dtype,
-    input_layout,
-    output_layout,
-    has_bias,
-    enable_split_reader,
-    act_db,
-    w_db,
-    device_params,
-):
-    config_override = {}
-    config_override["act_block_h"] = act_block_h_override
-
-    run_conv(
-        device=device,
-        torch_tensor_map=torch_tensor_map,
-        math_fidelity=math_fidelity,
-        input_dtype=ttnn.bfloat16, # keep input dtype as bfloat16 since resnet50 uses bfloat16 as first layer's input dtype
-        output_dtype=output_dtype,
-        weights_dtype=weights_dtype,
-        batch_size=batch,
-        output_channels=output_channels,
-        input_channels=input_channels,
-        input_height=input_height,
-        input_width=input_width,
-        filter_height=kernel[0],
-        filter_width=kernel[1],
-        stride_h=stride,
-        stride_w=stride,
-        padding=(padding, padding),
-        config_override=config_override,
-        dilation_h=dilation,
-        dilation_w=dilation,
-        output_layout=output_layout,
-        deallocate_activation=deallocate_activation,
-        has_bias=has_bias,
-        shard_layout=HS,
-        auto_shard=False,
-        memory_config=None,
-        input_mesh_mapper=None,
-        weight_mesh_mapper=None,
-        output_mesh_composer=None,
-        enable_split_reader=enable_split_reader,
-        input_layout=input_layout,
-        enable_act_double_buffer=act_db,
-        enable_weights_double_buffer=w_db,
-        slice_config = ttnn.Conv2dSliceConfig(slice_type=SliceWidth)
+        slice_config=slice_config,
     )
