@@ -287,8 +287,9 @@ void py_bind_conv2d(py::module& module) {
         | If the size of the slice dimension is not divisible by num_slices, then the last slice will be smaller than the rest.
         )doc");
     py::enum_<Conv2dSliceConfig::SliceType>(py_conv_slice_config, "SliceTypeEnum")
-        .value("SliceHeight", Conv2dSliceConfig::SliceType::HEIGHT)
-        .value("SliceWidth", Conv2dSliceConfig::SliceType::WIDTH);
+        .value("L1Full", Conv2dSliceConfig::SliceType::L1_FULL)
+        .value("DRAMSliceHeight", Conv2dSliceConfig::SliceType::DRAM_HEIGHT)
+        .value("DRAMSliceWidth", Conv2dSliceConfig::SliceType::DRAM_WIDTH);
 
     auto py_conv_config = py::class_<Conv2dConfig>(
         module,

@@ -136,7 +136,7 @@ def get_DRAM_conv_config(module_path, idx):
             else:
                 num_slices = 8
 
-    slice_type = ttnn.Conv2dSliceWidth
+    slice_type = ttnn.Conv2dDRAMSliceWidth
     return ttnn.Conv2dSliceConfig(
         slice_type=slice_type,
         num_slices=num_slices,
