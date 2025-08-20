@@ -22,10 +22,10 @@ struct TransactionIdCounter {
 
     FORCE_INLINE uint8_t get() const { return this->next_trid; }
 
-    FORCE_INLINE void reset() { this->next_trid = 0; }
+    FORCE_INLINE void init() { this->next_trid = 0; }
 
 private:
-    uint8_t next_trid = 0;
+    uint8_t next_trid;
 };
 
 template <
@@ -47,14 +47,16 @@ struct WriteTransactionIdTracker {
     static constexpr bool BOTH_PARAMS_ARE_EQUAL = NUM_CHANNELS_PARAM == MAX_TRANSACTION_IDS_PARAM;
     static_assert(OFFSET_PARAM + MAX_TRANSACTION_IDS - 1 <= NOC_MAX_TRANSACTION_ID, "Invalid transaction ID");
 
-    WriteTransactionIdTracker() {
+    explicit WriteTransactionIdTracker() = default;
+
+    FORCE_INLINE void init() {
         if constexpr (!(BOTH_PARAMS_ARE_EQUAL || BOTH_PARAMS_ARE_POW2)) {
             for (size_t i = 0; i < NUM_CHANNELS_PARAM; i++) {
                 this->buffer_slot_trids[i] = INVALID_TRID;
             }
         }
-        this->completion_trid_id.reset();
-        this->write_trid_id.reset();
+        this->completion_trid_id.init();
+        this->write_trid_id.init();
         this->completion_trid_available = true;
         this->write_trid_available = true;
         this->write_buffer_index = tt::tt_fabric::BufferIndex{0};
