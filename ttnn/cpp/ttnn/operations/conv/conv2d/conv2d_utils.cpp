@@ -1044,11 +1044,11 @@ Conv2dSliceConfig::SliceType determine_conv_slice_type(uint32_t input_height, ui
     float threshold_ratio = 3.0;
     if (input_height > input_width * threshold_ratio) {
         log_info(LogOp, "Determined Conv DRAM Slice Type as HEIGHT");
-        return Conv2dSliceConfig::SliceType::HEIGHT;
+        return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
     }
     log_info(LogOp, "Determined Conv DRAM Slice Type as WIDTH");
 
-    return Conv2dSliceConfig::SliceType::WIDTH;
+    return Conv2dSliceConfig::SliceType::DRAM_WIDTH;
 }
 uint32_t calculate_conv_dram_slice_L1_usage(
     const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config) {
@@ -1056,9 +1056,10 @@ uint32_t calculate_conv_dram_slice_L1_usage(
     TT_FATAL(
         dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
 
-    const uint32_t input_sliced_dim =
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? params.input_height : params.input_width;
-    const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT
+    const uint32_t input_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
+                                          ? params.input_height
+                                          : params.input_width;
+    const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
                                            ? params.output_height
                                            : params.output_width;
 
@@ -1080,7 +1081,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
 
     uint32_t output_slice_height, output_slice_width;
     uint32_t input_slice_height, input_slice_width;
-    if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
+    if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
         output_slice_height = max_output_slice_size;
         output_slice_width = params.output_width;
         input_slice_height = (max_output_slice_size * params.stride[0]);

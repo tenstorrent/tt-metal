@@ -81,7 +81,8 @@ ResultWithOptions conv2d(
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
     bool return_output_dim,
     bool return_weights_and_bias) {
-    if (dram_slice_config_.has_value()) {
+    if (dram_slice_config_.has_value() &&
+        dram_slice_config_.value().slice_type != Conv2dSliceConfig::SliceType::L1_FULL) {
         return result_to_result_with_options(
             conv2d_DRAM(
                 queue_id,
@@ -209,7 +210,7 @@ Result conv2d_DRAM(
         calculate_output_image_size({input_height, input_width}, kernel_size, stride, padding_n4, dilation);
 
     const uint32_t output_sliced_dim =
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? output_height : output_width;
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
 
     // If num_slices is not set, automatically determine a value for num_slices that would be functional.
     if (dram_slice_config.num_slices == 0) {
@@ -321,7 +322,7 @@ Result conv2d_DRAM(
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
         int pad_top, pad_bottom, pad_left, pad_right;
-        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
+        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
             output_slice_height_start = output_slice_dim_start;
             output_slice_height_end = output_slice_dim_end;
             output_slice_width_start = 0;
