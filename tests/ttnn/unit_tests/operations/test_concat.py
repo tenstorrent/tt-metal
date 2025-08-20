@@ -201,7 +201,14 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
     torch_output_tensor = torch.concat([torch_tensor for torch_tensor, _ in input_tensors], dim=dim)
     output = ttnn.concat([tensor for _, tensor in input_tensors], dim=dim, memory_config=output_sharded_memory_config)
     output = ttnn.to_torch(output)
-    assert torch.equal(torch_output_tensor, output)
+    assert torch.equal(
+        torch_output_tensor, output
+    ), f"""
+torch_output_tensor:
+{torch_output_tensor}
+output:
+{output}
+    """
 
     # If cache mode is enabled, run the second set of input tensors to verify buffers are updated when cache hits.
     if not cache_mode:

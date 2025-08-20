@@ -368,35 +368,6 @@ def to_torch(
     """
     import torch
 
-    torch_dtype_to_ttnn_dtype = {
-        torch.uint8: ttnn.uint8,
-        torch.int16: ttnn.uint16,
-        torch.int32: ttnn.int32,
-        torch.bfloat16: ttnn.bfloat16,
-        torch.float32: ttnn.float32,
-    }
-
-    on_device_typecast = False
-    ttnn_tilizable_data_types = [ttnn.float32, ttnn.int32, ttnn.bfloat16, ttnn.uint32]
-    if dtype in torch_dtype_to_ttnn_dtype and ttnn.is_tensor_storage_on_device(tensor):
-        if tensor.dtype == ttnn.float32 and tensor.layout != ttnn.TILE_LAYOUT:
-            # https://github.com/tenstorrent/tt-metal/issues/23405 `to_layout` loses precision on float32
-            # and the original tensor is not in the tile layout => cannot convert to the format required
-            # for on-device typecast.
-            pass
-
-        elif tensor.dtype not in ttnn_tilizable_data_types and tensor.layout != ttnn.TILE_LAYOUT:
-            # Cannot tile input tensor for type casting
-            pass
-
-        else:
-            if tensor.layout != ttnn.TILE_LAYOUT:
-                tensor = ttnn.to_layout(tensor, layout=ttnn.TILE_LAYOUT)
-
-            tensor = ttnn.typecast(tensor, dtype=torch_dtype_to_ttnn_dtype[dtype])
-
-            on_device_typecast = True
-
     if ttnn.is_tensor_storage_on_device(tensor):
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
@@ -410,7 +381,7 @@ def to_torch(
 
     torch_tensor = tensor
 
-    if dtype:
+    if dtype is not None:
         torch_tensor = torch_tensor.to(dtype=dtype)
 
     return torch_tensor

@@ -46,32 +46,6 @@
 #include <tracy/Tracy.hpp>
 
 using namespace tt::tt_metal;
-struct PyFromTorchConversionInput {
-    std::string torch_dtype;
-    DataType data_type;
-    Layout layout;
-
-    bool operator==(const PyFromTorchConversionInput& other) const {
-        return torch_dtype == other.torch_dtype && data_type == other.data_type && layout == other.layout;
-    }
-};
-
-struct PyTensorPreparedConversion {
-    /// Use this layout to construct the initial tensor -- extra conversion might be done
-    /// after the tensor has been moved to device.
-    Layout construct_with_layout = Layout::TILE;
-    DataType construct_with_data_type = DataType::INVALID;
-    std::optional<std::string> torch_convert_dtype = std::nullopt;
-};
-template <>
-struct std::hash<PyFromTorchConversionInput> {
-    std::size_t operator()(const PyFromTorchConversionInput& input) const {
-        std::size_t h1 = std::hash<std::string>{}(input.torch_dtype);
-        std::size_t h2 = std::hash<int>{}(static_cast<int>(input.data_type));
-        std::size_t h3 = std::hash<int>{}(static_cast<int>(input.layout));
-        return h1 ^ (h2 << 1) ^ (h3 << 2);
-    }
-};
 
 namespace ttnn::tensor {
 namespace CMAKE_UNIQUE_NAMESPACE {
@@ -103,6 +77,33 @@ void log_external_operation(const operation::ExternalOperation& operation, const
 void log_external_operation(const operation::ExternalOperation& operation, const std::vector<Tensor>& input_tensors) {}
 
 #endif
+
+struct PyFromTorchConversionInput {
+    std::string torch_dtype;
+    DataType data_type;
+    Layout layout;
+
+    bool operator==(const PyFromTorchConversionInput& other) const {
+        return torch_dtype == other.torch_dtype && data_type == other.data_type && layout == other.layout;
+    }
+};
+
+struct PyTensorPreparedConversion {
+    /// Use this layout to construct the initial tensor -- extra conversion might be done
+    /// after the tensor has been moved to device.
+    Layout construct_with_layout = Layout::TILE;
+    DataType construct_with_data_type = DataType::INVALID;
+    std::optional<std::string> torch_convert_dtype = std::nullopt;
+};
+
+struct PyFromTorchConversionInputHash {
+    std::size_t operator()(const PyFromTorchConversionInput& input) const {
+        std::size_t h1 = std::hash<std::string>{}(input.torch_dtype);
+        std::size_t h2 = std::hash<int>{}(static_cast<int>(input.data_type));
+        std::size_t h3 = std::hash<int>{}(static_cast<int>(input.layout));
+        return h1 ^ (h2 << 1) ^ (h3 << 2);
+    }
+};
 
 template <typename T>
 Tensor create_typed_tt_tensor_from_py_data(
@@ -399,8 +400,9 @@ std::optional<PyTensorPreparedConversion> prepare_torch_tensor_conversion(
     // Mapping
     // `{input_torch_type, expected_ttnn_type, expected_layout}` -> `{on-host_tensor_layout, on-host_tensor_data_type,
     // torch_data_conversion}`
-    static std::unordered_map<PyFromTorchConversionInput, PyTensorPreparedConversion> conversion_map = {
-        // clang-format off
+    static std::unordered_map<PyFromTorchConversionInput, PyTensorPreparedConversion, PyFromTorchConversionInputHash>
+        conversion_map = {
+            // clang-format off
 
         // conversion must be done on host, but after that the tiling can be done on device. Caused by
         // the float32 tiling on device might lose precision,
@@ -429,8 +431,8 @@ std::optional<PyTensorPreparedConversion> prepare_torch_tensor_conversion(
 
         {{"uint8",   DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
         {{"uint8",   DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32, "int32" }},
-        // clang-format on
-    };
+            // clang-format on
+        };
 
     DataType expected_dtype = DataType::INVALID;
     if (dtype.has_value()) {
@@ -476,28 +478,26 @@ Tensor convert_python_tensor_to_tt_tensor_on_device(
             contiguous_py_tensor.attr("to")(torch.attr(strategy.torch_convert_dtype.value().c_str()));
     }
 
-    PreprocessedPyTensor preprocessed_py_tensor{
-        .data_type = strategy.construct_with_data_type,
-        .contiguous_py_tensor = contiguous_py_tensor,
-        .num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("numel")()),
-        .py_data_ptr = py::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")()),
-    };
+    auto py_data_ptr = py::cast<std::size_t>(contiguous_py_tensor.attr("data_ptr")());
+    auto num_elements = py::cast<std::size_t>(contiguous_py_tensor.attr("numel")());
 
     const auto shape = ttnn::Shape(py::cast<ttnn::SmallVector<uint32_t>>(py_tensor.attr("shape")));
 
     TT_FATAL(
-        preprocessed_py_tensor.num_elements == shape.volume(),
+        num_elements == shape.volume(),
         "Number of elements from python tensor {} must match volume of shape {}!",
-        preprocessed_py_tensor.num_elements,
+        num_elements,
         shape.volume());
 
-    tt::tt_metal::MemoryPin pydata_pin(std::make_shared<py::object>(preprocessed_py_tensor.contiguous_py_tensor));
+    tt::tt_metal::MemoryPin pydata_pin(std::make_shared<py::object>(contiguous_py_tensor));
 
     auto output = create_tt_tensor_from_py_data(
-        preprocessed_py_tensor.py_data_ptr,
+        py_data_ptr,
         shape,
         TensorLayout(
-            preprocessed_py_tensor.data_type, PageConfig(strategy.construct_with_layout, optional_tile), memory_config),
+            strategy.construct_with_data_type,
+            PageConfig(strategy.construct_with_layout, optional_tile),
+            memory_config),
         device,
         pydata_pin,
         cq_id,
