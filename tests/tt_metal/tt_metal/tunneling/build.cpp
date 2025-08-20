@@ -127,7 +127,10 @@ int CompileLiteFabric(
 
     oss << lite_fabric_src << " ";
 
-    oss << "-c -o " << out_dir_str << "/lite_fabric.o";
+    // Disable gp relaxations. We store various data in L1. We need functions to work when called directly from
+    // the L1 address. The caller may have already setup their own gp, thus the gp relative instructions we have
+    // are invalid
+    oss << "-mno-relax -c -o " << out_dir_str << "/lite_fabric.o";
 
     std::string compile_cmd = oss.str();
     log_info(tt::LogMetal, "Compile LiteFabric command:\n{}", compile_cmd);
