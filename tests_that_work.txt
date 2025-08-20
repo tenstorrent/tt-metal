@@ -1,6 +1,8 @@
 ## Incorrectly hits cache and throws undefined behaviour
 # Segfaults
 pytest -q program_cache/moreh/moreh_group_norm/failures/test_moreh_group_norm_cachehit_optional_outputs_override.py::test_moreh_group_norm_program_cache_optional_outputs_override -s --disable-warnings
+# Incorrect output shape
+pytest -q program_cache/experimental/transformer/rotary_embedding/failures/test_rotary_embedding_cachehit_decode_flag_mismatch.py -s --disable-warning
 
 ## Incorrectly hits cache, but throws legit error
 # Complains about tensor with DeviceStorage
