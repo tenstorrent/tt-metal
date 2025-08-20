@@ -144,8 +144,9 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
                const std::variant<float, Tensor>& false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor,
+               const std::optional<CoreRangeSet>& sub_core_grids,
                QueueId queue_id) {
-                return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor);
+                return self(queue_id, predicate, true_value, false_value, memory_config, output_tensor, sub_core_grids);
             },
             py::arg("predicate"),
             py::arg("true_value"),
@@ -153,6 +154,7 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
+            py::arg("sub_core_grids") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
 }
 
