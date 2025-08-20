@@ -826,6 +826,12 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         Conv2dConfig conv_config;
     };
 
+    // Output of halo op is always ROW_MAJOR, so input for convs is either DataType::FLOAT32 or DataType::BFLOAT16
+    const tt::tt_metal::DataType conv_input_dtype = (input_datatype == tt::tt_metal::DataType::FLOAT32)
+                                                        ? tt::tt_metal::DataType::FLOAT32
+                                                        : tt::tt_metal::DataType::BFLOAT16;
+    const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
+
     const bool conv_is_1d_deptwise =
         is_1d_deptwise_conv(groups, in_channels, out_channels, kernel_size[1], input_width, enable_bias);
 
@@ -920,7 +926,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             Layout::TILE,
             input_parallel_config));
 
-        uint32_t approx_input_size_per_core = estimate_halo_output_bytes(
+        uint32_t approx_input_size_per_core = estimate_halo_output_elems(
             halo_input_memory_config.shard_spec().value().shape,
             batch_size,
             input_height,
@@ -929,7 +935,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             dilation,
             padding);
 
-        l1_usage.tensor_allocation_size += approx_input_size_per_core;
+        l1_usage.tensor_allocation_size += approx_input_size_per_core * input_datum_size;
         log_debug(
             tt::LogOp,
             "L1 usage for {}: {}, {}, Halo Output : {}",
@@ -1015,7 +1021,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     return {opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config};
 }
 
-uint32_t estimate_halo_output_bytes(
+uint32_t estimate_halo_output_elems(
     std::array<uint32_t, 2> halo_input_shard_shape,
     uint32_t batch_size,
     uint32_t input_height,
@@ -1038,8 +1044,7 @@ uint32_t estimate_halo_output_bytes(
         (shard_height + (dilation[0] * kernel_size[0] - 1) * batch_boundary_multiplier) *
         (input_width + padding[2] + padding[3]);
 
-    // Multiplying by 2 as output is always BFloat16.
-    uint32_t approx_max_halo_size = approx_max_halo_num_sticks * halo_input_shard_shape[1] * 2;
+    uint32_t approx_max_halo_size = approx_max_halo_num_sticks * halo_input_shard_shape[1];
     log_trace(
         LogOp,
         "Halo Max Size Approximation, Shard Height: {}, Batch Multiplier: {}, Max Num Sticks : {}",
@@ -1195,22 +1200,25 @@ uint32_t calculate_conv_dram_slice_L1_usage(
 
         // Output of padded slice is always BFloat16, so size is 2 bytes.
         uint32_t input_size = shard_shape[0] * shard_shape[1] * 2;
-        uint32_t approx_max_halo_size = estimate_halo_output_bytes(
-            shard_shape,
-            params.batch_size,
-            input_slice_height,
-            input_slice_width,
-            params.kernel_size,
-            params.dilation,
-            params.padding_n4);
+
+        // Halo output is always BFloat16 in Conv DRAM
+        uint32_t approx_max_halo_bytes = estimate_halo_output_elems(
+                                             shard_shape,
+                                             params.batch_size,
+                                             input_slice_height,
+                                             input_slice_width,
+                                             params.kernel_size,
+                                             params.dilation,
+                                             params.padding_n4) *
+                                         2;
         log_debug(
             tt::LogOp,
-            "Conv DRAM Auto slicing: num_slices = {}, input_size = {}, approx_max_halo_size = {}, conv size = {}",
+            "Conv DRAM Auto slicing: num_slices = {}, input_size = {}, approx_max_halo_bytes = {}, conv size = {}",
             dram_slice_config.num_slices,
             input_size,
-            approx_max_halo_size,
+            approx_max_halo_bytes,
             l1_usage);
-        return std::make_tuple(l1_usage, input_size, approx_max_halo_size);
+        return std::make_tuple(l1_usage, input_size, approx_max_halo_bytes);
     };
 
     // Min slice size may have a larger L1 usage due to a lower core count.
