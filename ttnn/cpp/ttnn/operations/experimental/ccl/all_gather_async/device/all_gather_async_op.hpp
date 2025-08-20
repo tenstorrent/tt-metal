@@ -41,6 +41,7 @@ struct AllGatherAsync {
     const std::vector<GlobalSemaphore> semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
+    bool use_all_gather_async_llama_sharded;
     bool use_optimal_ccl_for_llama;
     const std::optional<GlobalSemaphore>& barrier_semaphore;
     bool using_persistent_buffers;
@@ -58,6 +59,7 @@ struct AllGatherAsync {
         std::vector<GlobalSemaphore> semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         std::optional<uint32_t> cluster_axis,
+        bool use_all_gather_async_llama_sharded,
         bool use_optimal_ccl_for_llama,
         const std::optional<GlobalSemaphore>& barrier_semaphore,
         bool using_persistent_buffers,
@@ -73,6 +75,7 @@ struct AllGatherAsync {
         semaphore(semaphore),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
+        use_all_gather_async_llama_sharded(use_all_gather_async_llama_sharded),
         use_optimal_ccl_for_llama(use_optimal_ccl_for_llama),
         barrier_semaphore(barrier_semaphore),
         using_persistent_buffers(using_persistent_buffers),
@@ -93,6 +96,7 @@ struct AllGatherAsync {
         attrs.emplace_back("barrier_semaphore", barrier_semaphore);
         attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
         attrs.emplace_back("cluster_axis", cluster_axis);
+        attrs.emplace_back("use_all_gather_async_llama_sharded", use_all_gather_async_llama_sharded);
         attrs.emplace_back("use_optimal_ccl_for_llama", use_optimal_ccl_for_llama);
         attrs.emplace_back("semaphore", semaphore);
         attrs.emplace_back("chunks_per_sync", chunks_per_sync);
@@ -206,6 +210,7 @@ Tensor all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
 
@@ -219,6 +224,7 @@ Tensor all_gather_async(
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
     std::optional<uint32_t> cluster_axis = std::nullopt,
+    bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
     std::optional<uint32_t> chunks_per_sync = std::nullopt,
@@ -233,6 +239,7 @@ std::vector<Tensor> all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
 
@@ -247,6 +254,7 @@ Tensor all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
 
@@ -261,6 +269,7 @@ std::vector<Tensor> all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
+    bool use_all_gather_async_llama_sharded = false,
     bool use_optimal_ccl_for_llama = false,
     const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt);
 
