@@ -82,7 +82,7 @@ class PytorchExcelGraph:
             worksheet.write(0, col, header)
 
         # Write data rows
-        for row_idx, node_id in enumerate(list(nx.topological_sort(self.graph))[::-1]):
+        for row_idx, node_id in enumerate(list(nx.topological_sort(self.graph))):
             row_data = self.generate_row(node_id)
             if row_data:
                 for col_idx, header in enumerate(self.row_header):

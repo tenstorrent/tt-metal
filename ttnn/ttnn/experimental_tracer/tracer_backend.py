@@ -42,6 +42,7 @@ class TracerData:
         self.graph_output_to_node: Dict[str, Dict[str, Any]] = {}
         self.post_run_output_to_input: Dict[str, List[TrackableTensorArgument]] = {}
         self.post_run_output_to_node: Dict[str, Dict[str, Any]] = {}
+        self.constants: Dict[str, ConstantTensor] = {}
         self.id = 0
         self.save_original_tensors = save_original_tensors
 
@@ -67,11 +68,11 @@ class TracerData:
         for node_id, inputs in self.graph_output_to_input.items():
             graph.add_node(node_id)
             for input_node_id in inputs:
-                graph.add_edge(node_id, input_node_id.tensor.id)
+                graph.add_edge(input_node_id.tensor.id, node_id)
 
         try:
             # Perform topological sort
-            topological_order = list(nx.topological_sort(graph))[::-1]
+            topological_order = list(nx.topological_sort(graph))
 
             # Reorder the dictionaries based on topological order
             self.graph_output_to_node = {
@@ -212,7 +213,10 @@ class Trackable_Tensor(torch.Tensor):
                 if Trackable_Tensor.tracer_data.save_original_tensors:
                     res = e.elem
                 else:
-                    res = torch.empty(*e.trackable_shape, device="meta", dtype=e.trackable_dtype)
+                    if e.numel() <= 1:
+                        res = torch.empty(1, device="meta", dtype=e.trackable_dtype)
+                    else:
+                        res = torch.empty(*e.trackable_shape, device="meta", dtype=e.trackable_dtype)
             else:
                 if isinstance(e, torch.Tensor) and not Trackable_Tensor.tracer_data.save_original_tensors:
                     res = torch.empty(*e.shape, device="meta", dtype=e.dtype)
@@ -224,7 +228,21 @@ class Trackable_Tensor(torch.Tensor):
         # no_dispatch is only needed if you use enable_python_mode.
         # It prevents infinite recursion.
         with no_dispatch():
-            rs = tree_map(wrap, func(*tree_map(unwrap, args), **tree_map(unwrap, kwargs)))
+            if func.name() == "aten::_local_scalar_dense":
+                if Trackable_Tensor.tracer_data.save_original_tensors:
+                    # If the tensor is a Trackable_Tensor, return its elem
+                    return args[0].elem.item() if isinstance(args[0], Trackable_Tensor) else args[0].item()
+                else:
+                    print(
+                        f"Evaluating item() when no inference is enabled might cause incorrect tracing. Please make sure .item() is not used in the model as it may lead to non-deterministic behavior."
+                    )
+                    return (
+                        torch.zeros(args[0].trackable_shape, dtype=args[0].trackable_dtype).item()
+                        if isinstance(args[0], Trackable_Tensor)
+                        else args[0].item()
+                    )
+            else:
+                rs = tree_map(wrap, func(*tree_map(unwrap, args), **tree_map(unwrap, kwargs)))
         local_id = str(id)
         graph_output_to_input[local_id] = []
         input_shapes = []
@@ -332,7 +350,6 @@ class OperationGraph:
         self.tracer = tracer
         self.operations: Dict[str, Operation] = {}
         self.graph = nx.DiGraph()
-        self.symbol_set = set()
 
     def parse_args(self, args: List[Any], op_unique_name: str) -> List[Any]:
         """Parse arguments, converting tensors and nested structures."""
@@ -347,7 +364,13 @@ class OperationGraph:
                     )
                     return PlaceholderTensor(name=name)
             elif isinstance(arg, torch.Tensor):
-                return ConstantTensor(name=f"{op_unique_name}_{index}", value=arg)
+                if self.tracer.save_original_tensors:
+                    for constant in self.tracer.constants.values():
+                        if constant.value.equal(arg):
+                            return constant
+                result = ConstantTensor(name=f"{op_unique_name}_{index}", value=arg)
+                self.tracer.constants[result.name] = result
+                return result
             elif isinstance(arg, (list, tuple)):
                 return self.parse_args(arg, op_unique_name)
             return arg
@@ -380,6 +403,7 @@ class OperationGraph:
                 new_args = [arg for arg in args]
                 new_args[parent_index] = PlaceholderTensor(name=self.operations[parent_id].unique_name)
                 operation = TupleOp(
+                    id=node_id,
                     unique_name=name,
                     function_call_name=function_call_name,
                     args=new_args,
@@ -390,6 +414,7 @@ class OperationGraph:
             else:
                 args = self.parse_args(node_data.get("args", []), node_data["name"])
                 operation = Operation(
+                    id=node_id,
                     unique_name=name,
                     function_call_name=function_call_name,
                     args=args,
@@ -413,6 +438,7 @@ class OperationGraph:
         for arg in node_data.get("args", []):
             if isinstance(arg, FrozenTrackableTensor) and arg.is_graph_input:
                 self.operations[arg.id] = InputOp(
+                    id=arg.id,
                     unique_name=arg.module_name,
                     function_call_name="torch.ones",
                     args=[arg.shape],
@@ -424,14 +450,15 @@ class OperationGraph:
                     },
                     res=PlaceholderTensor(name=arg.module_name),
                 )
-                self.graph.add_edge(node_data["id"], arg.id)
+                self.graph.add_edge(arg.id, node_data["id"])
             elif isinstance(arg, (list, tuple)):
                 for item in arg:
                     if isinstance(item, FrozenTrackableTensor) and item.is_graph_input:
                         self.operations[item.id] = InputOp(
+                            id=item.id,
                             unique_name=item.module_name,
                             function_call_name="torch.ones",
-                            args=[item.shape],
+                            args=[item.shape, item],
                             kwargs={},
                         )
                         self.operations[item.id].meta_data = OperationMetadata(
@@ -440,7 +467,7 @@ class OperationGraph:
                             },
                             res=PlaceholderTensor(name=item.module_name),
                         )
-                        self.graph.add_edge(node_data["id"], item.id)
+                        self.graph.add_edge(item.id, node_data["id"])
 
     def build_graph(self):
         """Build a directed graph using operations and their connections."""
@@ -450,7 +477,7 @@ class OperationGraph:
         for output, inputs in self.tracer.graph_output_to_input.items():
             for input_node in inputs:
                 if output in self.operations and input_node.tensor.id in self.operations:
-                    self.graph.add_edge(output, input_node.tensor.id)
+                    self.graph.add_edge(input_node.tensor.id, output)
                 else:
                     print(f"Warning: Edge from {output} to {input_node} could not be added.")
 
@@ -460,6 +487,22 @@ class OperationGraph:
         """
         self.create_operations()
         self.build_graph()
+
+    @staticmethod
+    def from_operation_graph(other_graph: "OperationGraph") -> "OperationGraph":
+        """
+        Create a new OperationGraph instance from an existing one.
+
+        Args:
+            other_graph (OperationGraph): The existing OperationGraph instance.
+
+        Returns:
+            OperationGraph: A new OperationGraph instance with copied data.
+        """
+        new_graph = OperationGraph(other_graph.tracer)
+        new_graph.operations = {k: v for k, v in other_graph.operations.items()}
+        new_graph.graph = other_graph.graph.copy()
+        return new_graph
 
 
 class WrappedOperationGraph(OperationGraph):
@@ -530,12 +573,12 @@ def get_serialized_info(value):
     """
 
     if isinstance(value, torch.Tensor):
-        return value.tolist()  # Convert tensor to list
+        return get_serialized_info(value.tolist())  # Convert tensor to list
     elif isinstance(value, (list, tuple, set)):
         return [get_serialized_info(v) for v in value]
     elif isinstance(value, dict):
         return {k: get_serialized_info(v) for k, v in value.items()}
-    elif isinstance(value, torch.memory_format):
+    elif isinstance(value, (torch.memory_format, torch.dtype)):
         return str(value)
     return value
 
@@ -650,7 +693,7 @@ def propagate_module_name(graph_output_to_input, graph_output_to_node):
     # using a while loop to check for uniqueness
     seen_names = set()
     for node_data in graph_output_to_node.values():
-        if node_data["name"] is None:
+        if node_data["name"] is None or node_data["name"] == "":
             node_data["name"] = "autogenerated"
         original_name = node_data["name"]
         unique_name = original_name
@@ -716,7 +759,7 @@ def create_json_structure(graph_output_to_node, outputs_to_inputs):
     return json_structure
 
 
-def get_attrs_for_op(operation: Operation) -> Dict[str, Any]:
+def get_attrs_for_op(operation: Operation, node) -> Dict[str, Any]:
     """
     Get attributes for the operation to be serialized.
 
@@ -776,6 +819,7 @@ def get_attrs_for_op(operation: Operation) -> Dict[str, Any]:
             print(f"Skipping Parameter value {value} in attrs {key} of {operation.function_call_name}")
             delete_attrs.append(key)
     attrs = {k: v for k, v in attrs.items() if k not in delete_attrs}
+    attrs["id"] = node
     return attrs
 
 
@@ -786,8 +830,8 @@ def create_graph_json_structure(operation_graph: OperationGraph):
     current_row = 0
     id_to_row = {}
     outputs = []
-    for node in list(nx.topological_sort(operation_graph.graph))[::-1]:
-        inputs = list(operation_graph.graph.neighbors(node))
+    for node in list(nx.topological_sort(operation_graph.graph)):
+        inputs = list(operation_graph.graph.predecessors(node))
         # Example attributes for demonstration purposes
         op = operation_graph.graph.nodes[node]["operation"].unique_name
         attrs = operation_graph.graph.nodes[node]["operation"].kwargs
@@ -798,7 +842,7 @@ def create_graph_json_structure(operation_graph: OperationGraph):
         else:
             meta_data = meta_data.meta
         serialized_attrs.update(serialize_attrs(meta_data))
-        serialized_attrs.update(get_attrs_for_op(operation_graph.graph.nodes[node]["operation"]))
+        serialized_attrs.update(get_attrs_for_op(operation_graph.graph.nodes[node]["operation"], node))
         function_call_name = operation_graph.graph.nodes[node]["operation"].function_call_name
         if function_call_name is None or function_call_name == "":
             function_call_name = operation_graph.graph.nodes[node]["operation"].__class__.__name__
@@ -808,6 +852,10 @@ def create_graph_json_structure(operation_graph: OperationGraph):
             "attrs": serialized_attrs,
             "inputs": [[id_to_row[input_node], 0, 0] if input_node in id_to_row else [] for input_node in inputs],
         }
+        try:
+            json_dumps = json.dumps(node_entry)
+        except Exception as e:
+            print(f"Error serializing node {node}: {node_entry}")
         nodes.append(node_entry)
         if not inputs:  # Assuming nodes without inputs are argument nodes
             arg_nodes.append(len(nodes) - 1)
@@ -930,6 +978,7 @@ def trace_torch_model(
         else:
             operation_graph = OperationGraph(tracer)
         operation_graph.generate()
+        print(f"Found {len(operation_graph.graph)} operations in the traced model.")
         if dump_visualization:
             json_structure = create_graph_json_structure(operation_graph)
             # Write the JSON structure to the specified output file

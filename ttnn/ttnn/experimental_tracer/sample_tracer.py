@@ -11,6 +11,7 @@ from generate_pytorch_unittest_graph import (
 from generate_pytorch_graph import PytorchGraph
 from generate_pytorch_excel_graph import PytorchExcelGraph
 from torchinfo import summary
+from find_repeated_subgraphs import find_repeated_subgraphs, CompositePytorchGraph
 
 allowed_modes = [
     "yolov4",
@@ -33,11 +34,28 @@ allowed_modes = [
     "segformer_classification",
     "vit_base_patch16_224",
     "vit_so400m_patch14_siglip_224",
+    "vit_large_patch14_reg4_dinov2",
+    "vit_b_16_siglip2",
     "swin_transformer",
     "swin_transformer_v2",
+    "open_vla",
 ]
 
-allowed_dtypes = ["float32", "float64", "int32", "int64"]
+allowed_dtypes = ["float32", "float64", "int32", "int64", "bfloat16"]
+import torch
+
+
+class CustomClass(torch.nn.Module):
+    def forward(self, x):
+        x = x - 1
+        for i in range(6):
+            x = x * 2
+            x = x + 1
+            x = x - 1
+            x = x + 1
+            x = x - 1
+        res = x * 2
+        return res
 
 
 def get_parser():
@@ -181,7 +199,52 @@ def main(args_dict):
             raise RuntimeError(
                 "Failed to load vit_so400m_patch14_siglip_224 model. Ensure timm==0.9.10 is installed and the model is available."
             )
+    elif args.model == "vit_large_patch14_reg4_dinov2":
+        from timm.models import create_model
 
+        try:
+            torch_model = create_model(
+                "vit_large_patch14_reg4_dinov2.lvd142m", pretrained=True, img_size=args.input_shape[0][2]
+            )
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to load vit_large_patch14_reg4_dinov2 model. Ensure timm==0.9.10 is installed and the model is available."
+            )
+    elif args.model == "vit_b_16_siglip2":
+        from open_clip import (
+            create_model_from_pretrained,
+            get_tokenizer,
+        )  # works on open-clip-torch >= 2.31.0, timm >= 1.0.15
+
+        try:
+            torch_model, _ = create_model_from_pretrained("hf-hub:timm/ViT-B-16-SigLIP2", pretrained=False)
+        except Exception as e:
+            raise RuntimeError(
+                "Failed to load vit_b_16_siglip2 model. Ensure timm==0.9.10 is installed and the model is available."
+            )
+    elif args.model == "open_vla":
+        from transformers import AutoModelForVision2Seq
+
+        class OpenVLA(torch.nn.Module):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.vla = AutoModelForVision2Seq.from_pretrained(
+                    "openvla/openvla-7b", torch_dtype=torch.bfloat16, low_cpu_mem_usage=True, trust_remote_code=True
+                )
+                self.vla.eval()
+
+            def forward(self, pixel_values, attention_mask, input_ids):
+                return self.vla.predict_action(
+                    pixel_values=pixel_values,
+                    attention_mask=attention_mask,
+                    input_ids=input_ids,
+                    unnorm_key="bridge_orig",
+                    do_sample=False,
+                )
+
+        torch_model = OpenVLA()
+
+    # torch_model = CustomClass()
     torch_model.eval()
     if not args.model == "sentence_bert" and not args.disable_torch_summary:
         print("Started torch summary: ")
@@ -205,6 +268,10 @@ def main(args_dict):
         )
     )
     graph.dump_to_python_file("test.py", True)
+    if not args.no_infer:
+        clustered_graph, composite_ops = find_repeated_subgraphs(operation_graph)
+        pytorch_graph = CompositePytorchGraph(clustered_graph)
+        pytorch_graph.dump_to_python_file("clustered_graph.py", True)
 
 
 if __name__ == "__main__":

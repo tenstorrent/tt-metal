@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Union, Optional
+from typing import List, Dict, Any, Union, Optional, ClassVar
 import torch
 import re
 
@@ -89,6 +89,7 @@ class OperationMetadata:
 class Operation:
     """Base class for operations in the graph."""
 
+    id: str
     unique_name: str
     function_call_name: str
     args: List[Any]
@@ -120,9 +121,15 @@ class Operation:
             serialized_kwargs = ", " + serialized_kwargs
         return f"{to_valid_variable_name(self.unique_name)} = {self.function_call_name}({serialized_args}{serialized_kwargs}){self.postfix}"
 
+    def generate_import_code(self) -> List[str]:
+        """Generate import statements for this operation."""
+        # Default implementation returns an empty list, subclasses can override
+        return ["import torch"]
+
     def to_operation(self, New_type) -> "Operation":
         """Convert this operation to a generic Operation type."""
         return New_type(
+            id=self.id,
             unique_name=self.unique_name,
             function_call_name=self.function_call_name,
             args=self.args,
@@ -131,6 +138,15 @@ class Operation:
             meta_data=self.meta_data,
             graph_output_indices=self.graph_output_indices,
         )
+
+    def get_unique_representation(self) -> Dict[str, Any]:
+        """Get a unique representation of the operation for hashing."""
+        return {
+            "unique_name": self.__class__.__name__,
+            "function_call_name": self.function_call_name,
+            "input_shapes": self.input_shapes,
+            "output_shapes": self.output_shapes,
+        }
 
     @property
     def input_shapes(self) -> Optional[Dict[int, Any]]:
@@ -220,6 +236,22 @@ class AtenConvolution(WrappedOperation):
             // self.attrs.groups
         )
 
+    def get_unique_representation(self) -> Dict[str, Any]:
+        """Get a unique representation of the operation for hashing."""
+        unique_representation = super().get_unique_representation()
+        unique_representation.update(
+            {
+                "kernel_size": self.attrs.kernel,
+                "stride": self.attrs.stride,
+                "padding": self.attrs.padding,
+                "dilation": self.attrs.dilation,
+                "groups": self.attrs.groups,
+                "hidden_units": self.attrs.hidden_units,
+                "unique_name": "AtenConvolutionT" if self.attrs.transposed else "AtenConvolution",
+            }
+        )
+        return unique_representation
+
 
 @dataclass
 @register_operation("torch.ops.aten.add_.Tensor")
@@ -278,6 +310,19 @@ class AtenMaxPool2dWithIndices(WrappedOperation):
             * self.attrs.kernel[0]
             * self.attrs.kernel[1]
         )
+
+    def get_unique_representation(self) -> Dict[str, Any]:
+        """Get a unique representation of the operation for hashing."""
+        unique_representation = super().get_unique_representation()
+        unique_representation.update(
+            {
+                "kernel_size": self.attrs.kernel,
+                "stride": self.attrs.stride,
+                "padding": self.attrs.padding,
+                "dilation": self.attrs.dilation,
+            }
+        )
+        return unique_representation
 
 
 @dataclass
@@ -422,7 +467,6 @@ class AtenUpsampleNearest2d(WrappedOperation):
 @register_operation("torch.ops.aten.clone")
 class AtenClone(WrappedOperation):
     """Represents the clone operation."""
-
     pass
 
 
@@ -539,7 +583,6 @@ class AtenGelu(WrappedOperation):
 @register_operation("torch.ops.aten.relu_")
 class AtenReluInplace(WrappedOperation):
     """Represents the relu_ operation."""
-
     pass
 
 
@@ -587,7 +630,6 @@ class AtenLinalgVectorNorm(WrappedOperation):
 @register_operation("torch.ops.aten.clamp_min")
 class AtenClampMin(WrappedOperation):
     """Represents the clamp_min operation."""
-
     pass
 
 
@@ -595,7 +637,6 @@ class AtenClampMin(WrappedOperation):
 @register_operation("torch.ops.aten.max.dim")
 class AtenMaxDim(WrappedOperation):
     """Represents the max.dim operation."""
-
     pass
 
 
@@ -768,11 +809,31 @@ class AtenHardtanhInplace(WrappedOperation):
 
 
 @dataclass
+@register_operation("torch.ops.aten._scaled_dot_product_flash_attention")
+class AtenScaledDotProductFlashAttention(WrappedOperation):
+    """Represents the _scaled_dot_product_flash_attention operation."""
+
+    pass
+
+
+@dataclass
 class InputOp(Operation):
     """Represents an input operation in the graph."""
 
+    counter: ClassVar[int] = 0
+
     def __post_init__(self):
         self.unique_name = to_valid_variable_name(self.unique_name)
+        if not self.id:
+            InputOp.counter += 1
+
+    def generate_code(self):
+        serialized_args = [self._serialize(arg) for arg in self.args]
+        return f"{to_valid_variable_name(self.unique_name)} = INPUT{InputOp.counter}.reshape({serialized_args[0]})"
+
+    def to_operation(self, New_type) -> "Operation":
+        """Convert this operation to a generic Operation type."""
+        return self
 
 
 @dataclass
@@ -786,6 +847,16 @@ class TupleOp(Operation):
         """Generate PyTorch code for this operation."""
         index = self.kwargs["index"]
         return f"{to_valid_variable_name(self.unique_name)} = {self.args[index].generate_code()}[{index}]{self.postfix}"
+
+    def get_unique_representation(self) -> Dict[str, Any]:
+        """Get a unique representation of the operation for hashing."""
+        representation = super().get_unique_representation()
+        representation.update(
+            {
+                "index": self.kwargs.get("index", None),
+            }
+        )
+        return representation
 
 
 @dataclass
@@ -805,9 +876,18 @@ class ConstantTensor(Parameter):
     """Represents a constant tensor in the graph."""
 
     value: torch.Tensor = field(default_factory=lambda: torch.tensor([]))
+    id: str = ""
+    counter: ClassVar[int] = 0
+    ConstantTensorFromModel: ClassVar[bool] = False
+
+    def __post_init__(self):
+        self.id = f"const{ConstantTensor.counter}"
+        ConstantTensor.counter += 1
 
     def generate_code(self) -> str:
         """Generate the serialization code for this constant tensor."""
+        if ConstantTensor.ConstantTensorFromModel:
+            return self.id
         if self.value.numel() > 10:
             return f"torch.zeros({self.value.shape}, dtype={self.value.dtype})"
         return f"torch.tensor({self.value.tolist()})"
