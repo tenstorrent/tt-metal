@@ -92,6 +92,8 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
     tt_output = tt_model(tt_input)
 
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0)
+    print("reference_output ", reference_output.shape)
+    print("tt_output_torch ", tt_output_torch.shape)
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     pcc_required = 0.9999
