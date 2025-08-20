@@ -21,7 +21,7 @@ void print_python_call_stack() {
     try {
         py::module traceback = py::module::import("traceback");
         py::object stack = traceback.attr("format_stack")();
-        std::cout << "Python call stack for ttnn.add():\n";
+        std::cout << "****CALLSTACK****\n";
 
         // Filter out pytest and environment frames, only show user code
         for (py::handle frame : stack) {
@@ -41,6 +41,7 @@ void print_python_call_stack() {
     } catch (const std::exception& e) {
         std::cout << "Failed to get Python call stack: " << e.what() << std::endl;
     }
+    std::cout << "**** END CALLSTACK ****\n";
 }
 
 namespace detail {
@@ -2049,6 +2050,14 @@ void py_module(py::module& module) {
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 print_python_call_stack();
+
+                std::cout << "****ARGS****\n";
+                std::cout << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
+                          << " data_type = " << input_tensor_a.dtype()
+                          << " memory_config = " << input_tensor_a.memory_config() << std::endl;
+                std::cout << "scalar = " << scalar << std::endl;
+                std::cout << "**** END ARGS ***\n";
+
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -2087,6 +2096,16 @@ void py_module(py::module& module) {
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
                 print_python_call_stack();
+
+                std::cout << "****ARGS****\n";
+                std::cout << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
+                          << " data_type = " << input_tensor_a.dtype()
+                          << " memory_config = " << input_tensor_a.memory_config() << std::endl;
+                std::cout << "input_tensor_b : shape = " << input_tensor_b.logical_shape()
+                          << " data_type = " << input_tensor_b.dtype()
+                          << " memory_config = " << input_tensor_b.memory_config() << std::endl;
+                std::cout << "**** END ARGS ***\n";
+
                 return self(
                     queue_id,
                     input_tensor_a,
