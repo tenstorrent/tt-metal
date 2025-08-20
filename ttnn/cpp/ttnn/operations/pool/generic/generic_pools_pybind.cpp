@@ -42,6 +42,8 @@ void bind_max_pool2d_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`, which should be used with pre-sharded input tensors.
             in_place (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
+            output_data_format (ttnn.DataType, optional): the data format for the output tensor. Defaults to `ttnn.bfloat16`.
+            output_layout (ttnn.Layout, optional): the layout for the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
@@ -95,6 +97,8 @@ void bind_max_pool2d_operation(py::module& module) {
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool in_place_halo,
+               const DataType output_data_format,
+               const Layout output_layout,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
@@ -110,7 +114,9 @@ void bind_max_pool2d_operation(py::module& module) {
                     ceil_mode,
                     memory_config,
                     applied_shard_scheme,
-                    in_place_halo);
+                    in_place_halo,
+                    output_data_format,
+                    output_layout);
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
@@ -126,6 +132,8 @@ void bind_max_pool2d_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
             py::arg("in_place_halo") = false,
+            py::arg("output_data_format") = DataType::BFLOAT16,
+            py::arg("output_layout") = Layout::ROW_MAJOR,
             py::arg("queue_id") = DefaultQueueId});
 }
 

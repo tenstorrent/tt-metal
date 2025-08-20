@@ -137,7 +137,7 @@ void MAIN {
                 cb_pop_front(curr_in_cb_id, 1);
             }
 
-            dprint_tensix_dest_reg(0);
+            // dprint_tensix_dest_reg(0);
             // dprint_tensix_dest_reg(1);
             // dprint_tensix_dest_reg(2);
             // dprint_tensix_dest_reg(3);
@@ -167,7 +167,7 @@ void MAIN {
             DPRINT << "haloo" << ENDL();
             DPRINT << "tilize_stick_counter: " << tilize_stick_counter << "/" << in_nblocks_c * TILE_HEIGHT << ENDL();
             if (tilize_stick_counter == TILE_HEIGHT) {
-                PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
+                // PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
 
                 cb_push_back(tmp_cb_id, in_ntiles_c);
                 PACK((pack_untilize_uninit(tmp_cb_id)));
@@ -183,7 +183,7 @@ void MAIN {
 
                 tilize_block(tmp_cb_id, in_ntiles_c, out_cb_id);
 
-                PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
+                // PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
 
                 cb_pop_front(tmp_cb_id, in_ntiles_c);
                 cb_push_back(out_cb_id, in_ntiles_c);

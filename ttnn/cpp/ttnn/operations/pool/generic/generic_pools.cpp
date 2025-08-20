@@ -225,7 +225,12 @@ Tensor MaxPool2DOp::invoke(
     bool ceil_mode,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    bool in_place_halo) {
+    bool in_place_halo,
+    const DataType output_data_format,
+    const Layout output_layout) {
+    TT_FATAL(output_data_format == DataType::BFLOAT16, "Currently only BFLOAT16 output data format is supported");
+    TT_FATAL(output_layout == Layout::ROW_MAJOR || output_layout == Layout::TILE, "Only ROW_MAJOR and TILE output layouts are supported");
+    
     return pool2d_invoke(
         queue_id,
         input_tensor,
