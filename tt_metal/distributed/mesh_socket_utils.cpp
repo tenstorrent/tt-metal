@@ -8,7 +8,6 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "impl/context/metal_context.hpp"
-#include <cstring>
 
 #include "tt_metal/hw/inc/socket.h"
 
@@ -279,10 +278,10 @@ void write_socket_configs(
     auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
     const auto& config = peer_descriptor.config;
+    auto grouped_connections = group_socket_connections(config, socket_endpoint);
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
     const SocketSenderSize sender_size;
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    const auto grouped_connections = group_socket_connections(config, socket_endpoint);
     const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
     if (is_sender) {
         const auto max_num_downstreams = get_max_num_downstreams_per_core(config);

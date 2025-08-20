@@ -26,7 +26,7 @@ struct sender_socket_md {
 
     uint32_t is_sender = 0;
 };
-
+// After the metadata, the buffer contains the following arrays:
 // uint32_t bytes_acked_array[num_downstreams]
 // sender_downstream_encoding[num_downstreams]
 
