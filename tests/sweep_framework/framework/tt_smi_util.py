@@ -41,13 +41,12 @@ class ResetUtil:
 
                 self.command = executable
                 self.args = args
-                
-        self.reset()
-        return
-
-
         if self.command is None:
             raise Exception(f"SWEEPS: Unable to locate tt-smi executable")
+            
+        self.reset()
+        return
+        
 
     def reset(self):
         smi_process = subprocess.run([self.command, *self.args], stdout=subprocess.DEVNULL)
