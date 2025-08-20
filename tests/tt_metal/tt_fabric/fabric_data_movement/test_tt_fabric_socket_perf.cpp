@@ -48,6 +48,13 @@
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
 
+void run_unicast_test_bw_chips(
+    BaseFabricFixture* fixture,
+    chip_id_t src_physical_device_id,
+    chip_id_t dst_physical_device_id,
+    uint32_t num_hops,
+    bool use_dram_dst = false);
+
 TEST_F(Fabric2DFixture, UnicastRaw_Skeleton) { RunTestUnicastRaw(this); }
 
 TEST_F(Fabric2DFixture, UnicastConn_Skeleton) { RunTestUnicastConnAPI(this, /*num_connections=*/1); }
@@ -61,20 +68,36 @@ TEST_F(Fabric2DFixture, UnicastConn_Timed_Skeleton) {
     std::cout << "[UnicastConn_Timed_Skeleton] wall_time_s=" << sec << "\n";
 }
 
-TEST_F(Fabric2DFixture, UnicastConn_Hardcoded) {
-    FabricNodeId src_fabric_node_id{MeshId{0}, /*chip_id=*/0};
-    FabricNodeId dst_fabric_node_id{MeshId{0}, /*chip_id=*/1};
+struct PerfParams {
+    uint32_t mesh_id = 0;       // mesh to use
+    chip_id_t src_chip = 0;     // logical chip id in that mesh
+    chip_id_t dst_chip = 1;     // logical chip id in that mesh
+    uint32_t num_hops = 1;      // 1 = direct neighbor, >1 = farther away
+    bool use_dram_dst = false;  // false -> land in L1 on dst; true -> land in DRAM
+};
 
-    // Map to physical chip ids
+// Helper that maps (mesh, logical chip ids) -> physical ids and runs the unicast test
+static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
-    chip_id_t src_phys = cp.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
-    chip_id_t dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
 
-    // Hard-code path properties
-    uint32_t num_hops = 1;
-    bool use_dram_dst = false;  // true to land in DRAM on the dst side
+    tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
+    tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip};
 
-    run_unicast_test_bw_chips(this, src_phys, dst_phys, num_hops, use_dram_dst);
+    chip_id_t src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
+    chip_id_t dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
+
+    run_unicast_test_bw_chips(fixture, src_phys, dst_phys, p.num_hops, p.use_dram_dst);
+}
+
+TEST_F(Fabric2DFixture, UnicastConn_CodeControlled) {
+    PerfParams p;
+    p.mesh_id = 0;
+    p.src_chip = 0;
+    p.dst_chip = 1;
+    p.num_hops = 1;          // e.g., 1 for neighbor
+    p.use_dram_dst = false;  // set true to land in DRAM on dst
+
+    RunUnicastConnWithParams(this, p);
 }
 
 }  // namespace fabric_router_tests
