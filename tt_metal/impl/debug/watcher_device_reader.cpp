@@ -10,8 +10,10 @@
 #include <fmt/base.h>
 #include <cstdint>
 #include <cstdio>
+#include <sstream>
 #include <tt-logger/tt-logger.hpp>
 #include <metal_soc_descriptor.h>
+#include "hal.hpp"
 #include "impl/context/metal_context.hpp"
 #include <algorithm>
 #include <cstddef>
@@ -189,7 +191,7 @@ struct stack_usage_info_t {
 // Information that needs to be kept around on a per-dump basis, shared per-core
 struct WatcherDeviceReader::DumpData {
     std::set<std::pair<CoreCoord, riscv_id_t>> paused_cores;
-    std::map<riscv_id_t, stack_usage_info_t> highest_stack_usage;
+    std::map<HalProcessorIdentifier, stack_usage_info_t> highest_stack_usage;
     std::map<int, bool> used_kernel_names;
 };
 
@@ -341,14 +343,16 @@ void WatcherDeviceReader::Dump(FILE* file) {
     // Print stack usage report for this device/dump
     if (!dump_data.highest_stack_usage.empty()) {
         fprintf(f, "Stack usage summary:");
-        for (auto& [risc_id, info] : dump_data.highest_stack_usage) {
-            const char* riscv_name = get_riscv_name(info.virtual_coord, risc_id);
+        for (auto& [processor, info] : dump_data.highest_stack_usage) {
+            std::stringstream ss;
+            ss << processor;
+            auto processor_name = ss.str();
             // Threshold of free space for warning.
             constexpr uint32_t min_threshold = 64;
             fprintf(
                 f,
                 "\n\t%s highest stack usage: %u bytes free, on core %s, running kernel %s",
-                riscv_name,
+                processor_name.c_str(),
                 info.stack_free,
                 info.virtual_coord.str().c_str(),
                 kernel_names[info.kernel_id].c_str());
@@ -362,7 +366,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
                     "{}! Kernel {} uses (at least) all of the stack.",
                     device_id,
                     info.virtual_coord.str(),
-                    riscv_name,
+                    processor_name.c_str(),
                     kernel_names[info.kernel_id].c_str());
             } else if (info.stack_free < min_threshold) {
                 fprintf(f, " (Close to overflow)");
@@ -373,7 +377,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
                     min_threshold,
                     device_id,
                     info.virtual_coord.str(),
-                    riscv_name,
+                    processor_name.c_str(),
                     kernel_names[info.kernel_id].c_str(),
                     info.stack_free);
             }
@@ -998,13 +1002,30 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
 
 void WatcherDeviceReader::Core::DumpStackUsage() const {
     const debug_stack_usage_t* stack_usage_mbox = &mbox_data_->watcher.stack_usage;
-    for (int risc_id = 0; risc_id < DebugNumUniqueRiscs; risc_id++) {
-        const auto &usage = stack_usage_mbox->cpu[risc_id];
-        if (usage.min_free) {
-            auto& slot = dump_data_.highest_stack_usage[static_cast<riscv_id_t>(risc_id)];
-            if (usage.min_free <= slot.stack_free) {
-                slot = {virtual_coord_, usage.min_free - 1, stack_usage_mbox->cpu[risc_id].watcher_kernel_id};
+    const auto& hal = MetalContext::instance().hal();
+    uint32_t processor_index = 0;
+    auto processor_class_count = hal.get_processor_classes_count(programmable_core_type_);
+    for (uint32_t processor_class_index = 0; processor_class_index < processor_class_count; processor_class_index++) {
+        auto processor_type_count = hal.get_processor_types_count(programmable_core_type_, processor_class_index);
+        for (uint32_t processor_type = 0; processor_type < processor_type_count; processor_type++) {
+            const auto& usage = stack_usage_mbox->cpu[processor_index];
+            if (usage.min_free) {
+                HalProcessorIdentifier processor = {
+                    programmable_core_type_,
+                    static_cast<HalProcessorClassType>(processor_class_index),
+                    processor_type,
+                };
+                // TODO(HalProcessorClassType): fix this after HAL treats DM0 and DM1 as the same processor class.
+                if (processor_class_index != static_cast<uint32_t>(HalProcessorClassType::COMPUTE)) {
+                    processor.processor_type = static_cast<int>(processor.processor_class);
+                    processor.processor_class = HalProcessorClassType::DM;
+                }
+                auto& slot = dump_data_.highest_stack_usage[processor];
+                if (usage.min_free <= slot.stack_free) {
+                    slot = {virtual_coord_, usage.min_free - 1, usage.watcher_kernel_id};
+                }
             }
+            processor_index++;
         }
     }
 }
