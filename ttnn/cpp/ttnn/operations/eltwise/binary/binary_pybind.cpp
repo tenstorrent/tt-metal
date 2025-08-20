@@ -11,17 +11,20 @@
 #include "ttnn/types.hpp"
 #include <iostream>
 #include <sstream>
+#include <fstream>
+#include <functional>
+#include <string>
 
 namespace ttnn {
 namespace operations {
 namespace binary {
 
-// Function to print Python call stack
-void print_python_call_stack() {
+// Function to get Python call stack as string
+std::string get_python_call_stack() {
+    std::stringstream stack_stream;
     try {
         py::module traceback = py::module::import("traceback");
         py::object stack = traceback.attr("format_stack")();
-        std::cout << "****CALLSTACK****\n";
 
         // Filter out pytest and environment frames, only show user code
         for (py::handle frame : stack) {
@@ -35,13 +38,49 @@ void print_python_call_stack() {
                 continue;
             }
 
-            std::cout << frame_str;
+            stack_stream << frame_str;
         }
-        std::cout << std::flush;
     } catch (const std::exception& e) {
-        std::cout << "Failed to get Python call stack: " << e.what() << std::endl;
+        stack_stream << "Failed to get Python call stack: " << e.what() << std::endl;
     }
-    std::cout << "**** END CALLSTACK ****\n";
+    return stack_stream.str();
+}
+
+// Function to generate hash from string
+std::string generate_hash(const std::string& input) {
+    std::hash<std::string> hasher;
+    size_t hash_value = hasher(input);
+
+    // Convert to hex string for shorter representation
+    std::stringstream hex_stream;
+    hex_stream << std::hex << hash_value;
+    return hex_stream.str();
+}
+
+// Function to write operation info to file
+void write_operation_info_to_file(const std::string& callstack, const std::string& args_info) {
+    // Create combined string for hashing
+    std::string combined = callstack + args_info;
+    std::string stack_id = generate_hash(combined);
+
+    // Create filename
+    std::string filename = "op_" + stack_id + ".txt";
+
+    // Write to file
+    std::ofstream file(filename);
+    if (file.is_open()) {
+        file << "****CALLSTACK****\n";
+        file << callstack;
+        file << "**** END CALLSTACK ****\n";
+        file << "****ARGS****\n";
+        file << args_info;
+        file << "**** END ARGS ***\n";
+        file.close();
+
+        std::cout << "Operation info written to: " << filename << std::endl;
+    } else {
+        std::cout << "Failed to write operation info to file: " << filename << std::endl;
+    }
 }
 
 namespace detail {
@@ -2049,14 +2088,15 @@ void py_module(py::module& module) {
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
-                print_python_call_stack();
+                std::string callstack = get_python_call_stack();
 
-                std::cout << "****ARGS****\n";
-                std::cout << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
-                          << " data_type = " << input_tensor_a.dtype()
-                          << " memory_config = " << input_tensor_a.memory_config() << std::endl;
-                std::cout << "scalar = " << scalar << std::endl;
-                std::cout << "**** END ARGS ***\n";
+                std::stringstream args_stream;
+                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
+                            << " data_type = " << input_tensor_a.dtype()
+                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
+                args_stream << "scalar = " << scalar << std::endl;
+
+                write_operation_info_to_file(callstack, args_stream.str());
 
                 return self(
                     queue_id,
@@ -2095,16 +2135,17 @@ void py_module(py::module& module) {
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
-                print_python_call_stack();
+                std::string callstack = get_python_call_stack();
 
-                std::cout << "****ARGS****\n";
-                std::cout << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
-                          << " data_type = " << input_tensor_a.dtype()
-                          << " memory_config = " << input_tensor_a.memory_config() << std::endl;
-                std::cout << "input_tensor_b : shape = " << input_tensor_b.logical_shape()
-                          << " data_type = " << input_tensor_b.dtype()
-                          << " memory_config = " << input_tensor_b.memory_config() << std::endl;
-                std::cout << "**** END ARGS ***\n";
+                std::stringstream args_stream;
+                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
+                            << " data_type = " << input_tensor_a.dtype()
+                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
+                args_stream << "input_tensor_b : shape = " << input_tensor_b.logical_shape()
+                            << " data_type = " << input_tensor_b.dtype()
+                            << " memory_config = " << input_tensor_b.memory_config() << std::endl;
+
+                write_operation_info_to_file(callstack, args_stream.str());
 
                 return self(
                     queue_id,
