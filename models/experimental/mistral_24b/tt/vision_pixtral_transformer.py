@@ -12,6 +12,7 @@ class TtPixtralTransformer(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         weight_cache_path,
@@ -23,11 +24,13 @@ class TtPixtralTransformer(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
 
         block_key = "layers"
         self.resblocks = [
             TtPixtralImageTransformerBlock(
                 mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
                 state_dict=state_dict,
                 state_dict_prefix=f"{state_dict_prefix}{block_key}.{i}.",
                 weight_cache_path=weight_cache_path,

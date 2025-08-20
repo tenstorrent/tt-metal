@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.experimental.mistral_24b.tt.pipeline.mistral_vision_tower import MistralVisionTower
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
@@ -20,6 +21,11 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
     indirect=True,
 )
 def test_mistral_vision_tower(mesh_device, reset_seeds):
@@ -43,9 +49,11 @@ def test_mistral_vision_tower(mesh_device, reset_seeds):
     reference_output = reference_model(input_tensor, image_sizes=[(H, W)])
 
     reference_output = reference_output.last_hidden_state
+    tt_ccl = TT_CCL(mesh_device)
     ##### TT Model: MistralVisionTower #####
     vision_model = MistralVisionTower(
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         state_dict=state_dict,
         state_dict_prefix=first_layer_prefix,
         dtype=dtype,

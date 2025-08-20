@@ -12,13 +12,15 @@ from models.experimental.mistral_24b.tt.vision_mmp import TTMistral3MultiModalPr
 
 
 class TtMistralVisionTransformer(LightweightModule):
-    def __init__(self, mesh_device, state_dict, state_dict_prefix, dtype, model_args):
+    def __init__(self, mesh_device, tt_ccl, state_dict, state_dict_prefix, dtype, model_args):
         super().__init__()
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
 
         self.vision_tower = MistralVisionTower(
             mesh_device=mesh_device,
+            tt_ccl=self.tt_ccl,
             state_dict=state_dict,
             state_dict_prefix=state_dict_prefix,
             dtype=dtype,

@@ -18,6 +18,7 @@ class MistralVisionTower(LightweightModule):
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix,
         dtype,
@@ -28,6 +29,7 @@ class MistralVisionTower(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.dtype = dtype
         self.config = configuration
 
@@ -98,6 +100,7 @@ class MistralVisionTower(LightweightModule):
 
         self.transformer = TtPixtralTransformer(
             mesh_device=self.mesh_device,
+            tt_ccl=tt_ccl,
             state_dict=self.state_dict,
             state_dict_prefix=f"{state_dict_prefix}transformer.",
             weight_cache_path=configuration.weight_cache_path(dtype),

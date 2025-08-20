@@ -8,6 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
 
 from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixtralTransformer
@@ -26,6 +27,11 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
             os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
     indirect=True,
 )
 def test_image_transformer_inference(batch, num_chunks, mesh_device):
@@ -52,8 +58,10 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device):
 
     all_tests_pass = True
 
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TtPixtralTransformer(
         mesh_device,
+        tt_ccl,
         state_dict,
         state_dict_prefix=first_layer_prefix,
         weight_cache_path=None,

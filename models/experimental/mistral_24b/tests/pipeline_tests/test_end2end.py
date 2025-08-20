@@ -6,6 +6,7 @@ from loguru import logger
 import os
 import ttnn
 
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import (
     sample_host,
     PagedAttentionConfig,
@@ -117,8 +118,14 @@ def setup_vision_prompts_and_tokenizer(model_args, instruct):
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": "https://www.theeducationmagazine.com/wp-content/uploads/2020/03/18.jpg"},
-                {"type": "text", "text": "Tell me who you see in the image and describe the image ?"},
+                {
+                    "type": "image",
+                    "image": "https://img.freepik.com/premium-photo/girl-hugging-dog-with-girl-hugging-her_737761-2565.jpg",
+                },
+                {
+                    "type": "text",
+                    "text": "Is there a cat in this image? If not, what animal do you see in the image? Describe the image in detail in 600 words.",
+                },
             ],
         }
     ]
@@ -182,9 +189,11 @@ def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged
             max_num_blocks=page_params["page_max_num_blocks"],
         )
 
+    tt_ccl = TT_CCL(mesh_device)
     # Load vision model (exactly like test_end2end.py)
     vision_model = TtMistralVisionTransformer(
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         state_dict=state_dict,
         state_dict_prefix=vision_prefix,
         dtype=dtype,
@@ -419,6 +428,11 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
     ids=["accuracy"],
 )
 @pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 30000000, "num_command_queues": 1}],
+    indirect=True,
+)
+@pytest.mark.parametrize(
     "mesh_device",
     [
         {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
@@ -427,8 +441,6 @@ def validate_e2e_outputs(results, expected_min_tokens=1):
     ],
     indirect=True,
 )
-# @pytest.mark.parametrize("device_params", [{"l1_small_size": 1584864, "trace_region_size": 0}], indirect=True)
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 def test_e2e_vision_text_pipeline(
     weights,
     layers,

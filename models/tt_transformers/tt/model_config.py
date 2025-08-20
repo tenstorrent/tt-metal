@@ -1413,8 +1413,6 @@ class ModelArgs:
 
     def _get_text_prefix(self):
         if self.is_vision():
-            if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
-                return "language_model."
             return "text_model."
         else:
             return ""
@@ -1768,8 +1766,12 @@ class ModelArgs:
         return self.vision_chunk_size > 0
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        text_prefix = self.state_dict_text_prefix
-        vision_prefix = self.state_dict_vision_prefix
+        if self.is_vision() and "Mistral-Small-3.1-24B" not in self.model_name:
+            text_prefix = self.state_dict_text_prefix
+        else:
+            text_prefix = "" if not is_vision else self.state_dict_text_prefix
+
+        vision_prefix = self.state_dict_vision_prefix if is_vision else ""
 
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
 
