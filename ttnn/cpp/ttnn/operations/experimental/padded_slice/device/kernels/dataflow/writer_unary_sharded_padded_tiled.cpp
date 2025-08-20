@@ -76,8 +76,6 @@ void kernel_main() {
            << ", padded_channels_ntiles: " << padded_channels_ntiles << ENDL();
 #endif
 
-    // Multiplying by 2 as the output is always BFloat16
-
     const uint32_t output_end_width_in_input = output_end[1] + output_start_in_input[1];
     uint32_t row_count = 0;
     while (tiles_read < total_num_tiles && rows_remaining > 0) {

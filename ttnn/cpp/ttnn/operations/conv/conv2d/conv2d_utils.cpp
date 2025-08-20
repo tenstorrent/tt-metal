@@ -1204,10 +1204,8 @@ uint32_t calculate_conv_dram_slice_L1_usage(
 
         auto shard_shape = sliced_input_tensor_memory_config.shard_spec().value().shape;
 
-        // Output of padded slice is always BFloat16, so size is 2 bytes.
         uint32_t input_size = shard_shape[0] * shard_shape[1] * input_datum_size;
 
-        // Halo output is always BFloat16 in Conv DRAM
         uint32_t approx_max_halo_bytes = estimate_halo_output_elems(
                                              shard_shape,
                                              params.batch_size,
@@ -1216,7 +1214,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                                              params.kernel_size,
                                              params.dilation,
                                              params.padding_n4) *
-                                         2;
+                                         input_datum_size;
         log_debug(
             tt::LogOp,
             "Conv DRAM Auto slicing: num_slices = {}, input_size = {}, approx_max_halo_bytes = {}, conv size = {}",
