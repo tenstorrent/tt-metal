@@ -60,18 +60,14 @@
 |------------------------------------------------------|-------|----------------------------------------------------------|-----------|-------|--------------|--------|---------------------------------------------------------------------------|
 | [Whisper (distil-large-v3)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/whisper)  | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 232       | 58.1  | 45           | 58.1   | [v0.59.0-rc52](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc52) |
 
-
 ## Diffusion Models
 | Model                                                                       | Batch | Hardware                                                 | Sec/Image     | Target Sec/Image | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
 | [Stable Diffusion 1.4 (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/wormhole/stable_diffusion))  | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 6.25   | 3        |           |
 | [Stable Diffusion 3.5 Medium (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/experimental/stable_diffusion_35_large)  | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 16   | 10        |             |
 
-
 **Notes:**
 - Stable Diffusion sec/image is based on the time elapsed from submitting the input prompt to receiving the image from the VAE decoder.
-
-
 
 ## CNNs and Vision Transformers
 
@@ -106,7 +102,6 @@
 | [SegFormer Semantic Segmentation (512x512)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/segformer)       | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 84      | 300        |              |
 | [YOLOv9c (640x640)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/yolov9c)                                   | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 40      | 240        |             |
 | [UFLD - v2 (320x800)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/ufld_v2)                                   | 1     | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole)        | 255      | 2000        |             |
-
 
 ## NLPs
 
