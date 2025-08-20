@@ -15,6 +15,7 @@
 #include <functional>
 #include <atomic>
 #include <string>
+#include <filesystem>
 
 // External reference to global operation ID counter defined in core.cpp
 extern std::atomic<uint32_t> ttnn_global_operation_id;
@@ -55,8 +56,12 @@ uint32_t write_operation_info_to_file(const std::string& callstack, const std::s
     // Get next operation ID
     uint32_t stack_id = ttnn_global_operation_id.fetch_add(1);
 
-    // Create filename
-    std::string filename = "op_" + std::to_string(stack_id) + ".json";
+    // Create directory if it doesn't exist
+    std::string dir_path = "./generated/inspector/ops";
+    std::filesystem::create_directories(dir_path);
+
+    // Create filename with full path
+    std::string filename = dir_path + "/op_" + std::to_string(stack_id) + ".json";
 
     // Write to JSON file
     std::ofstream file(filename);
