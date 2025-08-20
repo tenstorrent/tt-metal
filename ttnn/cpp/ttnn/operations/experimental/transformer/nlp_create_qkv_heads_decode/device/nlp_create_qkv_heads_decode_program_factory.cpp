@@ -345,10 +345,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             process_qv,                        // read and write q and v heads
             process_k,                         // read and write k heads
             batch_offset.has_value() ? 1 : 0,  // use_batch_offset
-            (uint32_t)batch_offset_index_stick_size,
             batch_offset_index_stick_size,
             batch_offset_cb_index_reader};
-        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(q_reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(batch_offset.has_value() ? batch_offset.value().buffer() : nullptr)
+            .append_to(q_reader_compile_time_args);
         auto q_reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
