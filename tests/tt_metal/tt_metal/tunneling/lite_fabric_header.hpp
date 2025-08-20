@@ -19,9 +19,15 @@ struct NocReadCommandHeader {
     uint64_t event;
 };
 
+struct WriteRegCommandHeader {
+    uint32_t reg_address;
+    uint32_t reg_value;
+};
+
 union LiteFabricCommandFields {
     NocUnicastCommandHeader noc_unicast;
     NocReadCommandHeader noc_read;
+    WriteRegCommandHeader write_reg;
 };
 static_assert(sizeof(LiteFabricCommandFields) == 16, "CommandFields size is not 24 bytes");
 
@@ -41,7 +47,8 @@ struct LiteFabricRoutingFields {
 enum class NocSendTypeEnum : uint8_t {
     NOC_UNICAST_WRITE = 0,
     NOC_READ = 1,
-    NOC_SEND_TYPE_LAST = NOC_READ,
+    WRITE_REG = 2,
+    NOC_SEND_TYPE_LAST = WRITE_REG,
 };
 
 union NocSendType {
@@ -110,6 +117,12 @@ struct LiteFabricHeader {
         this->noc_send_type = lite_fabric::NocSendType(lite_fabric::NocSendTypeEnum::NOC_READ, noc_index);
         this->payload_size_bytes = payload_size_bytes;
         this->command_fields.noc_read = noc_read_command_header;
+        return *static_cast<LiteFabricHeader*>(this);
+    }
+
+    inline LiteFabricHeader& to_write_reg(const WriteRegCommandHeader& write_reg_command_header) {
+        this->noc_send_type = lite_fabric::NocSendType(lite_fabric::NocSendTypeEnum::WRITE_REG, 0);
+        this->command_fields.write_reg = write_reg_command_header;
         return *static_cast<LiteFabricHeader*>(this);
     }
 
