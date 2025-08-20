@@ -190,7 +190,7 @@ template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config = std::nullopt,
     QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>

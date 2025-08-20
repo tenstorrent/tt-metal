@@ -953,9 +953,11 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<MeshDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
+            [](const Tensor& self, MeshDevice* device, std::optional<const MemoryConfig>& mem_config, QueueId cq_id) {
+                return self.to_device(device, mem_config, cq_id);
+            },
             py::arg("device").noconvert(),
-            py::arg("mem_config").noconvert() = MemoryConfig{},
+            py::arg("mem_config").noconvert() = std::nullopt,
             py::arg("cq_id") = ttnn::DefaultQueueId,
             py::keep_alive<0, 2>(),
             R"doc(
@@ -963,7 +965,7 @@ void pytensor_module(py::module& m_tensor) {
 
             Only BFLOAT16 (in ROW_MAJOR or TILE layout) and BFLOAT8_B, BFLOAT4_B (in TILE layout) are supported on device.
 
-            If ``arg1`` is not supplied, default ``MemoryConfig`` with ``interleaved`` set to ``True``.
+            If ``arg1`` is not supplied, memory config from the source tensor will be used.
 
             +-----------+-------------------------------------------------+----------------------------+-----------------------+----------+
             | Argument  | Description                                     | Data type                  | Valid range           | Required |
