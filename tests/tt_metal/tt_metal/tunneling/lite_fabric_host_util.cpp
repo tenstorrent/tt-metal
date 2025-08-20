@@ -21,6 +21,20 @@ uint32_t GetStateAddressMetal() {
     return state_addr;
 }
 uint32_t GetStateAddress() { return LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::LiteFabricConfig, current_state); }
+
+lite_fabric::LiteFabricConfig GetInitLiteFabricConfig(const lite_fabric::SystemDescriptor& desc) {
+    lite_fabric::LiteFabricConfig config{};
+    config.is_primary = true;
+    config.is_mmio = true;
+    config.initial_state = lite_fabric::InitState::ETH_INIT_NEIGHBOUR;
+    config.current_state = lite_fabric::InitState::ETH_INIT_NEIGHBOUR;
+    config.binary_addr = LITE_FABRIC_TEXT_START;
+    config.binary_size = (LITE_FABRIC_TEXT_SIZE + 15) & ~0xF;  // Align to 16 bytes;
+    config.eth_chans_mask = desc.enabled_eth_channels.at(0);
+    config.routing_enabled = true;
+    return config;
+}
+
 }  // namespace
 
 namespace lite_fabric {
@@ -175,15 +189,7 @@ std::unique_ptr<tt::tt_metal::Program> LaunchLiteFabricWithMetal(
     std::map<chip_id_t, tt::tt_metal::IDevice*>& devices, const SystemDescriptor& desc) {
     log_info(tt::LogMetal, "Eth Mask = {:0b}", desc.enabled_eth_channels.at(0));
 
-    lite_fabric::LiteFabricConfig config{};
-    config.is_primary = true;
-    config.is_mmio = true;
-    config.initial_state = lite_fabric::InitState::ETH_INIT_NEIGHBOUR;
-    config.current_state = lite_fabric::InitState::ETH_INIT_NEIGHBOUR;
-    config.binary_addr = 0;
-    config.binary_size = 0;
-    config.eth_chans_mask = desc.enabled_eth_channels.at(0);
-    config.routing_enabled = true;
+    lite_fabric::LiteFabricConfig config = GetInitLiteFabricConfig(desc);
 
     // Compile kernels
     auto pgm = std::make_unique<tt::tt_metal::Program>();
@@ -260,18 +266,8 @@ void LaunchLiteFabric(
     constexpr uint32_t k_FirmwareStart = LITE_FABRIC_TEXT_START;
     constexpr uint32_t k_PcResetAddress = LITE_FABRIC_RESET_PC;
 
-    lite_fabric::LiteFabricConfig config{};
-    config.is_primary = true;
-    config.is_mmio = true;
-    config.initial_state = lite_fabric::InitState::ETH_INIT_NEIGHBOUR;
-    config.current_state = lite_fabric::InitState::ETH_INIT_NEIGHBOUR;
-    config.binary_addr = 0;
-    config.binary_size = 0;
-    config.eth_chans_mask = desc.enabled_eth_channels.at(0);
-    config.routing_enabled = true;
-
-    // Need an abstraction layer for Lite Fabric
-    auto config_addr = LITE_FABRIC_CONFIG_START;
+    lite_fabric::LiteFabricConfig config = GetInitLiteFabricConfig(desc);
+    auto config_addr = lite_fabric::LiteFabricMemoryMap::get_address();
 
     for (const auto& tunnel_1x : desc.tunnels_from_mmio) {
         lite_fabric::SetResetState(cluster, tunnel_1x.mmio_cxy_virtual(), true);
@@ -292,20 +288,17 @@ void LaunchLiteFabric(
         bin_file.read(reinterpret_cast<char*>(binary_data.data()), bin_size);
         bin_file.close();
 
-        log_info(tt::LogMetal, "Loaded flat binary {} size {} B", bin_path, bin_size);
+        log_debug(tt::LogMetal, "Loaded flat binary {} size {} B", bin_path, bin_size);
 
         // Set up configuration
-        config.binary_addr = LITE_FABRIC_TEXT_START;
-        config.binary_size = (bin_size + 15) & ~0xF;  // Align to 16 bytes
-
         cluster.write_core(
             (void*)&config, sizeof(lite_fabric::LiteFabricConfig), tunnel_1x.mmio_cxy_virtual(), config_addr);
 
         // Write entire binary as single operation to device memory
-        log_info(tt::LogMetal, "Writing flat binary to {:#x} size {} B", LITE_FABRIC_TEXT_START, bin_size);
+        log_debug(tt::LogMetal, "Writing flat binary to {:#x} size {} B", LITE_FABRIC_TEXT_START, bin_size);
         cluster.write_core(binary_data.data(), bin_size, tunnel_1x.mmio_cxy_virtual(), LITE_FABRIC_TEXT_START);
 
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Wrote lite fabric. Core: {}, Config: {:#x}, Binary: {:#x}, Size: {} B",
             tunnel_1x.mmio_core_logical,
@@ -349,6 +342,42 @@ void LaunchLiteFabric(tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const 
     lite_fabric::LaunchLiteFabric(cluster, hal, desc, bin_path);
 }
 
+template <typename HOST_INTERFACE>
+void ResumeLiteFabric(
+    tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const SystemDescriptor& desc, HOST_INTERFACE& host_interface) {
+    constexpr uint32_t k_FirmwareStart = LITE_FABRIC_TEXT_START;
+    constexpr uint32_t k_PcResetAddress = LITE_FABRIC_RESET_PC;
+
+    // NOTE: If we didn't want to reinit back to firmware start we could set the PC to the service routing, and update
+    // the host interface pointers by reading from the device.
+    lite_fabric::LiteFabricConfig config = GetInitLiteFabricConfig(desc);
+    auto config_addr = lite_fabric::LiteFabricMemoryMap::get_address();
+
+    host_interface.init();
+    for (const auto& tunnel_1x : desc.tunnels_from_mmio) {
+        lite_fabric::SetResetState(cluster, tunnel_1x.mmio_cxy_virtual(), true);
+        lite_fabric::SetPC(cluster, tunnel_1x.mmio_cxy_virtual(), k_PcResetAddress, k_FirmwareStart);
+        cluster.write_core(
+            (void*)&config, sizeof(lite_fabric::LiteFabricConfig), tunnel_1x.mmio_cxy_virtual(), config_addr);
+    }
+
+    for (auto tunnel_1x : desc.tunnels_from_mmio) {
+        lite_fabric::SetResetState(cluster, tunnel_1x.mmio_cxy_virtual(), false);
+    }
+
+    cluster.l1_barrier(0);
+    // Wait for ready
+    for (auto tunnel_1x : desc.tunnels_from_mmio) {
+        lite_fabric::WaitForState(
+            cluster, tunnel_1x.mmio_cxy_virtual(), GetStateAddress(), lite_fabric::InitState::READY);
+        log_info(
+            tt::LogMetal,
+            "Lite Fabric {} (virtual={}) is ready",
+            tunnel_1x.mmio_core_logical.str(),
+            tunnel_1x.mmio_core_virtual.str());
+    }
+}
+
 void TerminateLiteFabricWithMetal(tt::Cluster& cluster, const SystemDescriptor& desc) {
     uint32_t routing_enabled_address =
         tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
@@ -356,7 +385,7 @@ void TerminateLiteFabricWithMetal(tt::Cluster& cluster, const SystemDescriptor& 
         offsetof(lite_fabric::LiteFabricMemoryMap, config) + offsetof(lite_fabric::LiteFabricConfig, routing_enabled);
     uint32_t enabled = 0;
     for (const auto& tunnel_1x : desc.tunnels_from_mmio) {
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Host to terminate Device {} {} (virtual={})",
             0,
@@ -365,6 +394,7 @@ void TerminateLiteFabricWithMetal(tt::Cluster& cluster, const SystemDescriptor& 
         cluster.write_core((void*)&enabled, sizeof(uint32_t), tunnel_1x.mmio_cxy_virtual(), routing_enabled_address);
     }
     cluster.l1_barrier(0);
+    SetResetState(cluster, desc, true);
 }
 
 void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc) {
@@ -372,7 +402,7 @@ void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc) {
                                        offsetof(lite_fabric::LiteFabricConfig, routing_enabled);
     uint32_t enabled = 0;
     for (const auto& tunnel_1x : desc.tunnels_from_mmio) {
-        log_info(
+        log_debug(
             tt::LogMetal,
             "Host to terminate Device {} {} (virtual={})",
             0,
@@ -381,6 +411,7 @@ void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc) {
         cluster.write_core((void*)&enabled, sizeof(uint32_t), tunnel_1x.mmio_cxy_virtual(), routing_enabled_address);
     }
     cluster.l1_barrier(0);
+    SetResetState(cluster, desc, true);
 }
 
 }  // namespace lite_fabric
