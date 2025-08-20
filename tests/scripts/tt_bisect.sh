@@ -95,7 +95,7 @@ while [[ "$found" = "false" ]]; do
    rm -rf .cpmcache  build_Release build_Debug build
 
    build_rc=0
-   ./build_metal.sh --build-all || build_rc=$?
+   ./build_metal.sh --build-dir build --build-type Release --toolchain-path cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake --build-all --enable-ccache --configure-only || build_rc=$?
    echo "::endgroup::"
 
    if [[ $build_rc -ne 0 ]]; then
