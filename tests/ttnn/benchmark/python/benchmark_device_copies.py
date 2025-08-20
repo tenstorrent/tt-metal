@@ -2,6 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+# This file contains a set of benchmark that test the transfer performance between
+# host and device with and without format conversions.
+
+# This is meant to test if any modifications of tt-nn and tt-metal will regress
+# the performance of data transfer.
+
+# Currently the benchmark measures performance in terms of time to operate on a
+# fixed sized tensor. While benchmarking for throughput maybe more appropriate,
+# this is currently not implemented due to the limitations of pytest.benchmark .
+
 import torch
 import ttnn
 import pytest
