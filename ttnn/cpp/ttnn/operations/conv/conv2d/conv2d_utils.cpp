@@ -960,7 +960,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             padding);
 
         l1_usage.tensor_allocation_size += approx_input_size_per_core * input_datum_size;
-        log_debug(
+        log_trace(
             tt::LogOp,
             "L1 usage for {}: {}, {}, Halo Output : {}",
             conv_config.shard_layout,
@@ -993,10 +993,9 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         winning_config = width;
     }
 
-    log_debug(tt::LogOp, "Core counts H: {} B: {}, W: {}", height.core_count, block.core_count, width.core_count);
-    log_debug(
-        tt::LogOp, "Selected shard layout: {}, size: {}", winning_config.conv_config.shard_layout, winning_config.size);
 
+    log_trace(
+        tt::LogOp, "Selected shard layout: {}, size: {}", winning_config.conv_config.shard_layout, winning_config.size);
     return winning_config.conv_config;
 }
 
@@ -1076,15 +1075,40 @@ uint32_t estimate_halo_output_elems(
     return approx_max_halo_size;
 };
 
+Conv2dSliceConfig::SliceType determine_conv_slice_type(
+    uint32_t input_height, uint32_t input_width, Layout output_layout) {
+    if (output_layout == Layout::ROW_MAJOR) {
+        float threshold_ratio = 3.0;
+        if (input_height > input_width * threshold_ratio) {
+            log_info(LogOp, "Determined Conv DRAM Slice Type as HEIGHT");
+            return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
+        }
+        log_info(LogOp, "Determined Conv DRAM Slice Type as WIDTH");
+        return Conv2dSliceConfig::SliceType::DRAM_WIDTH;
+    } else {
+        if (input_width < 70) {
+            return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
+        } else {
+            float threshold_ratio = 2;
+            if (input_height > input_width * threshold_ratio) {
+                log_info(LogOp, "Determined Conv DRAM Slice Type as HEIGHT");
+                return Conv2dSliceConfig::SliceType::DRAM_HEIGHT;
+            }
+            log_info(LogOp, "Determined Conv DRAM Slice Type as WIDTH");
+            return Conv2dSliceConfig::SliceType::DRAM_WIDTH;
+        }
+    }
+}
 uint32_t calculate_conv_dram_slice_L1_usage(
     const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config) {
     Conv2dConfig conv_config = params.conv_config;
     TT_FATAL(
         dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
 
-    const uint32_t input_sliced_dim =
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? params.input_height : params.input_width;
-    const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT
+    const uint32_t input_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
+                                          ? params.input_height
+                                          : params.input_width;
+    const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT
                                            ? params.output_height
                                            : params.output_width;
 
@@ -1095,8 +1119,9 @@ uint32_t calculate_conv_dram_slice_L1_usage(
     const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
 
     uint32_t slice_rounding_value = 1;
+
     if (conv_config.output_layout == tt::tt_metal::Layout::TILE &&
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::WIDTH) {
+        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_WIDTH) {
         // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
@@ -1107,8 +1132,9 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                                           uint32_t input_slice_width,
                                           uint32_t output_slice_height,
                                           uint32_t output_slice_width) {
-        log_debug(
-            tt::LogOp,
+
+        log_trace(
+            LogOp,
             "Conv2D DRAM Auto Slice Max Input Size : {}x{}, Max Output Size : {}x{}",
             input_slice_height,
             input_slice_width,
@@ -1211,7 +1237,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                                              params.dilation,
                                              params.padding_n4) *
                                          input_datum_size;
-        log_debug(
+        log_trace(
             tt::LogOp,
             "Conv DRAM Auto slicing: num_slices = {}, input_shard_shape = {}, approx_max_halo_bytes = {}, conv size = "
             "{}",
@@ -1242,7 +1268,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
         int pad_top, pad_bottom, pad_left, pad_right;
-        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
+        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
             output_slice_height_start = output_slice_dim_start;
             output_slice_height_end = output_slice_dim_end;
             output_slice_width_start = 0;
@@ -1383,7 +1409,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             output_size = cb.cb_size_per_core();
         }
     }
-    log_debug(tt::LogOp, "Conv L1 Size Estimation, Total CB size: {}, Output Size: {}", total_CB_size, output_size);
+    log_trace(tt::LogOp, "Conv L1 Size Estimation, Total CB size: {}, Output Size: {}", total_CB_size, output_size);
 
     return conv2d::conv_op_l1_usage{.tensor_allocation_size = output_size, .CB_allocation_size = total_CB_size};
 }

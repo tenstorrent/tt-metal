@@ -102,8 +102,8 @@ def test_conv_features(
     )
 
 
-SliceHeight = ttnn.Conv2dSliceHeight
-SliceWidth = ttnn.Conv2dSliceWidth
+SliceHeight = ttnn.Conv2dDRAMSliceHeight
+SliceWidth = ttnn.Conv2dDRAMSliceWidth
 
 
 @pytest.mark.parametrize(
@@ -183,8 +183,5 @@ def test_conv_dram(
         output_layout=input_layout,
         run_twice=True,
         fast_compare=True,
-        slice_config=ttnn.Conv2dSliceConfig(
-            slice_type=slice_type,
-            num_slices=num_slices,
-        ),
+        use_dram=True,
     )
