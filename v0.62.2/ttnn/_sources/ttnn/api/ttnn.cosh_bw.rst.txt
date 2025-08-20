@@ -1,0 +1,8 @@
+﻿ttnn.cosh\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.cosh_bw:
+
+.. autodata:: ttnn.cosh_bw

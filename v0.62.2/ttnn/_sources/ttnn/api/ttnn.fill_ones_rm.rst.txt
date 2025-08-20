@@ -1,0 +1,8 @@
+﻿ttnn.fill\_ones\_rm
+===================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.fill_ones_rm:
+
+.. autodata:: ttnn.fill_ones_rm

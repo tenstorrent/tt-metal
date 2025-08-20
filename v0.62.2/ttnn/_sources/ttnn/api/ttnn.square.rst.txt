@@ -1,0 +1,8 @@
+﻿ttnn.square
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.square:
+
+.. autodata:: ttnn.square

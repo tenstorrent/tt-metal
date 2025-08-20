@@ -1,0 +1,8 @@
+﻿ttnn.lcm
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.lcm:
+
+.. autodata:: ttnn.lcm

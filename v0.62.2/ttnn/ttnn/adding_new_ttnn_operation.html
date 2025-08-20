@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Adding New TT-NN Operation &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metal/latest/ttnn/ttnn/adding_new_ttnn_operation.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Profiling TT-NN Operations" href="profiling_ttnn_operations.html" />
+    <link rel="prev" title="Converting PyTorch Model to TT-NN" href="converting_torch_model_to_ttnn.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="about.html">What is TT-NN?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="usage.html">Using TT-NN</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="api.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="converting_torch_model_to_ttnn.html">Converting PyTorch Model to TT-NN</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Adding New TT-NN Operation</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#faq">FAQ</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#what-is-a-tt-nn-operation">What is a TT-NN operation?</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#what-steps-are-needed-to-add-tt-nn-operation-in-c">What steps are needed to add TT-NN operation in C++?</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#what-steps-are-needed-to-add-tt-nn-operation-in-python">What steps are needed to add TT-NN operation in Python?</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#example-of-adding-a-new-device-operation">Example of Adding a new Device Operation</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#c-implementation">C++ Implementation</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#step-1-implement-device-operation">Step 1: Implement device operation</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#step-2-implement-the-operation-in-c">Step 2: Implement the operation in C++</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#python-implementation">Python Implementation</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#step-1-add-python-binding">Step 1: Add Python binding</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#step-2-optional-add-golden-function-for-the-operation-in-python">Step 2: (Optional) Add golden function for the operation in Python</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="profiling_ttnn_operations.html">Profiling TT-NN Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Adding New TT-NN Operation</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/ttnn/adding_new_ttnn_operation.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="adding-new-tt-nn-operation">
+<h1>Adding New TT-NN Operation<a class="headerlink" href="#adding-new-tt-nn-operation" title="Permalink to this heading"></a>
+</h1>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This document is meant for contributors to TT-NN.</p>
+<p>Not all operations may be functional on all Tenstorrent hardware (Grayskull,
+Wormhole, or others).</p>
+</div>
+<section id="faq">
+<h2>FAQ<a class="headerlink" href="#faq" title="Permalink to this heading"></a>
+</h2>
+<section id="what-is-a-tt-nn-operation">
+<h3>What is a TT-NN operation?<a class="headerlink" href="#what-is-a-tt-nn-operation" title="Permalink to this heading"></a>
+</h3>
+<p>A TT-NN operation is a function that takes in one or more input tensors and produces one or more output tensors. It is implemented in C++ and can be called from Python.</p>
+</section>
+<section id="what-steps-are-needed-to-add-tt-nn-operation-in-c">
+<h3>What steps are needed to add TT-NN operation in C++?<a class="headerlink" href="#what-steps-are-needed-to-add-tt-nn-operation-in-c" title="Permalink to this heading"></a>
+</h3>
+<ol class="arabic simple">
+<li><p>There are 2 options for writing a new operation. Optiona <code class="docutils literal notranslate"><span class="pre">a</span></code> is to write a device operation and option <code class="docutils literal notranslate"><span class="pre">b</span></code> is to write a composite operation
+a. Implement device operation in C++. Device operation is a struct that specifies how to create output tensors and a program to run on the device.
+b. Implement a composite operation in C++. Composite operation simply defines <code class="docutils literal notranslate"><span class="pre">operator()</span></code> method that calls other operations.</p></li>
+<li><p>Register the struct using <cite>ttnn::register_operation</cite>.</p></li>
+</ol>
+</section>
+<section id="what-steps-are-needed-to-add-tt-nn-operation-in-python">
+<h3>What steps are needed to add TT-NN operation in Python?<a class="headerlink" href="#what-steps-are-needed-to-add-tt-nn-operation-in-python" title="Permalink to this heading"></a>
+</h3>
+<ol class="arabic simple">
+<li><p>Take an existing registered C++ operation and add a Python binding for it using <cite>ttnn::bind_registered_operation</cite>.
+The operation will be auto-registered in python. If the operation is called <cite>ttnn::add</cite> in C++, then the python binding will be <cite>ttnn.add</cite>.</p></li>
+<li><p>(Optional) Attach golden function to the operation using <cite>ttnn.attach_golden_function</cite>. This is useful for debugging and testing.</p></li>
+</ol>
+</section>
+</section>
+<section id="example-of-adding-a-new-device-operation">
+<h2>Example of Adding a new Device Operation<a class="headerlink" href="#example-of-adding-a-new-device-operation" title="Permalink to this heading"></a>
+</h2>
+<p>Let’s implement <cite>ttnn.example</cite> (It will just copy the input tensor to the output tensor on the device)</p>
+<section id="c-implementation">
+<h3>C++ Implementation<a class="headerlink" href="#c-implementation" title="Permalink to this heading"></a>
+</h3>
+<section id="step-1-implement-device-operation">
+<h4>Step 1: Implement device operation<a class="headerlink" href="#step-1-implement-device-operation" title="Permalink to this heading"></a>
+</h4>
+<p>In order to add a new device operation, follow the directory structure shown below:</p>
+<p><cite>ttnn/cpp/ttnn/operations/&lt;category&gt;/&lt;operation_name&gt;/device/&lt;operation_name&gt;_device_operation.hpp</cite>
+<cite>ttnn/cpp/ttnn/operations/&lt;category&gt;/&lt;operation_name&gt;/device/&lt;operation_name&gt;_device_operation.cpp</cite>
+<cite>ttnn/cpp/ttnn/operations/&lt;category&gt;/&lt;operation_name&gt;/device/&lt;program_factory_0&gt;_program_factory.cpp</cite></p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>Add as many program factories as needed. But the minimum requirement is one program factory.</p>
+</div>
+<p>A concrete example of a device operation can be found in <cite>ttnn/cpp/ttnn/operations/examples/example/device</cite></p>
+<div class="literal-block-wrapper docutils container" id="id1">
+<div class="code-block-caption">
+<span class="caption-text">ttnn/cpp/ttnn/operations/examples/example/device/example_device_operation.hpp</span><a class="headerlink" href="#id1" title="Permalink to this code"></a>
+</div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="linenos">  1</span><span class="c1">// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.</span>
+<span class="linenos">  2</span><span class="c1">//</span>
+<span class="linenos">  3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
+<span class="linenos">  4</span>
+<span class="linenos">  5</span><span class="cp">#pragma once</span>
+<span class="linenos">  6</span>
+<span class="linenos">  7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;optional&gt;</span>
+<span class="linenos">  8</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;variant&gt;</span>
+<span class="linenos">  9</span>
+<span class="linenos"> 10</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn/tensor/tensor.hpp"</span>
+<span class="linenos"> 11</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn/core.hpp"</span>
+<span class="linenos"> 12</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn/device_operation.hpp"</span>
+<span class="linenos"> 13</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn/types.hpp"</span>
+<span class="linenos"> 14</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn/decorators.hpp"</span>
+<span class="linenos"> 15</span>
+<span class="linenos"> 16</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 17</span>
+<span class="linenos"> 18</span><span class="k">struct</span><span class="w"> </span><span class="nc">ExampleDeviceOperation</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 19</span><span class="w">    </span><span class="c1">// Define the operation attributes. This is it to store all variables needed by operations that aren't tensors</span>
+<span class="linenos"> 20</span><span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">operation_attributes_t</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 21</span><span class="w">        </span><span class="kt">bool</span><span class="w"> </span><span class="n">attribute</span><span class="p">;</span>
+<span class="linenos"> 22</span><span class="w">        </span><span class="kt">int</span><span class="w"> </span><span class="n">some_other_attribute</span><span class="p">;</span>
+<span class="linenos"> 23</span><span class="w">    </span><span class="p">};</span>
+<span class="linenos"> 24</span>
+<span class="linenos"> 25</span><span class="w">    </span><span class="c1">// Define the tensor arguments. This is it to store all tensors passed in and/or out of the operation</span>
+<span class="linenos"> 26</span><span class="w">    </span><span class="c1">// Tensor arguments don't need to be just input tensors, they can be output tensors, input/output tensors, optional</span>
+<span class="linenos"> 27</span><span class="w">    </span><span class="c1">// tensors, etc.</span>
+<span class="linenos"> 28</span><span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">tensor_args_t</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 29</span><span class="w">        </span><span class="c1">// This example will use a tensor that can only be used as an input</span>
+<span class="linenos"> 30</span><span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">;</span>
+<span class="linenos"> 31</span>
+<span class="linenos"> 32</span><span class="w">        </span><span class="c1">// However, the following examples show what else can be done with tensor_args_t</span>
+<span class="linenos"> 33</span>
+<span class="linenos"> 34</span><span class="w">        </span><span class="c1">// An example of the tensor that can be used for input/output or just for pre-allocated output</span>
+<span class="linenos"> 35</span><span class="w">        </span><span class="c1">// Tensor&amp; io_tensor;</span>
+<span class="linenos"> 36</span>
+<span class="linenos"> 37</span><span class="w">        </span><span class="c1">// An example of an optional tensor</span>
+<span class="linenos"> 38</span><span class="w">        </span><span class="c1">// std::optional&lt;Tensor&gt; optional_output_tensor;</span>
+<span class="linenos"> 39</span>
+<span class="linenos"> 40</span><span class="w">        </span><span class="c1">// An example of a vector of tensors</span>
+<span class="linenos"> 41</span><span class="w">        </span><span class="c1">// std::vector&lt;Tensor&gt; vector_of_tensors;</span>
+<span class="linenos"> 42</span>
+<span class="linenos"> 43</span><span class="w">        </span><span class="c1">// An example of a tuple of tensors</span>
+<span class="linenos"> 44</span><span class="w">        </span><span class="c1">// std::tuple&lt;Tensor, ...&gt; tuple_of_tensors;</span>
+<span class="linenos"> 45</span>
+<span class="linenos"> 46</span><span class="w">        </span><span class="c1">// An example of a vector of optional tensors</span>
+<span class="linenos"> 47</span><span class="w">        </span><span class="c1">// std::vector&lt;std::optional&lt;Tensor&gt;&gt; vector_of_optional_tensors;</span>
+<span class="linenos"> 48</span>
+<span class="linenos"> 49</span><span class="w">        </span><span class="c1">// An example of a tuple of tensors</span>
+<span class="linenos"> 50</span><span class="w">        </span><span class="c1">// std::tuple&lt;std::vector&lt;std::optional&lt;Tensor&gt;&gt;, std::optional&lt;Tensor&gt;&gt; some_crazy_tuple_of_tensors;</span>
+<span class="linenos"> 51</span><span class="w">    </span><span class="p">};</span>
+<span class="linenos"> 52</span>
+<span class="linenos"> 53</span><span class="w">    </span><span class="c1">// Define the return types for the spec(s) of the operation</span>
+<span class="linenos"> 54</span><span class="w">    </span><span class="c1">// Can be a single ttnn::TensorSpec, std::optional&lt;ttnn::TensorSpec&gt;, std::vector&lt;ttnn::TensorSpec&gt;,</span>
+<span class="linenos"> 55</span><span class="w">    </span><span class="c1">// std::tuple&lt;ttnn::TensorSpec&gt; etc.</span>
+<span class="linenos"> 56</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="n">spec_return_value_t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">TensorSpec</span><span class="p">;</span>
+<span class="linenos"> 57</span>
+<span class="linenos"> 58</span><span class="w">    </span><span class="c1">// Define the return types for the tensor(s) of the operation</span>
+<span class="linenos"> 59</span><span class="w">    </span><span class="c1">// Can be a single Tensor, std::optional&lt;Tensor, ...&gt;, std::vector&lt;Tensor&gt;, std::tuple&lt;Tensor, ...&gt; etc.</span>
+<span class="linenos"> 60</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="n">tensor_return_value_t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">Tensor</span><span class="p">;</span>
+<span class="linenos"> 61</span>
+<span class="linenos"> 62</span><span class="w">    </span><span class="c1">// Note spec_return_value_t and tensor_return_value_t should follow the same pattern</span>
+<span class="linenos"> 63</span><span class="w">    </span><span class="c1">// i.e. if spec_return_value_t is a std::vector&lt;std::optional&lt;ttnn::TensorSpec&gt;&gt; then tensor_return_value_t should</span>
+<span class="linenos"> 64</span><span class="w">    </span><span class="c1">// be std::vector&lt;std::optional&lt;Tensor&gt;&gt;</span>
+<span class="linenos"> 65</span>
+<span class="linenos"> 66</span><span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">SingleCore</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 67</span><span class="w">        </span><span class="c1">// Shared variables are the variables that are shared between the create and override_runtime_arguments methods</span>
+<span class="linenos"> 68</span><span class="w">        </span><span class="k">struct</span><span class="w"> </span><span class="nc">shared_variables_t</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 69</span><span class="w">            </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">KernelHandle</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="p">;</span>
+<span class="linenos"> 70</span><span class="w">            </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">KernelHandle</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="p">;</span>
+<span class="linenos"> 71</span><span class="w">        </span><span class="p">};</span>
+<span class="linenos"> 72</span><span class="w">        </span><span class="k">using</span><span class="w"> </span><span class="n">cached_program_t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">device_operation</span><span class="o">::</span><span class="n">CachedProgram</span><span class="o">&lt;</span><span class="n">shared_variables_t</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="linenos"> 73</span>
+<span class="linenos"> 74</span><span class="w">        </span><span class="k">static</span><span class="w"> </span><span class="n">cached_program_t</span><span class="w"> </span><span class="nf">create</span><span class="p">(</span>
+<span class="linenos"> 75</span><span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span>
+<span class="linenos"> 76</span><span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">,</span>
+<span class="linenos"> 77</span><span class="w">            </span><span class="n">tensor_return_value_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">);</span>
+<span class="linenos"> 78</span>
+<span class="linenos"> 79</span><span class="w">        </span><span class="k">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">override_runtime_arguments</span><span class="p">(</span>
+<span class="linenos"> 80</span><span class="w">            </span><span class="n">cached_program_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cached_program</span><span class="p">,</span>
+<span class="linenos"> 81</span><span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span>
+<span class="linenos"> 82</span><span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">,</span>
+<span class="linenos"> 83</span><span class="w">            </span><span class="n">tensor_return_value_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">);</span>
+<span class="linenos"> 84</span><span class="w">    </span><span class="p">};</span>
+<span class="linenos"> 85</span>
+<span class="linenos"> 86</span><span class="w">    </span><span class="k">struct</span><span class="w"> </span><span class="nc">MultiCore</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 87</span><span class="w">        </span><span class="c1">// Shared variables are the variables that are shared between the create and override_runtime_arguments methods</span>
+<span class="linenos"> 88</span><span class="w">        </span><span class="k">struct</span><span class="w"> </span><span class="nc">shared_variables_t</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 89</span><span class="w">            </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">KernelHandle</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="p">;</span>
+<span class="linenos"> 90</span><span class="w">            </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">KernelHandle</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="p">;</span>
+<span class="linenos"> 91</span><span class="w">            </span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="w"> </span><span class="n">num_cores</span><span class="p">;</span>
+<span class="linenos"> 92</span><span class="w">            </span><span class="n">std</span><span class="o">::</span><span class="kt">size_t</span><span class="w"> </span><span class="n">num_cores_y</span><span class="p">;</span>
+<span class="linenos"> 93</span><span class="w">        </span><span class="p">};</span>
+<span class="linenos"> 94</span><span class="w">        </span><span class="k">using</span><span class="w"> </span><span class="n">cached_program_t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">device_operation</span><span class="o">::</span><span class="n">CachedProgram</span><span class="o">&lt;</span><span class="n">shared_variables_t</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="linenos"> 95</span>
+<span class="linenos"> 96</span><span class="w">        </span><span class="k">static</span><span class="w"> </span><span class="n">cached_program_t</span><span class="w"> </span><span class="nf">create</span><span class="p">(</span>
+<span class="linenos"> 97</span><span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span>
+<span class="linenos"> 98</span><span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">,</span>
+<span class="linenos"> 99</span><span class="w">            </span><span class="n">tensor_return_value_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">);</span>
+<span class="linenos">100</span>
+<span class="linenos">101</span><span class="w">        </span><span class="k">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">override_runtime_arguments</span><span class="p">(</span>
+<span class="linenos">102</span><span class="w">            </span><span class="n">cached_program_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cached_program</span><span class="p">,</span>
+<span class="linenos">103</span><span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span>
+<span class="linenos">104</span><span class="w">            </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">,</span>
+<span class="linenos">105</span><span class="w">            </span><span class="n">tensor_return_value_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">);</span>
+<span class="linenos">106</span><span class="w">    </span><span class="p">};</span>
+<span class="linenos">107</span>
+<span class="linenos">108</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="n">program_factory_t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">variant</span><span class="o">&lt;</span><span class="n">SingleCore</span><span class="p">,</span><span class="w"> </span><span class="n">MultiCore</span><span class="o">&gt;</span><span class="p">;</span>
+<span class="linenos">109</span>
+<span class="linenos">110</span><span class="w">    </span><span class="c1">// Mandatory methods</span>
+<span class="linenos">111</span>
+<span class="linenos">112</span><span class="w">    </span><span class="c1">// Select the program factory based on the operation attributes and tensor args</span>
+<span class="linenos">113</span><span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">program_factory_t</span><span class="w"> </span><span class="nf">select_program_factory</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="p">);</span>
+<span class="linenos">114</span>
+<span class="linenos">115</span><span class="w">    </span><span class="c1">// Validate the operation when it creates a program. Usually will have more checks</span>
+<span class="linenos">116</span><span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">validate_on_program_cache_miss</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="p">);</span>
+<span class="linenos">117</span>
+<span class="linenos">118</span><span class="w">    </span><span class="c1">// Validate the operation when it reuses a program. Usually will have less checks</span>
+<span class="linenos">119</span><span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="nf">validate_on_program_cache_hit</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="p">);</span>
+<span class="linenos">120</span>
+<span class="linenos">121</span><span class="w">    </span><span class="c1">// Compute the output specs based on the operation attributes and tensor args</span>
+<span class="linenos">122</span><span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">spec_return_value_t</span><span class="w"> </span><span class="nf">compute_output_specs</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="p">);</span>
+<span class="linenos">123</span>
+<span class="linenos">124</span><span class="w">    </span><span class="c1">// Create the output tensors based on the operation attributes and tensor args</span>
+<span class="linenos">125</span><span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">tensor_return_value_t</span><span class="w"> </span><span class="nf">create_output_tensors</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="p">);</span>
+<span class="linenos">126</span>
+<span class="linenos">127</span><span class="w">    </span><span class="c1">// API call to map user arguments to operation attributes and tensor args.</span>
+<span class="linenos">128</span><span class="w">    </span><span class="c1">// This is the only method that is called by the user</span>
+<span class="linenos">129</span><span class="w">    </span><span class="c1">// The user will be able to call the operation using `tensor_return_value_t output =</span>
+<span class="linenos">130</span><span class="w">    </span><span class="c1">// ttnn::prim::example(input_tensor)` after the op is registered Keep in mind that the the overload with `queue_id`</span>
+<span class="linenos">131</span><span class="w">    </span><span class="c1">// argument will be added automatically for primitive operations So, the user can also call this operation using</span>
+<span class="linenos">132</span><span class="w">    </span><span class="c1">// `tensor_return_value_t output = ttnn::prim::example(queue_id, input_tensor)`</span>
+<span class="linenos">133</span><span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">tuple</span><span class="o">&lt;</span><span class="n">operation_attributes_t</span><span class="p">,</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">invoke</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">);</span>
+<span class="linenos">134</span>
+<span class="linenos">135</span><span class="w">    </span><span class="c1">// Optional methods</span>
+<span class="linenos">136</span>
+<span class="linenos">137</span><span class="w">    </span><span class="c1">// In case the operation need a custom hash function, the following method can be implemented</span>
+<span class="linenos">138</span><span class="w">    </span><span class="cm">/* static tt::stl::hash::hash_t compute_program_hash(</span>
+<span class="linenos">139</span><span class="cm">        const operation_attributes_t&amp;, const tensor_args_t&amp;);</span>
+<span class="linenos">140</span><span class="cm">    */</span>
+<span class="linenos">141</span>
+<span class="linenos">142</span><span class="w">    </span><span class="c1">// In case the operation needs a custom create_op_performance_model, this method can be implemented</span>
+<span class="linenos">143</span><span class="w">    </span><span class="cm">/*</span>
+<span class="linenos">144</span><span class="cm">    static tt::tt_metal::tt::tt_metal::operation::OpPerformanceModel create_op_performance_model(</span>
+<span class="linenos">145</span><span class="cm">        const operation_attributes_t&amp;,</span>
+<span class="linenos">146</span><span class="cm">        const tensor_args_t&amp;,</span>
+<span class="linenos">147</span><span class="cm">        tensor_return_value_t&amp;);</span>
+<span class="linenos">148</span><span class="cm">    */</span>
+<span class="linenos">149</span><span class="p">};</span>
+<span class="linenos">150</span>
+<span class="linenos">151</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+<span class="linenos">152</span>
+<span class="linenos">153</span><span class="c1">// Register the operation with the ttnn::register_operation API to make it available to the user as ttnn::prim::example</span>
+<span class="linenos">154</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">prim</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">155</span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">example</span><span class="w"> </span><span class="o">=</span>
+<span class="linenos">156</span><span class="w">    </span><span class="n">ttnn</span><span class="o">::</span><span class="n">register_operation</span><span class="o">&lt;</span><span class="s">"ttnn::prim::example"</span><span class="p">,</span><span class="w"> </span><span class="n">ttnn</span><span class="o">::</span><span class="n">operations</span><span class="o">::</span><span class="n">examples</span><span class="o">::</span><span class="n">ExampleDeviceOperation</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="linenos">157</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::prim</span>
+</pre></div>
+</div>
+</div>
+<div class="literal-block-wrapper docutils container" id="id2">
+<div class="code-block-caption">
+<span class="caption-text">ttnn/cpp/ttnn/operations/examples/example/device/example_device_operation.cpp</span><a class="headerlink" href="#id2" title="Permalink to this code"></a>
+</div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.</span>
+<span class="linenos"> 2</span><span class="c1">//</span>
+<span class="linenos"> 3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
+<span class="linenos"> 4</span>
+<span class="linenos"> 5</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"example_device_operation.hpp"</span>
+<span class="linenos"> 6</span>
+<span class="linenos"> 7</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 8</span>
+<span class="linenos"> 9</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">program_factory_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::select_program_factory</span><span class="p">(</span>
+<span class="linenos">10</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">11</span><span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">some_condition_based_on_operation_attributes_and_or_tensor_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">true</span><span class="p">;</span>
+<span class="linenos">12</span><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">some_condition_based_on_operation_attributes_and_or_tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">13</span><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">SingleCore</span><span class="p">{};</span>
+<span class="linenos">14</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">15</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">MultiCore</span><span class="p">{};</span>
+<span class="linenos">16</span><span class="p">}</span>
+<span class="linenos">17</span>
+<span class="linenos">18</span><span class="kt">void</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::validate_on_program_cache_miss</span><span class="p">(</span>
+<span class="linenos">19</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">attributes</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
+<span class="linenos">20</span>
+<span class="linenos">21</span><span class="kt">void</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::validate_on_program_cache_hit</span><span class="p">(</span>
+<span class="linenos">22</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">attributes</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{}</span>
+<span class="linenos">23</span>
+<span class="linenos">24</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">spec_return_value_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::compute_output_specs</span><span class="p">(</span>
+<span class="linenos">25</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">26</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">.</span><span class="n">input_tensor</span><span class="p">;</span>
+<span class="linenos">27</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">TensorSpec</span><span class="p">(</span>
+<span class="linenos">28</span><span class="w">        </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">logical_shape</span><span class="p">(),</span>
+<span class="linenos">29</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">TensorLayout</span><span class="p">(</span>
+<span class="linenos">30</span><span class="w">            </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">dtype</span><span class="p">(),</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">PageConfig</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">.</span><span class="n">layout</span><span class="p">()),</span><span class="w"> </span><span class="n">MemoryConfig</span><span class="p">{}));</span>
+<span class="linenos">31</span><span class="p">}</span>
+<span class="linenos">32</span>
+<span class="linenos">33</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">tensor_return_value_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::create_output_tensors</span><span class="p">(</span>
+<span class="linenos">34</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">35</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">output_spec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_output_specs</span><span class="p">(</span><span class="n">operation_attributes</span><span class="p">,</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">);</span>
+<span class="linenos">36</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="n">create_device_tensor</span><span class="p">(</span><span class="n">output_spec</span><span class="p">,</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">.</span><span class="n">input_tensor</span><span class="p">.</span><span class="n">device</span><span class="p">());</span>
+<span class="linenos">37</span><span class="p">}</span>
+<span class="linenos">38</span>
+<span class="linenos">39</span><span class="n">std</span><span class="o">::</span><span class="n">tuple</span><span class="o">&lt;</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">operation_attributes_t</span><span class="p">,</span><span class="w"> </span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">tensor_args_t</span><span class="o">&gt;</span>
+<span class="linenos">40</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">invoke</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">41</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">{</span><span class="n">operation_attributes_t</span><span class="p">{</span><span class="nb">true</span><span class="p">,</span><span class="w"> </span><span class="mi">42</span><span class="p">},</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="p">{</span><span class="n">input_tensor</span><span class="p">}};</span>
+<span class="linenos">42</span><span class="p">}</span>
+<span class="linenos">43</span>
+<span class="linenos">44</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+</pre></div>
+</div>
+</div>
+<div class="literal-block-wrapper docutils container" id="id3">
+<div class="code-block-caption">
+<span class="caption-text">ttnn/cpp/ttnn/operations/examples/example/device/single_core_program_factory.cpp</span><a class="headerlink" href="#id3" title="Permalink to this code"></a>
+</div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="linenos">  1</span><span class="c1">// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.</span>
+<span class="linenos">  2</span><span class="c1">//</span>
+<span class="linenos">  3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
+<span class="linenos">  4</span>
+<span class="linenos">  5</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"example_device_operation.hpp"</span>
+<span class="linenos">  6</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/work_split.hpp&gt;</span>
+<span class="linenos">  7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/tensor_accessor_args.hpp&gt;</span>
+<span class="linenos">  8</span>
+<span class="linenos">  9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 10</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">SingleCore</span><span class="o">::</span><span class="n">cached_program_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::SingleCore::create</span><span class="p">(</span>
+<span class="linenos"> 11</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span>
+<span class="linenos"> 12</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">,</span>
+<span class="linenos"> 13</span><span class="w">    </span><span class="n">tensor_return_value_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 14</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">tt</span><span class="p">;</span>
+<span class="linenos"> 15</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">tt</span><span class="o">::</span><span class="nn">tt_metal</span><span class="p">;</span>
+<span class="linenos"> 16</span>
+<span class="linenos"> 17</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">.</span><span class="n">input_tensor</span><span class="p">;</span>
+<span class="linenos"> 18</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">output_tensor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">;</span>
+<span class="linenos"> 19</span>
+<span class="linenos"> 20</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">src_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">buffer</span><span class="p">();</span>
+<span class="linenos"> 21</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">dst_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">output_tensor</span><span class="p">.</span><span class="n">buffer</span><span class="p">();</span>
+<span class="linenos"> 22</span>
+<span class="linenos"> 23</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">Program</span><span class="w"> </span><span class="n">program</span><span class="p">{};</span>
+<span class="linenos"> 24</span>
+<span class="linenos"> 25</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">DataFormat</span><span class="w"> </span><span class="n">cb_data_format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">datatype_to_dataformat_converter</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">.</span><span class="n">dtype</span><span class="p">());</span>
+<span class="linenos"> 26</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">detail</span><span class="o">::</span><span class="n">TileSize</span><span class="p">(</span><span class="n">cb_data_format</span><span class="p">);</span>
+<span class="linenos"> 27</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">DataFormat</span><span class="w"> </span><span class="n">cb_data_format_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">datatype_to_dataformat_converter</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">.</span><span class="n">dtype</span><span class="p">());</span>
+<span class="linenos"> 28</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">detail</span><span class="o">::</span><span class="n">TileSize</span><span class="p">(</span><span class="n">cb_data_format_output</span><span class="p">);</span>
+<span class="linenos"> 29</span>
+<span class="linenos"> 30</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">physical_volume</span><span class="p">()</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">constants</span><span class="o">::</span><span class="n">TILE_HW</span><span class="p">;</span>
+<span class="linenos"> 31</span>
+<span class="linenos"> 32</span><span class="w">    </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">compute_with_storage_grid_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="mi">1</span><span class="p">,</span><span class="w"> </span><span class="mi">1</span><span class="p">};</span>
+<span class="linenos"> 33</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_cores_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_with_storage_grid_size</span><span class="p">.</span><span class="n">y</span><span class="p">;</span>
+<span class="linenos"> 34</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="p">[</span><span class="n">num_cores</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">core_group_1</span><span class="p">,</span><span class="w"> </span><span class="n">core_group_2</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_per_core_group_1</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_per_core_group_2</span><span class="p">]</span><span class="w"> </span><span class="o">=</span>
+<span class="linenos"> 35</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">split_work_to_cores</span><span class="p">(</span><span class="n">compute_with_storage_grid_size</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">);</span>
+<span class="linenos"> 36</span>
+<span class="linenos"> 37</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">src0_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">;</span>
+<span class="linenos"> 38</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_input_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="linenos"> 39</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="w"> </span><span class="n">cb_src0_config</span><span class="w"> </span><span class="o">=</span>
+<span class="linenos"> 40</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="p">(</span><span class="n">num_input_tiles</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span><span class="w"> </span><span class="p">{{</span><span class="n">src0_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">cb_data_format</span><span class="p">}})</span>
+<span class="linenos"> 41</span><span class="w">            </span><span class="p">.</span><span class="n">set_page_size</span><span class="p">(</span><span class="n">src0_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">);</span>
+<span class="linenos"> 42</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">cb_src0_config</span><span class="p">);</span>
+<span class="linenos"> 43</span>
+<span class="linenos"> 44</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">output_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_2</span><span class="p">;</span>
+<span class="linenos"> 45</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_output_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="linenos"> 46</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="w"> </span><span class="n">cb_output_config</span><span class="w"> </span><span class="o">=</span>
+<span class="linenos"> 47</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="p">(</span>
+<span class="linenos"> 48</span><span class="w">            </span><span class="n">num_output_tiles</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">single_tile_size_output</span><span class="p">,</span><span class="w"> </span><span class="p">{{</span><span class="n">output_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">cb_data_format_output</span><span class="p">}})</span>
+<span class="linenos"> 49</span><span class="w">            </span><span class="p">.</span><span class="n">set_page_size</span><span class="p">(</span><span class="n">output_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">single_tile_size_output</span><span class="p">);</span>
+<span class="linenos"> 50</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">cb_output_config</span><span class="p">);</span>
+<span class="linenos"> 51</span>
+<span class="linenos"> 52</span><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reader_compile_time_args</span><span class="p">;</span>
+<span class="linenos"> 53</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">src_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">reader_compile_time_args</span><span class="p">);</span>
+<span class="linenos"> 54</span><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">writer_compile_time_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="n">output_cb_index</span><span class="p">};</span>
+<span class="linenos"> 55</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">dst_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">writer_compile_time_args</span><span class="p">);</span>
+<span class="linenos"> 56</span>
+<span class="linenos"> 57</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">KernelHandle</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="linenos"> 58</span><span class="w">        </span><span class="n">program</span><span class="p">,</span>
+<span class="linenos"> 59</span><span class="w">        </span><span class="s">"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp"</span><span class="p">,</span>
+<span class="linenos"> 60</span><span class="w">        </span><span class="n">all_cores</span><span class="p">,</span>
+<span class="linenos"> 61</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">ReaderDataMovementConfig</span><span class="p">(</span><span class="n">reader_compile_time_args</span><span class="p">));</span>
+<span class="linenos"> 62</span>
+<span class="linenos"> 63</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">KernelHandle</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="linenos"> 64</span><span class="w">        </span><span class="n">program</span><span class="p">,</span>
+<span class="linenos"> 65</span><span class="w">        </span><span class="s">"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"</span><span class="p">,</span>
+<span class="linenos"> 66</span><span class="w">        </span><span class="n">all_cores</span><span class="p">,</span>
+<span class="linenos"> 67</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">WriterDataMovementConfig</span><span class="p">(</span><span class="n">writer_compile_time_args</span><span class="p">));</span>
+<span class="linenos"> 68</span>
+<span class="linenos"> 69</span><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compute_kernel_args_group_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 70</span><span class="w">        </span><span class="n">num_tiles_per_core_group_1</span><span class="p">,</span><span class="w">  </span><span class="c1">// per_core_block_cnt</span>
+<span class="linenos"> 71</span><span class="w">        </span><span class="mi">1</span><span class="w">                            </span><span class="c1">// per_core_block_size</span>
+<span class="linenos"> 72</span><span class="w">    </span><span class="p">};</span>
+<span class="linenos"> 73</span>
+<span class="linenos"> 74</span><span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">math_approx_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="linenos"> 75</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="linenos"> 76</span><span class="w">        </span><span class="n">program</span><span class="p">,</span>
+<span class="linenos"> 77</span><span class="w">        </span><span class="s">"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp"</span><span class="p">,</span>
+<span class="linenos"> 78</span><span class="w">        </span><span class="n">core_group_1</span><span class="p">,</span>
+<span class="linenos"> 79</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">ComputeConfig</span><span class="p">{</span>
+<span class="linenos"> 80</span><span class="w">            </span><span class="p">.</span><span class="n">math_fidelity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MathFidelity</span><span class="o">::</span><span class="n">HiFi4</span><span class="p">,</span>
+<span class="linenos"> 81</span><span class="w">            </span><span class="p">.</span><span class="n">math_approx_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">math_approx_mode</span><span class="p">,</span>
+<span class="linenos"> 82</span><span class="w">            </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_kernel_args_group_1</span><span class="p">});</span>
+<span class="linenos"> 83</span>
+<span class="linenos"> 84</span><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">core_group_2</span><span class="p">.</span><span class="n">ranges</span><span class="p">().</span><span class="n">empty</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 85</span><span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compute_kernel_args_group_2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 86</span><span class="w">            </span><span class="n">num_tiles_per_core_group_2</span><span class="p">,</span><span class="w">  </span><span class="c1">// per_core_block_cnt</span>
+<span class="linenos"> 87</span><span class="w">            </span><span class="mi">1</span><span class="w">                            </span><span class="c1">// per_core_block_size</span>
+<span class="linenos"> 88</span><span class="w">        </span><span class="p">};</span>
+<span class="linenos"> 89</span>
+<span class="linenos"> 90</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="linenos"> 91</span><span class="w">            </span><span class="n">program</span><span class="p">,</span>
+<span class="linenos"> 92</span><span class="w">            </span><span class="s">"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp"</span><span class="p">,</span>
+<span class="linenos"> 93</span><span class="w">            </span><span class="n">core_group_2</span><span class="p">,</span>
+<span class="linenos"> 94</span><span class="w">            </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">ComputeConfig</span><span class="p">{</span>
+<span class="linenos"> 95</span><span class="w">                </span><span class="p">.</span><span class="n">math_fidelity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MathFidelity</span><span class="o">::</span><span class="n">HiFi4</span><span class="p">,</span>
+<span class="linenos"> 96</span><span class="w">                </span><span class="p">.</span><span class="n">math_approx_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">math_approx_mode</span><span class="p">,</span>
+<span class="linenos"> 97</span><span class="w">                </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_kernel_args_group_2</span><span class="p">});</span>
+<span class="linenos"> 98</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos"> 99</span>
+<span class="linenos">100</span><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_cores</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">101</span><span class="w">        </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="n">i</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">num_cores_y</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="n">num_cores_y</span><span class="p">};</span>
+<span class="linenos">102</span><span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="linenos">103</span><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">core_group_1</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="n">core</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">104</span><span class="w">            </span><span class="n">num_tiles_per_core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">num_tiles_per_core_group_1</span><span class="p">;</span>
+<span class="linenos">105</span><span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">core_group_2</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="n">core</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">106</span><span class="w">            </span><span class="n">num_tiles_per_core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">num_tiles_per_core_group_2</span><span class="p">;</span>
+<span class="linenos">107</span><span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">108</span><span class="w">            </span><span class="n">TT_ASSERT</span><span class="p">(</span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="s">"Core not in specified core ranges"</span><span class="p">);</span>
+<span class="linenos">109</span><span class="w">        </span><span class="p">}</span>
+<span class="linenos">110</span>
+<span class="linenos">111</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span>
+<span class="linenos">112</span><span class="w">            </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">src_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="p">});</span>
+<span class="linenos">113</span>
+<span class="linenos">114</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span>
+<span class="linenos">115</span><span class="w">            </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">dst_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="p">});</span>
+<span class="linenos">116</span><span class="w">        </span><span class="n">num_tiles_written</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">;</span>
+<span class="linenos">117</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">118</span>
+<span class="linenos">119</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">120</span><span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">program</span><span class="p">),</span>
+<span class="linenos">121</span><span class="w">        </span><span class="p">{.</span><span class="n">unary_reader_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="p">,</span><span class="w"> </span><span class="p">.</span><span class="n">unary_writer_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="p">}};</span>
+<span class="linenos">122</span><span class="p">}</span>
+<span class="linenos">123</span>
+<span class="linenos">124</span><span class="kt">void</span><span class="w"> </span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">SingleCore</span><span class="o">::</span><span class="n">override_runtime_arguments</span><span class="p">(</span>
+<span class="linenos">125</span><span class="w">    </span><span class="n">cached_program_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cached_program</span><span class="p">,</span>
+<span class="linenos">126</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span>
+<span class="linenos">127</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">,</span>
+<span class="linenos">128</span><span class="w">    </span><span class="n">tensor_return_value_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">129</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">program</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cached_program</span><span class="p">.</span><span class="n">program</span><span class="p">;</span>
+<span class="linenos">130</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cached_program</span><span class="p">.</span><span class="n">shared_variables</span><span class="p">.</span><span class="n">unary_reader_kernel_id</span><span class="p">;</span>
+<span class="linenos">131</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cached_program</span><span class="p">.</span><span class="n">shared_variables</span><span class="p">.</span><span class="n">unary_writer_kernel_id</span><span class="p">;</span>
+<span class="linenos">132</span>
+<span class="linenos">133</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">.</span><span class="n">input_tensor</span><span class="p">;</span>
+<span class="linenos">134</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">output_tensor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">;</span>
+<span class="linenos">135</span>
+<span class="linenos">136</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">src_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">buffer</span><span class="p">();</span>
+<span class="linenos">137</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">dst_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">output_tensor</span><span class="p">.</span><span class="n">buffer</span><span class="p">();</span>
+<span class="linenos">138</span>
+<span class="linenos">139</span><span class="w">    </span><span class="p">{</span>
+<span class="linenos">140</span><span class="w">        </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">runtime_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">GetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="p">,</span><span class="w"> </span><span class="n">CoreCoord</span><span class="p">{</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">});</span>
+<span class="linenos">141</span><span class="w">        </span><span class="n">runtime_args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">();</span>
+<span class="linenos">142</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">143</span>
+<span class="linenos">144</span><span class="w">    </span><span class="p">{</span>
+<span class="linenos">145</span><span class="w">        </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">runtime_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">GetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="p">,</span><span class="w"> </span><span class="n">CoreCoord</span><span class="p">{</span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="mi">0</span><span class="p">});</span>
+<span class="linenos">146</span><span class="w">        </span><span class="n">runtime_args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">();</span>
+<span class="linenos">147</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">148</span><span class="p">}</span>
+<span class="linenos">149</span>
+<span class="linenos">150</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+</pre></div>
+</div>
+</div>
+<div class="literal-block-wrapper docutils container" id="id4">
+<div class="code-block-caption">
+<span class="caption-text">ttnn/cpp/ttnn/operations/examples/example/device/multi_core_program_factory.cpp</span><a class="headerlink" href="#id4" title="Permalink to this code"></a>
+</div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="linenos">  1</span><span class="c1">// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.</span>
+<span class="linenos">  2</span><span class="c1">//</span>
+<span class="linenos">  3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
+<span class="linenos">  4</span>
+<span class="linenos">  5</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"example_device_operation.hpp"</span>
+<span class="linenos">  6</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/work_split.hpp&gt;</span>
+<span class="linenos">  7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">&lt;tt-metalium/tensor_accessor_args.hpp&gt;</span>
+<span class="linenos">  8</span>
+<span class="linenos">  9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 10</span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">MultiCore</span><span class="o">::</span><span class="n">cached_program_t</span><span class="w"> </span><span class="nf">ExampleDeviceOperation::MultiCore::create</span><span class="p">(</span>
+<span class="linenos"> 11</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span>
+<span class="linenos"> 12</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">,</span>
+<span class="linenos"> 13</span><span class="w">    </span><span class="n">tensor_return_value_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 14</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">tt</span><span class="p">;</span>
+<span class="linenos"> 15</span><span class="w">    </span><span class="k">using</span><span class="w"> </span><span class="k">namespace</span><span class="w"> </span><span class="nn">tt</span><span class="o">::</span><span class="nn">tt_metal</span><span class="p">;</span>
+<span class="linenos"> 16</span>
+<span class="linenos"> 17</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">.</span><span class="n">input_tensor</span><span class="p">;</span>
+<span class="linenos"> 18</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">output_tensor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">;</span>
+<span class="linenos"> 19</span>
+<span class="linenos"> 20</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">src_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">buffer</span><span class="p">();</span>
+<span class="linenos"> 21</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">dst_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">output_tensor</span><span class="p">.</span><span class="n">buffer</span><span class="p">();</span>
+<span class="linenos"> 22</span>
+<span class="linenos"> 23</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">Program</span><span class="w"> </span><span class="n">program</span><span class="p">{};</span>
+<span class="linenos"> 24</span>
+<span class="linenos"> 25</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">DataFormat</span><span class="w"> </span><span class="n">cb_data_format</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">datatype_to_dataformat_converter</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">.</span><span class="n">dtype</span><span class="p">());</span>
+<span class="linenos"> 26</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">detail</span><span class="o">::</span><span class="n">TileSize</span><span class="p">(</span><span class="n">cb_data_format</span><span class="p">);</span>
+<span class="linenos"> 27</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">DataFormat</span><span class="w"> </span><span class="n">cb_data_format_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">datatype_to_dataformat_converter</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">.</span><span class="n">dtype</span><span class="p">());</span>
+<span class="linenos"> 28</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">single_tile_size_output</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">detail</span><span class="o">::</span><span class="n">TileSize</span><span class="p">(</span><span class="n">cb_data_format_output</span><span class="p">);</span>
+<span class="linenos"> 29</span>
+<span class="linenos"> 30</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">physical_volume</span><span class="p">()</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">constants</span><span class="o">::</span><span class="n">TILE_HW</span><span class="p">;</span>
+<span class="linenos"> 31</span>
+<span class="linenos"> 32</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">IDevice</span><span class="o">*</span><span class="w"> </span><span class="n">device</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">device</span><span class="p">();</span>
+<span class="linenos"> 33</span>
+<span class="linenos"> 34</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">compute_with_storage_grid_size</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">device</span><span class="o">-&gt;</span><span class="n">compute_with_storage_grid_size</span><span class="p">();</span>
+<span class="linenos"> 35</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_cores_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_with_storage_grid_size</span><span class="p">.</span><span class="n">y</span><span class="p">;</span>
+<span class="linenos"> 36</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="p">[</span><span class="n">num_cores</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">core_group_1</span><span class="p">,</span><span class="w"> </span><span class="n">core_group_2</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_per_core_group_1</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_per_core_group_2</span><span class="p">]</span><span class="w"> </span><span class="o">=</span>
+<span class="linenos"> 37</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">split_work_to_cores</span><span class="p">(</span><span class="n">compute_with_storage_grid_size</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles</span><span class="p">);</span>
+<span class="linenos"> 38</span>
+<span class="linenos"> 39</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">src0_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_0</span><span class="p">;</span>
+<span class="linenos"> 40</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_input_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="linenos"> 41</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="w"> </span><span class="n">cb_src0_config</span><span class="w"> </span><span class="o">=</span>
+<span class="linenos"> 42</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="p">(</span><span class="n">num_input_tiles</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">,</span><span class="w"> </span><span class="p">{{</span><span class="n">src0_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">cb_data_format</span><span class="p">}})</span>
+<span class="linenos"> 43</span><span class="w">            </span><span class="p">.</span><span class="n">set_page_size</span><span class="p">(</span><span class="n">src0_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">single_tile_size</span><span class="p">);</span>
+<span class="linenos"> 44</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">cb_src0_config</span><span class="p">);</span>
+<span class="linenos"> 45</span>
+<span class="linenos"> 46</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">output_cb_index</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">CBIndex</span><span class="o">::</span><span class="n">c_2</span><span class="p">;</span>
+<span class="linenos"> 47</span><span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_output_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">2</span><span class="p">;</span>
+<span class="linenos"> 48</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="w"> </span><span class="n">cb_output_config</span><span class="w"> </span><span class="o">=</span>
+<span class="linenos"> 49</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CircularBufferConfig</span><span class="p">(</span>
+<span class="linenos"> 50</span><span class="w">            </span><span class="n">num_output_tiles</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="n">single_tile_size_output</span><span class="p">,</span><span class="w"> </span><span class="p">{{</span><span class="n">output_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">cb_data_format_output</span><span class="p">}})</span>
+<span class="linenos"> 51</span><span class="w">            </span><span class="p">.</span><span class="n">set_page_size</span><span class="p">(</span><span class="n">output_cb_index</span><span class="p">,</span><span class="w"> </span><span class="n">single_tile_size_output</span><span class="p">);</span>
+<span class="linenos"> 52</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateCircularBuffer</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">all_cores</span><span class="p">,</span><span class="w"> </span><span class="n">cb_output_config</span><span class="p">);</span>
+<span class="linenos"> 53</span>
+<span class="linenos"> 54</span><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">reader_compile_time_args</span><span class="p">;</span>
+<span class="linenos"> 55</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">src_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">reader_compile_time_args</span><span class="p">);</span>
+<span class="linenos"> 56</span><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">writer_compile_time_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{(</span><span class="n">std</span><span class="o">::</span><span class="kt">uint32_t</span><span class="p">)</span><span class="n">output_cb_index</span><span class="p">};</span>
+<span class="linenos"> 57</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">TensorAccessorArgs</span><span class="p">(</span><span class="o">*</span><span class="n">dst_buffer</span><span class="p">).</span><span class="n">append_to</span><span class="p">(</span><span class="n">writer_compile_time_args</span><span class="p">);</span>
+<span class="linenos"> 58</span>
+<span class="linenos"> 59</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">KernelHandle</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="linenos"> 60</span><span class="w">        </span><span class="n">program</span><span class="p">,</span>
+<span class="linenos"> 61</span><span class="w">        </span><span class="s">"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp"</span><span class="p">,</span>
+<span class="linenos"> 62</span><span class="w">        </span><span class="n">all_cores</span><span class="p">,</span>
+<span class="linenos"> 63</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">ReaderDataMovementConfig</span><span class="p">(</span><span class="n">reader_compile_time_args</span><span class="p">));</span>
+<span class="linenos"> 64</span>
+<span class="linenos"> 65</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">KernelHandle</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="linenos"> 66</span><span class="w">        </span><span class="n">program</span><span class="p">,</span>
+<span class="linenos"> 67</span><span class="w">        </span><span class="s">"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp"</span><span class="p">,</span>
+<span class="linenos"> 68</span><span class="w">        </span><span class="n">all_cores</span><span class="p">,</span>
+<span class="linenos"> 69</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">WriterDataMovementConfig</span><span class="p">(</span><span class="n">writer_compile_time_args</span><span class="p">));</span>
+<span class="linenos"> 70</span>
+<span class="linenos"> 71</span><span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compute_kernel_args_group_1</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 72</span><span class="w">        </span><span class="n">num_tiles_per_core_group_1</span><span class="p">,</span><span class="w">  </span><span class="c1">// per_core_block_cnt</span>
+<span class="linenos"> 73</span><span class="w">        </span><span class="mi">1</span><span class="w">                            </span><span class="c1">// per_core_block_size</span>
+<span class="linenos"> 74</span><span class="w">    </span><span class="p">};</span>
+<span class="linenos"> 75</span>
+<span class="linenos"> 76</span><span class="w">    </span><span class="kt">bool</span><span class="w"> </span><span class="n">math_approx_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">false</span><span class="p">;</span>
+<span class="linenos"> 77</span><span class="w">    </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="linenos"> 78</span><span class="w">        </span><span class="n">program</span><span class="p">,</span>
+<span class="linenos"> 79</span><span class="w">        </span><span class="s">"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp"</span><span class="p">,</span>
+<span class="linenos"> 80</span><span class="w">        </span><span class="n">core_group_1</span><span class="p">,</span>
+<span class="linenos"> 81</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">ComputeConfig</span><span class="p">{</span>
+<span class="linenos"> 82</span><span class="w">            </span><span class="p">.</span><span class="n">math_fidelity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MathFidelity</span><span class="o">::</span><span class="n">HiFi4</span><span class="p">,</span>
+<span class="linenos"> 83</span><span class="w">            </span><span class="p">.</span><span class="n">math_approx_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">math_approx_mode</span><span class="p">,</span>
+<span class="linenos"> 84</span><span class="w">            </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_kernel_args_group_1</span><span class="p">});</span>
+<span class="linenos"> 85</span>
+<span class="linenos"> 86</span><span class="w">    </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="n">core_group_2</span><span class="p">.</span><span class="n">ranges</span><span class="p">().</span><span class="n">empty</span><span class="p">())</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 87</span><span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compute_kernel_args_group_2</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos"> 88</span><span class="w">            </span><span class="n">num_tiles_per_core_group_2</span><span class="p">,</span><span class="w">  </span><span class="c1">// per_core_block_cnt</span>
+<span class="linenos"> 89</span><span class="w">            </span><span class="mi">1</span><span class="w">                            </span><span class="c1">// per_core_block_size</span>
+<span class="linenos"> 90</span><span class="w">        </span><span class="p">};</span>
+<span class="linenos"> 91</span>
+<span class="linenos"> 92</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">CreateKernel</span><span class="p">(</span>
+<span class="linenos"> 93</span><span class="w">            </span><span class="n">program</span><span class="p">,</span>
+<span class="linenos"> 94</span><span class="w">            </span><span class="s">"ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp"</span><span class="p">,</span>
+<span class="linenos"> 95</span><span class="w">            </span><span class="n">core_group_2</span><span class="p">,</span>
+<span class="linenos"> 96</span><span class="w">            </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">ComputeConfig</span><span class="p">{</span>
+<span class="linenos"> 97</span><span class="w">                </span><span class="p">.</span><span class="n">math_fidelity</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MathFidelity</span><span class="o">::</span><span class="n">HiFi4</span><span class="p">,</span>
+<span class="linenos"> 98</span><span class="w">                </span><span class="p">.</span><span class="n">math_approx_mode</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">math_approx_mode</span><span class="p">,</span>
+<span class="linenos"> 99</span><span class="w">                </span><span class="p">.</span><span class="n">compile_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">compute_kernel_args_group_2</span><span class="p">});</span>
+<span class="linenos">100</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">101</span>
+<span class="linenos">102</span><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_cores</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">103</span><span class="w">        </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="n">i</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">num_cores_y</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="n">num_cores_y</span><span class="p">};</span>
+<span class="linenos">104</span><span class="w">        </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span>
+<span class="linenos">105</span><span class="w">        </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">core_group_1</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="n">core</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">106</span><span class="w">            </span><span class="n">num_tiles_per_core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">num_tiles_per_core_group_1</span><span class="p">;</span>
+<span class="linenos">107</span><span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">core_group_2</span><span class="p">.</span><span class="n">contains</span><span class="p">(</span><span class="n">core</span><span class="p">))</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">108</span><span class="w">            </span><span class="n">num_tiles_per_core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">num_tiles_per_core_group_2</span><span class="p">;</span>
+<span class="linenos">109</span><span class="w">        </span><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">110</span><span class="w">            </span><span class="n">TT_ASSERT</span><span class="p">(</span><span class="nb">false</span><span class="p">,</span><span class="w"> </span><span class="s">"Core not in specified core ranges"</span><span class="p">);</span>
+<span class="linenos">111</span><span class="w">        </span><span class="p">}</span>
+<span class="linenos">112</span>
+<span class="linenos">113</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span>
+<span class="linenos">114</span><span class="w">            </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">src_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="p">});</span>
+<span class="linenos">115</span>
+<span class="linenos">116</span><span class="w">        </span><span class="n">tt</span><span class="o">::</span><span class="n">tt_metal</span><span class="o">::</span><span class="n">SetRuntimeArgs</span><span class="p">(</span>
+<span class="linenos">117</span><span class="w">            </span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="p">{</span><span class="n">dst_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">(),</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">,</span><span class="w"> </span><span class="n">num_tiles_written</span><span class="p">});</span>
+<span class="linenos">118</span><span class="w">        </span><span class="n">num_tiles_written</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="n">num_tiles_per_core</span><span class="p">;</span>
+<span class="linenos">119</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">120</span>
+<span class="linenos">121</span><span class="w">    </span><span class="k">return</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">122</span><span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">move</span><span class="p">(</span><span class="n">program</span><span class="p">),</span>
+<span class="linenos">123</span><span class="w">        </span><span class="p">{.</span><span class="n">unary_reader_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="p">,</span>
+<span class="linenos">124</span><span class="w">         </span><span class="p">.</span><span class="n">unary_writer_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="p">,</span>
+<span class="linenos">125</span><span class="w">         </span><span class="p">.</span><span class="n">num_cores</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">num_cores</span><span class="p">,</span>
+<span class="linenos">126</span><span class="w">         </span><span class="p">.</span><span class="n">num_cores_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">num_cores_y</span><span class="p">}};</span>
+<span class="linenos">127</span><span class="p">}</span>
+<span class="linenos">128</span>
+<span class="linenos">129</span><span class="kt">void</span><span class="w"> </span><span class="n">ExampleDeviceOperation</span><span class="o">::</span><span class="n">MultiCore</span><span class="o">::</span><span class="n">override_runtime_arguments</span><span class="p">(</span>
+<span class="linenos">130</span><span class="w">    </span><span class="n">cached_program_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">cached_program</span><span class="p">,</span>
+<span class="linenos">131</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">operation_attributes_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">operation_attributes</span><span class="p">,</span>
+<span class="linenos">132</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="n">tensor_args_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">,</span>
+<span class="linenos">133</span><span class="w">    </span><span class="n">tensor_return_value_t</span><span class="o">&amp;</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">134</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">program</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cached_program</span><span class="p">.</span><span class="n">program</span><span class="p">;</span>
+<span class="linenos">135</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cached_program</span><span class="p">.</span><span class="n">shared_variables</span><span class="p">.</span><span class="n">unary_reader_kernel_id</span><span class="p">;</span>
+<span class="linenos">136</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cached_program</span><span class="p">.</span><span class="n">shared_variables</span><span class="p">.</span><span class="n">unary_writer_kernel_id</span><span class="p">;</span>
+<span class="linenos">137</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">num_cores</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cached_program</span><span class="p">.</span><span class="n">shared_variables</span><span class="p">.</span><span class="n">num_cores</span><span class="p">;</span>
+<span class="linenos">138</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">num_cores_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">cached_program</span><span class="p">.</span><span class="n">shared_variables</span><span class="p">.</span><span class="n">num_cores_y</span><span class="p">;</span>
+<span class="linenos">139</span>
+<span class="linenos">140</span><span class="w">    </span><span class="k">const</span><span class="w"> </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tensor_args</span><span class="p">.</span><span class="n">input_tensor</span><span class="p">;</span>
+<span class="linenos">141</span><span class="w">    </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">output_tensor</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">tensor_return_value</span><span class="p">;</span>
+<span class="linenos">142</span>
+<span class="linenos">143</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">src_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">.</span><span class="n">buffer</span><span class="p">();</span>
+<span class="linenos">144</span><span class="w">    </span><span class="k">auto</span><span class="w"> </span><span class="n">dst_buffer</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">output_tensor</span><span class="p">.</span><span class="n">buffer</span><span class="p">();</span>
+<span class="linenos">145</span>
+<span class="linenos">146</span><span class="w">    </span><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">num_cores</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">147</span><span class="w">        </span><span class="n">CoreCoord</span><span class="w"> </span><span class="n">core</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="n">i</span><span class="w"> </span><span class="o">/</span><span class="w"> </span><span class="n">num_cores_y</span><span class="p">,</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">%</span><span class="w"> </span><span class="n">num_cores_y</span><span class="p">};</span>
+<span class="linenos">148</span>
+<span class="linenos">149</span><span class="w">        </span><span class="p">{</span>
+<span class="linenos">150</span><span class="w">            </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">runtime_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">GetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_reader_kernel_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">);</span>
+<span class="linenos">151</span><span class="w">            </span><span class="n">runtime_args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">src_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">();</span>
+<span class="linenos">152</span><span class="w">        </span><span class="p">}</span>
+<span class="linenos">153</span>
+<span class="linenos">154</span><span class="w">        </span><span class="p">{</span>
+<span class="linenos">155</span><span class="w">            </span><span class="k">auto</span><span class="o">&amp;</span><span class="w"> </span><span class="n">runtime_args</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">GetRuntimeArgs</span><span class="p">(</span><span class="n">program</span><span class="p">,</span><span class="w"> </span><span class="n">unary_writer_kernel_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">);</span>
+<span class="linenos">156</span><span class="w">            </span><span class="n">runtime_args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">dst_buffer</span><span class="o">-&gt;</span><span class="n">address</span><span class="p">();</span>
+<span class="linenos">157</span><span class="w">        </span><span class="p">}</span>
+<span class="linenos">158</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">159</span><span class="p">}</span>
+<span class="linenos">160</span>
+<span class="linenos">161</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="step-2-implement-the-operation-in-c">
+<h4>Step 2: Implement the operation in C++<a class="headerlink" href="#step-2-implement-the-operation-in-c" title="Permalink to this heading"></a>
+</h4>
+<p>In order to add a new operation, add the following file:</p>
+<p><cite>ttnn/cpp/ttnn/operations/&lt;category&gt;/&lt;operation_name&gt;/&lt;operation_name&gt;.hpp</cite></p>
+<p>A concrete example:</p>
+<div class="literal-block-wrapper docutils container" id="id5">
+<div class="code-block-caption">
+<span class="caption-text">ttnn/cpp/ttnn/operations/examples/example/example.hpp</span><a class="headerlink" href="#id5" title="Permalink to this code"></a>
+</div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.</span>
+<span class="linenos"> 2</span><span class="c1">//</span>
+<span class="linenos"> 3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
+<span class="linenos"> 4</span>
+<span class="linenos"> 5</span><span class="cp">#pragma once</span>
+<span class="linenos"> 6</span>
+<span class="linenos"> 7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"device/example_device_operation.hpp"</span>
+<span class="linenos"> 8</span>
+<span class="linenos"> 9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">10</span>
+<span class="linenos">11</span><span class="c1">// A composite operation is an operation that calls multiple operations in sequence</span>
+<span class="linenos">12</span><span class="c1">// It is written using invoke and can be used to call multiple primitive and/or composite operations</span>
+<span class="linenos">13</span><span class="k">struct</span><span class="w"> </span><span class="nc">CompositeExampleOperation</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">14</span><span class="w">    </span><span class="c1">// The user will be able to call this method as `Tensor output = ttnn::composite_example(input_tensor)` after the op</span>
+<span class="linenos">15</span><span class="w">    </span><span class="c1">// is registered</span>
+<span class="linenos">16</span><span class="w">    </span><span class="k">static</span><span class="w"> </span><span class="n">Tensor</span><span class="w"> </span><span class="nf">invoke</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="o">&amp;</span><span class="w"> </span><span class="n">input_tensor</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">17</span><span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">copy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">prim</span><span class="o">::</span><span class="n">example</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">);</span>
+<span class="linenos">18</span><span class="w">        </span><span class="k">auto</span><span class="w"> </span><span class="n">another_copy</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">prim</span><span class="o">::</span><span class="n">example</span><span class="p">(</span><span class="n">copy</span><span class="p">);</span>
+<span class="linenos">19</span><span class="w">        </span><span class="k">return</span><span class="w"> </span><span class="n">another_copy</span><span class="p">;</span>
+<span class="linenos">20</span><span class="w">    </span><span class="p">}</span>
+<span class="linenos">21</span><span class="p">};</span>
+<span class="linenos">22</span>
+<span class="linenos">23</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+<span class="linenos">24</span>
+<span class="linenos">25</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">26</span><span class="k">constexpr</span><span class="w"> </span><span class="k">auto</span><span class="w"> </span><span class="n">composite_example</span><span class="w"> </span><span class="o">=</span>
+<span class="linenos">27</span><span class="w">    </span><span class="n">ttnn</span><span class="o">::</span><span class="n">register_operation</span><span class="o">&lt;</span><span class="s">"ttnn::composite_example"</span><span class="p">,</span><span class="w"> </span><span class="n">operations</span><span class="o">::</span><span class="n">examples</span><span class="o">::</span><span class="n">CompositeExampleOperation</span><span class="o">&gt;</span><span class="p">();</span>
+<span class="linenos">28</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn</span>
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+<section id="python-implementation">
+<h3>Python Implementation<a class="headerlink" href="#python-implementation" title="Permalink to this heading"></a>
+</h3>
+<section id="step-1-add-python-binding">
+<h4>Step 1: Add Python binding<a class="headerlink" href="#step-1-add-python-binding" title="Permalink to this heading"></a>
+</h4>
+<p>In order to add a python binding for the operation, follow the directory structure shown below:</p>
+<p><cite>ttnn/python/ttnn/operations/&lt;category&gt;/&lt;operation_name&gt;/&lt;operation_name&gt;_pybind.hpp</cite>
+<cite>ttnn/python/ttnn/operations/&lt;category&gt;/&lt;category&gt;_pybind.hpp</cite></p>
+<p>A concrete example:</p>
+<div class="literal-block-wrapper docutils container" id="id6">
+<div class="code-block-caption">
+<span class="caption-text">ttnn/cpp/ttnn/operations/examples/example/example_pybind.hpp</span><a class="headerlink" href="#id6" title="Permalink to this code"></a>
+</div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.</span>
+<span class="linenos"> 2</span><span class="c1">//</span>
+<span class="linenos"> 3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
+<span class="linenos"> 4</span>
+<span class="linenos"> 5</span><span class="cp">#pragma once</span>
+<span class="linenos"> 6</span>
+<span class="linenos"> 7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn-pybind/pybind_fwd.hpp"</span>
+<span class="linenos"> 8</span>
+<span class="linenos"> 9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">10</span><span class="k">namespace</span><span class="w"> </span><span class="nn">py</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nn">pybind11</span><span class="p">;</span>
+<span class="linenos">11</span>
+<span class="linenos">12</span><span class="kt">void</span><span class="w"> </span><span class="nf">bind_example_operation</span><span class="p">(</span><span class="n">py</span><span class="o">::</span><span class="k">module</span><span class="o">&amp;</span><span class="w"> </span><span class="k">module</span><span class="p">);</span>
+<span class="linenos">13</span>
+<span class="linenos">14</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+<span class="linenos">15</span>
+<span class="linenos">16</span><span class="cm">/*</span>
+<span class="linenos">17</span><span class="cm">void bind_example_operation(py::module&amp; module) {</span>
+<span class="linenos">18</span><span class="cm">    bind_registered_operation(</span>
+<span class="linenos">19</span><span class="cm">        module,</span>
+<span class="linenos">20</span><span class="cm">        ttnn::prim::example,</span>
+<span class="linenos">21</span><span class="cm">        R"doc(example(input_tensor: ttnn.Tensor) -&gt; ttnn.Tensor)doc",</span>
+<span class="linenos">22</span>
+<span class="linenos">23</span><span class="cm">        // Add pybind overloads for the C++ APIs that should be exposed to python</span>
+<span class="linenos">24</span><span class="cm">        // There should be no logic here, just a call to `self` with the correct arguments</span>
+<span class="linenos">25</span><span class="cm">        // The overload with `queue_id` argument will be added automatically for primitive operations</span>
+<span class="linenos">26</span><span class="cm">        // This specific function can be called from python as `ttnn.prim.example(input_tensor)` or</span>
+<span class="linenos">27</span><span class="cm">        // `ttnn.prim.example(input_tensor, queue_id=queue_id)`</span>
+<span class="linenos">28</span><span class="cm">        ttnn::pybind_overload_t{</span>
+<span class="linenos">29</span><span class="cm">            [](const decltype(ttnn::prim::example)&amp; self, const ttnn::Tensor&amp; input_tensor) -&gt; ttnn::Tensor {</span>
+<span class="linenos">30</span><span class="cm">                return self(input_tensor);</span>
+<span class="linenos">31</span><span class="cm">            },</span>
+<span class="linenos">32</span><span class="cm">            py::arg("input_tensor")});</span>
+<span class="linenos">33</span>
+<span class="linenos">34</span><span class="cm">    bind_registered_operation(</span>
+<span class="linenos">35</span><span class="cm">        module,</span>
+<span class="linenos">36</span><span class="cm">        ttnn::composite_example,</span>
+<span class="linenos">37</span><span class="cm">        R"doc(composite_example(input_tensor: ttnn.Tensor) -&gt; ttnn.Tensor)doc",</span>
+<span class="linenos">38</span>
+<span class="linenos">39</span><span class="cm">        // Add pybind overloads for the C++ APIs that should be exposed to python</span>
+<span class="linenos">40</span><span class="cm">        // There should be no logic here, just a call to `self` with the correct arguments</span>
+<span class="linenos">41</span><span class="cm">        ttnn::pybind_overload_t{</span>
+<span class="linenos">42</span><span class="cm">            [](const decltype(ttnn::composite_example)&amp; self, const ttnn::Tensor&amp; input_tensor) -&gt; ttnn::Tensor {</span>
+<span class="linenos">43</span><span class="cm">                return self(input_tensor);</span>
+<span class="linenos">44</span><span class="cm">            },</span>
+<span class="linenos">45</span><span class="cm">            py::arg("input_tensor")});</span>
+<span class="linenos">46</span><span class="cm">}</span>
+<span class="linenos">47</span><span class="cm">*/</span>
+</pre></div>
+</div>
+</div>
+<div class="literal-block-wrapper docutils container" id="id7">
+<div class="code-block-caption">
+<span class="caption-text">ttnn/cpp/ttnn/operations/examples/examples_pybind.hpp</span><a class="headerlink" href="#id7" title="Permalink to this code"></a>
+</div>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="linenos"> 1</span><span class="c1">// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.</span>
+<span class="linenos"> 2</span><span class="c1">//</span>
+<span class="linenos"> 3</span><span class="c1">// SPDX-License-Identifier: Apache-2.0</span>
+<span class="linenos"> 4</span>
+<span class="linenos"> 5</span><span class="cp">#pragma once</span>
+<span class="linenos"> 6</span>
+<span class="linenos"> 7</span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"ttnn-pybind/pybind_fwd.hpp"</span>
+<span class="linenos"> 8</span>
+<span class="linenos"> 9</span><span class="k">namespace</span><span class="w"> </span><span class="nn">ttnn</span><span class="o">::</span><span class="nn">operations</span><span class="o">::</span><span class="nn">examples</span><span class="w"> </span><span class="p">{</span>
+<span class="linenos">10</span><span class="k">namespace</span><span class="w"> </span><span class="nn">py</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nn">pybind11</span><span class="p">;</span>
+<span class="linenos">11</span>
+<span class="linenos">12</span><span class="kt">void</span><span class="w"> </span><span class="nf">py_module</span><span class="p">(</span><span class="n">py</span><span class="o">::</span><span class="k">module</span><span class="o">&amp;</span><span class="w"> </span><span class="k">module</span><span class="p">);</span>
+<span class="linenos">13</span>
+<span class="linenos">14</span><span class="p">}</span><span class="w">  </span><span class="c1">// namespace ttnn::operations::examples</span>
+</pre></div>
+</div>
+</div>
+<p>Finally, call the module defined in <cite>examples/example/example_pybind.hpp</cite> wherever you want it to be added.</p>
+</section>
+<section id="step-2-optional-add-golden-function-for-the-operation-in-python">
+<h4>Step 2: (Optional) Add golden function for the operation in Python<a class="headerlink" href="#step-2-optional-add-golden-function-for-the-operation-in-python" title="Permalink to this heading"></a>
+</h4>
+<p>A golden function can be added to an operation in order to compare its output with an equivalent <cite>torch</cite> implementation</p>
+<p>Add the following code in a python file:</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+
+<span class="c1"># For the golden function, use the same signature as the operation</span>
+<span class="c1"># Keep in mind that all `ttnn.Tensor`s are converted to `torch.Tensor`s</span>
+<span class="c1"># And arguments not needed by torch can be ignored using `*args` and `**kwargs`</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">golden_function</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">:</span> <span class="s2">"torch.Tensor"</span><span class="p">,</span> <span class="o">*</span><span class="n">args</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="n">output_tensor</span><span class="p">:</span>  <span class="s2">"torch.Tensor"</span> <span class="o">=</span> <span class="o">...</span>
+    <span class="k">return</span> <span class="n">output_tensor</span>
+
+<span class="c1"># TT-NN Tensors are converted to torch tensors before calling the golden function automatically</span>
+<span class="c1"># And the outputs are converted back to TT-NN Tensors</span>
+<span class="c1"># But in some cases you may need to preprocess the inputs and postprocess the outputs manually</span>
+
+<span class="c1"># In order to preprocess the inputs manually, use the following signature</span>
+<span class="c1"># Note that the arguments are not packed into *args and **kwargs as in the golden function!!!</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">preprocess_golden_function_inputs</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">):</span>
+    <span class="c1"># i.e.</span>
+    <span class="n">ttnn_input_tensor</span> <span class="o">=</span> <span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">ttnn_input_tensor</span><span class="p">)</span>
+
+<span class="c1"># In order to postprocess the outputs manually, use the following signature</span>
+<span class="c1"># Note that the arguments are not packed into *args and **kwargs as in the golden function!!!</span>
+<span class="k">def</span><span class="w"> </span><span class="nf">postprocess_golden_function_outputs</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">kwargs</span><span class="p">,</span> <span class="n">output</span><span class="p">):</span>
+    <span class="c1"># i.e.</span>
+    <span class="n">ttnn_input_tensor</span> <span class="o">=</span> <span class="n">args</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="n">torch_output_tensor</span> <span class="o">=</span> <span class="n">outputs</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">return</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_output_tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn_input_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">ttnn_input_tensor</span><span class="o">.</span><span class="n">device</span><span class="p">)</span>
+
+<span class="n">ttnn</span><span class="o">.</span><span class="n">attach_golden_function</span><span class="p">(</span>
+    <span class="n">ttnn</span><span class="o">.</span><span class="n">example</span><span class="p">,</span>
+    <span class="n">golden_function</span><span class="o">=</span><span class="n">golden_function</span><span class="p">,</span>
+    <span class="n">preprocess_golden_function_inputs</span><span class="o">=</span><span class="n">preprocess_golden_function_inputs</span><span class="p">,</span> <span class="c1"># Optional</span>
+    <span class="n">postprocess_golden_function_outputs</span><span class="o">=</span><span class="n">postprocess_golden_function_outputs</span> <span class="c1"># Optional</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><cite>ttnn.example</cite> is the name of the operation in Python because the operation was registered as <cite>ttnn::example</cite> in C++.</p>
+</div>
+</section>
+</section>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="converting_torch_model_to_ttnn.html" class="btn btn-neutral float-left" title="Converting PyTorch Model to TT-NN" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="profiling_ttnn_operations.html" class="btn btn-neutral float-right" title="Profiling TT-NN Operations" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

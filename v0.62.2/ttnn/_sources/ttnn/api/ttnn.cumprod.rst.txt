@@ -1,0 +1,8 @@
+﻿ttnn.cumprod
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.cumprod:
+
+.. autodata:: ttnn.cumprod

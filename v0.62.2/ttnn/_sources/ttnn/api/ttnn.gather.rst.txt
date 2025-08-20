@@ -1,0 +1,8 @@
+﻿ttnn.gather
+===========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.gather:
+
+.. autodata:: ttnn.gather
