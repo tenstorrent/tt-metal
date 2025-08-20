@@ -227,10 +227,12 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         Tensor index_full_tiled = ttnn::to_layout(index_full_reshaped, ttnn::TILE_LAYOUT);
 
         // Convert to UINT16
-        Tensor index_full_uint16_tiled = ttnn::typecast(index_full_tiled, DataType::UINT16);
+        Tensor index_full_uint16 = ttnn::typecast(index_full_tiled, DataType::UINT16);
 
         // Convert back to ROW_MAJOR layout
-        Tensor index_full_uint16 = ttnn::to_layout(index_full_uint16_tiled, ttnn::ROW_MAJOR_LAYOUT);
+        if (!is_in_tiled) {
+            index_full_uint16 = ttnn::to_layout(index_full_uint16, ttnn::ROW_MAJOR_LAYOUT);
+        }
 
         TT_FATAL(
             input_tensor_sharded.memory_config().is_sharded(), "Input tensor must be sharded to shard indices tensor.");
