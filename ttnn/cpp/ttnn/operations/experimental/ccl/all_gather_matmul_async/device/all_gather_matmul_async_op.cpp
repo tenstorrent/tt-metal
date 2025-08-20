@@ -268,6 +268,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         sub_device_id,
         /*cluster_axis=*/std::nullopt,
         false,
+        false,
         barrier_semaphore,
         using_persistent_buffers,
         chunks_per_sync,

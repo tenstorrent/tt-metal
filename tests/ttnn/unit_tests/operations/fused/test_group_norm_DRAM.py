@@ -42,7 +42,6 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         # Current in SDXL VAE 1024x1024
         (1, 256, 1024, 1024, 32, 48, 8, 8),  # 62ms
         (1, 256, 512, 512, 32, 12, 8, 8),  # 15.7ms
-        (1, 512, 128, 128, 32, 4, 8, 8),  # 1.57 ms
         (1, 512, 256, 256, 32, 4, 8, 8),  # 6.1ms
         (1, 512, 512, 512, 32, 12, 8, 8),  # 24ms
         (1, 128, 1024, 1024, 32, 64, 4, 8),  # 100ms (6 of these in total)

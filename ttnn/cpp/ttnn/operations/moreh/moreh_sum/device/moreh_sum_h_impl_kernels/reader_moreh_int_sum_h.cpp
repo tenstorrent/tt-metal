@@ -24,7 +24,7 @@ void kernel_main() {
 
 #ifdef DO_MASK_H
     constexpr uint32_t cb_id_mask_h = 1;
-    generate_int_mask_h(cb_id_mask_h, mask_h);
+    generate_mask_h<int32_t>(cb_id_mask_h, mask_h);
 #endif
 
     const auto s = TensorAccessor(src_args, src_addr, tile_bytes);
