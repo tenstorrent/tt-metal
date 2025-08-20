@@ -8,36 +8,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters
 from loguru import logger
 
-from models.experimental.panoptic_deeplab.reference.pytorch_stem import DeepLabStem
+from models.experimental.panoptic_deeplab.reference.pytorch_stem import StemBlock
 from models.experimental.panoptic_deeplab.tt.resnet.tt_stem import TtStem
-
-
-def create_random_stem_state_dict():
-    """Create random state dict for DeepLabStem."""
-    state_dict = {}
-
-    # Conv1: 3 -> 64 channels, 3x3 kernel, stride=2
-    state_dict["conv1.weight"] = torch.randn(64, 3, 3, 3, dtype=torch.bfloat16)
-    state_dict["conv1.norm.weight"] = torch.randn(64, dtype=torch.bfloat16)
-    state_dict["conv1.norm.bias"] = torch.randn(64, dtype=torch.bfloat16)
-    state_dict["conv1.norm.running_mean"] = torch.randn(64, dtype=torch.bfloat16)
-    state_dict["conv1.norm.running_var"] = torch.abs(torch.randn(64, dtype=torch.bfloat16)) + 1e-5
-
-    # Conv2: 64 -> 64 channels, 3x3 kernel, stride=1
-    state_dict["conv2.weight"] = torch.randn(64, 64, 3, 3, dtype=torch.bfloat16)
-    state_dict["conv2.norm.weight"] = torch.randn(64, dtype=torch.bfloat16)
-    state_dict["conv2.norm.bias"] = torch.randn(64, dtype=torch.bfloat16)
-    state_dict["conv2.norm.running_mean"] = torch.randn(64, dtype=torch.bfloat16)
-    state_dict["conv2.norm.running_var"] = torch.abs(torch.randn(64, dtype=torch.bfloat16)) + 1e-5
-
-    # Conv3: 64 -> 128 channels, 3x3 kernel, stride=1
-    state_dict["conv3.weight"] = torch.randn(128, 64, 3, 3, dtype=torch.bfloat16)
-    state_dict["conv3.norm.weight"] = torch.randn(128, dtype=torch.bfloat16)
-    state_dict["conv3.norm.bias"] = torch.randn(128, dtype=torch.bfloat16)
-    state_dict["conv3.norm.running_mean"] = torch.randn(128, dtype=torch.bfloat16)
-    state_dict["conv3.norm.running_var"] = torch.abs(torch.randn(128, dtype=torch.bfloat16)) + 1e-5
-
-    return state_dict
+from models.experimental.panoptic_deeplab.tt.common import create_random_stem_state_dict
 
 
 def create_stem_models(device=None):
@@ -47,7 +20,7 @@ def create_stem_models(device=None):
     state_dict = create_random_stem_state_dict()
 
     # Create PyTorch model
-    pytorch_model = DeepLabStem()
+    pytorch_model = StemBlock()
 
     # Load state dict into PyTorch model
     pytorch_model.load_state_dict(state_dict)

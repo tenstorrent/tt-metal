@@ -10,42 +10,7 @@ from loguru import logger
 
 from models.experimental.panoptic_deeplab.reference.pytorch_bottleneck import BottleneckBlock
 from models.experimental.panoptic_deeplab.tt.resnet.tt_bottleneck import TtBottleneck
-
-
-def create_random_state_dict(in_channels, bottleneck_channels, out_channels, has_shortcut=False):
-    """Create random state dict for BottleneckBlock."""
-    state_dict = {}
-
-    # Conv1 weights (1x1 conv)
-    state_dict["conv1.weight"] = torch.randn(bottleneck_channels, in_channels, 1, 1, dtype=torch.bfloat16)
-    state_dict["conv1.norm.weight"] = torch.randn(bottleneck_channels, dtype=torch.bfloat16)
-    state_dict["conv1.norm.bias"] = torch.randn(bottleneck_channels, dtype=torch.bfloat16)
-    state_dict["conv1.norm.running_mean"] = torch.randn(bottleneck_channels, dtype=torch.bfloat16)
-    state_dict["conv1.norm.running_var"] = torch.abs(torch.randn(bottleneck_channels, dtype=torch.bfloat16)) + 1e-5
-
-    # Conv2 weights (3x3 conv)
-    state_dict["conv2.weight"] = torch.randn(bottleneck_channels, bottleneck_channels, 3, 3, dtype=torch.bfloat16)
-    state_dict["conv2.norm.weight"] = torch.randn(bottleneck_channels, dtype=torch.bfloat16)
-    state_dict["conv2.norm.bias"] = torch.randn(bottleneck_channels, dtype=torch.bfloat16)
-    state_dict["conv2.norm.running_mean"] = torch.randn(bottleneck_channels, dtype=torch.bfloat16)
-    state_dict["conv2.norm.running_var"] = torch.abs(torch.randn(bottleneck_channels, dtype=torch.bfloat16)) + 1e-5
-
-    # Conv3 weights (1x1 conv)
-    state_dict["conv3.weight"] = torch.randn(out_channels, bottleneck_channels, 1, 1, dtype=torch.bfloat16)
-    state_dict["conv3.norm.weight"] = torch.randn(out_channels, dtype=torch.bfloat16)
-    state_dict["conv3.norm.bias"] = torch.randn(out_channels, dtype=torch.bfloat16)
-    state_dict["conv3.norm.running_mean"] = torch.randn(out_channels, dtype=torch.bfloat16)
-    state_dict["conv3.norm.running_var"] = torch.abs(torch.randn(out_channels, dtype=torch.bfloat16)) + 1e-5
-
-    # Shortcut weights (if needed)
-    if has_shortcut:
-        state_dict["shortcut.weight"] = torch.randn(out_channels, in_channels, 1, 1, dtype=torch.bfloat16)
-        state_dict["shortcut.norm.weight"] = torch.randn(out_channels, dtype=torch.bfloat16)
-        state_dict["shortcut.norm.bias"] = torch.randn(out_channels, dtype=torch.bfloat16)
-        state_dict["shortcut.norm.running_mean"] = torch.randn(out_channels, dtype=torch.bfloat16)
-        state_dict["shortcut.norm.running_var"] = torch.abs(torch.randn(out_channels, dtype=torch.bfloat16)) + 1e-5
-
-    return state_dict
+from models.experimental.panoptic_deeplab.tt.common import create_random_bottleneck_state_dict
 
 
 def create_bottleneck_models(
@@ -61,7 +26,7 @@ def create_bottleneck_models(
     """Create both PyTorch and TTNN BottleneckBlock models with same weights."""
 
     # Create random state dict
-    state_dict = create_random_state_dict(in_channels, bottleneck_channels, out_channels, has_shortcut)
+    state_dict = create_random_bottleneck_state_dict(in_channels, bottleneck_channels, out_channels, has_shortcut)
 
     # Create PyTorch model
     pytorch_model = BottleneckBlock(

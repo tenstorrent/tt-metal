@@ -43,7 +43,10 @@ class TtStem(nn.Module):
         )
 
         self.conv3 = TtConv2d(
-            TtConv2dParameters.from_torch(conv3_state, device=device, dtype=dtype), stride=(1, 1), padding=(1, 1)
+            TtConv2dParameters.from_torch(conv3_state, device=device, dtype=dtype),
+            stride=(1, 1),
+            padding=(1, 1),
+            slice_count=2,
         )
 
         # Extract normalization parameters
@@ -154,9 +157,10 @@ class TtStem(nn.Module):
         # Conv1 + BatchNorm + ReLU
         x = self.conv1(x)
         # Convert NHWC to NCHW for batch_norm
-        x = ttnn.permute(x, (0, 3, 1, 2))
-        x = ttnn.batch_norm(
-            x,
+        x_permuted = ttnn.permute(x, (0, 3, 1, 2))
+        ttnn.deallocate(x)
+        x_normed = ttnn.batch_norm(
+            x_permuted,
             running_mean=self.conv1_norm_running_mean,
             running_var=self.conv1_norm_running_var,
             weight=self.conv1_norm_weight,
@@ -164,16 +168,23 @@ class TtStem(nn.Module):
             eps=1e-05,
             training=False,
         )
+        ttnn.deallocate(x_permuted)
+
         # Convert back to NHWC
-        x = ttnn.permute(x, (0, 2, 3, 1))
-        x = ttnn.relu(x)
+        x_permuted = ttnn.permute(x_normed, (0, 2, 3, 1))
+        ttnn.deallocate(x_normed)
+
+        x_relued = ttnn.relu(x_permuted)
+        ttnn.deallocate(x_permuted)
 
         # Conv2 + BatchNorm + ReLU
-        x = self.conv2(x)
+        x = self.conv2(x_relued)
+        ttnn.deallocate(x_relued)
         # Convert NHWC to NCHW for batch_norm
-        x = ttnn.permute(x, (0, 3, 1, 2))
-        x = ttnn.batch_norm(
-            x,
+        x_permuted = ttnn.permute(x, (0, 3, 1, 2))
+        ttnn.deallocate(x)
+        x_normed = ttnn.batch_norm(
+            x_permuted,
             running_mean=self.conv2_norm_running_mean,
             running_var=self.conv2_norm_running_var,
             weight=self.conv2_norm_weight,
@@ -181,16 +192,22 @@ class TtStem(nn.Module):
             eps=1e-05,
             training=False,
         )
+        ttnn.deallocate(x_permuted)
         # Convert back to NHWC
-        x = ttnn.permute(x, (0, 2, 3, 1))
-        x = ttnn.relu(x)
+        x_permuted = ttnn.permute(x_normed, (0, 2, 3, 1))
+        ttnn.deallocate(x_normed)
+        x_relued = ttnn.relu(x_permuted)
+        ttnn.deallocate(x_permuted)
+        ttnn.move(x_relued)
 
         # Conv3 + BatchNorm + ReLU
-        x = self.conv3(x)
+        x = self.conv3(x_relued)
+        ttnn.deallocate(x_relued)
         # Convert NHWC to NCHW for batch_norm
-        x = ttnn.permute(x, (0, 3, 1, 2))
-        x = ttnn.batch_norm(
-            x,
+        x_permuted = ttnn.permute(x, (0, 3, 1, 2))
+        ttnn.deallocate(x)
+        x_normed = ttnn.batch_norm(
+            x_permuted,
             running_mean=self.conv3_norm_running_mean,
             running_var=self.conv3_norm_running_var,
             weight=self.conv3_norm_weight,
@@ -198,8 +215,30 @@ class TtStem(nn.Module):
             eps=1e-05,
             training=False,
         )
+        ttnn.deallocate(x_permuted)
         # Convert back to NHWC
-        x = ttnn.permute(x, (0, 2, 3, 1))
-        x = ttnn.relu(x)
+        x_permuted = ttnn.permute(x_normed, (0, 2, 3, 1))
+        ttnn.deallocate(x_normed)
+        x_relued = ttnn.relu(x_permuted)
+        ttnn.deallocate(x_permuted)
 
-        return x
+        # Max pooling with kernel_size=3, stride=2, padding=1
+        # Extract tensor dimensions from the shape
+        batch_size, input_h, input_w, channels = x_relued.shape
+        x_relued = ttnn.reshape(x_relued, (1, 1, batch_size * input_h * input_w, channels))
+        x_pooled = ttnn.max_pool2d(
+            x_relued,
+            batch_size=batch_size,
+            input_h=input_h,
+            input_w=input_w,
+            channels=channels,
+            kernel_size=[3, 3],
+            stride=[2, 2],
+            padding=[1, 1],
+            dilation=[1, 1],
+            ceil_mode=False,
+        )
+        ttnn.deallocate(x_relued)
+        x_pooled = ttnn.reshape(x_pooled, (batch_size, input_h // 2, input_w // 2, channels))
+
+        return x_pooled

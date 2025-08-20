@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 from typing import Dict
 
-from models.experimental.panoptic_deeplab.reference.pytorch_stem import DeepLabStem
+from models.experimental.panoptic_deeplab.reference.pytorch_stem import StemBlock
 from models.experimental.panoptic_deeplab.reference.pytorch_bottleneck import BottleneckBlock
 
 
@@ -25,7 +25,7 @@ class ResNet(nn.Module):
         super().__init__()
 
         # Initialize stem
-        self.stem = DeepLabStem()
+        self.stem = StemBlock()
 
         # Initialize res2 (3 blocks, first has shortcut)
         # Input: 128 channels from stem, Output: 256 channels
