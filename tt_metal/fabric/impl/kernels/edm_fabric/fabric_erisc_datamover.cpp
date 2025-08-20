@@ -2053,9 +2053,6 @@ void kernel_main() {
     const auto downstream_edm_vc0_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc0_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    // remote address for flow control
-    const auto downstream_edm_vc0_semaphore_id =
-        get_arg_val<uint32_t>(arg_idx++);  // TODO: Convert to semaphore ID // UC: Remove
     const auto downstream_edm_vc0_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc0_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_vc0_noc_interface_buffer_index_local_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -2066,25 +2063,9 @@ void kernel_main() {
     const auto downstream_edm_vc1_noc_x = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc1_noc_y = get_arg_val<uint32_t>(arg_idx++);
 
-    // remote address for flow control
-    const auto downstream_edm_vc1_semaphore_id =
-        get_arg_val<uint32_t>(arg_idx++);  // TODO: Convert to semaphore ID // UC: Remove
     const auto downstream_edm_vc1_worker_registration_id = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_edm_vc1_worker_location_info_address = get_arg_val<uint32_t>(arg_idx++);
     const auto downstream_vc1_noc_interface_buffer_index_local_addr = get_arg_val<uint32_t>(arg_idx++);
-
-    // Receiver channels local semaphore for managing flow control with the downstream EDM.
-    // The downstream EDM should be sending semaphore updates to this address any time it can
-    // accept a new message
-    // 1D has 1 downstream EDM for line and 2 downstream EDMs for ring.
-    // 2D has 3 downstream EDMs for mesh but we allocate 4 to simplify connectivity. 1 corresponding to router's own
-    // direction stays unused. 2D torus has 4 downstream EDMs but we allocate 5 with one unused.
-    // UC: Remove
-    const auto my_sem_for_ack_from_downstream_edm_0 = get_arg_val<uint32_t>(arg_idx++);
-    const auto my_sem_for_ack_from_downstream_edm_1 = get_arg_val<uint32_t>(arg_idx++);
-    const auto my_sem_for_ack_from_downstream_edm_2 = get_arg_val<uint32_t>(arg_idx++);
-    const auto my_sem_for_ack_from_downstream_edm_3 = get_arg_val<uint32_t>(arg_idx++);
-    const auto my_sem_for_ack_from_downstream_edm_4 = get_arg_val<uint32_t>(arg_idx++);
 
     const auto my_sem_for_teardown_from_edm_0 = get_arg_val<uint32_t>(arg_idx++);
     const auto my_sem_for_teardown_from_edm_1 = get_arg_val<uint32_t>(arg_idx++);

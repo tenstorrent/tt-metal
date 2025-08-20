@@ -1330,7 +1330,6 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_edm_vcs_buffer_base_address[1].value_or(0),
         this->downstream_edm_vcs_noc_x[1].value_or(0),
         this->downstream_edm_vcs_noc_y[1].value_or(0),
-        this->downstream_edm_vcs_semaphore_address[1].value_or(-1),
         this->downstream_edm_vcs_worker_registration_address[1].value_or(0),
         this->downstream_edm_vcs_worker_location_info_address[1].value_or(0),
         this->receiver_channels_local_buffer_index_address[0],  // extend the following 3 for 2D. need 3 each for 2D.
@@ -1339,16 +1338,10 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
         this->downstream_edm_vcs_buffer_base_address[2].value_or(0),
         this->downstream_edm_vcs_noc_x[2].value_or(0),
         this->downstream_edm_vcs_noc_y[2].value_or(0),
-        this->downstream_edm_vcs_semaphore_address[2].value_or(-1),
         this->downstream_edm_vcs_worker_registration_address[2].value_or(0),
         this->downstream_edm_vcs_worker_location_info_address[2].value_or(0),
         this->receiver_channels_local_buffer_index_address[1],
-        // this is the receiver channel's local sem for flow controlling with downstream fabric sender
-        this->receiver_channels_downstream_flow_control_semaphore_id[0].value_or(-1),
-        this->receiver_channels_downstream_flow_control_semaphore_id[1].value_or(-1),
-        this->receiver_channels_downstream_flow_control_semaphore_id[2].value_or(-1),
-        this->receiver_channels_downstream_flow_control_semaphore_id[3].value_or(-1),
-        this->receiver_channels_downstream_flow_control_semaphore_id[4].value_or(-1),
+
         this->receiver_channels_downstream_teardown_semaphore_id[0].value_or(-1),
         this->receiver_channels_downstream_teardown_semaphore_id[1].value_or(-1),
         this->receiver_channels_downstream_teardown_semaphore_id[2].value_or(-1),
@@ -1547,7 +1540,6 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
     }
 
     this->downstream_edm_vcs_buffer_base_address[1] = adapter_spec.edm_buffer_base_addr;
-    this->downstream_edm_vcs_semaphore_address[1] = adapter_spec.edm_l1_sem_addr;
     this->downstream_edm_vcs_worker_registration_address[1] = adapter_spec.edm_connection_handshake_addr;
     this->downstream_edm_vcs_worker_location_info_address[1] = adapter_spec.edm_worker_location_info_addr;
 
@@ -1586,7 +1578,6 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamover
     this->downstream_edm_vcs_noc_x[2] = ds_noc_x;
     this->downstream_edm_vcs_noc_y[2] = ds_noc_y;
     this->downstream_edm_vcs_buffer_base_address[2] = adapter_spec.edm_buffer_base_addr;
-    this->downstream_edm_vcs_semaphore_address[2] = adapter_spec.edm_l1_sem_addr;
     this->downstream_edm_vcs_worker_registration_address[2] = adapter_spec.edm_connection_handshake_addr;
     this->downstream_edm_vcs_worker_location_info_address[2] = adapter_spec.edm_worker_location_info_addr;
     if (!is_2D_routing) {
