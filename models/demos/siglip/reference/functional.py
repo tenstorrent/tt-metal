@@ -70,13 +70,7 @@ def gelu_tanh(x):
     return (
         0.5
         * x
-        * (
-            1
-            + torch.tanh(
-                torch.sqrt(torch.tensor(2.0 / torch.pi, device=x.device))
-                * (x + 0.044715 * torch.pow(x, 3))
-            )
-        )
+        * (1 + torch.tanh(torch.sqrt(torch.tensor(2.0 / torch.pi, device=x.device)) * (x + 0.044715 * torch.pow(x, 3))))
     )
 
 
@@ -90,19 +84,10 @@ def siglip_mlp(
     vision_dim: int = 1152,
     vision_mlp_ratio: float = 4.0,
 ) -> torch.Tensor:
-    
-    hidden_states = F.linear(
-        hidden_states, 
-        state_dict["c_fc"]["weight"], 
-        state_dict["c_fc"].get("bias")
-    )
-    
+    hidden_states = F.linear(hidden_states, state_dict["c_fc"]["weight"], state_dict["c_fc"].get("bias"))
+
     hidden_states = gelu_tanh(hidden_states)
-    
-    hidden_states = F.linear(
-        hidden_states, 
-        state_dict["c_proj"]["weight"], 
-        state_dict["c_proj"].get("bias")
-    )
-    
+
+    hidden_states = F.linear(hidden_states, state_dict["c_proj"]["weight"], state_dict["c_proj"].get("bias"))
+
     return hidden_states

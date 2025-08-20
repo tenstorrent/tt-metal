@@ -54,9 +54,7 @@ def test_mlp(mesh_device, mlp_func, model_location_generator):
     random_inputs = (
         torch.rand(batch, seq_len, config.hidden_size, dtype=reference_mlp.state_dict()["fc1.weight"].dtype)
         * (expected_max_input_scale - expected_min_input_scale)
-    ) - (
-        (expected_max_input_scale - expected_min_input_scale) / 2
-    )
+) - ((expected_max_input_scale - expected_min_input_scale) / 2)    
 
     reference_output = reference_mlp(hidden_states=random_inputs)
 
