@@ -246,7 +246,8 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_height_shard
 
     // Calculate pages per core for height sharded tensors
     const auto total_output_pages = output_shape[0] * output_shape[1] * output_shape[2] * output_shape[3];  // N*D*H*W
-    const uint32_t pages_per_core = (total_output_pages + num_cores - 1) / num_cores;
+    // Split work between reader and writer RISC cores - each physical core has 2 RISC cores
+    const uint32_t pages_per_risc_core = (total_output_pages + (num_cores * 2) - 1) / (num_cores * 2);
 
     // Set runtime arguments for all cores
     std::vector<uint32_t> runtime_arguments{
@@ -265,15 +266,24 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_height_shard
     for (uint32_t i = 0; i < num_cores; ++i) {
         const auto& core = logical_cores[i];
 
-        // Calculate pages for this core
-        uint32_t start_page_id = i * pages_per_core;
-        uint32_t end_page_id = std::min((i + 1) * pages_per_core, total_output_pages);
-        uint32_t num_pages_this_core = end_page_id - start_page_id;
+        // Calculate pages for reader RISC core (NCRISC) - first half of the work
+        uint32_t reader_start_page_id = i * pages_per_risc_core * 2;  // Each physical core gets 2 * pages_per_risc_core
+        uint32_t reader_end_page_id = std::min(reader_start_page_id + pages_per_risc_core, total_output_pages);
+        uint32_t reader_num_pages = reader_end_page_id - reader_start_page_id;
 
-        runtime_arguments[2] = num_pages_this_core;  // num_output_pages
-        runtime_arguments[3] = start_page_id;        // start_output_page_id
+        // Calculate pages for writer RISC core (BRISC) - second half of the work
+        uint32_t writer_start_page_id = std::min(reader_end_page_id, total_output_pages);
+        uint32_t writer_end_page_id = std::min(writer_start_page_id + pages_per_risc_core, total_output_pages);
+        uint32_t writer_num_pages = writer_end_page_id - writer_start_page_id;
 
+        // Set runtime args for reader kernel (NCRISC)
+        runtime_arguments[2] = reader_num_pages;      // num_output_pages
+        runtime_arguments[3] = reader_start_page_id;  // start_output_page_id
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, runtime_arguments);
+
+        // Set runtime args for writer kernel (BRISC)
+        runtime_arguments[2] = writer_num_pages;      // num_output_pages
+        runtime_arguments[3] = writer_start_page_id;  // start_output_page_id
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, runtime_arguments);
     }
 

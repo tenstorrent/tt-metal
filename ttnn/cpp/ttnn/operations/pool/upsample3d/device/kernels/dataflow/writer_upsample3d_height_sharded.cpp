@@ -36,17 +36,13 @@ void kernel_main() {
     const uint32_t input_h = output_h / scale_factor_h;
     const uint32_t input_w = output_w / scale_factor_w;
 
-    // Only use one RISC to avoid race conditions
-    if (!is_reader) {
-        return;  // BRISC does nothing, only NCRISC processes
-    }
-
-    uint32_t pages_per_reader = num_output_pages;
-    uint32_t reader_start_page = start_output_page_id;
+    // Both RISC cores process their assigned work
+    uint32_t pages_to_process = num_output_pages;
+    uint32_t start_page = start_output_page_id;
 
     // WORK FROM OUTPUT PERSPECTIVE: Process assigned output pages
-    for (uint32_t page_idx = 0; page_idx < pages_per_reader; ++page_idx) {
-        uint32_t output_page_id = reader_start_page + page_idx;
+    for (uint32_t page_idx = 0; page_idx < pages_to_process; ++page_idx) {
+        uint32_t output_page_id = start_page + page_idx;
 
         // Convert output page ID to 3D coordinates (n, d, h, w)
         // For tensor [N, D, H, W, C]: page_id = n*(D*H*W) + d*(H*W) + h*W + w
