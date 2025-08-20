@@ -540,10 +540,10 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         .format_descriptors = {output_format_descriptor},
     };
 
-    uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    uint32_t src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t last_ktile_w = input_tensor_a.logical_shape()[-1] % tt::constants::TILE_WIDTH;
-    const KernelDescriptor::CompileTimeArgs reader_compile_time_args = {src0_is_dram, src1_is_dram, last_ktile_w};
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {last_ktile_w};
+    TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
     KernelDescriptor::CompileTimeArgs writer_compile_time_args = {(uint32_t)output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
@@ -687,7 +687,6 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpEltwiseSFPU) {
         device_input_tensor.device());
 
     auto input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(device_input_tensor.dtype());
-    uint32_t is_dram_input = device_input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     CoreCoord core = {0, 0};
     CoreRange core_range = {core, core};
