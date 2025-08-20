@@ -13,7 +13,6 @@ from models.demos.siglip.tests.common import flatten_state_dict
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_out_subblock_w
 from models.tt_transformers.tt.multimodal.llama_image_mlp import TtLlamaImageFeedForward
-from models.utility_functions import nearest_32
 
 
 def find_largest_divisor(n, max_divisor=8):
@@ -127,7 +126,7 @@ def siglip_mlp_ttnn(
 ) -> torch.Tensor:
     state_dict = flatten_state_dict(state_dict)
     grid = mesh_device.compute_with_storage_grid_size()
-    
+
     mlp_config = MLPConfig(
         num_devices=mesh_device.get_num_devices() if mesh_device else 0,
         vision_dim=vision_dim,
@@ -145,7 +144,7 @@ def siglip_mlp_ttnn(
         weight_cache_path=weight_cache_path,
         dtype=dtype,
     )
-    
+
     if isinstance(hidden_states, torch.Tensor):
         hidden_states = ttnn.from_torch(
             hidden_states,
@@ -160,5 +159,5 @@ def siglip_mlp_ttnn(
         output = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0]
     else:
         output = ttnn_mlp(hidden_states)
-    
+
     return output
