@@ -62,46 +62,81 @@ uint32_t write_operation_info_to_file(const std::string& callstack, const std::s
     std::filesystem::create_directories(dir_path);
 
     // Create filename with full path
-    std::string filename = dir_path + "/op_" + std::to_string(stack_id) + ".json";
-    // Write to JSON file
-    std::ofstream file(filename);
-    if (file.is_open()) {
-        file << "{\n";
-        file << "  \"operation_id\": " << stack_id << ",\n";
-        file << "  \"callstack\": \"";
-        // Escape quotes and newlines in callstack
-        for (char c : callstack) {
-            if (c == '"') {
-                file << "\\\"";
-            } else if (c == '\n') {
-                file << "\\n";
-            } else if (c == '\\') {
-                file << "\\\\";
-            } else {
-                file << c;
+    std::string filename = dir_path + "/ops.json";
+
+    // Check if file exists and has content
+    bool file_exists = std::filesystem::exists(filename);
+    bool is_empty = !file_exists || std::filesystem::file_size(filename) == 0;
+
+    if (is_empty) {
+        // Create new file with array start
+        std::ofstream file(filename);
+        if (file.is_open()) {
+            file << "[\n  {\"operation_id\": " << stack_id << ", \"callstack\": \"";
+            // Escape quotes and newlines in callstack
+            for (char c : callstack) {
+                if (c == '"') {
+                    file << "\\\"";
+                } else if (c == '\n') {
+                    file << "\\n";
+                } else if (c == '\\') {
+                    file << "\\\\";
+                } else {
+                    file << c;
+                }
             }
-        }
-        file << "\",\n";
-        file << "  \"arguments\": \"";
-        // Escape quotes and newlines in args
-        for (char c : args_info) {
-            if (c == '"') {
-                file << "\\\"";
-            } else if (c == '\n') {
-                file << "\\n";
-            } else if (c == '\\') {
-                file << "\\\\";
-            } else {
-                file << c;
+            file << "\", \"arguments\": \"";
+            // Escape quotes and newlines in args
+            for (char c : args_info) {
+                if (c == '"') {
+                    file << "\\\"";
+                } else if (c == '\n') {
+                    file << "\\n";
+                } else if (c == '\\') {
+                    file << "\\\\";
+                } else {
+                    file << c;
+                }
             }
+            file << "\"}\n]";
+            file.close();
         }
-        file << "\"\n";
-        file << "}\n";
-        file.close();
-        std::cout << "Operation dispatched with stack_id: " << stack_id << " -> " << filename << std::endl;
     } else {
-        std::cout << "Failed to write operation info to file: " << filename << std::endl;
+        // Append to existing array - remove closing ], add comma and new object, add closing ]
+        std::fstream file(filename, std::ios::in | std::ios::out);
+        if (file.is_open()) {
+            file.seekp(-1, std::ios::end);  // Go to before the last character (])
+            file << ",\n  {\"operation_id\": " << stack_id << ", \"callstack\": \"";
+            // Escape quotes and newlines in callstack
+            for (char c : callstack) {
+                if (c == '"') {
+                    file << "\\\"";
+                } else if (c == '\n') {
+                    file << "\\n";
+                } else if (c == '\\') {
+                    file << "\\\\";
+                } else {
+                    file << c;
+                }
+            }
+            file << "\", \"arguments\": \"";
+            // Escape quotes and newlines in args
+            for (char c : args_info) {
+                if (c == '"') {
+                    file << "\\\"";
+                } else if (c == '\n') {
+                    file << "\\n";
+                } else if (c == '\\') {
+                    file << "\\\\";
+                } else {
+                    file << c;
+                }
+            }
+            file << "\"}\n]";
+            file.close();
+        }
     }
+    std::cout << "Operation dispatched with stack_id: " << stack_id << " -> " << filename << std::endl;
     return stack_id;
 }
 
