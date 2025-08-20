@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "compute_kernel_api.h"
 
 namespace NAMESPACE {
@@ -25,7 +26,11 @@ void MAIN {
 
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
-    mm_init(in0_cb, in1_cb, out_cb);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(in0_cb, in1_cb, out_cb);
+
+    // Initialize matmul operation
+    matmul_init(in0_cb, in1_cb);
     for (uint32_t block_id = 0; block_id < num_blocks; block_id++) {
         acquire_dst();
         if (block_id > 0) {
@@ -35,25 +40,33 @@ void MAIN {
                 copy_tile(partials_cb, i, i);
             }
             cb_pop_front(partials_cb, out_block_num_tiles);
-            mm_init_short(in0_cb, in1_cb);
+            // Hardware startup - common MMIO configurations
+            compute_kernel_hw_startup(in0_cb, in1_cb);
         }
         uint32_t out_tile_index = 0;
         uint32_t in0_index_r_offset = 0;
         cb_wait_front(in0_cb, in0_block_num_tiles);
-        cb_wait_front(in1_cb, in1_block_num_tiles);
-        for (uint32_t r = 0; r < out_r; r++) {
-            for (uint32_t c = 0; c < out_c; c++) {
-                uint32_t in1_index_c_offset = 0;
-                for (uint32_t k = 0; k < in0_k; k++) {
-                    int in0_tile_index = in0_index_r_offset + k;
-                    int in1_tile_index = in1_index_c_offset + c;
-                    matmul_tiles(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index, transpose);
-                    in1_index_c_offset += k;
-                }
-                out_tile_index++;
+
+        // Initialize matmul operation
+        matmul_init(in0_cb, in1_cb);
+    }
+    uint32_t out_tile_index = 0;
+    uint32_t in0_index_r_offset = 0;
+    cb_wait_front(in0_cb);
+    cb_wait_front(in1_cb, in1_block_num_tiles);
+    for (uint32_t r = 0; r < out_r; r++) {
+        for (uint32_t c = 0; c < out_c; c++) {
+            uint32_t in1_index_c_offset = 0;
+            for (uint32_t k = 0; k < in0_k; k++) {
+                int in0_tile_index = in0_index_r_offset + k;
+                int in1_tile_index = in1_index_c_offset + c;
+                matmul_tile(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index, transpose);
+                in1_index_c_offset += k;
             }
-            in0_index_r_offset += in0_k;
+            out_tile_index++;
         }
+        in0_index_r_offset += in0_k;
+    }
         cb_pop_front(in0_cb, in0_block_num_tiles);
         cb_pop_front(in1_cb, in1_block_num_tiles);
 

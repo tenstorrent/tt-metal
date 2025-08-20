@@ -8,6 +8,7 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 #include "mod_div_lib.h"
 
@@ -135,13 +136,22 @@ void MAIN {
     uint32_t untilize_mode_reblock_cb = tt::CBIndex::c_27;
     uint32_t out0_cb = tt::CBIndex::c_16;
 
-    mm_init(in0_cb, tt::CBIndex::c_1, out0_cb);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(in0_cb, tt::CBIndex::c_1, out0_cb);
+
+    // Initialize matmul operation
+    matmul_init(in0_cb, tt::CBIndex::c_1);
     for (uint32_t block = 0; block < num_blocks; block++) {
         bool last_out = block == (num_blocks - 1);
         if (tilize_in) {
             tilize_activation(in0_cb, in0_subblock_h, in0_block_w, in0_num_subblocks, tilize_mode_tilized_in0_cb);
-            mm_init_short(tilize_mode_tilized_in0_cb, tt::CBIndex::c_1);
+            // Hardware startup - common MMIO configurations
+            compute_kernel_hw_startup(tilize_mode_tilized_in0_cb, tt::CBIndex::c_1);
             cb_wait_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
+
+            // Initialize matmul operation
+            matmul_init(tilize_mode_tilized_in0_cb, tt::CBIndex::c_1);
+            cb_wait_front(tilize_mode_tilized_in0_cb);
         } else {
             cb_wait_front(in0_cb, in0_block_num_tiles);
         }
@@ -160,7 +170,7 @@ void MAIN {
                         copy_tile(matmul_partials_cb, i, i);
                     }
                     cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
-                    mm_init_short(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
+                    matmul_init(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
                 }
 
                 // Compute output sub-block from in0_subblock x in1_subblock
@@ -173,7 +183,7 @@ void MAIN {
                             int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                             int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
                             if (tilize_in) {
-                                matmul_tiles(
+                                matmul_tile(
                                     tilize_mode_tilized_in0_cb,
                                     tt::CBIndex::c_1,
                                     in0_index,
@@ -181,7 +191,7 @@ void MAIN {
                                     dst_index,
                                     false /* transpose */);
                             } else {
-                                matmul_tiles(
+                                matmul_tile(
                                     in0_cb, tt::CBIndex::c_1, in0_index, in1_index, dst_index, false /* transpose */);
                             }
                             in1_index_inner_dim_offset += in1_per_core_w;
@@ -217,7 +227,8 @@ void MAIN {
                         untilize_mode_final_matmul_partials_cb,
                         untilize_mode_reblock_cb,
                         out0_cb);
-                    mm_init_short(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
+                    // Hardware startup - common MMIO configurations
+                    compute_kernel_hw_startup(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
                 }
             }
 
@@ -230,9 +241,24 @@ void MAIN {
 
         if (tilize_in) {
             cb_pop_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
-        } else {
-            cb_pop_front(in0_cb, in0_block_num_tiles);
+
+            // Initialize matmul operation
+            matmul_init(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
         }
+    }
+
+    in0_index_subblock_offset += in0_subblock_num_tiles;
+}
+
+if (spill) {
+    enable_reload = true;
+}
+
+if (tilize_in) {
+    cb_pop_front(tilize_mode_tilized_in0_cb);
+} else {
+    cb_pop_front(in0_cb, in0_block_num_tiles);
+}
         cb_pop_front(tt::CBIndex::c_1, in1_block_num_tiles);
     }
 }

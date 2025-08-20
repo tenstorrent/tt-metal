@@ -15,6 +15,7 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 /******************************************************************************
  *                                                                             *
@@ -375,8 +376,11 @@ ALWI void cb_matmul_blocks(
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
 
-    mm_block_init_short(
-        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(in0_cb, in1_cb, transpose /*transpose*/);
+
+    // Initialize matmul block operation
+    matmul_block_init(in0_cb, in1_cb, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     reconfig_data_format(in1_cb, in0_cb);
     cb_wait_front(in1_cb, K * N);

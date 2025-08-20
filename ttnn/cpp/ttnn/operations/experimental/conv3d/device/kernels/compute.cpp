@@ -8,6 +8,7 @@
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 
@@ -29,7 +30,7 @@ void matmul_blocks(
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
-    mm_block_init_short(
+    matmul_block_init(
         in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     uint32_t output_num_tiles = M * N;
@@ -159,7 +160,11 @@ void MAIN {
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t output_tiles = matmul_M_t * matmul_N_t;
 
-    mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
+
+    // Initialize matmul operation
+    matmul_init(cb_vol2col_tiled, cb_weight_tiled);
 
     // Load range parameters
     uint32_t argidx = 0;
