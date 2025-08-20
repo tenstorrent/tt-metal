@@ -31,7 +31,7 @@ void kernel_main() {
             // DPRINT << "val: " << val << ENDL();
         }
 
-        uint64_t dst_noc_addr = get_noc_addr(h, s0, 0, 0);
+        uint64_t dst_noc_addr = get_noc_addr(h, s0);
 
         noc_async_write(cb_addr, dst_noc_addr, stick_size);
         noc_async_write_barrier();
