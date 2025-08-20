@@ -761,13 +761,23 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
         num_heads,
     };
 
+    tt_metal::ReaderDataMovementConfig reader_config(reader_compile_time_args);
+    reader_config.noc = tt_metal::NOC::NOC_1;
+    // set noc mode to 1
+    reader_config.noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
+
+    tt_metal::WriterDataMovementConfig writer_config(writer_compile_time_args);
+    writer_config.noc = tt_metal::NOC::NOC_1;
+    // set noc mode to 1
+    writer_config.noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
+
     // Create reader kernel
     const auto unary_reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
         "reader_paged_row_major_fused_update_cache_interleaved_start_id.cpp",
         all_cores_bb,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        reader_config);
 
     // Create writer kernel
     const auto unary_writer_kernel_id = tt_metal::CreateKernel(
@@ -775,7 +785,7 @@ operation::ProgramWithCallbacks paged_row_major_fused_update_cache_multi_core(
         "ttnn/cpp/ttnn/operations/experimental/paged_cache/device/kernels/dataflow/"
         "writer_paged_row_major_fused_update_cache_interleaved_start_id.cpp",
         all_cores_bb,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        writer_config);
 
     // Create compute kernel
     const auto compute_kernel_id = tt_metal::CreateKernel(
