@@ -3,8 +3,21 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+
+void core_agnostic_main();
+
+#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
 #include "dataflow_api.h"
-#include "debug/dprint.h"
+
+void kernel_main() { core_agnostic_main(); }
+#else
+#include "compute_kernel_api/common.h"
+
+// We are in compute kernel land
+namespace NAMESPACE {
+void MAIN { core_agnostic_main(); }
+}  // namespace NAMESPACE
+#endif
 
 using namespace tt;
 
@@ -14,12 +27,13 @@ static constexpr std::size_t CB_STEP_SIZE = 32;
 static constexpr std::size_t CHURN_TARGET = (0x10000 - 2 * CB_STEP_SIZE);
 static constexpr std::size_t CHURN_LOOP_COUNT = CHURN_TARGET / CB_STEP_SIZE;
 
-void kernel_main() {
+void core_agnostic_main() {
     for (auto i = 0ul; i < CHURN_LOOP_COUNT; i++) {
         cb_wait_front(CB_ID, CB_STEP_SIZE);
         cb_pop_front(CB_ID, CB_STEP_SIZE);
     }
 
+#ifdef CHECK_FRONT
     auto result_ptr = get_arg_val<uint32_t*>(0);
     auto success_token = get_arg_val<uint32_t>(1);
 
@@ -28,4 +42,5 @@ void kernel_main() {
     } else {
         *result_ptr = 0;
     }
+#endif
 }

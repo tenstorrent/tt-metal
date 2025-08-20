@@ -112,21 +112,24 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlocking) {
 }
 
 TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
-    static constexpr uint32_t SUCCESS_TOKEN = 6789;
+    static constexpr uint32_t SUCCESS_TOKEN = 0xC0FFEE;
 
     auto device = devices_.at(0);
     Program program;
-    auto writer_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_writer.cpp",
         WORKER_CORE,
         ComputeConfig{});
 
+    WriterDataMovementConfig reader_config;
+    reader_config.defines["CHECK_FRONT"] = "1";
+
     auto reader_kernel = CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_reader.cpp",
         WORKER_CORE,
-        WriterDataMovementConfig{});
+        reader_config);
 
     CreateCircularBuffer(
         program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
@@ -140,6 +143,41 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
     detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), sizeof(std::uint32_t), host_buffer);
     log_info(LogTest, "host_buffer: {}", host_buffer.front());
     EXPECT_EQ(host_buffer.front(), SUCCESS_TOKEN) << "Reader should have detected that the CB is full.";
+}
+
+TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
+    static constexpr uint32_t SUCCESS_TOKEN = 0xBABE;
+
+    auto device = devices_.at(0);
+    Program program;
+
+    ReaderDataMovementConfig writer_config;
+    writer_config.defines["CHECK_BACK"] = "1";
+
+    auto writer_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_writer.cpp",
+        WORKER_CORE,
+        writer_config);
+
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_reader.cpp",
+        WORKER_CORE,
+        ComputeConfig{});
+
+    CreateCircularBuffer(
+        program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
+
+    auto result_buffer = create_result_buffer(device);
+    SetRuntimeArgs(program, writer_kernel, WORKER_CORE, {result_buffer->address(), SUCCESS_TOKEN});
+
+    EnqueueProgram(device->command_queue(), program, true);
+
+    std::vector<std::uint32_t> host_buffer;
+    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), sizeof(std::uint32_t), host_buffer);
+    log_info(LogTest, "host_buffer: {}", host_buffer.front());
+    EXPECT_EQ(host_buffer.front(), SUCCESS_TOKEN) << "Writer should have detected that the CB is full.";
 }
 
 }  // namespace tt::tt_metal
