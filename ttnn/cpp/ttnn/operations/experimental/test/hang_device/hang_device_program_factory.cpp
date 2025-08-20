@@ -19,8 +19,6 @@ ExecuteTestHangDeviceOperation::SingleCore::cached_program_t ExecuteTestHangDevi
 
     tt::tt_metal::Program program{};
 
-    tt::tt_metal::IDevice* device = input_tensor.tensor.device();
-
     std::vector<uint32_t> compute_kernel_args = {};
     KernelHandle void_compute_kernel_id = CreateKernel(
         program,

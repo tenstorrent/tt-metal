@@ -8,6 +8,7 @@
 #include <iostream>
 #include <mutex>
 #include <string>
+#include <chrono>
 
 #include "impl/context/metal_context.hpp"
 
@@ -15,7 +16,7 @@ namespace fs = std::filesystem;
 
 namespace tt {
 namespace utils {
-static float timeout_seconds = -1.f;
+static std::chrono::duration<float> timeout_duration = std::chrono::duration<float>(-1.f);
 bool run_command(const std::string& cmd, const std::string& log_file, const bool verbose) {
     // ZoneScoped;
     // ZoneText( cmd.c_str(), cmd.length());
@@ -57,14 +58,15 @@ const std::string& get_reports_dir() {
     return outpath;
 }
 
-float get_timeout_seconds_for_operations() {
-    if (timeout_seconds == -1.f) {
+std::chrono::duration<float> get_timeout_duration_for_operations() {
+    if (timeout_duration.count() == -1.f) {
         const char* env_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
-        // If is not configured, is infinite
-        timeout_seconds = env_value ? std::stof(env_value) : 0.f;
+        // If not configured, is infinite (0.f means no timeout)
+        float seconds = env_value ? std::stof(env_value) : 0.f;
+        timeout_duration = std::chrono::duration<float>(seconds);
     }
 
-    return timeout_seconds;
+    return timeout_duration;
 }
 }  // namespace utils
 

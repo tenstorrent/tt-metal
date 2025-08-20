@@ -426,7 +426,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
     };
 
     tt::utils::wait_with_timeout(
-        wait_operation_body, wait_condition, on_timeout, tt::utils::get_timeout_seconds_for_operations());
+        wait_operation_body, wait_condition, on_timeout, tt::utils::get_timeout_duration_for_operations());
 
     return write_ptr_and_toggle;
 }
