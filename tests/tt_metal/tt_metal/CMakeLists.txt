@@ -103,7 +103,11 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels test_kernels/*)
+file(
+    GLOB_RECURSE kernels
+    test_kernels/*
+    perf_microbenchmark/routing/kernels/*
+)
 target_sources(
     metalium_test_files
     PUBLIC

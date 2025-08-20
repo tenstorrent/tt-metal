@@ -81,59 +81,6 @@ WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device, Topology topolog
         TEST_RESULTS_SIZE_BYTES};
 }
 
-std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint32_t end, uint32_t count) {
-    std::vector<uint32_t> range(end - start + 1);
-
-    // generate the range
-    std::iota(range.begin(), range.end(), start);
-
-    // shuffle the range
-    std::shuffle(range.begin(), range.end(), global_rng);
-
-    return std::vector<uint32_t>(range.begin(), range.begin() + count);
-}
-
-std::shared_ptr<tt_metal::Program> create_receiver_program(
-    const std::vector<uint32_t>& compile_time_args,
-    const std::vector<uint32_t>& runtime_args,
-    const CoreCoord& logical_core) {
-    auto recv_program = std::make_shared<tt_metal::Program>();
-    auto recv_kernel = tt_metal::CreateKernel(
-        *recv_program,
-        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
-        {logical_core},
-        tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args});
-    tt_metal::SetRuntimeArgs(*recv_program, recv_kernel, logical_core, runtime_args);
-    return recv_program;
-}
-
-void get_mcast_receivers(
-    std::unordered_map<RoutingDirection, std::vector<FabricNodeId>>& mcast_ref,
-    std::vector<chip_id_t>& mcast_receiver_physical_device_ids,
-    RoutingDirection trunk_direction,
-    RoutingDirection branch_direction) {
-    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    if (mcast_ref.find(branch_direction) != mcast_ref.end()) {
-        auto node_ids = mcast_ref[branch_direction];
-        for (auto node : node_ids) {
-            auto curr_fabric_node_id = node;
-            for (uint32_t i = 0; i < mcast_ref[trunk_direction].size(); i++) {
-                auto neighbors = control_plane.get_intra_chip_neighbors(curr_fabric_node_id, trunk_direction);
-                if (neighbors.size() > 0) {
-                    FabricNodeId rx_node_id(MeshId{curr_fabric_node_id.mesh_id}, neighbors[0]);
-                    mcast_receiver_physical_device_ids.push_back(
-                        control_plane.get_physical_chip_id_from_fabric_node_id(rx_node_id));
-                    curr_fabric_node_id = rx_node_id;
-                    log_info(tt::LogTest, "Mcast Rx MeshId {} ChipId {}", rx_node_id.mesh_id, rx_node_id.chip_id);
-                }
-            }
-        }
-    }
-}
-
 void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
@@ -198,7 +145,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
-        "tests/tt_metal/tt_metal/test_kernels/routing/tt_fabric_1d_tx.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_tx.cpp",
         {sender_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
@@ -231,7 +178,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     auto receiver_program = tt_metal::CreateProgram();
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
-        "tests/tt_metal/tt_metal/test_kernels/routing/tt_fabric_1d_rx.cpp",
+        "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_1d_rx.cpp",
         {receiver_logical_core},
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
