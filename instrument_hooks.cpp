@@ -36,6 +36,7 @@ static pthread_t g_processing_thread;
  */
 static char* demangle(const char* name) {
     int status = 0;
+    // __cxa_demangle allocates memory using malloc
     char* demangled = abi::__cxa_demangle(name, nullptr, nullptr, &status);
     if (status == 0 && demangled) {
         return demangled;
@@ -43,78 +44,75 @@ static char* demangle(const char* name) {
     if (demangled) {
         free(demangled);
     }
-    size_t name_len = strlen(name) + 1;
-    char* name_copy = (char*)malloc(name_len);
-    if (name_copy) {
-        memcpy(name_copy, name, name_len);
-    }
-    return name_copy;
+    return strdup(name);
 }
 
 /**
- * @brief Converts a function address to its string representation.
- *
- * @param addr The memory address of the function.
- * @param buf The buffer to write the string representation into.
- * @param size The size of the buffer.
- */
-static void addr_to_string(void* addr, char* buf, size_t size) {
-    Dl_info info;
-    if (dladdr(addr, &info) && info.dli_sname) {
-        char* demangled_name = demangle(info.dli_sname);
-        if (demangled_name) {
-            snprintf(buf, size, "%s", demangled_name);
-            free(demangled_name);
-        } else {
-            snprintf(buf, size, "??");
-        }
-    } else {
-        snprintf(buf, size, "??");
-    }
-}
-
-/**
- * @brief Gets the source file and line number for a given address.
+ * @brief Gets the function name, source file, and line number for a given address.
  *
  * This function shells out to the `llvm-addr2line-17` utility to resolve the address
- * to a file and line number using the debug symbols in the shared object.
+ * using the debug symbols in the shared object.
  *
  * @param info Dl_info struct for the address, containing the object path.
  * @param addr The absolute memory address to resolve.
+ * @param func_buf Buffer to store the resulting function name.
+ * @param func_buf_size Size of the function name buffer.
  * @param file_buf Buffer to store the resulting file path.
  * @param file_buf_size Size of the file buffer.
  * @param line_buf Buffer to store the resulting line number.
  * @param line_buf_size Size of the line buffer.
  */
 static void get_source_info(
-    const Dl_info& info, void* addr, char* file_buf, size_t file_buf_size, char* line_buf, size_t line_buf_size) {
+    const Dl_info& info,
+    void* addr,
+    char* func_buf,
+    size_t func_buf_size,
+    char* file_buf,
+    size_t file_buf_size,
+    char* line_buf,
+    size_t line_buf_size) {
     // Default to unknown
+    snprintf(func_buf, func_buf_size, "??");
     snprintf(file_buf, file_buf_size, "??");
     snprintf(line_buf, line_buf_size, "0");
 
     // Calculate the relative address within the shared object
     void* relative_addr = (void*)((char*)addr - (char*)info.dli_fbase);
 
-    // Construct the addr2line command using the version-specific llvm tool
-    char command[1024];
-    snprintf(command, sizeof(command), "llvm-addr2line-17 -e %s %p", info.dli_fname, relative_addr);
+    // Construct the addr2line command. -f shows function name, -e specifies the executable.
+    char command[2048];
+    snprintf(command, sizeof(command), "llvm-addr2line-17 -f -e %s %p", info.dli_fname, relative_addr);
 
     FILE* pipe = popen(command, "r");
     if (!pipe) {
         return;
     }
 
-    char output[512];
-    if (fgets(output, sizeof(output), pipe) != nullptr) {
-        // The output is typically in the format "filepath:linenumber"
-        char* colon = strrchr(output, ':');
+    char func_name_output[1024];
+    char file_line_output[1024];
+
+    // The output of `addr2line -f` is two lines:
+    // 1. Mangled function name
+    // 2. file:line
+    if (fgets(func_name_output, sizeof(func_name_output), pipe) != nullptr &&
+        fgets(file_line_output, sizeof(file_line_output), pipe) != nullptr) {
+        // Remove newline characters
+        func_name_output[strcspn(func_name_output, "\n")] = 0;
+        file_line_output[strcspn(file_line_output, "\n")] = 0;
+
+        // Demangle the function name
+        char* demangled_name = demangle(func_name_output);
+        if (demangled_name) {
+            snprintf(func_buf, func_buf_size, "%s", demangled_name);
+            free(demangled_name);
+        }
+
+        // Split "filepath:linenumber"
+        char* colon = strrchr(file_line_output, ':');
         if (colon) {
-            // Split the string at the colon
             *colon = '\0';
-            snprintf(file_buf, file_buf_size, "%s", output);
+            snprintf(file_buf, file_buf_size, "%s", file_line_output);
             snprintf(line_buf, line_buf_size, "%s", colon + 1);
-            // Remove trailing newline from line number if present
-            line_buf[strcspn(line_buf, "\n")] = 0;
         }
     }
     pclose(pipe);
@@ -133,25 +131,24 @@ static void* processing_thread_func(void* arg) {
         size_t tail = g_buffer_tail.load(std::memory_order_relaxed);
         if (tail != g_buffer_head.load(std::memory_order_acquire)) {
             void* caller_addr = g_call_buffer[tail];
-
             Dl_info caller_info;
-            dladdr(caller_addr, &caller_info);
-            const char* caller_so_path = caller_info.dli_fname ? caller_info.dli_fname : "";
+            if (dladdr(caller_addr, &caller_info) && caller_info.dli_fname) {
+                const char* caller_so_path = caller_info.dli_fname;
 
-            // First, check if the call is coming from our target library.
-            if (strstr(caller_so_path, "libtt_metal.so")) {
-                char func_name_buf[1024];
-                char file_path_buf[1024];
-                char line_num_buf[32];
+                if (strstr(caller_so_path, "libtt_metal.so")) {
+                    char func_name_buf[1024];
+                    char file_path_buf[1024];
+                    char line_num_buf[32];
 
-                // Get the source info first, so we can filter on it.
-                get_source_info(
-                    caller_info, caller_addr, file_path_buf, sizeof(file_path_buf), line_num_buf, sizeof(line_num_buf));
-
-                // REFINED FILTER: Now, also check if the source file path contains "tt-metal".
-                // This excludes inlined standard library headers.
-                if (strstr(file_path_buf, "tt-metal/tt_metal")) {
-                    addr_to_string(caller_addr, func_name_buf, sizeof(func_name_buf));
+                    get_source_info(
+                        caller_info,
+                        caller_addr,
+                        func_name_buf,
+                        sizeof(func_name_buf),
+                        file_path_buf,
+                        sizeof(file_path_buf),
+                        line_num_buf,
+                        sizeof(line_num_buf));
 
                     dprintf(
                         g_log_fd,
@@ -178,7 +175,9 @@ static void* processing_thread_func(void* arg) {
  */
 __attribute__((no_instrument_function)) static void profiler_shutdown() {
     g_done.store(true, std::memory_order_release);
-    pthread_join(g_processing_thread, nullptr);
+    if (g_processing_thread) {
+        pthread_join(g_processing_thread, nullptr);
+    }
 }
 
 /**
@@ -192,7 +191,8 @@ __attribute__((constructor, no_instrument_function)) static void profiler_init()
 extern "C" {
 
 // Clang's sanitizer coverage hook, called to initialize guard variables.
-void __attribute__((used)) __sanitizer_cov_trace_pc_guard_init(uint32_t* start, uint32_t* stop) {
+void __attribute__((used, no_instrument_function)) __sanitizer_cov_trace_pc_guard_init(
+    uint32_t* start, uint32_t* stop) {
     static uint64_t n;
     if (start == stop || *start) {
         return;
@@ -203,7 +203,7 @@ void __attribute__((used)) __sanitizer_cov_trace_pc_guard_init(uint32_t* start, 
 }
 
 // Clang's sanitizer coverage hook, called on function entry.
-void __attribute__((used)) __sanitizer_cov_trace_pc_guard(uint32_t* guard) {
+void __attribute__((used, no_instrument_function)) __sanitizer_cov_trace_pc_guard(uint32_t* guard) {
     if (!*guard) {
         return;
     }
