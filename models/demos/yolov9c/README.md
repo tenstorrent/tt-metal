@@ -1,7 +1,7 @@
 # Yolov9c
 
 ## Platforms:
-    Wormhole (n150, n300)
+Wormhole (n150, n300)
 
 ## Introduction:
 Yolov9 marks a significant advancement in real-time object detection, introducing groundbreaking techniques such as Programmable Gradient Information (PGI) and the Generalized Efficient Layer Aggregation Network (GELAN). Yolov9c is a compact and optimized variant of Yolov9, designed for efficient object detection with reduced computational overhead. It balances speed and accuracy.

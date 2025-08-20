@@ -1,6 +1,6 @@
 # Classification Evaluation
 
-- Using `imagenet-1k` validation dataset.
+- Dataset used: `imagenet-1k` validation dataset. [source](https://huggingface.co/datasets/ILSVRC/imagenet-1k)
 
 ## Evaluation Table
 

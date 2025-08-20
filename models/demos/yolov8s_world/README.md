@@ -1,7 +1,7 @@
 # Yolov8s-World
 
 ## Platforms:
-    Wormhole (n150, n300)
+Wormhole (n150, n300)
 
 ## Introduction
 Demo showcasing Yolov8s-World running on `Wormhole - n150, n300` using ttnn.

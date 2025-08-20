@@ -1,7 +1,7 @@
 # Unet Vanilla
 
 ## Platforms:
-Wormhole N150, N300
+Wormhole (n150, n300)
 
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
@@ -13,7 +13,7 @@ Wormhole N150, N300
 
 Use the following command to run the inference pipeline:
 
-    ```sh
+    ```
     pytest models/demos/vanilla_unet/tests/pcc/test_ttnn_unet.py::test_unet
     ```
 
@@ -65,7 +65,7 @@ Use the following command to run the inference pipeline:
     ```
 
 **Note:** If vanilla unet evaluation test fails with the error: `ValueError: Sample larger than population or is negative`
-Try deleting the "imageset" folder in "models/demos/segmentation_evaluation" directory and try running again.
+Try deleting the `imageset` folder in `models/demos/segmentation_evaluation` directory and try running again.
 
 
 ## Details

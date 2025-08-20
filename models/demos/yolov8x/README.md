@@ -1,7 +1,7 @@
 # Yolov8x
 
 ## Platforms:
-    Wormhole (n150, n300)
+Wormhole (n150, n300)
 
 ## Introduction
 YOLOv8 is one of the recent iterations in the YOLO series of real-time object detectors, offering cutting-edge performance in terms of accuracy and speed.
@@ -65,7 +65,7 @@ Note: Output images will be saved in the `models/demos/yolov8x/demo/runs` folder
 - Use the following command to run the performant evaluation with Trace+2CQs:
 
   ```
- pytest models/demos/yolo_eval/evaluate.py::test_yolov8x[res0-device_params0-tt_model]
+  pytest models/demos/yolo_eval/evaluate.py::test_yolov8x[res0-device_params0-tt_model]
   ```
 Note: The model is evaluated with 500 samples.
 

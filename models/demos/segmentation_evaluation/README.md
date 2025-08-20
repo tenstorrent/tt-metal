@@ -28,9 +28,10 @@ pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vani
 pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet_dp[wormhole_b0-res0-device_params0-1-tt_model]
 ```
 Note: If vanilla unet evaluation test fails with the error: `ValueError: Sample larger than population or is negative`
-Try deleting the "imageset" folder in "models/demos/segmentation_evaluation" directory and try running again.
+Try deleting the `imageset` folder in `models/demos/segmentation_evaluation` directory and try running again.
 
 **VGG Unet (256x256):**
+
 **_Single-Device (BS-1):_**<br>
 ```sh
 pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet[device_params0-res0-1-pretrained_weight_true-tt_model]
@@ -61,6 +62,7 @@ pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_segf
 ## To run the test of torch vs ground truth, please follow the following commands:
 
 **Vanilla Unet (480x640):**
+
 **_Single-Device (BS-1):_**<br>
 
 ```sh
@@ -73,6 +75,7 @@ pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vani
 ```
 
 **VGG Unet (256x256):**
+
 **_Single-Device (BS-1):_**<br>
 ```sh
 pytest models/demos/segmentation_evaluation/test_segmentation_eval.py::test_vgg_unet[device_params0-res0-1-pretrained_weight_true-torch_model]
