@@ -100,8 +100,8 @@ class TtGemmaModel(Transformer):
         ]
 
         tt_rot_mats_prefill_local = [
-            self.rope_setup_local.cos_matrix[:, :, start_pos : start_pos + S, :],
-            self.rope_setup_local.sin_matrix[:, :, start_pos : start_pos + S, :],
+            self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
+            self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
 
         if page_table is not None:
@@ -126,7 +126,7 @@ class TtGemmaModel(Transformer):
         else:
             tt_chunk_page_table = None
 
-        return tokens_embd, [tt_rot_mats_prefill_global, tt_rot_mats_prefill_local], tt_page_table, tt_chunk_page_table
+        return tokens_embd, tt_rot_mats_prefill_global, tt_rot_mats_prefill_local, tt_page_table, tt_chunk_page_table
 
     def compute_vision_token(self, pixel_values):
         vision_output = self.vision_model(pixel_values)

@@ -160,13 +160,6 @@ class Transformer(LightweightModule):
             self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
             self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
-        if self.rope_setup_local is not None:
-            tt_rot_mats_prefill_local = [
-                self.rope_setup_local.cos_matrix[:, :, start_pos : start_pos + S, :],
-                self.rope_setup_local.sin_matrix[:, :, start_pos : start_pos + S, :],
-            ]
-        else:
-            tt_rot_mats_prefill_local = None
 
         if hasattr(self, "rope_local_setup"):
             tt_rot_mats_prefill_local = [
