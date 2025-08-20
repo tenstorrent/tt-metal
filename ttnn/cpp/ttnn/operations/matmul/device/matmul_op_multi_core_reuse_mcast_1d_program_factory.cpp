@@ -2572,22 +2572,22 @@ ttnn::operations::matmul::matmul_mcast_1d_common_override_variables_t matmul_mul
         "Dimension K (A.shape[-1] and B.shape[-2]) must match for A and B in bmm_op");  // A.K == B.K
     TT_FATAL(
         ashape[-2] % in0_tile_shape[0] == 0,
-        "Input A inner dimension 1 ({}) must be divisible by tile shape 0 ({})",
+        "A.shape[-2] ({}) must be divisible by tile shape[0] ({})",
         ashape[-2],
         in0_tile_shape[0]);
     TT_FATAL(
         ashape[-1] % in0_tile_shape[1] == 0,
-        "Input A inner dimension 2 ({}) must be divisible by tile shape 1 ({})",
+        "A.shape[-1] ({}) must be divisible by tile shape[1] ({})",
         ashape[-1],
         in0_tile_shape[1]);
     TT_FATAL(
         bshape[-2] % in1_tile_shape[0] == 0,
-        "Input B inner dimension 1 ({}) must be divisible by tile shape 0 ({})",
+        "B.shape[-2] ({}) must be divisible by tile shape[0] ({})",
         bshape[-2],
         in1_tile_shape[0]);
     TT_FATAL(
         bshape[-1] % in1_tile_shape[1] == 0,
-        "Input B inner dimension 2 ({}) must be divisible by tile shape 1 ({})",
+        "B.shape[-1] ({}) must be divisible by tile shape[1] ({})",
         bshape[-1],
         in1_tile_shape[1]);
 

@@ -1061,7 +1061,7 @@ MatmulProgramConfig get_matmul_program_config(
         uint32_t batch_size_a = get_batch_size(input_tensor_a.padded_shape());
         uint32_t batch_size_b = get_batch_size(input_tensor_b.padded_shape());
         bool broadcast_batch = batch_size_a > 1 and batch_size_b == 1;
-        TT_FATAL(!broadcast_batch, "Batch broadcasting is not supported");
+        TT_FATAL(!broadcast_batch, "Batch broadcasting is not supported for the chosen program config");
 
         if (input_tensor_b.is_sharded()) {
             TT_FATAL(
@@ -2320,7 +2320,7 @@ void Matmul::validate(
                 uint32_t batch_size_a = get_batch_size(input_tensor_a.padded_shape());
                 uint32_t batch_size_b = get_batch_size(input_tensor_b.padded_shape());
                 bool broadcast_batch = batch_size_a > 1 and batch_size_b == 1;
-                TT_FATAL(!broadcast_batch, "Batch broadcasting is not supported");
+                TT_FATAL(!broadcast_batch, "Batch broadcasting is not supported for the chosen program config");
 
                 if (input_tensor_b.is_sharded()) {
                     TT_FATAL(per_core_M % M == 0, "per_core_M must be a multiple of M if input b is sharded!");
