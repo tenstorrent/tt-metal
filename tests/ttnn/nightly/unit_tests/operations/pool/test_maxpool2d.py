@@ -72,6 +72,13 @@ def run_max_pool(
         if stride == (1, 1):
             pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
 
+    if dilation_h > 1 or dilation_w > 1:
+        effective_kernel_h = dilation_h * (kernel_h - 1) + 1
+        effective_kernel_w = dilation_w * (kernel_w - 1) + 1
+        padded_input_h = in_h + pad_t + pad_b
+        padded_input_w = in_w + pad_l + pad_r
+        if effective_kernel_h > padded_input_h or effective_kernel_w > padded_input_w:
+            pytest.skip("Effective kernel size cannot exceed padded input size")
     # skips to speed up nightly test
     if nightly_skips:
         if dtype == ttnn.bfloat8_b:
@@ -282,7 +289,14 @@ def run_max_pool(
         (2, 2),
     ),
 )
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize(
+    "dilation",
+    (
+        (1, 1),  # default - no dilation
+        (2, 2),  # symmetric dilation
+        (2, 1),  # asymmetric dilation
+    ),
+)
 @pytest.mark.parametrize(
     "dtype",
     [
@@ -345,7 +359,13 @@ def test_run_max_pool_height_shard(
     "stride",
     ((1, 1),),
 )
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize(
+    "dilation",
+    (
+        (1, 1),  # default - no dilation
+        (2, 2),  # symmetric dilation for wide tests
+    ),
+)
 @pytest.mark.parametrize(
     "dtype",
     [
@@ -414,7 +434,14 @@ def test_run_max_pool_width_shard(
     "stride",
     ((1, 1),),
 )
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize(
+    "dilation",
+    (
+        (1, 1),  # default - no dilation
+        (2, 2),  # symmetric dilation for block shard
+        (1, 3),  # asymmetric dilation for block shard
+    ),
+)
 @pytest.mark.parametrize(
     "dtype",
     [
@@ -507,7 +534,13 @@ def test_run_max_pool_mem_config(
     "stride",
     ((1, 1),),
 )
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize(
+    "dilation",
+    (
+        (1, 1),  # default - no dilation
+        (2, 2),  # symmetric dilation for model tests
+    ),
+)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_run_max_pool_yolov4(
     input_shape,
@@ -536,7 +569,13 @@ def test_run_max_pool_yolov4(
     ((0, 0),),
 )
 @pytest.mark.parametrize("stride", ((2, 2),))
-@pytest.mark.parametrize("dilation", ((1, 1),))
+@pytest.mark.parametrize(
+    "dilation",
+    (
+        (1, 1),  # default - no dilation
+        (2, 2),  # symmetric dilation for model tests
+    ),
+)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("ceil_mode", [False, True])
 def test_run_max_pool_squeeze_net_model(
