@@ -66,7 +66,7 @@ void bind_experimental_gelu_backward_operation(py::module& module) {
             [](const OperationType& self,
                const Tensor& grad_output_tensor,
                const Tensor& input_tensor,
-               const string& approximate,
+               const std::string& approximate,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor>& input_grad_tensor,
                QueueId queue_id) -> ttnn::Tensor {

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+import inspect
 
 import torch
 import transformers
@@ -153,9 +154,14 @@ def update_model_config(config, batch_size):
         ),
     }
 
+    # properties are not in the output of config.to_dict() but can be used later in the model
+    # e.g. https://github.com/huggingface/transformers/blob/v4.53.0/src/transformers/configuration_utils.py#L368-L378
+    property_names = [name for name, value in inspect.getmembers(config.__class__) if isinstance(value, property)]
+    properties = {name: getattr(config, name) for name in property_names}
+
     return DotAccessDict(
         dict(
-            **config.to_dict(),
+            **(config.to_dict() | properties),
             core_grid=core_grid,
             core_grid_8x8=core_grid_8x8,
             should_reallocate_in_attention=should_reallocate_in_attention,

@@ -72,8 +72,8 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     CircularBufferConfig cb_src_config =
         CircularBufferConfig(rounded_input_unit_size, {{src_cb_index, input_data_format}})
             .set_page_size(src_cb_index, rounded_input_unit_size);
-    auto cb_src = CreateCircularBuffer(program, all_cores, cb_src_config);
-    std::map<string, string> reader_defines;
+    CreateCircularBuffer(program, all_cores, cb_src_config);
+    std::map<std::string, std::string> reader_defines;
 
     switch (dtype) {
         case DataType::BFLOAT16: reader_defines["OUTPUT_DTYPE_BFLOAT16"] = "1"; break;
@@ -86,13 +86,13 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     CircularBufferConfig cb_index_config =
         CircularBufferConfig(rounded_index_unit_size, {{index_cb_index, index_data_format}})
             .set_page_size(index_cb_index, rounded_index_unit_size);
-    auto cb_index = CreateCircularBuffer(program, all_cores, cb_index_config);
+    CreateCircularBuffer(program, all_cores, cb_index_config);
 
     auto dst_cb_index = CBIndex::c_16;
     CircularBufferConfig dst_cb_config =
         CircularBufferConfig(rounded_output_unit_size, {{dst_cb_index, output_data_format}})
             .set_page_size(dst_cb_index, rounded_output_unit_size);
-    auto cb_dst = CreateCircularBuffer(program, all_cores, dst_cb_config);
+    CreateCircularBuffer(program, all_cores, dst_cb_config);
 
     bool in_is_dram = input.buffer()->is_dram();
     bool index_is_dram = index.buffer()->is_dram();

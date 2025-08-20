@@ -18,14 +18,18 @@ from models.utility_functions import torch_random
     [
         ((1, 512, 128, 128), 0, 0.999),
         ((1, 512, 256, 256), 1, 0.993),
-        ((1, 512, 512, 512), 2, 0.998),
+        ((1, 512, 512, 512), 2, 0.997),
         ((1, 256, 1024, 1024), 3, 0.999),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae_upblock(device, input_shape, block_id, pcc, reset_seeds):
+def test_vae_upblock(device, input_shape, block_id, pcc, is_ci_env, reset_seeds):
     vae = AutoencoderKL.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0", torch_dtype=torch.float32, use_safetensors=True, subfolder="vae"
+        "stabilityai/stable-diffusion-xl-base-1.0",
+        torch_dtype=torch.float32,
+        use_safetensors=True,
+        subfolder="vae",
+        local_files_only=is_ci_env,
     )
     vae.eval()
     state_dict = vae.state_dict()

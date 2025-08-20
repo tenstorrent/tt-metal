@@ -38,7 +38,6 @@ public:
             contents(contents), address(addr), lma(lma), membytes(membytes) {}
     };
 
-public:
     ElfFile() = default;
     ~ElfFile();
 
@@ -58,10 +57,8 @@ public:
         return *this;
     }
 
-public:
     std::vector<Segment> const& GetSegments() const { return segments_; }
 
-public:
     // Release the implementation data, leaving the segments and
     // contents. Use this, after processing, if the elf object is long-lived.
     void ReleaseImpl();

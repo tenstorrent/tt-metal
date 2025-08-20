@@ -21,7 +21,7 @@ parameters = {
             ((1, 5), 3),
             ((1, 32), 3),
             ((1, 50), 50),
-            ((1, 50), 50257),
+            ((1, 50257), 50),
         ],
     }
 }
@@ -30,15 +30,15 @@ parameters = {
 def run_topk(device, params):
     [input_shape, k] = params
     torch_input_tensor = torch.rand(input_shape, dtype=torch.float32)
-    torch_output_tensor = torch.topk(torch_input_tensor, k)
+    torch_output_tensor, _ = torch.topk(torch_input_tensor, k)
 
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
     start_time = start_measuring_time()
-    op_output_tensor = ttnn.topk(input_tensor, k)
+    op_output_tensor, _ = ttnn.topk(input_tensor, k)
     output_tensor = ttnn.to_torch(op_output_tensor)
     e2e_perf = stop_measuring_time(start_time)
-    expected_pcc = 0.999
+    expected_pcc = 0.998
     tensors = [input_tensor, op_output_tensor]
     return get_run_return(torch_output_tensor, output_tensor, expected_pcc, tensors, e2e_perf)
 

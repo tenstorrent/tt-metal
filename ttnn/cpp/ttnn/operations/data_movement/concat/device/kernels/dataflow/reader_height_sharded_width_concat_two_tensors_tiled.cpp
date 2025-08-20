@@ -24,10 +24,14 @@ void kernel_main() {
     constexpr uint32_t groups = get_compile_time_arg_val(12);
 
     constexpr uint32_t bf16_tile_size = 32 * 32 * 2;
+#ifdef BF8
     constexpr uint32_t input0_stride = bf16_tile_size * input0_num_tiles_width / groups;
     constexpr uint32_t input1_stride = bf16_tile_size * input1_num_tiles_width / groups;
+#else
+    constexpr uint32_t input0_stride = tile_size * input0_num_tiles_width / groups;
+    constexpr uint32_t input1_stride = tile_size * input1_num_tiles_width / groups;
+#endif
     constexpr uint32_t group_stride = input0_stride + input1_stride;
-
     const uint32_t base_l1_read_addr_0 = get_read_ptr(input0_transpose_cb);
     const uint64_t noc_addr_0 = get_noc_addr(base_l1_read_addr_0);
     const uint32_t base_l1_read_addr_1 = get_read_ptr(input1_transpose_cb);

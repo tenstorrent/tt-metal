@@ -2,3 +2,5 @@ elasticsearch
 termcolor
 beautifultable
 faster-fifo
+# For PostgreSQL database connectivity
+psycopg-binary == 3.2.9

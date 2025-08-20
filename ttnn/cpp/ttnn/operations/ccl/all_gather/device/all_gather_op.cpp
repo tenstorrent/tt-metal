@@ -121,8 +121,6 @@ AllGatherConfig::AllGatherConfig(
 void AllGather::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
 
@@ -188,7 +186,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGather::create_program_at(
     std::vector<Tensor>& output_tensors) const {
     auto target_device = input_tensors.at(0).mesh_device() ? input_tensors.at(0).mesh_device()->get_device(mesh_coord)
                                                            : input_tensors.at(0).device();
-    ccl::SenderRecieverConfig config =
+    ccl::SenderReceiverConfig config =
         this->cluster_axis.has_value()
             ? ccl::get_device_sender_receiver_config_in_ring(mesh_coord, mesh_device, *cluster_axis, ring_size)
             : ccl::get_device_sender_receiver_config(target_device, this->devices, topology);
@@ -257,7 +255,7 @@ Tensor all_gather_impl(
 
     Tensor input_tensor_padded = input_tensor;
     if (needs_padding) {
-        ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {{0, 0}, {0, 0}, {0, h_pad}, {0, w_pad}};
+        ttnn::SmallVector<std::array<uint32_t, 2>> padding = {{0, 0}, {0, 0}, {0, h_pad}, {0, w_pad}};
         DataType original_dtype = input_tensor.dtype();
         if (input_tensor.dtype() != DataType::BFLOAT16 && input_tensor.dtype() != DataType::FLOAT32) {
             input_tensor_padded = ttnn::typecast(input_tensor_padded, DataType::BFLOAT16);
@@ -301,7 +299,7 @@ Tensor all_gather_impl(
     TT_FATAL(
         topology == ttnn::ccl::Topology::Linear,
         "This all_gather API with cluster_axis is currently supported only for the Linear topology");
-    const auto mesh_view = mesh_device.get_view();
+    const auto& mesh_view = mesh_device.get_view();
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     int32_t rank = input_tensor.logical_shape().rank();
@@ -359,12 +357,6 @@ std::vector<Tensor> all_gather(
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel,
     const ttnn::ccl::Topology topology) {
-    std::vector<IDevice*> devices;
-    devices.reserve(input_tensors.size());
-    for (const auto& input_tensor : input_tensors) {
-        devices.push_back(input_tensor.device());
-    }
-
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (const auto& input_tensor : input_tensors) {
@@ -376,7 +368,7 @@ std::vector<Tensor> all_gather(
             user_defined_num_workers,
             user_defined_num_buffers_per_channel,
             topology,
-            devices));
+            ttnn::ccl::get_active_physical_devices(input_tensors)));
     }
     return output_tensors;
 }

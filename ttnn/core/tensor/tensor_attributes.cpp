@@ -14,16 +14,14 @@
 namespace tt::tt_metal {
 
 TensorAttributes::TensorAttributes(
-    Storage storage, TensorSpec tensor_spec, DistributedTensorConfig distributed_tensor_config) :
+    Storage storage,
+    TensorSpec tensor_spec,
+    DistributedTensorConfig distributed_tensor_config,
+    TensorTopology tensor_topology) :
     storage_(std::move(storage)),
     tensor_spec_(std::move(tensor_spec)),
-    distributed_tensor_config_(std::move(distributed_tensor_config)) {
-    if (std::holds_alternative<HostStorage>(storage_)) {
-        TT_FATAL(
-            std::holds_alternative<ReplicateTensor>(distributed_tensor_config_),
-            "Host storage is a single shard that must be in replicated configuration.");
-    }
-}
+    distributed_tensor_config_(std::move(distributed_tensor_config)),
+    tensor_topology_(std::move(tensor_topology)) {}
 
 const Storage& TensorAttributes::get_storage() const { return storage_; }
 Storage& TensorAttributes::get_storage() { return storage_; }
@@ -31,5 +29,6 @@ const TensorSpec& TensorAttributes::get_tensor_spec() const { return tensor_spec
 const DistributedTensorConfig& TensorAttributes::get_distributed_tensor_config() const {
     return distributed_tensor_config_;
 }
+const TensorTopology& TensorAttributes::get_tensor_topology() const { return tensor_topology_; }
 
 }  // namespace tt::tt_metal

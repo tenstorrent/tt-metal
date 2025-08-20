@@ -39,7 +39,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     auto trace = ttnn::graph::GraphProcessor::end_graph_capture();
     auto operations = ttnn::graph::extract_arguments(trace);
 
-    auto operation0 = operations[0];
+    const auto& operation0 = operations[0];
     EXPECT_EQ(operation0.operation_name, "ttnn::moreh_dot");
     EXPECT_EQ(operation0.arguments.size(), 6);
     EXPECT_EQ(
@@ -63,7 +63,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(operation0.arguments[4], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
     EXPECT_EQ(operation0.arguments[5], "[ unsupported type , std::reference_wrapper<std::nullopt_t const>]");
 
-    auto operation1 = operations[1];
+    const auto& operation1 = operations[1];
     EXPECT_EQ(operation1.operation_name, "ttnn::prim::moreh_dot");
     EXPECT_EQ(operation1.arguments.size(), 6);
     EXPECT_EQ(
@@ -87,7 +87,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
     EXPECT_EQ(operation1.arguments[4], "nullopt");
     EXPECT_EQ(operation1.arguments[5], "nullopt");
 
-    auto operation2 = operations[2];
+    const auto& operation2 = operations[2];
     EXPECT_EQ(operation2.operation_name, "MorehDotOperation");
     EXPECT_EQ(operation2.arguments.size(), 2);
     EXPECT_EQ(
@@ -100,7 +100,7 @@ TEST_F(TestGraphCaptureArgumentsMorehDot, MorehDot) {
         "[ unsupported type , "
         "std::reference_wrapper<ttnn::operations::moreh::moreh_dot::MorehDotOperation::tensor_args_t const>]");
 
-    auto operation3 = operations[3];
+    const auto& operation3 = operations[3];
     EXPECT_EQ(operation3.operation_name, "tt::tt_metal::create_device_tensor");
     EXPECT_EQ(operation3.arguments.size(), 5);
     EXPECT_EQ(operation3.arguments[0], "Shape([1, 1, 1, 1])");

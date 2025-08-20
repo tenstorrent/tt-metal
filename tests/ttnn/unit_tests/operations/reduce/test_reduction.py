@@ -214,12 +214,61 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
 @pytest.mark.parametrize(
     "dim2",
     [8192 - 64, pytest.param(50257, marks=pytest.mark.xfail(condition=is_blackhole(), reason="Issue #23465"))],
-)  # Need to resolve issue #20294 to verify 128256 for OXMIQ <- will need topk_local_sort to handle uint32_t
+)
 @pytest.mark.parametrize("dim", [1])
 @pytest.mark.parametrize("k", [50, 3200])
 @pytest.mark.parametrize("largest", [True])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
+    torch.manual_seed(2005)
+    shape = [dim1, dim2]
+    torch_dtype = torch.bfloat16
+
+    input = torch.randn(shape, dtype=torch_dtype) * 0.9
+
+    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
+
+    ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
+    ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=dim, largest=largest, sorted=True)
+
+    desired_shape = [dim1, dim2]
+    desired_shape[dim] = k
+
+    assert list(ttnn_topk_values.shape) == desired_shape
+    assert list(ttnn_topk_indices.shape) == desired_shape
+
+    ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
+    ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices)
+
+    # Add 2^16 to negative values
+    ttnn_torch_indices = ttnn_torch_indices.to(dtype=torch.int32)
+    ttnn_torch_indices = torch.where(ttnn_torch_indices < 0, ttnn_torch_indices + 65536, ttnn_torch_indices)
+
+    if dtype == ttnn.bfloat8_b:
+        pcc_values = 0.99
+    else:
+        pcc_values = 1.0
+
+    # Convert to int64 only for torch.gather which requires signed indices
+    ttnn_torch_gather_from_indices = torch.gather(
+        input, dim, ttnn_torch_indices.to(torch.int64)  # Convert to signed only for PyTorch API compatibility
+    )
+
+    cosine = torch.nn.CosineSimilarity(dim=dim)
+    ttnn_torch_cosine = torch.mean(cosine(pyt_topk_values, ttnn_torch_gather_from_indices))
+    assert (
+        ttnn_torch_cosine > 0.99
+    ), f"Cosine similarity between topk values and gather from indices is {ttnn_torch_cosine} which is less than 0.99"
+    assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
+
+
+@pytest.mark.parametrize("dim1", [1])
+@pytest.mark.parametrize("dim2", [128256, 151936])
+@pytest.mark.parametrize("dim", [1])
+@pytest.mark.parametrize("k", [50])
+@pytest.mark.parametrize("largest", [True])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_large_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     torch.manual_seed(2005)
     shape = [dim1, dim2]
     torch_dtype = torch.bfloat16

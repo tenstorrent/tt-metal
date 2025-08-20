@@ -345,7 +345,7 @@ private:
 };
 
 struct TensorSyncBundle {
-    const Tensor* tensor;
+    const Tensor* tensor{};
     std::optional<TensorSyncSpec> sync_spec;
 };
 
@@ -633,7 +633,7 @@ static ReduceScatterKernelHandles build_line_reduce_scatter_worker_ct(
     std::vector<uint32_t> compute_kernel_args = {};
     constexpr bool fp32_dest_acc_en = false;
     constexpr bool math_approx_mode = false;
-    std::map<string, string> eltwise_defines = ttnn::operations::binary::utils::get_defines(reduce_op);
+    std::map<std::string, std::string> eltwise_defines = ttnn::operations::binary::utils::get_defines(reduce_op);
     auto math_kernel_id = tt::tt_metal::CreateKernel(
         program,
         reduce_kernel_path,
@@ -879,7 +879,7 @@ static void generate_partial_reducer_writer_worker_command_streams(
     auto const& topology_config = builder_config.topology_config.get();
     auto const& worker_cores = builder_config.worker_cores.get().partial_reducers[direction];
     auto const& worker_cores_vec = builder_config.worker_cores.get().partial_reducers_vec[direction];
-    size_t num_devices = topology_config.line_size();
+    [[maybe_unused]] size_t num_devices = topology_config.line_size();
     bool is_forward_direction = direction == LineDirection::FORWARD;
 
     log_trace(
@@ -1045,9 +1045,6 @@ static void create_non_end_of_line_final_reducer_worker_commands(
     auto const& all_program_tensors = builder_config.all_tensors.get();
     log_trace(tt::LogOp, "--------------------------------------");
     log_trace(tt::LogOp, "CREATE WORKER (final reducer - not end. Device={})", builder_config.device->id());
-
-    size_t const num_partial_reducer_workers_per_direction =
-        builder_config.worker_cores.get().partial_reducers[LineDirection::FORWARD].size();
 
     std::array<TensorSyncBundle, 2> const& partial_output_tensor_sync_bundles = {
         TensorSyncBundle{
@@ -1794,6 +1791,7 @@ static void initialize_op_internal_tensor_syncs(
     auto all_partial_reducer_cores = worker_cores.partial_reducers[LineDirection::FORWARD];
     all_partial_reducer_cores = all_partial_reducer_cores.merge(worker_cores.partial_reducers[LineDirection::BACKWARD]);
 
+    CreateSemaphore(program, all_partial_reducer_cores, 0, CoreType::WORKER);
     for (auto direction : {LineDirection::FORWARD, LineDirection::BACKWARD}) {
         all_tensors.input_tensor_from_remote_sync[direction] = TensorSyncSpec{};
         for (auto const& worker_core : partial_reducer_cores[direction]) {

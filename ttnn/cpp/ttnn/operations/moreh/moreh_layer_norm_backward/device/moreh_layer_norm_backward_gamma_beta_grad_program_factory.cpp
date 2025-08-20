@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
 #include <vector>
 
 #include "moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -32,7 +34,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     auto& mean = tensor_args.mean;
     auto& rstd = tensor_args.rstd;
 
-    auto& output_tensors = output_tensor;
     const std::optional<const Tensor>& gamma_grad = output_tensor.at(0);
     const std::optional<const Tensor>& beta_grad = output_tensor.at(1);
 
@@ -53,7 +54,6 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     const auto output_grad_shape = output_grad.padded_shape();
     const auto output_grad_shape_without_padding = output_grad.logical_shape();
-    const auto output_grad_rank = output_grad_shape.rank();
 
     const bool is_lastdim_layer_norm = normalized_dims == 1;
     const bool is_groupnorm = false;
@@ -137,21 +137,19 @@ MorehLayerNormBackwardGammaBetaGradOperation::ProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      DataMovementKernel SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const std::vector<uint32_t> reader_compile_time_args{
-        static_cast<uint32_t>(is_dram(output_grad)),
-        static_cast<uint32_t>(is_dram(input)),
-        static_cast<uint32_t>(is_dram(mean)),
-        static_cast<uint32_t>(is_dram(rstd)),
-        static_cast<uint32_t>(gamma_grad_has_value),
-        static_cast<uint32_t>(do_mask_h)};
+    std::vector<uint32_t> reader_compile_time_args{
+        static_cast<uint32_t>(gamma_grad_has_value), static_cast<uint32_t>(do_mask_h)};
+    TensorAccessorArgs(output_grad.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(mean.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(rstd.buffer()).append_to(reader_compile_time_args);
 
-    const std::vector<uint32_t> writer_compile_time_args{
-        static_cast<uint32_t>(is_dram(gamma_grad)),
-        static_cast<uint32_t>(is_dram(beta_grad)),
-        static_cast<uint32_t>(gamma_grad_has_value),
-        static_cast<uint32_t>(beta_grad_has_value)};
+    std::vector<uint32_t> writer_compile_time_args{
+        static_cast<uint32_t>(gamma_grad_has_value), static_cast<uint32_t>(beta_grad_has_value)};
+    TensorAccessorArgs(gamma_grad.has_value() ? gamma_grad->buffer() : nullptr).append_to(writer_compile_time_args);
+    TensorAccessorArgs(beta_grad.has_value() ? beta_grad->buffer() : nullptr).append_to(writer_compile_time_args);
 
-    std::map<string, string> reader_defines{};
+    std::map<std::string, std::string> reader_defines{};
     std::map<std::string, std::string> compute_defines{};
     compute_defines["REDUCE_OP"] = "PoolType::SUM";
     compute_defines["REDUCE_DIM"] = "ReduceDim::REDUCE_COL";

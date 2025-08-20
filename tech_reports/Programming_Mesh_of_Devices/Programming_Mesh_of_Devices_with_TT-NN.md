@@ -602,7 +602,7 @@ See `models/demos/t3000/llama2_70b/tests/test_llama_perf_decode.py::test_Llama_p
 1. Submesh Creation
 
 ```py
-    submesh_devices: List[ttnn.MeshDevice] = mesh_device.create_submeshes((2, 4))
+    submesh_devices: List[ttnn.MeshDevice] = mesh_device.create_submeshes(ttnn.MeshShape(2, 4))
 ```
 
 2. Compile & Run the Model on Each Submesh

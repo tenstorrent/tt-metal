@@ -8,6 +8,8 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.tt_transformers.tests.test_utils import get_ref_model_dype
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, precompute_freqs
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -49,6 +51,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
     max_seq_len,
     batch_size,
@@ -60,7 +63,7 @@ def test_decoder_inference(
 ):
     dtype = ttnn.bfloat8_b
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -84,8 +87,7 @@ def test_decoder_inference(
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling,
     )
     transformation_mats = rope_setup.get_both_trans_mats()
 
@@ -118,9 +120,11 @@ def test_decoder_inference(
         )
 
     # Initialize TT model
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TransformerBlock(
         args=model_args,
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         dtype=dtype,
         state_dict=state_dict,
         layer_num=0,
@@ -135,8 +139,8 @@ def test_decoder_inference(
         model_args.head_dim,
         model_args.max_seq_len * 2,
         model_args.rope_theta,
-        model_args.rope_scaling_factor,
-        model_args.orig_context_len,
+        model_args.rope_scaling.factor if model_args.rope_scaling else None,
+        model_args.rope_scaling.original_max_position_embeddings if model_args.rope_scaling else None,
     )
     freqs_cis = torch.complex(cos, sin)
 
@@ -156,7 +160,12 @@ def test_decoder_inference(
         logger.info(f"[Decoder] Generating token {i}")
 
         # input = torch.randn(1, 32, 4096)
-        pt_decode_input = (torch.rand(batch_size, seqlen, model_args.dim) * 2) - 1
+        pt_decode_input = (
+            torch.rand(
+                batch_size, seqlen, model_args.dim, dtype=get_ref_model_dype(reference_model, model_args.model_name)
+            )
+            * 2
+        ) - 1
         tt_decode_input = pt_decode_input.clone()
 
         decode_input = model_args.prepare_residual_tensor_decode(
@@ -172,7 +181,7 @@ def test_decoder_inference(
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats,
             mode="decode",
             page_table=page_table_tt,
         )

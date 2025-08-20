@@ -14,11 +14,6 @@
   pip install -r models/demos/yolov4/web_demo/server/requirements.txt
   ```
 
-- After installing the server side requirments, ONLY if you are running the demo on an N300 card,run the following to export the approprite envirement variable for N300.
-  ```
-  export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
-  ```
-
 - From the server run:
   ```
   source models/demos/yolov4/web_demo/server/run_uvicorn.sh
@@ -33,7 +28,7 @@
 - you may create a python virtual env and pip install the client side requirements.
 
   ```
-  pip install -r models/demos/yolov4/web_demo/client/requirements.txt
+  pip install -r requirements.txt
   ```
 - on the client side run:
   ```

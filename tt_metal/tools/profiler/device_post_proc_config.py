@@ -21,9 +21,34 @@ class default_setup(metaclass=MergeMetaclass):
         "NCRISC",
         "TRISC",
         "ERISC",
+        "CORE_AGG",
     ]
 
     timerAnalysis = {
+        "trace_fw_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-FW"},
+            "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-FW"},
+        },
+        "trace_kernel_duration": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
+            "end": {"core": "ANY", "risc": "CORE_AGG", "zone_name": "TRACE-KERNEL"},
+        },
+        "trace2trace - FW": {
+            "across": "device",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_END", "zone_name": "TRACE-FW"},
+            "end": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_START", "zone_name": "TRACE-FW"},
+        },
+        "trace2trace - kernel": {
+            "across": "device",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_END", "zone_name": "TRACE-KERNEL"},
+            "end": {"core": "ANY", "risc": "ANY", "zone_phase": "ZONE_START", "zone_name": "TRACE-KERNEL"},
+        },
         "op2op": {
             "across": "core",
             "type": "adjacent",
@@ -302,8 +327,8 @@ class test_ethernet_dispatch_cores(default_setup):
         "Ethernet CQ Prefetch": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "ERISC", "zone_name": "KERNEL-MAIN-HD"},
-            "end": {"risc": "ERISC", "zone_name": "KERNEL-MAIN-HD"},
+            "start": {"risc": "ERISC", "zone_name": "CQ-PREFETCH"},
+            "end": {"risc": "ERISC", "zone_name": "CQ-PREFETCH"},
         },
     }
     detectOps = False

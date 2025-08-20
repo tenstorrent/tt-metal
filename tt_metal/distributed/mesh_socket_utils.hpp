@@ -43,7 +43,8 @@ void write_socket_configs(
     const SocketPeerDescriptor& peer_descriptor,
     SocketEndpoint socket_endpoint);
 
-SocketPeerDescriptor generate_local_endpoint_descriptor(const MeshSocket& socket_endpoint);
+SocketPeerDescriptor generate_local_endpoint_descriptor(
+    const MeshSocket& socket_endpoint, std::optional<multihost::DistributedContextId> context_id = std::nullopt);
 
 void forward_descriptor_to_peer(
     const SocketPeerDescriptor& desc,
@@ -55,9 +56,9 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     SocketEndpoint socket_endpoint_type,
     const std::shared_ptr<const multihost::DistributedContext>& context);
 
-//  =============== Additional utility functions  ===============
-
-// Given a MeshDevice and a logical device coordinate, determine the device's physical mesh id
-uint32_t get_physical_mesh_id(const MeshDevice* mesh_device, const MeshCoordinate& coord);
+std::array<std::unordered_map<MeshCoordinate, tt::tt_fabric::FabricNodeId>, 2> generate_fabric_node_id_map(
+    const SocketConfig& config,
+    const SocketPeerDescriptor& sender_descriptor,
+    const SocketPeerDescriptor& receiver_descriptor);
 
 }  // namespace tt::tt_metal::distributed

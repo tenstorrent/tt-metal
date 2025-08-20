@@ -32,14 +32,9 @@ void MAIN {
     constexpr uint32_t block_ct_dim = per_core_block_tile_cnt / num_blocks_per_col;
     constexpr uint32_t full_ct_dim = per_core_block_tile_cnt;
 
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_16);
     pack_untilize_init<block_ct_dim, full_ct_dim>(tt::CBIndex::c_0, tt::CBIndex::c_16);
 
-#ifdef SHORT_INIT
-    unary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_16);
-    pack_untilize_init_short<block_ct_dim, full_ct_dim>(tt::CBIndex::c_0, tt::CBIndex::c_16);
-#else
-    pack_untilize_init<block_ct_dim, full_ct_dim>(tt::CBIndex::c_0, tt::CBIndex::c_16);
-#endif
 
     for (uint32_t r = 0; r < per_core_block_cnt; ++r) {
         cb_reserve_back(tt::CBIndex::c_16, full_ct_dim);

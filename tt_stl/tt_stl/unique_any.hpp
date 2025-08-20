@@ -72,8 +72,8 @@ struct unique_any final {
     }
 
 private:
-    alignas(ALIGNMENT) void* pointer = nullptr;
-    alignas(ALIGNMENT) storage_t type_erased_storage;
+    alignas(ALIGNMENT) storage_t type_erased_storage{};
+    void* pointer = nullptr;
 
     void (*delete_storage)(storage_t&) = nullptr;
     void* (*move_storage)(storage_t& storage, void*) = nullptr;

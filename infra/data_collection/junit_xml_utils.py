@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import io
 from functools import reduce
 
 from loguru import logger
@@ -9,8 +10,58 @@ from defusedxml.ElementTree import parse as XMLParse
 from toolz.dicttoolz import merge
 
 
+def clean_and_parse_xml(filepath):
+    """
+    Clean corrupted XML content and parse it safely.
+    Needed due to https://github.com/tenstorrent/tt-metal/issues/25958 where the XML file is corrupted.
+
+    Args:
+        filepath: Path to the XML file
+
+    Returns:
+        ElementTree: Parsed XML tree
+
+    Raises:
+        Exception: If parsing fails after cleaning attempts
+    """
+    # Try parsing the file directly first
+    try:
+        root_element_tree = XMLParse(filepath)
+        return root_element_tree
+    except Exception as e:
+        logger.warning(f"Initial XML parse failed for {filepath}, attempting to clean: {str(e)}")
+
+        # If direct parsing fails, try cleaning the file
+        with open(filepath, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Clean trailing junk characters that might cause parse errors
+        # Remove trailing whitespace and any stray characters after the closing tag
+        content = content.rstrip()
+
+        # Find the last proper closing tag and drop everything after it
+        last_testsuites = content.rfind("</testsuites>")
+        last_testsuite = content.rfind("</testsuite>")
+        last_proper_close = max(last_testsuites, last_testsuite)
+
+        if last_proper_close != -1:
+            # Keep everything up to and including the last proper closing tag
+            closing_tag = "</testsuites>" if last_testsuites > last_testsuite else "</testsuite>"
+            content = content[: last_proper_close + len(closing_tag)]
+
+        # Parse the cleaned content
+        try:
+            root_element_tree = XMLParse(io.StringIO(content))
+            return root_element_tree
+        except Exception as e:
+            logger.error(f"Failed to parse XML file {filepath} even after cleaning: {str(e)}")
+            logger.error(f"File content length: {len(content)} characters")
+            logger.error(f"Last 100 characters: {content[-100:]}")
+            raise
+
+
 def get_xml_file_root_element_tree(filepath):
-    root_element_tree = XMLParse(filepath)
+    root_element_tree = clean_and_parse_xml(filepath)
     root_element = root_element_tree.getroot()
 
     # For ctest, the junit XML root element tag is <testsuite> instead of <testsuites>

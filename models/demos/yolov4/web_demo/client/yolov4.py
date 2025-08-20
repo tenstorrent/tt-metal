@@ -152,8 +152,7 @@ class VideoProcessor(VideoProcessorBase):
         return av.VideoFrame.from_ndarray(image_final, format="bgr24")
 
 
-st.sidebar.image("TT.png", use_column_width=True)
-st.sidebar.image("GS.png", use_column_width=True)
+st.title("YOLOv4 Detection Demo")
 
 webrtc_streamer(
     key="example",

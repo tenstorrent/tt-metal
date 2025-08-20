@@ -15,9 +15,8 @@ from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 from tabulate import tabulate
 import pandas as pd
-from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
 
-from conftest import is_6u
+from conftest import is_6u, get_devices
 
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
@@ -31,10 +30,35 @@ daemon_process = None
 daemon_pipe_path = "/tmp/tt_metal_fabric_edm_daemon"
 daemon_result_pipe_path = "/tmp/tt_metal_fabric_edm_daemon_result"
 daemon_lock = threading.Lock()
-binary_path = os.environ.get("TT_METAL_HOME", "") + "/build/test/ttnn/unit_tests_ttnn_fabric_edm"
+binary_path = os.environ.get("TT_METAL_HOME", "") + "/build/test/tt_metal/tt_fabric/test_fabric_1d_bw"
 
 # Global direct execution mode setting (determined once per test session)
 _direct_mode_enabled = None
+
+# Global architecture setting (determined once per test session)
+_architecture = None
+
+
+# Update your existing functions to use session devices
+@pytest.fixture(scope="session", autouse=True)
+def get_architecture(silicon_arch_name):
+    """Get the current architecture (now uses session-cached value)"""
+    global _architecture
+
+    _architecture = silicon_arch_name
+    if _architecture == "wormhole_b0":
+        _architecture = "wormhole"
+
+    if _architecture is None:
+        raise RuntimeError("Architecture not initialized. Session setup should have handled this.")
+
+    return _architecture
+
+
+def should_test_be_skipped(*, num_links, line_size, num_cluster_cols, num_cluster_rows):
+    if _architecture == "blackhole":
+        return num_cluster_cols != 0 or num_cluster_rows != 0 or line_size > 2 or num_links > 1
+    return False
 
 
 def start_fabric_edm_daemon():
@@ -243,7 +267,7 @@ def read_golden_results(
     """Print a summary table of all test results by packet size"""
     csv_path = os.path.join(
         os.environ["TT_METAL_HOME"],
-        f"tests/tt_metal/microbenchmarks/ethernet/fabric_edm_bandwidth_golden{'_' + machine_type_suffix if machine_type_suffix is not None else ''}.csv",
+        f"tests/tt_metal/microbenchmarks/ethernet/golden/{_architecture}/fabric_edm_bandwidth_golden{'_' + machine_type_suffix if machine_type_suffix is not None else ''}.csv",
     )
 
     if not os.path.exists(csv_path):
@@ -336,7 +360,12 @@ def profile_results(
     total_packets_sent = packets_per_src_chip * traffic_streams_through_boundary
     total_byte_sent = total_packets_sent * packet_size
     bandwidth = total_byte_sent / max(main_loop_cycles)
-    packets_per_second = total_packets_sent / max(main_loop_cycles) * freq_hz
+    # main_loop_cycles = cycles
+    # freq_hz = cycles/s
+    # total_packets_sent = packets
+    # main_loop_cycles [cycles] / freq_hz [cycles/s] = s
+    # => total_packets_sent [packets] / (main_loop_cycles [cycles] / freq_hz [cycles/s])[=>s] = packets/s
+    packets_per_second = total_packets_sent / (max(main_loop_cycles) / freq_hz)
     bytes_per_GB = 1000000000
     bandwidth_GB_s = (bandwidth * freq_hz) / bytes_per_GB
     logger.info("main_loop_cycles: {} ", max(main_loop_cycles))
@@ -533,6 +562,11 @@ def run_fabric_edm(
     num_cluster_rows=0,
     num_cluster_cols=0,
 ):
+    if should_test_be_skipped(
+        num_links=num_links, line_size=line_size, num_cluster_cols=num_cluster_cols, num_cluster_rows=num_cluster_rows
+    ):
+        pytest.skip("Skipping test")
+
     if test_mode == "1_fabric_instance":
         assert num_cluster_rows == 0 and num_cluster_cols == 0
         test_name = f"{'unicast' if is_unicast else 'mcast'}_{fabric_mode.name}"
@@ -548,8 +582,6 @@ def run_fabric_edm(
 
     logger.warning("removing file profile_log_device.csv")
     subprocess.run(["rm", "-rf", f"{os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv"])
-
-    enable_persistent_kernel_cache()
 
     use_direct_exec = get_direct_mode()
 
@@ -592,7 +624,6 @@ def run_fabric_edm(
         result = subprocess.run(cmd, shell=True, capture_output=False)
         rc = result.returncode
 
-    disable_persistent_kernel_cache()
     if rc != 0:
         # Handle exit codes differently for daemon vs direct execution
         if rc == 1:
@@ -685,7 +716,7 @@ def test_fabric_edm_mcast_half_ring_bw(
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
-@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("line_size", [4, 8])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
@@ -865,7 +896,7 @@ def test_fabric_4chip_multi_link_edm_unicast_full_ring_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("line_size", [4, 8])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
 def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
@@ -895,7 +926,7 @@ def test_fabric_4_chip_one_link_mcast_saturate_chip_to_chip_ring_bw(
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
 @pytest.mark.parametrize("num_links", [2, 3, 4])
-@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("line_size", [4, 8])
 @pytest.mark.parametrize("packet_size", [4096])
 @pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
 def test_fabric_4_chip_multi_link_mcast_saturate_chip_to_chip_ring_bw(
@@ -1229,7 +1260,7 @@ def test_fabric_6u_all_rows_and_cols_mcast_bw(
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
-@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("line_size", [4, 8])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
@@ -1263,7 +1294,7 @@ def test_fabric_4chip_one_link_mcast_bw(
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
-@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("line_size", [4, 8])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
@@ -1297,7 +1328,7 @@ def test_fabric_4chip_one_link_bidirectional_single_producer_mcast_bw(
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
-@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("line_size", [4, 8])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
@@ -1432,7 +1463,7 @@ def test_fabric_two_link_non_forwarding_unicast_bw(
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
-@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("line_size", [4, 8])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
@@ -1466,7 +1497,7 @@ def test_fabric_one_link_forwarding_unicast_multiproducer_multihop_bw(
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
-@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("line_size", [4, 8])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
@@ -1500,7 +1531,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_bw(
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
-@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("line_size", [4, 8])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("packet_size", [16, 2048, 4096])
 @pytest.mark.parametrize("noc_message_type", ["noc_unicast_write", "noc_unicast_scatter_write"])
@@ -1567,7 +1598,7 @@ def test_fabric_one_link_forwarding_unicast_single_producer_multihop_atomic_inc_
 @pytest.mark.parametrize("num_messages", [200000])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
-@pytest.mark.parametrize("line_size", [4])
+@pytest.mark.parametrize("line_size", [4, 8])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("is_unicast", [False, True])
 @pytest.mark.parametrize("disable_sends_for_interior_workers", [False, True])

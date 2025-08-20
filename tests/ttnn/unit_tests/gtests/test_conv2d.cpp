@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <optional>
 #include <tuple>
 #include <vector>
 #include <tt-metalium/assert.hpp>
@@ -173,6 +174,7 @@ TEST_P(Conv2DFixture, Conv2DCalculateCorrectly) {
             param.padding,
             std::array<uint32_t, 2>{1, 1},  // dilation
             1,                              // groups
+            std::nullopt,                   // dtype
             std::nullopt,                   // bias tensor
             std::nullopt,                   // conv config
             std::nullopt,                   // compute config

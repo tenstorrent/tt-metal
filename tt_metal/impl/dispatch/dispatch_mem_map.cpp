@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/fabric_edm_packet_header.hpp>
 #include <tt-metalium/tt_align.hpp>
 
@@ -47,14 +47,6 @@ uint32_t DispatchMemMap::dispatch_buffer_pages() const { return settings.dispatc
 uint32_t DispatchMemMap::prefetch_d_buffer_size() const { return settings.prefetch_d_buffer_size_; }
 
 uint32_t DispatchMemMap::prefetch_d_buffer_pages() const { return settings.prefetch_d_pages_; }
-
-uint32_t DispatchMemMap::mux_buffer_size(uint8_t num_hw_cqs) const {
-    return settings.tunneling_buffer_size_ / num_hw_cqs;
-}
-
-uint32_t DispatchMemMap::mux_buffer_pages(uint8_t num_hw_cqs) const {
-    return settings.tunneling_buffer_pages_ / num_hw_cqs;
-}
 
 uint32_t DispatchMemMap::dispatch_s_buffer_size() const { return settings.dispatch_s_buffer_size_; }
 
@@ -127,11 +119,11 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
         DispatchSettings::DISPATCH_MESSAGE_ENTRIES <= DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET / l1_alignment + 1,
         "Number of dispatch message entries exceeds max representable offset");
 
-    constexpr uint8_t num_dev_cq_addrs = magic_enum::enum_count<CommandQueueDeviceAddrType>();
+    constexpr uint8_t num_dev_cq_addrs = enchantum::count<CommandQueueDeviceAddrType>;
     std::vector<uint32_t> device_cq_addr_sizes_(num_dev_cq_addrs, 0);
     for (auto dev_addr_idx = 0; dev_addr_idx < num_dev_cq_addrs; dev_addr_idx++) {
         CommandQueueDeviceAddrType dev_addr_type =
-            magic_enum::enum_cast<CommandQueueDeviceAddrType>(dev_addr_idx).value();
+            enchantum::cast<CommandQueueDeviceAddrType>(dev_addr_idx).value();
         if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_RD) {
             device_cq_addr_sizes_[dev_addr_idx] = settings.prefetch_q_rd_ptr_size_;
         } else if (dev_addr_type == CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD) {
@@ -155,7 +147,7 @@ void DispatchMemMap::reset(const CoreType& core_type, const uint32_t num_hw_cqs)
     device_cq_addrs_[0] = l1_base;
     for (auto dev_addr_idx = 1; dev_addr_idx < num_dev_cq_addrs; dev_addr_idx++) {
         device_cq_addrs_[dev_addr_idx] = device_cq_addrs_[dev_addr_idx - 1] + device_cq_addr_sizes_[dev_addr_idx - 1];
-        CommandQueueDeviceAddrType dev_addr_type = magic_enum::enum_value<CommandQueueDeviceAddrType>(dev_addr_idx);
+        auto dev_addr_type = *enchantum::index_to_enum<CommandQueueDeviceAddrType>(dev_addr_idx);
         if (dev_addr_type == CommandQueueDeviceAddrType::UNRESERVED) {
             device_cq_addrs_[dev_addr_idx] = align(device_cq_addrs_[dev_addr_idx], pcie_alignment);
         } else if (

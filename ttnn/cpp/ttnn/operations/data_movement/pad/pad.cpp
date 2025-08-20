@@ -79,7 +79,6 @@ ttnn::Tensor pad_impl(
 
             auto width_distinct = [](const auto& shape, const auto& other_shape) { return shape[3] != other_shape[3]; };
 
-            uint32_t input_w = input_logical_shape[3];
             uint32_t output_w = output_padded_shape[3];
 
             if (width_distinct(input_logical_shape, output_padded_shape)) {
@@ -191,28 +190,21 @@ ttnn::Tensor pad_impl(
         extra_index = 0;
     }
     auto input_shape_with_tile_padding = input_tensor_4D.padded_shape();
+    std::vector<uint32_t> pad_front_array(padding_size, 0);
     std::vector<uint32_t> output_padded_shape(padding_size, 0);
     for (size_t i = 0; i < padding_size; i++) {
+        pad_front_array[i] = padding[i + extra_index].before_elements;
         output_padded_shape[i] = padding[i + extra_index].before_elements + input_shape_with_tile_padding[i] +
                                  padding[i + extra_index].after_elements;
     }
-
-    auto pad_front = padding | std::views::transform([](const auto& p) { return p.before_elements; });
-    auto pad_back = padding | std::views::transform([](const auto& p) { return p.after_elements; });
 
     if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
         const int target_height = output_padded_shape[padding_size - 2];
         const int target_width = output_padded_shape[padding_size - 1];
         TT_FATAL(
-            target_height % ttnn::TILE_SIZE == 0 || target_width % ttnn::TILE_SIZE == 0,
+            target_height % ttnn::TILE_SIZE == 0 && target_width % ttnn::TILE_SIZE == 0,
             "ttnn.pad: for tiled tensors padding end must be a multiple of the tile size on height and width for a "
             "tensor in tile layout");
-    }
-
-    // Performing actual padding
-    std::vector<uint32_t> pad_front_array(padding_size, 0);
-    for (size_t i = 0; i < pad_front.size(); i++) {
-        pad_front_array[i] = pad_front[i];
     }
 
     return pad_impl(
@@ -391,13 +383,13 @@ ttnn::Tensor ExecutePad::invoke(
 ttnn::Tensor ExecutePad::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<std::pair<uint32_t, uint32_t>>& padding,
+    const ttnn::SmallVector<std::array<uint32_t, 2>>& padding,
     const float value,
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
     ttnn::SmallVector<PadSpecDim> padding_impl;
     std::transform(padding.begin(), padding.end(), std::back_inserter(padding_impl), [](auto& p) {
-        return PadSpecDim(p.first, p.second);
+        return PadSpecDim(p[0], p[1]);
     });
 
     return ExecutePad::invoke(queue_id, input_tensor, padding_impl, value, use_multicore, memory_config_arg);

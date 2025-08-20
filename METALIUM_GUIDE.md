@@ -105,16 +105,11 @@ void kernel_main() {
 
     const uint32_t tile_size_bytes = get_tile_size(cb_in0);
 
-    const InterleavedAddrGenFast<true> a = {
-        .bank_base_address = a_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b
-    };
-    const InterleavedAddrGenFast<true> b = {
-        .bank_base_address = b_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b
-    };
+    constexpr auto args_a = TensorAccessorArgs<0>();
+    const auto a = TensorAccessor(args_a, a_addr, tile_size_bytes);
+
+    constexpr auto args_b = TensorAccessorArgs<args_a.next_compile_time_args_offset()>();
+    const auto b = TensorAccessor(args_b, b_addr, tile_size_bytes);
 
     // Read inputs from DRAM into circular buffers
     for (uint32_t i = 0; i < n_tiles; i++) {
@@ -193,11 +188,8 @@ void kernel_main() {
 
     const uint32_t tile_size_bytes = get_tile_size(cb_out);
 
-    const InterleavedAddrGenFast<true> c = {
-        .bank_base_address = c_addr,
-        .page_size = tile_size_bytes,
-        .data_format = DataFormat::Float16_b
-    };
+    constexpr auto args_c = TensorAccessorArgs<0>();
+    const auto c = TensorAccessor(args_c, c_addr, tile_size_bytes);
 
     // Read outputs from circular buffers into DRAM
     for (uint32_t i = 0; i < n_tiles; i++) {
@@ -238,7 +230,7 @@ The 32×32 tile size allows hardware to process data efficiently within a few cl
 
 <img width="900" alt="image" src="docs/source/common/images/matmul-blocked-row-column-diagram.webp">
 
-GPUs often struggle to efficiently supply data to their tensor cores because their architectures are primarily designed around vector operations. This can lead to less optimal memory access patterns for tensor workloads. In contrast, Tenstorrent hardware is built for tile-based computation from the start—both the vector and matrix units operate natively on 32×32 tiles. This approach leads to more predictable performance and a simpler programming model. For detailed performance numbers, see the [Matrix Multiplcation performance report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/GEMM_FLOPS/GEMM_FLOPS.md) as well as the [Convolution Networks on Tenstorrent Chips](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) report.
+GPUs often struggle to efficiently supply data to their tensor cores because their architectures are primarily designed around vector operations. This can lead to less optimal memory access patterns for tensor workloads. In contrast, Tenstorrent hardware is built for tile-based computation from the start—both the vector and matrix units operate natively on 32×32 tiles. This approach leads to more predictable performance and a simpler programming model. For detailed performance numbers, see the [Matrix Multiplication performance report](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/GEMM_FLOPS/GEMM_FLOPS.md) as well as the [Convolution Networks on Tenstorrent Chips](https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/CNNs/ttcnn.md) report.
 
 ### Where is the cache hierarchy
 
@@ -376,16 +368,21 @@ CBHandle cb_out = CreateCircularBuffer(
 Then, we compile the kernels for data movement and computation. For simplicity, this example targets a single Tensix at coordinates (0, 0). Runtime arguments are then configured for each kernel to specify their operational parameters.
 
 ```c++
+std::vector<uint32_t> reader_args;
+TensorAccessorArgs(*a).append_to(reader_args);
+TensorAccessorArgs(*b).append_to(reader_args);
 auto reader = CreateKernel(
     program,
     "path/to/reader_kernel.cpp",
     core,
-    DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+    DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_args});
+std::vector<uint32_t> writer_args;
+TensorAccessorArgs(*c).append_to(writer_args);
 auto writer = CreateKernel(
     program,
     "path/to/writer_kernel.cpp",
     core,
-    DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+    DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = writer_args});
 auto compute = CreateKernel(
     program,
     "path/to/compute_kernel.cpp",
@@ -487,7 +484,7 @@ inline void calculate_sine() {
 }
 ```
 
-For Blackhole (and Wormhole) processors, the availability of `float_to_int16` instruction enables reliable value shifting to the [-π, π] range. The implementation then applies a MacLaurin series calculation for sine computation (utilizing the same mathematical approach but with processor-specific function naming). Additionally, the ITERATIONS parameter differs between processor generations (not shown in code here, it is set by an ourside source): Grayskull requires 4 iterations, while Wormhole and Blackhole require 8 iterations to accommodate their reduced vector width of 32 elements compared to Grayskull's 64-element vectors.
+For Blackhole (and Wormhole) processors, the availability of `float_to_int16` instruction enables reliable value shifting to the [-π, π] range. The implementation then applies a MacLaurin series calculation for sine computation (utilizing the same mathematical approach but with processor-specific function naming). Additionally, the ITERATIONS parameter differs between processor generations (not shown in code here, it is set by an outside source): Grayskull requires 4 iterations, while Wormhole and Blackhole require 8 iterations to accommodate their reduced vector width of 32 elements compared to Grayskull's 64-element vectors.
 
 ```c++
 // tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_trigonometry.h
@@ -537,7 +534,7 @@ Unlike OpenCL's command queue which optionally supports out-of-order execution, 
 // Wait for the current tail operation on queue 0 to complete
 // before proceeding on command queue 1
 auto event = EnqueueRecordEvent(device->command_queue(0));
-EnququeWaitForEvent(device->command_queue(1), event);
+EnqueueWaitForEvent(device->command_queue(1), event);
 ```
 
 ### SPMD in Metalium
@@ -579,7 +576,7 @@ for(uint32_t y = core_range.start.y; y < core_range.end.y; y++) {
 }
 ```
 
-Metalium provides the `tt::tt_metal::split_work_to_cores` utility function to distribute work across available cores for SPMD execution. The function takes the total number of tiles and available cores, then calculates how to divide the work when it cannot be evenly distributed. The function returns two groups of cores: a primary group that handles more tiles per core, and a secondary group that handles fewer, along with the tile count for each group. Minimizing workload inbalance between cores (if work can be evenly distributed, the secondary group will be empty.)
+Metalium provides the `tt::tt_metal::split_work_to_cores` utility function to distribute work across available cores for SPMD execution. The function takes the total number of tiles and available cores, then calculates how to divide the work when it cannot be evenly distributed. The function returns two groups of cores: a primary group that handles more tiles per core, and a secondary group that handles fewer, along with the tile count for each group. Minimizing workload imbalance between cores (if work can be evenly distributed, the secondary group will be empty.)
 
 ```c++
 auto core_grid = device->compute_with_storage_grid_size();
@@ -595,7 +592,7 @@ auto [num_cores, // number of cores utilized
 Only create kernels on cores that have been assigned work (i.e., those in `all_cores` or `core_group_*`). Avoid creating kernels on unused cores, as this can cause undefined behavior or crashes if kernels are created but runtime arguments are not set on the core. If there is not enough work, some cores may remain idle—do not assign kernels to them.
 
 ```c++
-// `all_cores` is guarenteed to be the union of `core_group_1` and `core_group_2`.
+// `all_cores` is guaranteed to be the union of `core_group_1` and `core_group_2`.
 for (const auto& core : all_cores) {
     // Good
     CreateKernel(program, "/path/to/reader.cpp", all_cores, DataMovementConfig{...});

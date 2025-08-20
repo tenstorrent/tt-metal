@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <string>
+
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "ttnn/operations/normalization/layernorm/device/layernorm_op.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -314,8 +316,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
                                                       (std::uint32_t)block_size};
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
-    std::map<string, string> reader_defines;
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> compute_defines;
     if (b) {
         reader_defines["FUSE_PRE_ADD"] = "1";
         compute_defines["FUSE_PRE_ADD"] = "1";
@@ -453,7 +455,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     union {
         float f;
         uint32_t u;
-    } e;
+    } e{};
     e.f = eps;  // epsilon
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -977,8 +979,8 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     auto reduce_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto reduce_second_stage_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, INVALID);
     // reader defines
-    std::map<string, string> reader_mcast_sender_defines;
-    std::map<string, string> reader_mcast_receiver_defines;
+    std::map<std::string, std::string> reader_mcast_sender_defines;
+    std::map<std::string, std::string> reader_mcast_receiver_defines;
     if (b) {
         reader_mcast_sender_defines["FUSE_PRE_ADD"] = "1";
         reader_mcast_receiver_defines["FUSE_PRE_ADD"] = "1";
@@ -1059,7 +1061,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     std::string sender_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
         "reader_mcast_sender_unary_sharded_ln.cpp";
-    std::string reciever_reader_kernel_file =
+    std::string receiver_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
         "reader_mcast_receiver_unary_sharded_ln.cpp";
 
@@ -1067,14 +1069,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         sender_reader_kernel_file =
             "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp";
-        reciever_reader_kernel_file =
+        receiver_reader_kernel_file =
             "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp";
     } else if (is_post_all_gather) {
         sender_reader_kernel_file =
             "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
-        reciever_reader_kernel_file =
+        receiver_reader_kernel_file =
             "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
     }
@@ -1093,7 +1095,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (use_mcast) {
         reader_mcast_receiver_kernels_id_all_to_all = CreateKernel(
             program,
-            reciever_reader_kernel_file,
+            receiver_reader_kernel_file,
             all_to_all_workers_except_sender,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1104,7 +1106,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (num_none_all_to_all_workers > 0) {
         reader_mcast_receiver_kernels_id = CreateKernel(
             program,
-            reciever_reader_kernel_file,
+            receiver_reader_kernel_file,
             not_all_to_all_workers,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1114,7 +1116,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     }
 
     // writer defines
-    std::map<string, string> writer_defines;
+    std::map<std::string, std::string> writer_defines;
     if (rms_norm) {
         writer_defines["RMSNORM"] = 1;
     }
@@ -1226,7 +1228,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
                 .defines = writer_defines});
     }
     // defines
-    std::map<string, string> compute_defines;
+    std::map<std::string, std::string> compute_defines;
     if (b) {
         compute_defines["FUSE_PRE_ADD"] = "1";
     }
@@ -1492,7 +1494,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     union {
         float f;
         uint32_t u;
-    } e;
+    } e{};
     e.f = eps;
 
     std::vector<uint32_t> in0_mcast_noc_x;

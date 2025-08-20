@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -29,25 +29,15 @@ namespace ckernel {
  */
  // clang-format on
 ALWI void logical_not_unary_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op<APPROX>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op<APPROX, sfpi::vFloat, float>(idst)));
 }
 
-// clang-format off
-/**
- * Performs element-wise computation of the logical not unary operation for int32 dtype on each element of a tile
- * in DST register at index tile_index. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
- *
- * Return value: None
- *
- * | Argument       | Description                                                                | Type     | Valid Range                                           | Required |
- * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- */
-// clang-format on
 ALWI void logical_not_unary_tile_int32(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op_int32<APPROX>(idst)));
+    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op<APPROX, sfpi::vInt, int16_t>(idst)));
+}
+
+ALWI void logical_not_unary_tile_uint32(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op<APPROX, sfpi::vUInt, uint16_t>(idst)));
 }
 
 /**

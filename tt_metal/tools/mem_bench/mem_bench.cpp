@@ -109,7 +109,6 @@ TestResult mem_bench_page_sizing(benchmark::State& state) {
 // Reports host bw.
 TestResult mem_bench_copy_multithread(benchmark::State& state) {
     static_assert((MEMCPY_ALIGNMENT & ((MEMCPY_ALIGNMENT)-1)) == 0);
-    constexpr uint32_t k_DeviceId = 0;
     TestResult results;
     Context ctx{
         {},
@@ -285,7 +284,6 @@ TestResult mem_bench_multi_mmio_devices(
     TestResult results;
 
     // One thread to wait for program on each device
-    int num_threads = devices.size();
 
     for (auto _ : state) {
         std::map<int, Program> programs;                  // device : programs
@@ -293,7 +291,6 @@ TestResult mem_bench_multi_mmio_devices(
         for (auto [device_id, device] : devices) {
             programs[device_id] = CreateProgram();
             Program& pgm = programs[device_id];
-            auto device_hugepage = get_hugepage(device_id, 0);
             auto device_hugepage_size = get_hugepage_size(device_id);
             configured_core_ranges.insert(
                 {device_id,
@@ -301,7 +298,6 @@ TestResult mem_bench_multi_mmio_devices(
                      .value()});
         }
 
-        double host_copy_time = 0;
         execute_work_synced_start(
             1,
             [devices, &programs](int /*thread_idx*/) {
@@ -397,7 +393,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
     auto hugepage = get_hugepage(device->id(), 0);
     auto hugepage_size = get_hugepage_size(device->id());
 
-    // Don't need to seperate device results
+    // Don't need to separate device results
     // Readers will have 0 bytes written
     // Writers will have 0 bytes read. Will not mix.
     TestResult results;

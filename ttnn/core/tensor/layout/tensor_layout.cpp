@@ -4,6 +4,10 @@
 
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/math.hpp>
+
 namespace tt::tt_metal {
 
 namespace {
@@ -122,10 +126,6 @@ void validate_shard_spec(const TensorLayout& tensor_layout) {
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
-TensorLayout::TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config) :
-    TensorLayout(dtype, page_config, memory_config, {}) {}
-
-// Private
 TensorLayout::TensorLayout(
     DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) :
     dtype_(dtype), page_config_(page_config), memory_config_(memory_config), alignment_(alignment) {
@@ -218,7 +218,12 @@ BufferShardingArgs TensorLayout::compute_buffer_sharding_args(const ttnn::Shape&
     if (const auto& nd_shard_spec = memory_config_.nd_shard_spec()) {
         auto padded_shape = compute_padded_shape(shape);
         distribution_spec = BufferDistributionSpec::from_shard_spec(
-            padded_shape, nd_shard_spec->shard_shape, page_shape, nd_shard_spec->grid, nd_shard_spec->orientation);
+            padded_shape,
+            nd_shard_spec->shard_shape,
+            page_shape,
+            nd_shard_spec->grid,
+            nd_shard_spec->orientation,
+            nd_shard_spec->shard_distribution_strategy);
     }
     return BufferShardingArgs(
         std::move(distribution_spec), std::move(shard_spec_buffer), memory_config_.memory_layout());
@@ -252,6 +257,44 @@ size_t TensorLayout::compute_page_size_bytes(const ttnn::Shape& shape) const {
 
 size_t TensorLayout::compute_page_size_bytes(const Shape2D& page_size) const {
     return page_config_.get_page_size_bytes(page_size, dtype_);
+}
+
+size_t TensorLayout::compute_consumed_memory_bytes_per_bank(
+    const ttnn::Shape& shape, size_t page_alignment, size_t num_banks) const {
+    const Shape2D physical_shape = compute_physical_shape(shape);
+    const Shape2D page_shape = compute_page_shape(physical_shape);
+
+    size_t num_pages_per_bank = 0;
+    if (!memory_config_.is_sharded()) {
+        const size_t num_pages =
+            physical_shape.height() * physical_shape.width() / page_shape.height() / page_shape.width();
+        num_pages_per_bank = div_up(num_pages, num_banks);
+    } else if (const auto& shard_spec = memory_config_.shard_spec()) {
+        Shape2D shard_shape = Shape2D(shard_spec->shape);
+        if (shard_spec->physical_shard_shape.has_value()) {
+            shard_shape = shard_spec->physical_shard_shape.value();
+        }
+        num_pages_per_bank =
+            div_up(shard_shape.height(), page_shape.height()) * div_up(shard_shape.width(), page_shape.width());
+    } else {
+        auto sharding_args = compute_buffer_sharding_args(shape);
+        const auto& dist_spec = sharding_args.buffer_distribution_spec().value();
+        num_pages_per_bank = dist_spec.max_num_dev_pages_per_core();
+    }
+
+    const size_t aligned_page_size = round_up(compute_page_size_bytes(page_shape), page_alignment);
+    return num_pages_per_bank * aligned_page_size;
+}
+
+size_t TensorLayout::compute_consumed_memory_bytes_per_bank(const ttnn::Shape& shape, const IDevice& device) const {
+    const size_t page_alignment = device.allocator()->get_alignment(memory_config_.buffer_type());
+    size_t num_banks = 0;
+    if (memory_config_.is_l1()) {
+        num_banks = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y;
+    } else {
+        num_banks = device.num_dram_channels();
+    }
+    return compute_consumed_memory_bytes_per_bank(shape, page_alignment, num_banks);
 }
 
 Shape2D TensorLayout::get_logical_shard_shape() const {

@@ -68,6 +68,7 @@ Applies a 2D convolution over `input_tensor`, a 4D tensor with dimensions ordere
         input_height,
         input_width,
         ## optional arguments
+        dtype,
         conv_config,
         compute_config,
         groups,
@@ -92,6 +93,7 @@ Arguments:
 * `batch_size` an `int`.
 * `input_height` an `int`.
 * `input_width` an `int`.
+* `dtype = ttnn.bfloat16`_optional_ output data type. If not set defaults to input activations data type
 * `conv_config` _optional_ structure of configuration parameters of type `Conv2DConfig`. This is described in detail below.
 * `compute_config` _optional_ structure of compute configuration parameters of type `DeviceConfiguration`. This is described in detail below.
 * `groups` _optional_ `int` to control the connections between inputs and outputs. Both `in_channels` and `out_channels` should be divisible by `groups`.
@@ -103,7 +105,6 @@ Arguments:
 
 Following are the conv2d operation configuration parameters:
 
-* `dtype = ttnn.bfloat16` input activations data type.
 * `weights_dtype = ttnn.bfloat16` weights and bias data type.
 * `activation = ""` _optional_ `string`. Any activation function to apply. Options are `"relu"`.
 * `deallocate_activation = False` _optional_ bool indicating whether the input activation tensor memory should be deallocated.
@@ -173,7 +174,6 @@ Once the inputs are prepared, we can call the `conv2d` operation as shown in the
 ```python
 
     conv_config = ttnn.Conv2dConfig(
-        dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16
     )
 
@@ -193,6 +193,7 @@ Once the inputs are prepared, we can call the `conv2d` operation as shown in the
         input_width=input_width,
         conv_config=conv_config,
         return_output_dim=True,
+        dtype=ttnn.bfloat16,
     )
 ```
 

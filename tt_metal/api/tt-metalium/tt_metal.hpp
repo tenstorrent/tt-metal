@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,22 +15,15 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/cluster.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
-#include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/profiler_optional_metadata.hpp>
 #include <tt-metalium/profiler_types.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/types/cluster_descriptor_types.h>
-
-namespace tt {
-namespace tt_metal {
-enum class FabricConfig : uint32_t;
-enum class FabricReliabilityMode : uint32_t;
-}  // namespace tt_metal
-}  // namespace tt
 
 namespace tt::tt_metal {
 class Buffer;
@@ -40,26 +33,6 @@ class Program;
 namespace detail {
 
 bool DispatchStateCheck(bool isFastDispatch);
-
-/**
- * Call before CreateDevices to enable fabric, which uses the specified number of routing planes.
- * Currently, setting num_routing_planes dictates how many routing planes the fabric should be active on
- * for that init sequence. The number of routing planes fabric will be initialized on will be the max
- * of all the values specified by different clients. If a client wants to initialize fabric on all the
- * available routing planes, num_routing_planes can be left unspecifed.
- * NOTE: This does not 'reserve' routing planes for any clients, but is rather a global setting.
- *
- * Return value: void
- *
- * | Argument           | Description                         | Data type         | Valid range | Required |
- * |--------------------|-------------------------------------|-------------------|-------------|----------|
- * | fabric_config      | Fabric config to set                | FabricConfig      |             | Yes      |
- * | num_routing_planes | Number of routing planes for fabric | optional<uint8_t> |             | No       |
- */
-void SetFabricConfig(
-    FabricConfig fabric_config,
-    FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-    std::optional<uint8_t> num_routing_planes = std::nullopt);
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
@@ -161,7 +134,7 @@ void LaunchProgram(
     const std::shared_ptr<Program>& program,
     bool wait_until_cores_done = true,
     bool force_slow_dispatch = false);
-void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile_results = true);
+void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results = true);
 
 /**
  *  Compiles all kernels within the program, and generates binaries that are written to
@@ -211,98 +184,6 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
 bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_slow_dispatch = false);
 
 /**
- * Clear profiler control buffer
- *
- * Return value: void
- *
- * | Argument      | Description                                                        | Type            | Valid Range
- * | Required |
- * |---------------|--------------------------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | Clear profiler control buffer before any core attempts to profler  | IDevice*        | | True     |
- * */
-void ClearProfilerControlBuffer(IDevice* device);
-
-/**
- * Initialize device profiling data buffers
- *
- * Return value: void
- *
- * | Argument      | Description                                       | Type            | Valid Range               |
- * Required |
- * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | IDevice*        |                           |
- * True     |
- * */
-void InitDeviceProfiler(IDevice* device);
-
-/**
- * Sync TT devices with host
- *
- * Return value: void
- *
- * | Argument      | Description                                       | Type            | Valid Range               | Required |
- * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * */
-void ProfilerSync(ProfilerSyncState state);
-
-/**
- * Read device side profiler data and dump results into device side CSV log
- *
- * Return value: void
- *
- * | Argument      | Description                                       | Type | Valid Range               | Required |
- * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | IDevice* |                           | True |
- * | core_coords   | The logical core coordinates being profiled.      | const std::unordered_map<CoreType,
- * std::vector<CoreCoord>> & |
- * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
- * */
-void DumpDeviceProfileResults(
-    IDevice* device,
-    std::vector<CoreCoord>& worker_cores,
-    ProfilerDumpState = ProfilerDumpState::NORMAL,
-    const std::optional<ProfilerOptionalMetadata>& metadata = {});
-
-/**
- * Traverse all cores and read device side profiler data and dump results into device side CSV log
- *
- * Return value: void
- *
- * | Argument      | Description                                       | Type | Valid Range               | Required |
- * |---------------|---------------------------------------------------|--------------------------------------------------------------|---------------------------|----------|
- * | device        | The device holding the program being profiled.    | Device * |                           | True |
- * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
- * */
-void DumpDeviceProfileResults(
-    IDevice* device,
-    ProfilerDumpState = ProfilerDumpState::NORMAL,
-    const std::optional<ProfilerOptionalMetadata>& metadata = {});
-
-/**
- * Set the directory for device-side CSV logs produced by the profiler instance in the tt-metal module
- *
- * Return value: void
- *
- * | Argument     | Description                                             |  Data type  | Valid range              |
- * required |
- * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
- * | output_dir   | The output directory that will hold the output CSV logs  | std::string | Any valid directory path |
- * No       |
- * */
-void SetDeviceProfilerDir(const std::string& output_dir = "");
-
-/**
- * Start a fresh log for the device side profile results
- *
- * Return value: void
- *
- * | Argument     | Description                                             |  Data type  | Valid range              |
- * required |
- * |--------------|---------------------------------------------------------|-------------|--------------------------|----------|
- * */
-void FreshProfilerDeviceLog();
-
-/**
  * Generate a (unique) per device ID for a program (potentially) running across multiple devices. The generated ID is
  * used by the performance profiler.
  *
@@ -318,6 +199,21 @@ void FreshProfilerDeviceLog();
  * |                          | no       |
  */
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op = false);
+
+/**
+ * Decode per device program ID to get encoded values (base program id, device id, and a flag indicating whether
+ * it's an op run entirely on host).
+ *
+ * Return value: tuple<uint32_t, uint32_t, bool>
+ *
+ * | Argument             | Description                                                                         |  Data
+ * type            | Valid range              | required |
+ * |----------------------|-------------------------------------------------------------------------------------|-----------------------|--------------------------|----------|
+ * | device_program_id    | Encoded device specific id used by the performance profiler  |
+ * uint32_t        | 0 - 2^32 - 1             | yes      |
+ */
+DeviceProgramId DecodePerDeviceProgramID(uint32_t device_program_id);
+
 /**
  * Copies data from a host buffer into a buffer within the device DRAM channel
  *

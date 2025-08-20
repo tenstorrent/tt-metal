@@ -179,6 +179,16 @@ CoreRangeSet::CoreRangeSet(const std::set<CoreRange>& core_ranges) : ranges_(cor
 
 CoreRangeSet::CoreRangeSet(const CoreRange& core_range) : ranges_{core_range} {}
 
+CoreRangeSet::CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords) {
+    std::vector<CoreRange> core_ranges;
+    core_ranges.reserve(core_coords.size());
+    for (const auto& core_coord : core_coords) {
+        core_ranges.push_back(CoreRange(core_coord));
+    }
+    CoreRangeSet unmerged_set(std::move(core_ranges));
+    *this = unmerged_set.merge_ranges();
+}
+
 void swap(CoreRangeSet& first, CoreRangeSet& second) { std::swap(first.ranges_, second.ranges_); }
 
 CoreRangeSet::CoreRangeSet(const CoreRangeSet& other) { this->ranges_ = other.ranges_; }
@@ -316,7 +326,6 @@ bool CoreRangeSet::contains(const CoreRange& other) const {
     } else if (this->num_cores() < num_remaining_cores) {
         return false;
     }
-    uint32_t num_intersect_cores = 0;
     for (const auto& cr : this->ranges_) {
         const auto& intersection = cr.intersection(other);
         if (intersection.has_value()) {
@@ -626,13 +635,26 @@ std::vector<CoreCoord> corerange_to_cores(const CoreRangeSet& crs, std::optional
     return all_cores;
 }
 
-CoreRangeSet select_from_corerange(const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise) {
+CoreRangeSet select_from_corerangeset(
+    const CoreRangeSet& crs, uint32_t start_index, uint32_t end_index, bool row_wise) {
     auto all_cores = corerange_to_cores(crs, end_index + 1, row_wise);
     std::vector<CoreRange> selected_cores;
     for (uint32_t i = start_index; i <= end_index; i++) {
         selected_cores.push_back(CoreRange(all_cores[i], all_cores[i]));
     }
     return CoreRangeSet(selected_cores);
+}
+std::optional<CoreRange> select_contiguous_range_from_corerangeset(const CoreRangeSet& crs, uint32_t x, uint32_t y) {
+    for (const auto& core_range : crs.ranges()) {
+        const auto& start_coord = core_range.start_coord;
+        const auto& end_coord = core_range.end_coord;
+        if (start_coord.x + x > end_coord.x || start_coord.y + y > end_coord.y) {
+            continue;
+        }
+        CoreCoord new_end_coord = {start_coord.x + x, start_coord.y + y};
+        return CoreRange(start_coord, new_end_coord);
+    }
+    return std::nullopt;
 }
 
 bool operator!=(const CoreRangeSet& a, const CoreRangeSet& b) { return !(a == b); }

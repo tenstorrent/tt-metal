@@ -201,9 +201,7 @@ class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
         self.max_gen_len = self.model_args[0].max_seq_len - 1  # TODO: double check what this should be
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, tt_data_parallel=1):
-        max_seq_len = 131072
-
+    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, tt_data_parallel=1):
         submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
 
         model_args = []
@@ -280,13 +278,15 @@ class LlamaForCausalLM(Generator):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, n_layers=None, tt_data_parallel=1):
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+    ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
             mesh_device,
             max_batch_size,
-            max_seq_len=131072,
+            max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
             optimizations=DecodersPrecision.performance,
@@ -312,13 +312,15 @@ class QwenForCausalLM(Generator):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, n_layers=None, tt_data_parallel=1):
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len=131072, n_layers=None, tt_data_parallel=1
+    ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
             mesh_device,
             max_batch_size,
-            max_seq_len=131072,
+            max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
             optimizations=DecodersPrecision.performance,
@@ -344,13 +346,15 @@ class MistralForCausalLM(Generator):
         super().__init__(*args, **kwargs)
 
     @classmethod
-    def initialize_vllm_model(cls, hf_config, mesh_device, max_batch_size, n_layers=None, tt_data_parallel=1):
+    def initialize_vllm_model(
+        cls, hf_config, mesh_device, max_batch_size, max_seq_len=32768, n_layers=None, tt_data_parallel=1
+    ):
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
             mesh_device,
             max_batch_size,
-            max_seq_len=32768,
+            max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
             optimizations=DecodersPrecision.performance,

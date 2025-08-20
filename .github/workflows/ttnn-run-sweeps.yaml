@@ -384,7 +384,6 @@ on:
           - eltwise.binary.rpow.rpow_sharded
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
-          - eltwise.binary.scatter.scatter_forge
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
           - eltwise.binary.eq.eq_scalar_pytorch2
@@ -495,6 +494,7 @@ on:
           - matmul.short.matmul
           - matmul.generality.matmul
           - matmul.generality.linear
+          - matmul.sparse.sparse_matmul
           - losses.l1_loss
           - losses.mse_loss
           - data_movement.concat.concat_interleaved_n_tensors
@@ -520,6 +520,7 @@ on:
           - data_movement.repeat_interleave.repeat_interleave
           - data_movement.nonzero.nonzero
           - data_movement.backward.concat_bw.concat_bw
+          - data_movement.pad.pad
           - conv_transpose2d.short.conv_transpose2d_short_sweep
           - conv2d.full.conv2d_misc
           - conv2d.full.conv2d_sharding
@@ -582,7 +583,7 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     timeout-minutes: 30
-    runs-on: tt-beta-ubuntu-2204-large
+    runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️  Setup Job
         uses: tenstorrent/tt-metal/.github/actions/setup-job@main

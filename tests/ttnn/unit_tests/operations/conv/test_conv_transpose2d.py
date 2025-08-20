@@ -91,13 +91,11 @@ def run_conv_transpose2d(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
     conv_config = ttnn.Conv2dConfig(
-        dtype=activations_dtype,
         weights_dtype=weights_dtype,
         shard_layout=shard_layout,
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=enable_act_double_buffer,
         enable_split_reader=enable_split_reader,
-        enable_subblock_padding=False,
         output_layout=output_layout,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -111,7 +109,6 @@ def run_conv_transpose2d(
 
     if config_override and "act_block_w_div" in config_override:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
-
     if preprocess_weights_bias:
         tt_weight_tensor = ttnn.to_device(tt_weight_tensor, device)
         tt_weight_tensor = ttnn.prepare_conv_transpose2d_weights(
@@ -134,6 +131,7 @@ def run_conv_transpose2d(
             conv_config=conv_config,
             compute_config=compute_config,
             mirror_kernel=mirror_kernel,
+            input_dtype=activations_dtype,
         )
 
         tt_bias_tensor = (
@@ -155,6 +153,7 @@ def run_conv_transpose2d(
                 groups=groups,
                 conv_config=conv_config,
                 compute_config=compute_config,
+                input_dtype=activations_dtype,
             )
             if has_bias
             else None
@@ -180,6 +179,7 @@ def run_conv_transpose2d(
         mirror_kernel=mirror_kernel,
         return_output_dim=True,
         return_weights_and_bias=True,
+        dtype=activations_dtype,
     )
     logger.info(f"Conv2d Transpose Input = {(input_height, input_width)} Output = {out_height, out_width}")
 

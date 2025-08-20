@@ -64,7 +64,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ConcatenateHeadsDeviceOperation::c
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
-    const auto batch_size = input_tensor.padded_shape()[0];
 
     auto device_compute_with_storage_grid_size = input_tensor.device()->compute_with_storage_grid_size();
     TT_FATAL(

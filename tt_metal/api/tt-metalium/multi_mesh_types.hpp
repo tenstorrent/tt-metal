@@ -33,6 +33,7 @@ struct EthChanDescriptor {
 struct IntermeshLinkTable {
     // Local mesh ID
     MeshId local_mesh_id = MeshId{0};
+    MeshHostRankId local_host_rank_id = MeshHostRankId{0};
     // Maps local eth channel to remote eth channel
     std::map<EthChanDescriptor, EthChanDescriptor> intermesh_links;
 };

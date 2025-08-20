@@ -5,6 +5,7 @@
 #pragma once
 
 #include <umd/device/types/cluster_descriptor_types.h>
+#include "context/metal_context.hpp"
 #include "gtest/gtest.h"
 #include <map>
 #include <tt-metalium/host_api.hpp>
@@ -15,7 +16,6 @@
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/device_pool.hpp>
-#include "llrt.hpp"
 
 namespace tt::tt_metal {
 
@@ -27,7 +27,6 @@ private:
 public:
     // A function to run a program, according to which dispatch mode is set.
     void RunProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, const bool skip_finish = false) {
-        const uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
         } else {
@@ -68,9 +67,9 @@ public:
     bool IsSlowDispatch() { return this->slow_dispatch_; }
 
 protected:
-    tt::ARCH arch_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
     std::vector<tt::tt_metal::IDevice*> devices_;
-    bool slow_dispatch_;
+    bool slow_dispatch_{};
     const size_t l1_small_size_{DEFAULT_L1_SMALL_SIZE};
     const size_t trace_region_size_{DEFAULT_TRACE_REGION_SIZE};
 
@@ -107,6 +106,7 @@ protected:
             tt::tt_metal::detail::CloseDevices(id_to_device_);
             id_to_device_.clear();
             devices_.clear();
+            MetalContext::instance().teardown();
         }
     }
 

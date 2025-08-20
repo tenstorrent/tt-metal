@@ -189,8 +189,7 @@ def mesh_device_fixture():
 
     assert ttnn.get_num_devices() >= 8, "Not T3000!"
 
-    device_ids = ttnn.get_t3k_physical_device_ids_ring()
-    num_devices_requested = len(device_ids)
+    num_devices_requested = 8
 
     mesh_device = ttnn.open_mesh_device(
         ttnn.MeshShape(1, num_devices_requested),
@@ -303,7 +302,7 @@ Options:
 
 `--clean` OPTIONAL: This setting is used to recover from mistakes in parameter generation, or if you have removed some test suites. If set, this flag will mark ALL vectors in the sweep as "archived", and regenerate all suites based on the current parameters in the sweep file.
 
-`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be assigned to your test vectors. This is to keep copies of vectors seperate from other developers / CI. By default, this will be your username. You are able to specify a tag when running tests using the runner.
+`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be assigned to your test vectors. This is to keep copies of vectors separate from other developers / CI. By default, this will be your username. You are able to specify a tag when running tests using the runner.
 
 ## Test Runner
 
@@ -349,7 +348,7 @@ Options:
 
 `--dry-run` EXPERIMENTAL: This flag will print all the test vectors that would be run without the flag. This is best used piping stdout to a text file to avoid flooding the terminal.
 
-`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be used to search for test vectors. This is to keep copies of vectors seperate from other developers / CI. By default, this will be your username. You are able to specify a tag when generating tests using the generator. To run the CI suites of tests locally, use the `ci-main` tag.
+`--tag <tag>` OPTIONAL: This setting is used to assign a custom tag that will be used to search for test vectors. This is to keep copies of vectors separate from other developers / CI. By default, this will be your username. You are able to specify a tag when generating tests using the generator. To run the CI suites of tests locally, use the `ci-main` tag.
 
 ## FAQ / Troubleshooting
 

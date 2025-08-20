@@ -19,13 +19,11 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out1 = get_compile_time_arg_val(1);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(2) == 1;
+    constexpr auto dst_args = TensorAccessorArgs<2>();
 
     const uint32_t tile_size = get_tile_size(cb_id_out0);
-    const DataFormat data_format = get_dataformat(cb_id_out0);
 
-    const InterleavedAddrGenFast<dst_is_dram> s1 = {
-        .bank_base_address = dst_addr, .page_size = tile_size, .data_format = data_format};
+    const auto s1 = TensorAccessor(dst_args, dst_addr, tile_size);
 
     cb_reserve_back(cb_id_out1, 1);  // in this kernel we are not pushing anything into CBs, just using the space
 

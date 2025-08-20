@@ -12,7 +12,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -51,7 +50,6 @@ using namespace tt::tt_metal;
 static constexpr uint32_t elements_in_tile = 32 * 32;
 
 static std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
-    uint32_t tile_size_bytes = tile_size(data_format);
     std::vector<uint32_t> u32_vec;
     if (data_format == tt::DataFormat::Float32) {
         u32_vec.resize(elements_in_tile);
@@ -117,8 +115,8 @@ static std::vector<uint32_t> GenerateInputTile(tt::DataFormat data_format) {
     return u32_vec;
 }
 
-static string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t> &input_tile) {
-    string data = "";
+static std::string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
+    std::string data = "";
     if (data_format == tt::DataFormat::Float32) {
         for (uint32_t col = 0; col < 32; col += 8) {
             data += fmt::format(
@@ -212,9 +210,9 @@ static string GenerateExpectedData(tt::DataFormat data_format, std::vector<uint3
     return data;
 }
 
-static string GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint32_t> &input_tile) {
-    string data = GenerateExpectedData(data_format, input_tile);
-    string expected = fmt::format("Print tile from Data0:{}", data);
+static std::string GenerateGoldenOutput(tt::DataFormat data_format, std::vector<uint32_t>& input_tile) {
+    std::string data = GenerateExpectedData(data_format, input_tile);
+    std::string expected = fmt::format("Print tile from Data0:{}", data);
     expected += fmt::format("\nPrint tile from Unpack:{}", data);
     expected += fmt::format("\nPrint tile from Math:\nWarning: MATH core does not support TileSlice printing, omitting print...");
     expected += fmt::format("\nPrint tile from Pack:{}", data);
@@ -231,10 +229,10 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     uint32_t tile_size = detail::TileSize(data_format);
     CircularBufferConfig cb_src0_config = CircularBufferConfig(tile_size, {{CBIndex::c_0, data_format}})
                                               .set_page_size(CBIndex::c_0, tile_size);
-    CBHandle cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
     CircularBufferConfig cb_intermed_config =
         CircularBufferConfig(tile_size, {{CBIndex::c_1, data_format}}).set_page_size(CBIndex::c_1, tile_size);
-    CBHandle cb_intermed = tt_metal::CreateCircularBuffer(program, core, cb_intermed_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_intermed_config);
 
     // Dram buffer to send data to, device will read it out of here to print
     tt_metal::InterleavedBufferConfig dram_config{
@@ -290,7 +288,7 @@ static void RunTest(DPrintFixture* fixture, IDevice* device, tt::DataFormat data
     fixture->RunProgram(device, program);
 
     // Check against expected prints
-    string expected = GenerateGoldenOutput(data_format, u32_vec);
+    std::string expected = GenerateGoldenOutput(data_format, u32_vec);
     // log_info(tt::LogTest, "Expected output:\n{}", expected);
     EXPECT_TRUE(
         FilesMatchesString(

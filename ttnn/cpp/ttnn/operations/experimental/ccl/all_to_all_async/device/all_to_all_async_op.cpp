@@ -17,7 +17,6 @@ void AllToAllAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "AllToAllAsync: Input tensor size must be 1, but is {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
-    const auto& layout = input_tensor.layout();
     const auto& dtype = input_tensor.dtype();
     const auto& page_size = input_tensor.buffer()->page_size();
     TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllToAllAsync currently requires aligned pages");

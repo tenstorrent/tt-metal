@@ -6,14 +6,16 @@
 #include <fmt/format.h>
 
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tests/ttnn/unit_tests/gtests/accessor/common.hpp"
 
 #include <string>
 #include <cstdint>
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include <ttnn/tensor/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace accessor_benchmarks {
 
@@ -40,7 +42,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
     const auto host_size_in_bytes = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
     const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
 
-    // Mirrors allocate_mesh_buffer_on_device in ttnn
+    // Mirrors allocate_device_buffer in ttnn
     const tt::tt_metal::distributed::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
 
     // Create input mesh buffer
@@ -83,22 +85,11 @@ void benchmark_all_args_combinations_single_core(
 
     tt::tt_metal::detail::SetDeviceProfilerDir(res_path + "/" + params.test_name);
     tt::tt_metal::detail::FreshProfilerDeviceLog();
-    for (uint8_t i = 0; i < 1 << 5; ++i) {
-        tensor_accessor::ArgsConfig args_loc_cnf(i);
-        if (args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeRank) and
-            (!args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeTensorShape) or
-             !args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeShardShape))) {
-            // If rank is runtime, tensor and shard shapes must also be runtime
-            continue;
-        }
-        if (args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeNumBanks) and
-            !args_loc_cnf.test(tensor_accessor::ArgConfig::RuntimeBankCoords)) {
-            // If number of banks is runtime, bank coordinates must also be runtime
-            continue;
-        }
-        auto args_bitmask = args_loc_cnf.raw();
+    auto all_args_combinations = get_all_sharded_args_configs();
+    for (const auto& arg_config : all_args_combinations) {
+        auto args_bitmask = arg_config.raw();
 
-        std::string crta_config_str = fmt::format("\"SHARDED_ACCESSOR_{:05b}\"", args_bitmask);
+        std::string crta_config_str = fmt::format("\"SHARDED_ACCESSOR_{:07b}\"", args_bitmask);
         log_info(
             tt::LogTest,
             "Creating single-core benchmarking program with the following args config: {}",
@@ -108,7 +99,7 @@ void benchmark_all_args_combinations_single_core(
         constexpr CoreCoord grid = {0, 0};
 
         // Set up sharded accessor compile-time args for reader kernel
-        const auto sharded_accessor_args = TensorAccessorArgs(*input_shard_view, args_loc_cnf);
+        const auto sharded_accessor_args = TensorAccessorArgs(*input_shard_view, arg_config);
 
         std::map<std::string, std::string> defines{{"ACCESSOR_CONFIG_NAME", crta_config_str}};
         // Create reader kernel
@@ -136,7 +127,7 @@ void benchmark_all_args_combinations_single_core(
         Finish(mesh_device_->mesh_command_queue());
         log_info(tt::LogTest, "Program finished!");
     }
-    tt::tt_metal::detail::DumpDeviceProfileResults(local_device);
+    tt::tt_metal::detail::ReadDeviceProfilerResults(local_device);
 }
 
 TEST_P(AccessorBenchmarks, GetNocAddr) {
@@ -145,6 +136,14 @@ TEST_P(AccessorBenchmarks, GetNocAddr) {
         mesh_device_,
         "accessor_get_noc_addr_benchmarks",
         "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_get_noc_addr_page_id_benchmark.cpp");
+}
+
+TEST_P(AccessorBenchmarks, GetNocAddrPageCoord) {
+    benchmark_all_args_combinations_single_core(
+        GetParam(),
+        mesh_device_,
+        "accessor_get_noc_addr_page_coord_benchmarks",
+        "tests/ttnn/unit_tests/gtests/accessor/kernels/accessor_get_noc_addr_page_coord_benchmark.cpp");
 }
 
 TEST_P(AccessorBenchmarks, Constructor) {

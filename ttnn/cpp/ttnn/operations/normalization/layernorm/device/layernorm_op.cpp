@@ -57,7 +57,14 @@ void LayerNorm::validate(
             TT_FATAL(
                 (gamma.value().padded_shape()[-1] == TILE_WIDTH &&
                  gamma.value().physical_volume() / TILE_WIDTH == a.padded_shape()[-1] / TILE_WIDTH),
-                "Error");
+                "Gamma's last padded dim needs to equal tile width and gamma's volume needs to align with last padded "
+                "dim of input. Error with gamma.value().padded_shape(): {}, TILE_WIDTH: {}, "
+                "gamma.value().physical_volume(): {}, "
+                "a.padded_shape(): {}",
+                gamma.value().padded_shape(),
+                TILE_WIDTH,
+                gamma.value().physical_volume(),
+                a.padded_shape());
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
@@ -92,7 +99,7 @@ void LayerNorm::validate(
         // TODO: Add support for this (should be similar to interleaved)
         TT_FATAL(
             a.memory_config().memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
-            "Hight sharded inputs are not supported.");
+            "Height sharded inputs are not supported.");
         TT_FATAL(
             this->output_mem_config.is_sharded() &&
                 this->output_mem_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED,
@@ -302,6 +309,11 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
 
+                TT_FATAL(
+                    a.is_sharded(),
+                    "ERROR - LayerNormShardedMultiCoreProgramConfig is used with non-sharded input. Please use "
+                    "LayerNormMultiCoreProgramConfig, or shard the tensors.");
+
                 return layernorm_multi_core_sharded(
                     a,
                     b,
@@ -318,6 +330,10 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                     program_config.block_w,
                     this->compute_kernel_config);
             } else {
+                TT_FATAL(
+                    !a.is_sharded(),
+                    "ERROR - LayerNormMultiCoreProgramConfig is being used with sharded input. Please use "
+                    "LayerNormShardedMultiCoreProgramConfig, or interleave the tensors.");
                 return layernorm_multi_core(
                     a, b, gamma, beta, output_tensor, this->norm_type, this->eps, this->compute_kernel_config);
             }

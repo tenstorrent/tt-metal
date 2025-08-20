@@ -239,9 +239,19 @@ def test_create_pipeline_json_for_gtest_testcases(workflow_run_gh_environment):
             # check that there are failing pytests stored in the pydantic testcase list
             assert len([x for x in job.tests if not x.success]) > 0
             assert job.job_status == JobStatus.failure
-
-    # fails validation, job is expected be skipped
-    assert len([x for x in pipeline.jobs if x.github_job_id == 37190219113]) == 0
+        # job has two tests with the same full_test_name, should be deduplicated
+        if job.github_job_id == 37190219113:
+            assert (
+                len(
+                    [
+                        x
+                        for x in job.tests
+                        if x.full_test_name
+                        == "tests/tt_metal/tt_metal/device/test_device_cluster_api.cpp::N300DeviceFixture::EthValidatePhysicalCoreConversion"
+                    ]
+                )
+                == 1
+            )
 
 
 def test_empty_gtest_xml(workflow_run_gh_environment):

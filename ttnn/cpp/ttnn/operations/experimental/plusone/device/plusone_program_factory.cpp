@@ -21,8 +21,6 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
     uint32_t input_unit_size = input.element_size();
 
-    tt::tt_metal::IDevice* device = input.device();
-
     CoreRangeSet all_cores = CoreRangeSet(std::vector{CoreRange({0, 0}, {0, 0})});
     uint32_t num_cores = 1;  // single-core
 
@@ -46,7 +44,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
             .set_page_size(src0_cb_index, aligned_input_unit_size);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     auto src_buffer = input.buffer();
     bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
@@ -59,7 +57,7 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
         H,
     };
 
-    std::map<string, string> kernel_defines;
+    std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/plusone/device/kernels/reader_plusone_interleaved.cpp",

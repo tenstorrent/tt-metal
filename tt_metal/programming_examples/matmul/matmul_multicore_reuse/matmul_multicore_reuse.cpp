@@ -10,6 +10,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <bmm_op.hpp>
 #include <fmt/core.h>
 #include <iostream>
@@ -90,9 +91,6 @@ void matmul_multicore_reuse(
     uint32_t Mt = M / TILE_HEIGHT;
     uint32_t Kt = K / TILE_WIDTH;
     uint32_t Nt = N / TILE_WIDTH;
-    uint32_t KtNt = Kt * Nt;
-    uint32_t MtKt = Mt * Kt;
-    uint32_t MtNt = Mt * Nt;
 
     // NOTE: Only supports matmuls where output is blocks of 16 x 16 tiles (ie. multiples of 16*32 x 16*32)
     // NOTE: Maximum number of tiles in output is 120 * 16^2 = 30,720 (eg. [1, 1, 5120, 6144])2
@@ -210,9 +208,6 @@ void matmul_multicore_reuse(
     auto src0_dram_buffer = CreateBuffer(dram_config_A);
     auto src1_dram_buffer = CreateBuffer(dram_config_B);
     auto dst_dram_buffer = CreateBuffer(dram_config_C);
-    uint32_t src0_addr = src0_dram_buffer->address();
-    uint32_t src1_addr = src1_dram_buffer->address();
-    uint32_t dst_addr = dst_dram_buffer->address();
 
     /*
      * Config of Circular Buffer in the device L1
@@ -221,12 +216,12 @@ void matmul_multicore_reuse(
     uint32_t src0_cb_index = CBIndex::c_0;  // 0
     CircularBufferConfig cb_src0_config = CircularBufferConfig(in0_CB_size, {{src0_cb_index, cb_data_format}})
                                               .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     uint32_t src1_cb_index = CBIndex::c_1;  // 1
     CircularBufferConfig cb_src1_config = CircularBufferConfig(in1_CB_size, {{src1_cb_index, cb_data_format}})
                                               .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t interm0_cb_index = 24;
@@ -235,18 +230,17 @@ void matmul_multicore_reuse(
     CircularBufferConfig cb_output_config = CircularBufferConfig(out_CB_size, output_cb_data_format_spec)
                                                 .set_page_size(output_cb_index, single_tile_size)
                                                 .set_page_size(interm0_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
     /*
      * Compile time arguments
      */
-    bool src0_is_dram = src0_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool src1_is_dram = src1_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_is_dram, (uint32_t)src1_is_dram};
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
 
-    bool dst_is_dram = dst_dram_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    // std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t) output_cb_index, (uint32_t)dst_is_dram};
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
 
     /*
      * Create Kernels (Reader, Writer, Compute)
@@ -271,7 +265,7 @@ void matmul_multicore_reuse(
             .compile_args = writer_compile_time_args});
 
     // Create compute kernel
-    auto mm_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_common/kernels/compute/bmm_large_block_zm.cpp",
         all_cores,
@@ -357,10 +351,6 @@ void matmul_multicore_reuse(
 
 int main() {
     bool pass = true;
-
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
 
     try {
         /* Silicon accelerator setup */

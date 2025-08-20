@@ -42,6 +42,28 @@ public:
     XtensorAdapter(std::vector<T>&& data, std::vector<size_t> shape_vec) :
         data_(std::move(data)), expr_(adapt(tt::stl::make_span(data_), std::move(shape_vec))) {}
 
+    XtensorAdapter(const XtensorAdapter& other) :
+        data_(other.data_), expr_(adapt(tt::stl::make_span(data_), other.expr_.shape())) {}
+
+    XtensorAdapter(XtensorAdapter&& other) noexcept :
+        data_(std::move(other.data_)), expr_(adapt(tt::stl::make_span(data_), other.expr_.shape())) {}
+
+    XtensorAdapter& operator=(const XtensorAdapter& other) {
+        if (this != &other) {
+            data_ = other.data_;
+            expr_ = adapt(tt::stl::make_span(data_), other.expr_.shape());
+        }
+        return *this;
+    }
+
+    XtensorAdapter& operator=(XtensorAdapter&& other) noexcept {
+        if (this != &other) {
+            data_ = std::move(other.data_);
+            expr_ = adapt(tt::stl::make_span(data_), other.expr_.shape());
+        }
+        return *this;
+    }
+
     // Returns a reference to the underlying xtensor expression.
     auto& expr() & { return expr_; }
     const auto& expr() const& { return expr_; }
@@ -97,7 +119,7 @@ template <typename T>
 xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
     auto vec = tensor.to_vector<T>();
     const auto& shape = tensor.logical_shape();
-    return xt::xarray<T>(span_to_xtensor_view(tt::stl::Span<const T>(vec.data(), vec.size()), shape));
+    return xt::xarray<T>(span_to_xtensor_view(tt::stl::Span<T>(vec.data(), vec.size()), shape));
 }
 
 }  // namespace ttnn::experimental::xtensor

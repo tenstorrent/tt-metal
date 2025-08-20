@@ -22,7 +22,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -39,9 +38,7 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "tt_metal/test_utils/env_vars.hpp"
 #include "umd/device/types/arch.h"
-#include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 
 namespace tt {
@@ -83,6 +80,7 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
     TT_FATAL(num_tiles % block_size_tiles == 0, "Error");
 
     std::vector<CoreCoord> cores;
+    cores.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; i++) {
         cores.push_back({i, 0});
     }
@@ -113,7 +111,7 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
         tt_metal::CircularBufferConfig cb_config =
             tt_metal::CircularBufferConfig(cb_size_bytes, {{cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_index, single_tile_size);
-        auto cb = tt_metal::CreateCircularBuffer(program, core, cb_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_config);
     }
 
     uint32_t src_address;
@@ -134,7 +132,7 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
     vector<tt_metal::KernelHandle> receiver_kernels;
     vector<tt_metal::KernelHandle> sender_kernels;
     for (int core_id = 0; core_id < num_cores; core_id++) {
-        string receiver_kernel_name;
+        std::string receiver_kernel_name;
         if (core_id == 0) {
             receiver_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_first_stage.cpp";
         } else {
@@ -151,7 +149,7 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
                 .noc = tt_metal::NOC::RISCV_1_default,
                 .compile_args = receiver_kernel_compile_time_args}));
 
-        string sender_kernel_name;
+        std::string sender_kernel_name;
         if (core_id == num_cores - 1) {
             sender_kernel_name = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_last_stage.cpp";
         } else {
@@ -269,7 +267,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
         GTEST_SKIP();
     }
 
-    unit_tests::create_pipeline::PipelineRowConfig test_config;
+    unit_tests::create_pipeline::PipelineRowConfig test_config{};
 
     // // saturate DRAM
     test_config.num_cores = this->device_->compute_with_storage_grid_size().x - 1;

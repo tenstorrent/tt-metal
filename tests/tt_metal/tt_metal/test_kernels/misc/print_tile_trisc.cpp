@@ -26,7 +26,8 @@ inline void cb_wait_front_pack(int operand, std::int32_t num_tiles) {
 #include "compute_kernel_api/common.h"
 #include "compute_kernel_api/untilize.h"
 ALWI void UNTILIZE_TILES(uint32_t in0_cb, uint32_t out_cb, uint32_t num_tiles) {
-    untilize_init(in0_cb, out_cb);
+    compute_kernel_hw_startup(in0_cb, out_cb);
+    untilize_init(in0_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_reserve_back(out_cb, num_tiles);
     untilize_block(in0_cb, num_tiles, out_cb);

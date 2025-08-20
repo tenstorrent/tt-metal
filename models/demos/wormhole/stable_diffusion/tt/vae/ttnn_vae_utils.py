@@ -75,6 +75,7 @@ def split_conv_and_run(
     conv_out_channel_split_factor,
     compute_config,
     conv_config,
+    conv_output_dtype,
     kernel_size=3,
     padding=1,
     return_weights_and_bias=False,
@@ -116,6 +117,7 @@ def split_conv_and_run(
                 **conv_kwargs,
                 compute_config=compute_config,
                 return_weights_and_bias=return_weights_and_bias,
+                dtype=conv_output_dtype,
             )
             hidden_states_slice.deallocate(True)
 
@@ -128,6 +130,8 @@ def split_conv_and_run(
                     device_bias.append(bias)
             else:
                 in_channel_slice_output = results
+
+            in_channel_slice_output = ttnn.move(in_channel_slice_output)
 
             if in_channel_slice_id == 0:
                 if in_channel_slice_output.memory_config() != ttnn.DRAM_MEMORY_CONFIG:

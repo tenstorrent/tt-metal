@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <cstdint>
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "dataflow_api.h"
 #include "socket_api.h"
 
@@ -10,8 +11,7 @@ void kernel_main() {
     constexpr uint32_t socket_config_addr = get_compile_time_arg_val(0);
     constexpr uint32_t page_size = get_compile_time_arg_val(1);
     constexpr uint32_t data_size = get_compile_time_arg_val(2);
-    constexpr uint32_t fabric_packet_header_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(4);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(3);
 
     size_t rt_args_idx = 0;
     tt::tt_fabric::WorkerToFabricEdmSender sender_fabric_connection =
@@ -19,12 +19,8 @@ void kernel_main() {
     sender_fabric_connection.open_start();
 
     // Sanity
-    cb_reserve_back(fabric_packet_header_cb_id, 2);
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* data_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(get_write_ptr(fabric_packet_header_cb_id));
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* socket_packet_header_addr =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-            get_write_ptr(fabric_packet_header_cb_id) + sizeof(PACKET_HEADER_TYPE));
+    auto* data_packet_header_addr = PacketHeaderPool::allocate_header();
+    auto* socket_packet_header_addr = PacketHeaderPool::allocate_header();
 
     // Create Socket Interface
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);

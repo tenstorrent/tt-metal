@@ -49,6 +49,14 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     auto multihost_config = yaml_config["multihost_config"];
     config.enable_mpi = multihost_config["enabled"].as<bool>(config.enable_mpi);
     config.num_mh_workers = multihost_config["num_workers"].as<uint32_t>(config.num_mh_workers);
+    auto socket_type_str = multihost_config["socket_type"].as<std::string>("mpi");
+    if (socket_type_str == "mpi") {
+        config.socket_type = ttnn::distributed::SocketType::MPI;
+    } else if (socket_type_str == "fabric") {
+        config.socket_type = ttnn::distributed::SocketType::FABRIC;
+    } else {
+        throw std::runtime_error("Unknown socket type: " + socket_type_str);
+    }
 
     return config;
 }
@@ -111,14 +119,41 @@ uint32_t round_up_to_tile(uint32_t value, uint32_t tile_size) {
     return (value + tile_size - 1) / tile_size * tile_size;
 }
 
-void initialize_device(bool ddp, bool tp) {
-    if (ddp || tp) {
-        // FIXME: currently hardcoded for n300
-        ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
-    } else {
-        // use single device defaults
-        ttml::autograd::ctx().open_device();
+DeviceConfig parse_device_config(const YAML::Node &yaml_config) {
+    DeviceConfig config;
+    auto device_node = yaml_config["device_config"];
+    if (!device_node) {
+        return config;
     }
+
+    config.enable_ddp = device_node["enable_ddp"].as<bool>(false);
+    config.enable_tp = device_node["enable_tp"].as<bool>(false);
+
+    if (config.enable_ddp && config.enable_tp) {
+        throw std::runtime_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
+    }
+
+    auto mesh_shape_node = device_node["mesh_shape"];
+    bool multidevice = config.enable_ddp || config.enable_tp;
+    if (multidevice && !mesh_shape_node) {
+        throw std::runtime_error("Mesh shape is required for multidevice training");
+    }
+    if (mesh_shape_node) {
+        assert(mesh_shape_node.size() == 2);
+        auto mesh_shape = mesh_shape_node.as<std::vector<int>>();
+        config.mesh_shape = tt::tt_metal::distributed::MeshShape(mesh_shape[0], mesh_shape[1]);
+    }
+
+    auto device_ids_node = device_node["device_ids"];
+    if (device_ids_node) {
+        config.device_ids = device_ids_node.as<std::vector<int>>();
+    }
+
+    return config;
+}
+
+void initialize_device(const tt::tt_metal::distributed::MeshShape &mesh_shape, const std::vector<int> &device_ids) {
+    ttml::autograd::ctx().open_device(mesh_shape, device_ids);
 }
 
 }  // namespace three_tier_arch

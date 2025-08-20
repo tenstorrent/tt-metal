@@ -19,7 +19,7 @@ inline void llk_math_eltwise_unary_sfpu_left_shift_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_left_shift(uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_left_shift<APPROXIMATE>, dst_index, vector_mode, param0);
 }
 

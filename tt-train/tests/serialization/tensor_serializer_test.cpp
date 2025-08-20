@@ -42,7 +42,7 @@ protected:
 TEST_F(TensorFileTest, SerializeDeserializeTensor) {
     ttml::serialization::MsgPackFile serializer;
     auto* device = &ttml::autograd::ctx().get_device();
-    auto shape = ttml::core::create_shape({1, 2, 32, 321});
+    auto shape = ttnn::Shape({1, 2, 32, 321});
     auto tensor_zeros = ttml::core::zeros(shape, device);
     auto tensor_ones = ttml::core::ones(shape, device);
 

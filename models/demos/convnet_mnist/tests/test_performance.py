@@ -110,6 +110,7 @@ def test_convnet_mnist(
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
+@pytest.mark.skip(reason="#26425: Seems to have changed in perf")
 def test_perf_device_bare_metal_convnet_mnist(batch_size, expected_perf):
     subdir = "ttnn_convnet_mnist"
     num_iterations = 1

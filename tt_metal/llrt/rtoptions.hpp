@@ -67,13 +67,13 @@ extern const char* RunTimeDebugClassNames[RunTimeDebugClassCount];
 struct TargetSelection {
     std::map<CoreType, std::vector<CoreCoord>> cores;
     std::map<CoreType, int> all_cores;
-    bool enabled;
+    bool enabled{};
     std::vector<int> chip_ids;
     bool all_chips = false;
     uint32_t riscv_mask = 0;
     std::string file_name;  // File name to write output to.
     bool one_file_per_risc = false;
-    bool prepend_device_core_risc;
+    bool prepend_device_core_risc{};
 };
 
 struct WatcherSettings {
@@ -85,6 +85,7 @@ struct WatcherSettings {
     bool phys_coords = false;
     bool text_start = false;
     bool skip_logging = false;
+    bool noc_sanitize_linked_transaction = false;
     int interval_ms = 0;
 };
 
@@ -106,8 +107,14 @@ class RunTimeOptions {
     std::string kernel_dir;
     std::string system_kernel_dir;
 
+    bool is_core_grid_override_todeprecate_env_var_set = false;
+    std::string core_grid_override_todeprecate;
+
     bool is_visible_devices_env_var_set = false;
     std::vector<uint32_t> visible_devices;
+
+    bool is_custom_fabric_mesh_graph_desc_path_set = false;
+    std::string custom_fabric_mesh_graph_desc_path;
 
     bool build_map_enabled = false;
 
@@ -124,6 +131,7 @@ class RunTimeOptions {
     bool profile_dispatch_cores = false;
     bool profiler_sync_enabled = false;
     bool profiler_mid_run_tracy_push = false;
+    bool profiler_trace_profiler = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
@@ -162,6 +170,10 @@ class RunTimeOptions {
     std::filesystem::path simulator_path = "";
 
     bool erisc_iram_enabled = false;
+    // a copy for an intermittent period until the environment variable TT_METAL_ENABLE_ERISC_IRAM is removed
+    // we keep a copy so that when we teardown the fabric (which enables erisc iram internally), we can recover
+    // to the user override (if it existed)
+    std::optional<bool> erisc_iram_enabled_env_var = std::nullopt;
 
     bool fast_dispatch = true;
 
@@ -181,6 +193,19 @@ class RunTimeOptions {
     // Force disables using DMA for reads and writes
     bool disable_dma_ops = false;
 
+    // Forces MetalContext re-init on Device creation. Workaround for upstream issues that require re-init each time
+    // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
+    bool force_context_reinit = false;
+
+    // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
+    bool enable_2_erisc_mode_with_fabric = false;
+
+    // Log kernels compilation commands
+    bool log_kernels_compilation_commands = false;
+
+    // Enable fabric performance telemetry
+    bool enable_fabric_telemetry = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -196,6 +221,11 @@ public:
     const std::string& get_kernel_dir() const;
     // Location where kernels are installed via package manager.
     const std::string& get_system_kernel_dir() const;
+
+    inline bool is_core_grid_override_todeprecate() const {
+        return this->is_core_grid_override_todeprecate_env_var_set;
+    }
+    const std::string& get_core_grid_override_todeprecate() const;
 
     inline bool is_visible_devices_specified() const { return this->is_visible_devices_env_var_set; }
     inline const std::vector<uint32_t>& get_visible_devices() const { return this->visible_devices; }
@@ -222,6 +252,12 @@ public:
     inline void set_watcher_text_start(bool text_start) { watcher_settings.text_start = text_start; }
     inline bool get_watcher_skip_logging() const { return watcher_settings.skip_logging; }
     inline void set_watcher_skip_logging(bool skip_logging) { watcher_settings.skip_logging = skip_logging; }
+    inline bool get_watcher_noc_sanitize_linked_transaction() const {
+        return watcher_settings.noc_sanitize_linked_transaction;
+    }
+    inline void set_watcher_noc_sanitize_linked_transaction(bool enabled) {
+        watcher_settings.noc_sanitize_linked_transaction = enabled;
+    }
     inline const std::set<std::string>& get_watcher_disabled_features() const { return watcher_disabled_features; }
     inline bool watcher_status_disabled() const { return watcher_feature_disabled(watcher_waypoint_str); }
     inline bool watcher_noc_sanitize_disabled() const { return watcher_feature_disabled(watcher_noc_sanitize_str); }
@@ -338,7 +374,8 @@ public:
         }
     }
     inline std::string get_compile_hash_string() const {
-        std::string compile_hash_str = fmt::format("{}_{}", get_watcher_enabled(), get_kernels_early_return());
+        std::string compile_hash_str =
+            fmt::format("{}_{}_{}", get_watcher_enabled(), get_kernels_early_return(), get_erisc_iram_enabled());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -357,6 +394,7 @@ public:
     inline bool get_profiler_enabled() const { return profiler_enabled; }
     inline bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
     inline bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
+    inline bool get_profiler_trace_only() const { return profiler_trace_profiler; }
     inline bool get_profiler_tracy_mid_run_push() const { return profiler_mid_run_tracy_push; }
     inline bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     inline bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }
@@ -384,9 +422,6 @@ public:
     inline unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     inline void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
 
-    inline bool get_fd_fabric() const { return fd_fabric_en && !using_slow_dispatch; }
-    inline void set_fd_fabric(bool enable) { fd_fabric_en = enable; }
-
     inline uint32_t get_watcher_debug_delay() const { return watcher_debug_delay; }
     inline void set_watcher_debug_delay(uint32_t delay) { watcher_debug_delay = delay; }
 
@@ -405,8 +440,23 @@ public:
     inline bool get_simulator_enabled() const { return simulator_enabled; }
     inline const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
-    inline bool get_erisc_iram_enabled() const { return erisc_iram_enabled; }
+    inline bool get_erisc_iram_enabled() const {
+        // Disabled when debug tools are enabled due to IRAM size
+        return erisc_iram_enabled && !get_watcher_enabled() && !get_feature_enabled(RunTimeDebugFeatureDprint);
+    }
+    inline bool get_erisc_iram_env_var_enabled() const {
+        return erisc_iram_enabled_env_var.has_value() && erisc_iram_enabled_env_var.value();
+    }
+    inline bool get_erisc_iram_env_var_disabled() const {
+        return erisc_iram_enabled_env_var.has_value() && !erisc_iram_enabled_env_var.value();
+    }
     inline bool get_fast_dispatch() const { return fast_dispatch; }
+
+    // Temporary API until all multi-device workloads are ported to run on fabric.
+    // It's currently not possible to enable Erisc IRAM by default for all legacy CCL
+    // workloads. In those workloads, erisc kernels are loaded every CCL op; the binary
+    // copy to IRAM can noticeably degrade legacy CCL op performance in those cases.
+    inline void set_erisc_iram_enabled(bool enable) { erisc_iram_enabled = enable; }
 
     inline bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
@@ -415,6 +465,27 @@ public:
 
     inline bool get_disable_dma_ops() const { return disable_dma_ops; }
     inline void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
+
+    inline bool get_force_context_reinit() const { return force_context_reinit; }
+
+    // Feature flag to specify if fabric is enabled in 2-erisc mode or not.
+    // if true, then the fabric router is parallelized across two eriscs in the Ethernet core
+    inline bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
+
+    inline bool is_custom_fabric_mesh_graph_desc_path_specified() const {
+        return is_custom_fabric_mesh_graph_desc_path_set;
+    }
+    inline std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
+
+    inline bool get_log_kernels_compilation_commands() const { return log_kernels_compilation_commands; }
+
+    // If true, the fabric (routers) will collect coarse grain telemetry data in software. This flag's state does not
+    // affect the ability to capture Ethernet Subsystem register-read-based telemetry data.
+    // This BW telemetry is coarse grain and records the total time that the reouter has unsent and inflight packets.
+    //
+    // NOTE: Enabling this option will lead to a 0-2% performance degradation for fabric traffic.
+    inline bool get_enable_fabric_telemetry() const { return enable_fabric_telemetry; }
+    inline void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

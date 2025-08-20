@@ -4,51 +4,32 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Script Name: check_noc_status.py
-
 Usage:
-    scripts/debugging_scripts/check_noc_status.py <elf-file> [-v]
-
-Arguments:
-    <elf-file>  Path to risc firmware elf file
-
-Options:
-    -v  If true includes passed tests in optput. Default: False
+    scripts/debugging_scripts/check_noc_status.py
 
 Description:
     This script checks if there are any mismatches between values of number of NOC transactions
-    stored in global variables from risc firmware and NOC status registers. Script looks for
-    these mismatches across all available devices and locations.
+    stored in global variables from risc firmware and NOC status registers.
 """
 
-import sys
-import os
+from ttexalens.tt_exalens_lib import read_tensix_register, parse_elf
+from ttexalens.context import Context
+from ttexalens.device import Device
+from ttexalens.parse_elf import mem_access
+from ttexalens.firmware import ELF
 
-try:
-    from ttexalens.tt_exalens_init import init_ttexalens
-    from ttexalens.tt_exalens_lib import read_riscv_memory, read_tensix_register
-    from ttexalens import util
-    from ttexalens.parse_elf import decode_symbols
-    from ttexalens.context import Context
-except:
-    print("No tt-exalens detected. Please install tt-exalens with:\n ./scripts/install_debugger.sh")
-    sys.exit(1)
+from check_per_device import run as get_check_per_device
+from dispatcher_data import run as get_dispatcher_data, DispatcherData
+from triage import ScriptConfig, log_check, run_script
 
-from elftools.elf.elffile import ELFFile
-from docopt import docopt
+script_config = ScriptConfig(
+    depends=["check_per_device", "dispatcher_data"],
+)
 
 
-def get_symbols_from_elf(elf_path: str, context: Context) -> dict[str, int]:
-    """Gets symbols from symbol table from elf file"""
-    # Open elf file from given path
-    stream = open(elf_path, "rb")
-    # Read elf
-    elf = ELFFile(stream)
-    # Get symbols from elf
-    return decode_symbols(elf)
-
-
-def check_noc_status(symbols: dict[str, int], context: Context, risc_id: int = 0, noc_id: int = 0) -> dict:
+def check_noc_status(
+    device: Device, dispatcher_data: DispatcherData, context: Context, risc_name: str = "brisc", noc_id: int = 0
+):
     """
     Checks for mismatches between variables and registers that store number of NOC transactions
     and stores them in dictionary creating summary of checking process
@@ -63,90 +44,45 @@ def check_noc_status(symbols: dict[str, int], context: Context, risc_id: int = 0
         "noc_posted_writes_num_issued": "NIU_MST_POSTED_WR_REQ_SENT",
     }
 
-    summary = {}
-    # Loop through all available devices
-    for device_id in context.device_ids:
-        device = context.devices[device_id]
-        # Get all functional workers and loop through them
-        locations = device.get_block_locations(block_type="functional_workers")
-        for loc in locations:
-            passed = True
-            error = False
+    # Get all functional workers and loop through them
+    locations = device.get_block_locations(block_type="functional_workers")
+    # Since all firmware elfs are the same, we can query dispatcher data and parse elf only once
+    fw_elf_path = dispatcher_data.get_core_data(locations[0], risc_name).firmware_path
+    fw_elf = parse_elf(fw_elf_path, context)
 
-            # Check if variables match with corresponding register
-            for var in VAR_TO_REG_MAP:
-                reg = VAR_TO_REG_MAP[var]
-                address = symbols[var]
-                # If reading fails, write error message and skip to next core
-                try:
-                    reg_val = read_tensix_register(loc, reg, device_id, context)
-                    var_val = read_riscv_memory(loc, address, noc_id, risc_id, device_id, context)
-                except Exception as e:
-                    summary[(device_id, loc)] = str(e)
-                    error = True
-                    break
+    for loc in locations:
+        message = f"Device {device._id} at {loc.to_user_str()}\n"
+        passed = True
 
-                if reg_val != var_val:
-                    # Store name of register and variable where mismatch occured along side their values
-                    if passed:
-                        # If this is the first one to fail, init list
-                        summary[(device_id, loc)] = [[reg, var, reg_val, var_val]]
-                    else:
-                        summary[(device_id, loc)].append([reg, var, reg_val, var_val])
-                    passed = False
+        loc_mem_reader = ELF.get_mem_reader(loc, risc_name)
 
-            # If core passed the inspection, write passed
-            if passed and not error:
-                summary[(device_id, loc)] = "PASSED"
+        # Check if variables match with corresponding register
+        for var in VAR_TO_REG_MAP:
+            reg = VAR_TO_REG_MAP[var]
+            # If reading fails, write error message and skip to next core
+            try:
+                reg_val = read_tensix_register(core_loc=loc, register=reg, noc_id=noc_id, context=context)
+                var_val = mem_access(fw_elf, var, loc_mem_reader)[0][0]
+            except Exception as e:
+                message += "    " + str(e) + "\n"
+                passed = False
+                break
 
-    return summary
+            if reg_val != var_val:
+                # Store name of register and variable where mismatch occurred along side their values
+                message += f"    {reg} {var} {reg_val} {var_val}\n"
+                passed = False
+
+        log_check(passed, message)
 
 
-def print_summary(summary: dict, verbose: bool = False) -> None:
-    """Prints summary of checking NOC transactions status"""
-    all_passed = True
-    for key in summary.keys():
-        if not verbose and summary[key] == "PASSED":
-            continue
-
-        device_id, loc = key
-        util.INFO(f"Device: {device_id}, loc: {loc}", end=" ")
-        if isinstance(summary[key], str):
-            if summary[key] == "PASSED":
-                print(f"{util.CLR_GREEN}{summary[key]}{util.CLR_END}")
-            else:
-                all_passed = False
-                util.WARN(summary[key])
-        else:
-            all_passed = False
-            util.ERROR("FAILED")
-            for elem in summary[key]:
-                reg, var, reg_val, var_val = elem
-                util.ERROR(f"\tMismatch between {reg} and {var} -> {reg_val} != {var_val}")
-
-    if all_passed:
-        print(f"\n{util.CLR_GREEN}All tests passed!{util.CLR_END}")
-
-
-def main():
-    args = docopt(__doc__, argv=sys.argv[1:])
-    elf_path = args["<elf-file>"]
-    verbose = True if args["-v"] else False
-
-    if not os.path.exists(elf_path):
-        util.ERROR(f"File {elf_path} does not exist")
-        return
-
-    context = init_ttexalens()
-    # Get symbols in order to obtain variable addresses
-    symbols = get_symbols_from_elf(elf_path, context)
-
-    risc_id = 0  # For now only works on BRISC
-    noc_id = 0  # For now we only use noc0
-
-    summary = check_noc_status(symbols, context, risc_id, noc_id)
-    print_summary(summary, verbose)
+def run(args, context: Context):
+    check_per_device = get_check_per_device(args, context)
+    dispatcher_data = get_dispatcher_data(args, context)
+    check_per_device.run_check(
+        lambda device: check_noc_status(device, dispatcher_data, context, risc_name="brisc", noc_id=0)
+    )
 
 
 if __name__ == "__main__":
-    main()
+    run_script()

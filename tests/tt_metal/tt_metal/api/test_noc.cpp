@@ -104,7 +104,7 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
     log_info(tt::LogTest, "Logical -- Virtual Mapping");
     log_info(tt::LogTest, "[Logical <-> Virtual] Coordinates");
     for (int r = 0; r < logical_grid_size.y; r++) {
-        string output_row = "";
+        std::string output_row = "";
         for (int c = 0; c < logical_grid_size.x; c++) {
             const CoreCoord logical_coord(c, r);
             const auto noc_coord = device->worker_core_from_logical_core(logical_coord);
@@ -120,7 +120,6 @@ TEST(NOC, TensixSingleDeviceHarvestingPrints) {
 }
 
 TEST(NOC, TensixVerifyNocNodeIDs) {
-    auto arch = tt::get_arch_from_string(get_umd_arch_name());
     tt::tt_metal::IDevice* device;
     const unsigned int device_id = *tt::tt_metal::MetalContext::instance().get_cluster().all_chip_ids().begin();
     device = tt::tt_metal::CreateDevice(device_id);

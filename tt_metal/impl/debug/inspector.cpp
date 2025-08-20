@@ -7,6 +7,8 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_options.hpp"
+#include "mesh_device.hpp"
+#include "distributed/mesh_workload_impl.hpp"
 #include "program.hpp"
 #include <memory>
 #include <tt-logger/tt-logger.hpp>
@@ -170,6 +172,125 @@ void Inspector::program_set_binary_status(
     }
     catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to log program binary status change: {}", e.what());
+    }
+}
+
+void Inspector::mesh_device_created(
+    const distributed::MeshDevice* mesh_device,
+    std::optional<int> parent_mesh_id) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->mesh_devices_mutex);
+        auto& mesh_device_data = data->mesh_devices_data[mesh_device->id()];
+        mesh_device_data.mesh_device = mesh_device;
+        mesh_device_data.mesh_id = mesh_device->id();
+        mesh_device_data.parent_mesh_id = parent_mesh_id;
+        data->logger.log_mesh_device_created(mesh_device_data);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh device created: {}", e.what());
+    }
+}
+
+void Inspector::mesh_device_destroyed(
+    const distributed::MeshDevice* mesh_device) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->mesh_devices_mutex);
+        auto& mesh_device_data = data->mesh_devices_data[mesh_device->id()];
+        data->logger.log_mesh_device_destroyed(mesh_device_data);
+        data->mesh_devices_data.erase(mesh_device->id());
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh device destroyed: {}", e.what());
+    }
+}
+
+void Inspector::mesh_device_initialized(
+    const distributed::MeshDevice* mesh_device) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->mesh_devices_mutex);
+        auto& mesh_device_data = data->mesh_devices_data[mesh_device->id()];
+        mesh_device_data.initialized = true;
+        data->logger.log_mesh_device_initialized(mesh_device_data);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh device initialized: {}", e.what());
+    }
+}
+
+void Inspector::mesh_workload_created(
+    const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
+        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
+        mesh_workload_data.mesh_workload = mesh_workload;
+        mesh_workload_data.mesh_workload_id = mesh_workload->get_id();
+        data->logger.log_mesh_workload_created(mesh_workload_data);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh workload created: {}", e.what());
+    }
+}
+
+void Inspector::mesh_workload_destroyed(
+    const distributed::MeshWorkloadImpl* mesh_workload) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
+        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
+        data->logger.log_mesh_workload_destroyed(mesh_workload_data);
+        data->mesh_workloads_data.erase(mesh_workload->get_id());
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh workload destroyed: {}", e.what());
+    }
+}
+
+void Inspector::mesh_workload_add_program(
+    const distributed::MeshWorkloadImpl* mesh_workload,
+    const distributed::MeshCoordinateRange& device_range,
+    std::size_t program_id) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
+        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
+        data->logger.log_mesh_workload_add_program(mesh_workload_data, device_range, program_id);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh workload add program: {}", e.what());
+    }
+}
+
+void Inspector::mesh_workload_set_program_binary_status(
+    const distributed::MeshWorkloadImpl* mesh_workload,
+    std::size_t mesh_id,
+    ProgramBinaryStatus status) noexcept {
+    if (!is_enabled()) {
+        return;
+    }
+    try {
+        auto* data = get_inspector_data();
+        std::lock_guard<std::mutex> lock(data->mesh_workloads_mutex);
+        auto& mesh_workload_data = data->mesh_workloads_data[mesh_workload->get_id()];
+        mesh_workload_data.binary_status_per_device[mesh_id] = status;
+        data->logger.log_mesh_workload_set_program_binary_status(mesh_workload_data, mesh_id, status);
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to log mesh workload set program binary status: {}", e.what());
     }
 }
 

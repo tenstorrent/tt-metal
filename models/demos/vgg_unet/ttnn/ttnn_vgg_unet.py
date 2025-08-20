@@ -52,8 +52,8 @@ class Conv:
             packer_l1_acc=False,
             math_approx_mode=True,
         )
+        self.conv_output_dtype = conv_param.dtype
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=conv_param.dtype,
             weights_dtype=ttnn.bfloat8_b,
             activation=conv_param.activation,
             shard_layout=conv_param.shard_layout,
@@ -102,6 +102,7 @@ class Conv:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         return x
 
@@ -127,7 +128,6 @@ class Conv_transpose:
             math_approx_mode=True,
         )
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=conv_param.dtype,
             weights_dtype=ttnn.bfloat8_b,
             shard_layout=conv_param.shard_layout,
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
@@ -186,6 +186,7 @@ class Conv_transpose:
             return_output_dim=True,
             return_weights_and_bias=True,
             mirror_kernel=True,
+            dtype=self.conv_param.dtype,
         )
         return x
 
@@ -235,7 +236,15 @@ class Tt_vgg_unet:
         self.d4 = Tt_decoder_block(device, conv_args.d4, parameters.d4)
         self.out = Conv(device, conv_args.out, parameters.out)
 
-    def __call__(self, x):
+    def __call__(self, input, min_channels=16):
+        n, c, h, w = input.shape
+        channel_padding_needed = min_channels - c
+        if channel_padding_needed > 0:
+            x = ttnn.pad(input, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+            ttnn.deallocate(input)
+            input = x
+        x = ttnn.permute(input, (0, 2, 3, 1))
+        x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         x = self.s1_0(x)
         x = self.s1_2(x)
         s1 = x

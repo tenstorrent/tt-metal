@@ -9,6 +9,8 @@
 #include "metal/ops/common/program_utils.hpp"
 #include "profiler_no_op_device_operation_types.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 namespace {
 
 constexpr auto kReaderKernelPath =
@@ -38,50 +40,6 @@ struct CrossEntropyBackwardKernels {
     tt::tt_metal::KernelHandle reader;
     tt::tt_metal::KernelHandle writer;
 };
-
-/**
- *   Create and configure a circular buffer, returning both the configuration and the handle.
- */
-tt::tt_metal::CBHandle create_circular_buffer(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    uint32_t cb_index,
-    tt::DataFormat data_format,
-    uint32_t single_tile_size,
-    uint32_t num_tiles) {
-    tt::tt_metal::CircularBufferConfig cb_config =
-        tt::tt_metal::CircularBufferConfig(num_tiles * single_tile_size, {{cb_index, data_format}})
-            .set_page_size(cb_index, single_tile_size);
-
-    auto cb_handle = CreateCircularBuffer(program, core_ranges, cb_config);
-    return cb_handle;
-}
-
-/**
- *   Create a reader kernel with the given compile-time arguments.
- */
-tt::tt_metal::KernelHandle create_reader_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
-}
-
-/**
- *   Create a writer kernel with the given compile-time arguments.
- */
-tt::tt_metal::KernelHandle create_writer_kernel(
-    tt::tt_metal::Program& program,
-    const tt::tt_metal::CoreRangeSet& core_ranges,
-    const std::vector<uint32_t>& compile_time_args,
-    const std::map<std::string, std::string>& defines,
-    const std::string& kernel_path) {
-    return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::WriterDataMovementConfig(compile_time_args, defines));
-}
 
 /**
  * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
@@ -139,16 +97,13 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
 
-    auto padded_tensor_shape = input.padded_shape();
-    auto padded_tensor_volume = input.physical_volume();
+    auto tensor_shape = input.logical_shape();
+    TT_FATAL(tensor_shape.rank() == 4U, "Input tensor must be 4D");
 
-    TT_FATAL(
-        padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
-    TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
-
-    uint32_t Wt = padded_tensor_shape[-1] / tt::constants::TILE_WIDTH;  // <- number of tiles in inner dimension
-    uint32_t Ht = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t NC = padded_tensor_shape[0] * padded_tensor_shape[1];
+    uint32_t Wt = (tensor_shape[-1] + tt::constants::TILE_WIDTH - 1U) /
+                  tt::constants::TILE_WIDTH;  // <- number of tiles in inner dimension
+    uint32_t Ht = (tensor_shape[-2] + tt::constants::TILE_HEIGHT - 1U) / tt::constants::TILE_HEIGHT;
+    uint32_t NC = tensor_shape[0] * tensor_shape[1];
     uint32_t total_rows_to_process = NC * Ht;
 
     // get number of free cores
@@ -180,13 +135,13 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
     TT_FATAL(
         input_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Input buffer must be in DRAM. Input buffer of type {}",
-        magic_enum::enum_name(input_buffer->buffer_type()));
+        enchantum::to_string(input_buffer->buffer_type()));
 
     auto* output_buffer = output.buffer();
     TT_FATAL(
         output_buffer->buffer_type() == ttnn::BufferType::DRAM,
         "Output buffer must be in DRAM. Output buffer of type {}",
-        magic_enum::enum_name(output_buffer->buffer_type()));
+        enchantum::to_string(output_buffer->buffer_type()));
 
     // configure defines
     std::map<std::string, std::string> defines;

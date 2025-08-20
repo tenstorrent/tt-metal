@@ -489,10 +489,6 @@ op_map = {
         "tt_op": tt_lib_ops.eltwise_rad2deg,
         "pytorch_op": pytorch_ops.rad2deg,
     },
-    "eltwise-scatter": {
-        "tt_op": tt_lib_ops.eltwise_scatter,
-        "pytorch_op": pytorch_ops.scatter,
-    },
     "eltwise-relu6": {
         "tt_op": tt_lib_ops.eltwise_relu6,
         "pytorch_op": pytorch_ops.relu6,

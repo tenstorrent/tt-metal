@@ -102,7 +102,7 @@ from ttnn._ttnn.multi_device import (
     MeshMapperConfig,
     MeshComposerConfig,
     get_device_tensors,
-    aggregate_as_tensor,
+    from_host_shards,
     combine_device_tensors,
     replicate_tensor_to_mesh_mapper,
     shard_tensor_to_mesh_mapper,
@@ -111,7 +111,7 @@ from ttnn._ttnn.multi_device import (
     create_mesh_composer,
     aggregate_tensor,
     distribute_tensor,
-    get_t3k_physical_device_ids_ring,
+    using_distributed_env,
 )
 
 from ttnn._ttnn.events import (
@@ -129,16 +129,32 @@ from ttnn._ttnn.operations.trace import (
     release_trace,
 )
 
+from ttnn._ttnn.operations.debug import (
+    apply_device_delay,
+)
+
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
 
 from ttnn._ttnn.fabric import FabricConfig, FabricReliabilityMode, set_fabric_config
 
+# Import cluster functions and types
+from ttnn._ttnn import cluster
+
 from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
+)
+
+from ttnn._ttnn.mesh_socket import (
+    create_socket_pair,
+    MeshSocket,
+    SocketConfig,
+    SocketMemoryConfig,
+    SocketConnection,
+    MeshCoreCoord,
 )
 
 from ttnn.types import (
@@ -156,6 +172,8 @@ from ttnn.types import (
     MemoryConfig,
     BufferType,
     TensorMemoryLayout,
+    ShardShapeAlignment,
+    ShardDistributionStrategy,
     DRAM_MEMORY_CONFIG,
     L1_MEMORY_CONFIG,
     L1_BLOCK_SHARDED_MEMORY_CONFIG,
@@ -176,9 +194,12 @@ from ttnn.types import (
     StorageType,
     DEVICE_STORAGE_TYPE,
     CoreGrid,
+    CoreType,
     CoreRange,
     Shape,
+    TensorSpec,
     Tensor,
+    ThrottleLevel,
     DeviceComputeKernelConfig,
     WormholeComputeKernelConfig,
     GrayskullComputeKernelConfig,
@@ -200,6 +221,7 @@ from ttnn.types import (
     KernelDescriptor,
     SemaphoreDescriptor,
     ProgramDescriptor,
+    TensorAccessorArgs,
 )
 
 from ttnn.device import (
@@ -221,7 +243,7 @@ from ttnn.device import (
     CreateDevices,
     CloseDevice,
     CloseDevices,
-    DumpDeviceProfiler,
+    ReadDeviceProfiler,
     SetDefaultDevice,
     GetDefaultDevice,
     format_input_tensor,
@@ -330,6 +352,7 @@ from ttnn.operations.normalization import (
     LayerNormShardedMultiCoreProgramConfig,
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
+    create_group_norm_input_negative_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
 )
 
@@ -345,11 +368,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import (
-    Topology,
-    teardown_edm_fabric,
-    initialize_edm_fabric,
-)
+from ttnn.operations.ccl import Topology
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,

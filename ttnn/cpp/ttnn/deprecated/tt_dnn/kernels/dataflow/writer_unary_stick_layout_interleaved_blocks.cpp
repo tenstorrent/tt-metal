@@ -6,7 +6,7 @@
 #include "dataflow_api.h"
 // #include "debug/dprint.h"
 
-template <bool DRAM>
+template <typename DSpec>
 inline void write_tiles_in_block(
     uint32_t cb_id_out0,
     uint32_t block_height_ntiles,
@@ -16,7 +16,7 @@ inline void write_tiles_in_block(
     uint32_t block_row_size,
     uint32_t block_row_size_unpadded,  // to remove padding from the last block in the row
     uint32_t num_rows_unpadded,
-    const InterleavedAddrGen<DRAM>& s) {
+    const TensorAccessor<DSpec>& s) {
     constexpr uint32_t TILE_HEIGHT = 32;  // TODO: use common source of truth
     uint32_t block_row_id = block_start_row_id;
     for (uint32_t tile_row_id = 0; tile_row_id < block_height_ntiles; tile_row_id++) {
@@ -43,19 +43,17 @@ void kernel_main() {
     uint32_t batch = get_arg_val<uint32_t>(3);
     uint32_t num_blocks_h = get_arg_val<uint32_t>(4);
     uint32_t num_blocks_w = get_arg_val<uint32_t>(5);
-    uint32_t output_row_size = get_arg_val<uint32_t>(6);               // output row size bytes
-    uint32_t last_block_row_size_unpadded = get_arg_val<uint32_t>(7);  // unpadded last block width
-    uint32_t num_output_rows_unpadded = get_arg_val<uint32_t>(8);
-    uint32_t block_start_row_id = get_arg_val<uint32_t>(9);
-    uint32_t block_start_row_offset = get_arg_val<uint32_t>(10);
+    uint32_t last_block_row_size_unpadded = get_arg_val<uint32_t>(6);  // unpadded last block width
+    uint32_t num_output_rows_unpadded = get_arg_val<uint32_t>(7);
+    uint32_t block_start_row_id = get_arg_val<uint32_t>(8);
+    uint32_t block_start_row_offset = get_arg_val<uint32_t>(9);
 
-    constexpr bool out_in_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(1) == 1;
+    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t output_row_size = get_compile_time_arg_val(1);
+    constexpr auto dst_args = TensorAccessorArgs<2>();
 
     // NOTE: Row major layout only supports bfp16
-    // TT_ASSERT(out_df != DataFormat::Bfp8_b);
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
-    const DataFormat out_df = get_dataformat(cb_id_out0);
 
     constexpr uint32_t TILE_HEIGHT = 32;  // TODO: use common source of truth
 
@@ -64,12 +62,7 @@ void kernel_main() {
                       : block_row_size >> 6;  // Assuming 4/2 bytes per datum, there are 128/64 bytes per tile row
     const uint32_t block_height_ntiles = num_rows_block / TILE_HEIGHT;
 
-    // const InterleavedAddrGenFast<true> s = {
-    //     .bank_base_address = dst_addr,
-    //     .page_size = output_row_size,
-    //     .data_format = out_df
-    // };
-    const InterleavedAddrGen<out_in_dram> s = {.bank_base_address = dst_addr, .page_size = output_row_size};
+    const auto s = TensorAccessor(dst_args, dst_addr, output_row_size);
     uint32_t num_rows_unpadded = num_output_rows_unpadded + block_start_row_id;
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t block_h = 0; block_h < num_blocks_h; block_h++) {

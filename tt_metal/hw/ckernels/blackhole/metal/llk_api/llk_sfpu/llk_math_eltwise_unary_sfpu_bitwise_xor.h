@@ -20,7 +20,7 @@ inline void llk_math_eltwise_unary_sfpu_bitwise_xor_init() {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_bitwise_xor(
     uint dst_index, uint param0, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_bitwise_xor<APPROXIMATE>, dst_index, vector_mode, param0);
 }
 

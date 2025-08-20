@@ -4,15 +4,14 @@
 
 #include "move_device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-void MoveDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-}
+void MoveDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {}
 
 std::vector<ttnn::TensorSpec> MoveDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
@@ -37,6 +36,18 @@ operation::ProgramWithCallbacks MoveDeviceOperation::create_program(
         case MoveOpParallelizationStrategy::MULTI_CORE:
         default: return move_multi_core(input_tensor, output_tensor);
     }
+}
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+MoveDeviceOperation::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 MoveOpParallelizationStrategy MoveDeviceOperation::get_parallelization_strategy(

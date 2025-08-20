@@ -20,7 +20,7 @@ void kernel_main() {
     auto bcast_id = get_arg_val<uint32_t>(6);
 
 #ifndef IN0_SHARDED
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto src0_args = TensorAccessorArgs<0>();
 #endif
 
     constexpr uint32_t cb_id_in0 = 0;
@@ -29,15 +29,12 @@ void kernel_main() {
 
     // single-tile ublocks
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat in0_data_format = get_dataformat(cb_id_in0);
-    const DataFormat in1_data_format = DataFormat::Float16_b;
 
     uint32_t l1_write_addr_in0;
     uint32_t l1_write_addr_in1;
 
 #ifndef IN0_SHARDED
-    const InterleavedAddrGenFast<src0_is_dram> s0 = {
-        .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
+    const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
 #else
     cb_reserve_back(cb_id_in0, num_tiles);
     cb_push_back(cb_id_in0, num_tiles);

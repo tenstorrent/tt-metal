@@ -28,8 +28,8 @@ void kernel_main() {
     constexpr uint32_t scalar = get_compile_time_arg_val(4);
     generate_reduce_scaler(cb_id_in2, scalar);
 
-    constexpr auto tensor_args = make_tensor_accessor_args<5>();
-    auto tensor_accessor = make_tensor_accessor_from_args(tensor_args, src_addr, tile_bytes);
+    constexpr auto tensor_args = TensorAccessorArgs<5>();
+    auto tensor_accessor = TensorAccessor(tensor_args, src_addr, tile_bytes);
 
     uint32_t w = curr_col_in_batch;
 
@@ -62,7 +62,7 @@ void kernel_main() {
             for (uint32_t k = i; k < chunk_end; ++k) {
                 cb_reserve_back(cb_id_in0, onetile);
                 uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(curr_id, tensor_accessor, l1_write_addr);
+                noc_async_read_page(curr_id, tensor_accessor, l1_write_addr);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_in0, onetile);
 

@@ -6,6 +6,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 
 using namespace tt::tt_metal;
 
@@ -57,10 +58,8 @@ int main() {
         auto l1_buffer = CreateBuffer(l1_config);
 
         auto input_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t input_dram_buffer_addr = input_dram_buffer->address();
 
         auto output_dram_buffer = CreateBuffer(dram_config);
-        const uint32_t output_dram_buffer_addr = output_dram_buffer->address();
 
         // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
         const uint32_t input_bank_id = 0;
@@ -78,10 +77,10 @@ int main() {
         EnqueueProgram(cq, program, false);
         Finish(cq);
 
-        // It is necessary to explictly dump profile results at the end of the
+        // It is necessary to explictly read profile results at the end of the
         // program to get noc traces for standalone tt_metal programs.  For
         // ttnn, this is called _automatically_
-        detail::DumpDeviceProfileResults(device);
+        detail::ReadDeviceProfilerResults(device);
 
         pass &= CloseDevice(device);
 

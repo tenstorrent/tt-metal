@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
-//
 // SPDX-License-Identifier: Apache-2.0
 
 #include <CLI/CLI.hpp>
@@ -7,10 +6,12 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
+#include <ttnn/distributed/create_socket.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <wandbcpp.hpp>
 
 #include "3tier/remote_optimizer.hpp"
+#include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/clip_grad_norm.hpp"
 #include "core/distributed/distributed.hpp"
@@ -273,8 +274,8 @@ void generate(
         }
     }
 
-    auto mask_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-        mask, ttml::core::create_shape({1, 1, max_sequence_length, max_sequence_length}), device));
+    auto mask_tensor = ttml::autograd::create_tensor(
+        ttml::core::from_vector(mask, ttnn::Shape({1, 1, max_sequence_length, max_sequence_length}), device));
 
     // Prepare a padded buffer for the prompt
     std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, pad_token_id);
@@ -300,10 +301,7 @@ void generate(
         }
         auto prompt_tokens_padded_size = static_cast<uint32_t>(prompt_tokens_padded.size());
         auto prompt_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            prompt_tokens_padded,
-            ttml::core::create_shape({1, 1, 1, prompt_tokens_padded_size}),
-            device,
-            ttnn::Layout::ROW_MAJOR));
+            prompt_tokens_padded, ttnn::Shape({1, 1, 1, prompt_tokens_padded_size}), device, ttnn::Layout::ROW_MAJOR));
 
         // Forward pass
         // 'output' shape is presumably [batch=1, 1, seq_len, vocab_size] or something similar
@@ -393,6 +391,7 @@ struct TrainingConfig {
     // mpi config
     bool enable_mpi = false;
     uint32_t num_mh_workers = 0U;
+    SocketType socket_type = SocketType::MPI;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -431,6 +430,15 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     if (auto multihost_config = yaml_config["multihost_config"]) {
         config.enable_mpi = multihost_config["enabled"].as<bool>(false);
         config.num_mh_workers = multihost_config["num_workers"].as<uint32_t>(0U);
+
+        auto socket_type_str = multihost_config["socket_type"].as<std::string>("mpi");
+        if (socket_type_str == "mpi") {
+            config.socket_type = SocketType::MPI;
+        } else if (socket_type_str == "fabric") {
+            config.socket_type = SocketType::FABRIC;
+        } else {
+            throw std::runtime_error("Unknown socket type: " + socket_type_str);
+        }
     }
     return config;
 }
@@ -488,11 +496,12 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt.yaml";
+    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespeare_nanogpt.yaml";
+
     std::string run_name = "";
     bool is_eval = false;
     bool add_time_to_name = true;
-    bool enable_wandb = true;
+    bool enable_wandb = false;
     std::string save_and_exit_path = "";
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
@@ -512,8 +521,8 @@ int main(int argc, char **argv) {
         auto &ctx = ttml::autograd::ctx();
         ctx.initialize_distributed_context(argc, argv);
 
-        auto &distributed_ctx = ctx.get_distributed_context();
-        fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx.size(), *distributed_ctx.rank());
+        auto distributed_ctx = ctx.get_distributed_context();
+        fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx->size(), *distributed_ctx->rank());
 
         // disable wandb for now in case of mpi example
         enable_wandb = false;
@@ -531,8 +540,7 @@ int main(int argc, char **argv) {
         fmt::print("MPI config:\n");
         fmt::print("  enable_mpi: {}\n", config.enable_mpi);
         fmt::print("  num_mh_workers: {}\n", config.num_mh_workers);
-    } else {
-        fmt::print("Not MPI run.\n");
+        fmt::print("  socket_type: {}\n", config.socket_type == SocketType::MPI ? "MPI" : "FABRIC");
     }
 
     if (enable_wandb) {
@@ -607,7 +615,7 @@ int main(int argc, char **argv) {
     // set seed
     ttml::autograd::ctx().set_seed(config.seed);
     if (config.enable_mpi) {
-        int rank = *ttml::autograd::ctx().get_distributed_context().rank();
+        int rank = *ttml::autograd::ctx().get_distributed_context()->rank();
         auto seed = config.seed + static_cast<uint32_t>(rank);
         ttml::autograd::ctx().set_seed(seed);
     }
@@ -659,8 +667,18 @@ int main(int argc, char **argv) {
     fmt::print("Vocab size: {}\n", tokenizer->get_vocab_size());
     fmt::print("Tokenizer type: {}\n", config.tokenizer_type);
 
-    initialize_device(device_config.mesh_shape, device_config.device_ids);
+    if (config.socket_type == SocketType::FABRIC) {
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
+        if (device_config.mesh_shape != tt::tt_metal::distributed::MeshShape(1, 8)) {
+            throw std::runtime_error(fmt::format(
+                "Fabric config is set to 2D dynamic, but mesh shape is not (1, 8). Mesh shape: {}",
+                device_config.mesh_shape));
+        }
+    } else if (device_config.enable_tp || device_config.enable_ddp) {
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
+    }
 
+    initialize_device(device_config.mesh_shape, device_config.device_ids);
     auto *device = &ttml::autograd::ctx().get_device();
 
     struct CachedHostData {
@@ -678,7 +696,7 @@ int main(int argc, char **argv) {
         }
     }
     cached_data.masks_tensor = ttml::autograd::create_tensor(
-        ttml::core::from_vector(mask, ttml::core::create_shape({1, 1, sequence_length, sequence_length}), device));
+        ttml::core::from_vector(mask, ttnn::Shape({1, 1, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, num_heads, device, &cached_data, &device_config](std::vector<DatasetSample> &&samples) {
@@ -702,26 +720,28 @@ int main(int argc, char **argv) {
 
             auto create_data_and_targets = [&]() -> std::tuple<TensorPtr, TensorPtr> {
                 if (device_config.enable_ddp) {
-                    auto data_xtensor = xt::adapt(data, {batch_size, 1U, 1U, sequence_length});
-                    auto data_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
+                    const auto mapper = ttnn::distributed::shard_tensor_to_mesh_mapper(*device, 0);
                     auto data_tensor =
-                        ttml::autograd::create_tensor(ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
-                            data_xtensor, device, data_composer, ttnn::Layout::ROW_MAJOR));
+                        ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                            data,
+                            ttnn::Shape({batch_size, 1, 1, sequence_length}),
+                            device,
+                            ttnn::Layout::ROW_MAJOR,
+                            mapper.get()));
 
-                    auto targets_xtensor = xt::adapt(targets, {batch_size, sequence_length});
-                    auto targets_composer = ttml::core::ShardXTensorToMesh<uint32_t>(device->shape(), 0);
-                    auto targets_tt_tensor = ttml::core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
-                        targets_xtensor, device, targets_composer, ttnn::Layout::ROW_MAJOR);
+                    auto targets_tt_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+                        targets,
+                        ttnn::Shape({batch_size, sequence_length}),
+                        device,
+                        ttnn::Layout::ROW_MAJOR,
+                        mapper.get());
                     auto targets_tensor = ttml::autograd::create_tensor(targets_tt_tensor);
                     return {data_tensor, targets_tensor};
                 }
 
                 auto data_tensor =
                     ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-                        data,
-                        ttml::core::create_shape({batch_size, 1, 1, sequence_length}),
-                        device,
-                        ttnn::Layout::ROW_MAJOR));
+                        data, ttnn::Shape({batch_size, 1, 1, sequence_length}), device, ttnn::Layout::ROW_MAJOR));
 
                 auto targets_tensor =
                     ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
@@ -745,7 +765,8 @@ int main(int argc, char **argv) {
     std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.vocab_size; }) {
-                arg.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), (device_config.enable_tp ? num_devices : 1U) * 32U);
+                arg.vocab_size =
+                    round_up_to_tile(tokenizer->get_vocab_size(), (device_config.enable_tp ? num_devices : 1U) * 32U);
             } else {
                 throw std::runtime_error(
                     "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
@@ -833,7 +854,8 @@ int main(int argc, char **argv) {
     auto select_optimizer =
         [&model, &adamw_params, &config](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (config.enable_mpi) {
-            return std::make_unique<RemoteOptimizer>(get_model_parameters(model), config.num_mh_workers);
+            return std::make_unique<RemoteOptimizer>(
+                get_model_parameters(model), config.num_mh_workers, config.socket_type);
         } else if (use_moreh_adamw) {
             return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
         } else {
@@ -877,8 +899,7 @@ int main(int argc, char **argv) {
     };
 
     auto get_loss_value = [device](const TensorPtr &loss) {
-        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
-        auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), composer);
+        auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
         // sum of loss xtensors
         float loss_float =
             std::accumulate(loss_xtensors.begin(), loss_xtensors.end(), 0.0F, [](float acc, auto &xtensor) {
@@ -890,8 +911,13 @@ int main(int argc, char **argv) {
 
     const uint32_t num_epochs = config.num_epochs;
     auto gradient_accumulator_helper = GradientAccumulator(config.gradient_accumulation_steps);
+
+    bool is_everything_compiled = false;
+
     for (uint32_t epoch = 0; epoch < num_epochs; ++epoch) {
         for (auto [features, target, masks] : train_dataloader) {
+            ttml::autograd::ctx().get_profiler().read_results(device, "dataloader_step_done");
+
             auto start_timer = std::chrono::high_resolution_clock::now();
             if (gradient_accumulator_helper.should_zero_grad()) {
                 optimizer->zero_grad();
@@ -900,6 +926,14 @@ int main(int argc, char **argv) {
             auto loss = ttml::ops::cross_entropy_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
             float loss_float = get_loss_value(loss);
+            ttml::autograd::ctx().get_profiler().read_results(device, "model_forward_done");
+
+            if (device_config.enable_tp) {
+                auto ones_grad = ttnn::ones_like(loss->get_value());
+                ones_grad = ttnn::multiply(
+                    ones_grad, 1.F / static_cast<float>(ttml::autograd::ctx().get_device().num_devices()));
+                loss->set_grad(ones_grad);
+            }
 
             loss->backward();
             ttml::autograd::ctx().reset_graph();
@@ -910,7 +944,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (!device_config.enable_tp) {
+                if (!device_config.enable_tp && !config.enable_mpi) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
 
@@ -924,7 +958,7 @@ int main(int argc, char **argv) {
                 scheduler->step();
                 auto global_step = optimizer->get_steps();
                 if (config.enable_mpi) {
-                    fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context().rank());
+                    fmt::print("[Rank {}] ", *ttml::autograd::ctx().get_distributed_context()->rank());
                 }
                 fmt::print("Step: {}, Loss: {}\n", global_step, gradient_accumulator_helper.average_loss());
                 loss_meter.update(gradient_accumulator_helper.average_loss());
@@ -945,11 +979,18 @@ int main(int argc, char **argv) {
                     }
                 }
 
+                ttml::autograd::ctx().get_profiler().read_results(device, fmt::format("iteration_{}", global_step));
+
                 if (global_step >= config.max_steps) {
                     break;
                 }
 
                 gradient_accumulator_helper.reset();
+
+                if (!is_everything_compiled) {
+                    ttml::autograd::ctx().get_profiler().read_results(device, "compilation_finished");
+                    is_everything_compiled = true;
+                }
             }
             auto end_timer = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::microseconds>(end_timer - start_timer).count();
@@ -980,14 +1021,16 @@ int main(int argc, char **argv) {
 
     if (config.enable_mpi) {
         auto &ctx = ttml::autograd::ctx();
-        auto &distributed_ctx = ctx.get_distributed_context();
-        distributed_ctx.barrier();
-        fmt::print("Rank {}: Finalizing MPI context\n", *distributed_ctx.rank());
+        auto distributed_ctx = ctx.get_distributed_context();
+        distributed_ctx->barrier();
+        fmt::print("Rank {}: Finalizing MPI context\n", distributed_ctx->rank());
     }
 
     if (enable_wandb) {
         wandbcpp::finish();
     }
 
+    ttml::autograd::ctx().get_profiler().read_results(device, "before close device", 0);
+    ttml::autograd::ctx().close_profiler();
     return 0;
 }

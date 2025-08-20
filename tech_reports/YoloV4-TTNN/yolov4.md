@@ -223,7 +223,6 @@ class Conv:
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat8_b,
             math_fidelity=ttnn.MathFidelity.LoFi,
             activation=self.activation,
@@ -254,6 +253,7 @@ class Conv:
             input_height=self.input_params[1],
             input_width=self.input_params[2],
             conv_config=conv_config,
+            dtype=ttnn.bfloat16,
         )
         return output_tensor
 ```
@@ -269,7 +269,6 @@ Here are the convolution parameters that can be utilized to enhance the performa
 2. Set the dtype and weight_dtype to `BFLOAT8_b`
 ```py
                 conv_config = ttnn.Conv2dConfig(
-                           dtype=ttnn.bfloat8_b,
                             weights_dtype=ttnn.bfloat8_b,
                             )
 ```

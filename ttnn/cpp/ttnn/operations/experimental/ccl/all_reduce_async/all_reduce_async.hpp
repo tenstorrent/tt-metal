@@ -75,7 +75,8 @@ struct ExecuteAllReduceAsync {
         ttnn::ccl::Topology topology,
         std::optional<size_t> num_preferred_links,
         std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
-        bool use_noc1_only);
+        bool use_noc1_only,
+        bool use_optimal_ccl_for_llama);
     static std::vector<ttnn::Tensor> invoke(
         const std::vector<ttnn::Tensor>& input_tensors,
         ttnn::Tensor& buffer_tensor,
@@ -87,7 +88,8 @@ struct ExecuteAllReduceAsync {
         ttnn::ccl::Topology topology,
         std::optional<size_t> num_preferred_links,
         std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
-        bool use_noc1_only);
+        bool use_noc1_only,
+        bool use_optimal_ccl_for_llama);
 };
 
 }  // namespace ccl

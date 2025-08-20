@@ -17,7 +17,7 @@ inline void llk_math_eltwise_unary_sfpu_log1p_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_log1p(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_log1p<APPROXIMATE>, dst_index, vector_mode);
 }
 

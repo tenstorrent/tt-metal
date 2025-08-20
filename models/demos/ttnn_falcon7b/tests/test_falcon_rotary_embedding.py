@@ -30,7 +30,7 @@ def torch_model():
     filtered_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())
 
     configuration = transformers.FalconConfig.from_pretrained(PRETRAINED_MODEL_NAME)
-    torch_model = transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding(configuration.head_dim).eval()
+    torch_model = transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding(configuration).eval()
     torch_model.load_state_dict(filtered_state_dict)
     return torch_model
 
@@ -55,7 +55,7 @@ def test_falcon_rotary_embeddings(device, model_name, input_shape, expected_pcc,
     torch_value_layer = torch.rand(batch, num_kv_heads, query_length, head_dim, dtype=torch.float32)
     torch_query_layer = torch.rand(batch, config.num_attention_heads, query_length, head_dim, dtype=torch.float32)
     torch_key_layer = torch.rand(batch, num_kv_heads, query_length, head_dim, dtype=torch.float32)
-    torch_cos, torch_sin = torch_model.forward(torch_value_layer, seq_len=query_length)
+    torch_cos, torch_sin = torch_model.forward(torch_value_layer, torch.arange(query_length).unsqueeze(0))
     torch_query_embed, torch_key_embed = transformers.models.falcon.modeling_falcon.apply_rotary_pos_emb(
         torch_query_layer, torch_key_layer, torch_cos, torch_sin, None
     )

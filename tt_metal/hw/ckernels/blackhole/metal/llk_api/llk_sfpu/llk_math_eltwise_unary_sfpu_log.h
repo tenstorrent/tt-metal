@@ -19,7 +19,7 @@ inline void llk_math_eltwise_unary_sfpu_log_init() {
 
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_log(uint dst_index, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_log<APPROXIMATE, false>, dst_index, vector_mode, 0);
 }
 
@@ -31,7 +31,7 @@ inline void llk_math_eltwise_unary_sfpu_log_with_base_init() {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_log_with_base(
     uint dst_index, uint base_scale, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_log<APPROXIMATE, true>, dst_index, vector_mode, base_scale);
 }
 

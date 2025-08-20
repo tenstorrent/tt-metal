@@ -75,7 +75,6 @@ MorehMeanOperation::spec_return_value_t MorehMeanOperation::compute_output_specs
 
     ttnn::SmallVector<uint32_t> shape;
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
-    const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
 
     // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
     // e.g. (2, 64, 64) with dim 0 to be (64, 64)

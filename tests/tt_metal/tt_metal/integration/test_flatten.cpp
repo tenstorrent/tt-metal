@@ -23,6 +23,8 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
+#include <distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -48,8 +50,6 @@ uint32_t prod(vector<uint32_t>& shape) {
 }
 
 inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec, vector<uint32_t> shape) {
-    int numel_in_tensor = prod(shape) / 2;
-    int idx = 0;
     std::vector<uint32_t> expected_dst_vec;
 
     uint32_t num_tile_rows = shape.at(shape.size() - 2) / 32;
@@ -63,7 +63,6 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
             for (uint32_t k = 0; k < num_tile_cols; k++) {
                 // Copy a row
                 for (uint32_t l = 0; l < 16; l++) {
-                    uint32_t src_addr = src_addr_ + l;
                     expected_dst_vec.push_back(src_vec.at(src_addr_ + l));
                 }
 
@@ -86,10 +85,18 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
 }
 
 bool flatten(
-    tt_metal::DispatchFixture* fixture, tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+    tt_metal::MeshDispatchFixture* fixture,
+    std::shared_ptr<distributed::MeshDevice> mesh_device,
+    uint32_t num_tiles_r = 5,
+    uint32_t num_tiles_c = 5) {
     bool pass = true;
 
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
     CoreCoord core = {0, 0};
 
@@ -97,19 +104,17 @@ bool flatten(
 
     uint32_t num_tiles = num_tiles_r * num_tiles_c;
     uint32_t num_bytes_per_tensor_row = num_tiles_c * 64;
-    uint32_t num_bytes_per_tile = num_tiles * single_tile_size;
 
     uint32_t dram_buffer_size =
         single_tile_size * num_tiles * 32;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
 
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = dram_buffer_size,
-        .page_size = dram_buffer_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
-    auto src_dram_buffer = CreateBuffer(dram_config);
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
+
+    auto src_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-    auto dst_dram_buffer = CreateBuffer(dram_config);
+    auto dst_dram_buffer = distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
     // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
@@ -120,7 +125,7 @@ bool flatten(
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 1;
@@ -128,17 +133,17 @@ bool flatten(
         tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
     auto flatten_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/flatten.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto unary_writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
@@ -148,8 +153,8 @@ bool flatten(
         num_tiles * 32  // per_core_tile_cnt
     };
 
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
-        program,
+    tt_metal::CreateKernel(
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compute_kernel_args});
@@ -165,17 +170,17 @@ bool flatten(
     ////////////////////////////////////////////////////////////////////////////
     //                      Execute Application
     ////////////////////////////////////////////////////////////////////////////
-    fixture->WriteBuffer(device, src_dram_buffer, src_vec);
+    fixture->WriteBuffer(mesh_device, src_dram_buffer, src_vec);
 
     tt_metal::SetRuntimeArgs(
-        program, flatten_kernel, core, {dram_buffer_src_addr, 0, num_tiles_r, num_tiles_c, num_bytes_per_tensor_row});
+        program_, flatten_kernel, core, {dram_buffer_src_addr, 0, num_tiles_r, num_tiles_c, num_bytes_per_tensor_row});
 
-    tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0, num_tiles * 32});
+    tt_metal::SetRuntimeArgs(program_, unary_writer_kernel, core, {dram_buffer_dst_addr, 0, num_tiles * 32});
 
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     std::vector<uint32_t> result_vec;
-    fixture->ReadBuffer(device, dst_dram_buffer, result_vec);
+    fixture->ReadBuffer(mesh_device, dst_dram_buffer, result_vec);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Validation & Teardown
@@ -210,7 +215,6 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
 
     uint32_t num_tiles = num_tiles_r * num_tiles_c;
     uint32_t num_bytes_per_tensor_row = num_tiles_c * 64;
-    uint32_t num_bytes_per_tile = num_tiles * single_tile_size;
 
     uint32_t dram_buffer_size = single_tile_size * num_tiles * 32;
 
@@ -224,7 +228,7 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = CreateCircularBuffer(program, core, cb_src0_config);
+    CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t ouput_cb_index = 16;
     uint32_t num_output_tiles = 1;
@@ -232,7 +236,7 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
         tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-    auto cb_output = CreateCircularBuffer(program, core, cb_output_config);
+    CreateCircularBuffer(program, core, cb_output_config);
 
     auto flatten_kernel = CreateKernel(
         program,
@@ -250,7 +254,7 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
 
     vector<uint32_t> compute_kernel_args = {num_tiles * 32};
 
-    auto eltwise_unary_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy.cpp",
         core,
@@ -312,7 +316,7 @@ bool flatten_stress(tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_
 
 }  // namespace test_flatten
 
-TEST_F(DispatchFixture, TensixFlatten) {
+TEST_F(MeshDispatchFixture, TensixFlatten) {
     // TODO: Re-enable when #7264 is fixed
     GTEST_SKIP();
     uint32_t num_tiles_r = 2;

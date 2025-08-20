@@ -13,6 +13,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/utils.hpp>
 
 namespace tt_metal = tt::tt_metal;
@@ -39,6 +40,6 @@ int main(int argc, char** argv) {
         });
 
     tt_metal::EnqueueProgram(device->command_queue(), program, true);
-    tt_metal::detail::DumpDeviceProfileResults(device);
+    tt_metal::detail::ReadDeviceProfilerResults(device);
     tt_metal::CloseDevice(device);
 }

@@ -12,6 +12,7 @@ from models.demos.yolov4.common import (
     YOLOV4_BOXES_PCC,
     YOLOV4_BOXES_PCC_BLACKHOLE,
     YOLOV4_CONFS_PCC,
+    YOLOV4_L1_SMALL_SIZE,
     image_to_tensor,
     load_image,
     load_torch_model,
@@ -25,11 +26,9 @@ from models.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_weight, resolution):
+def run_yolov4(device, model_location_generator, use_pretrained_weight, resolution):
     torch.manual_seed(0)
 
-    # https://github.com/tenstorrent/tt-metal/issues/23192
-    device.disable_and_clear_program_cache()
     if use_pretrained_weight:
         torch_model = load_torch_model(model_location_generator)
     else:
@@ -40,7 +39,7 @@ def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_wei
         torch_model.load_state_dict(new_state_dict)
         torch_model.eval()
 
-    imgfile = "models/demos/yolov4/resources/giraffe_320.jpg"
+    imgfile = "models/demos/yolov4/resources/giraffe.jpg"
     img = load_image(imgfile, resolution)
     torch_input = image_to_tensor(img)
 
@@ -74,7 +73,7 @@ def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_wei
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 16384}],
+    [{"l1_small_size": YOLOV4_L1_SMALL_SIZE}],
     indirect=True,
     ids=["0"],
 )
@@ -97,10 +96,9 @@ def run_yolov4(device, reset_seeds, model_location_generator, use_pretrained_wei
         "1",
     ],
 )
-def test_yolov4(device, reset_seeds, model_location_generator, use_pretrained_weight, resolution):
+def test_yolov4(device, model_location_generator, use_pretrained_weight, resolution):
     run_yolov4(
         device,
-        reset_seeds,
         model_location_generator,
         use_pretrained_weight,
         resolution,

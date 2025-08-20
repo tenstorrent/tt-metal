@@ -25,9 +25,9 @@ while (my $line = <$info>) {
     # output line from test_pgm_dispatch
     if ($line =~ /us per iteration/) {
         my @parts = split(' ', $line);
-        my $us = $parts[8];
-        my $index = index($parts[8], ".");
-        my $digits = index($parts[8], "us") - $index;
+        my $us = $parts[9];
+        my $index = index($parts[9], ".");
+        my $digits = index($parts[9], "us") - $index;
         $digits = $digits >= 3 ? 3 : $digits;
         $us = substr($us, 0, $index + $digits);
         $data->[$j][$i] = $us;
@@ -37,7 +37,7 @@ while (my $line = <$info>) {
     # output line from test_bw_and_latency
     if ($line =~ /BW:/) {
         my @parts = split(' ', $line);
-        my $bw = $parts[7];
+        my $bw = $parts[8];
         $data->[$j][$i] = $bw;
         $j++;
     }
@@ -45,7 +45,7 @@ while (my $line = <$info>) {
     # output latency from test_bw_and_latency
     if ($line =~ /Latency:/) {
         my @parts = split(' ', $line);
-        my $bw = $parts[7];
+        my $bw = $parts[8];
         $data->[$j][$i] = $bw;
         $j++;
     }

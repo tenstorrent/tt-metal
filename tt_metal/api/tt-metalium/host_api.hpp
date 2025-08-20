@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <initializer_list>
 #include <variant>
 #include <vector>
 
@@ -276,7 +277,8 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
  * | total_size | New size of the circular buffer in bytes                                                 | uint32_t                     |             | Yes      |
  */
 // clang-format on
-void UpdateDynamicCircularBufferAddressAndTotalSize(Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
+void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
 
 // clang-format off
 /**
@@ -452,7 +454,7 @@ using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
 // clang-format off
 /**
  * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -472,8 +474,29 @@ void SetRuntimeArgs(
 
 // clang-format off
 /**
- * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
+ * Set runtime args for a kernel that are sent to the core during runtime. This API needs to be called to update the runtime args for the kernel.
  * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any logical Tensix core coordinate(s) on which the kernel is placed | Yes      |
+ * | runtime_args | The runtime args to be written                                         | initializer_list<const uint32_t>                       |                                                                     | Yes      |
+ */
+// clang-format on
+void SetRuntimeArgs(
+    const Program& program,
+    KernelHandle kernel,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    std::initializer_list<const uint32_t> runtime_args);
+
+// clang-format off
+/**
+ * Set multiple runtime arguments of a kernel at once during runtime, each mapping to a specific core. The runtime args for each core may be unique.
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -494,14 +517,14 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set runtime args for a kernel that are sent to the specified cores using the command queue. This API must be used when Asynchronous Command Queue Mode is enabled.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
  * | device       | The device that runtime args are being written to.                     | IDevice*                                               |                                                                            | Yes      |
- * | kernel       | The kernel that will recieve these runtime args.                       | std::shared_ptr<Kernel>                                |                                                                            | Yes      |
+ * | kernel       | The kernel that will receive these runtime args.                       | std::shared_ptr<Kernel>                                |                                                                            | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::variant<CoreCoord,CoreRange,CoreRangeSet> & | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
  * | runtime_args | The runtime args to be written                                         | std::shared_ptr<RuntimeArgs>                           |                                                                            | Yes      |
 */
@@ -515,13 +538,13 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set multiple runtime arguments of a kernel using the command queue. Each core can have distinct arguments. This API must be used when Asynchronous Command Queue Mode is enabled.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  * | Argument     | Description                                                            | Type                                                   | Valid Range                                                                | Required |
  * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|----------------------------------------------------------------------------|----------|
  * | device       | The device that runtime args are being written to.                     | IDevice*                                               |                                                                            | Yes      |
- * | kernel       | The kernel that will recieve these runtime args.                       | std::shared_ptr<Kernel>                                |                                                                            | Yes      |
+ * | kernel       | The kernel that will receive these runtime args.                       | std::shared_ptr<Kernel>                                |                                                                            | Yes      |
  * | core_spec    | Location of Tensix core(s) where the runtime args will be written      | const std::vector< CoreCoord > &                       | Any set of logical Tensix core coordinates on which the kernel is placed   | Yes      |
  * | runtime_args | The runtime args to be written                                         | const std::vector<std::shared_ptr<RuntimeArgs>>        | Outer vector size must be equal to size of core_spec vector                | Yes      |
  */
@@ -535,7 +558,7 @@ void SetRuntimeArgs(
 // clang-format off
 /**
  * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
- * Maximum of 255 allowed runtime args per core (unique and common runtime args count toward same limit).
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
  *
  * Return value: void
  *
@@ -547,6 +570,23 @@ void SetRuntimeArgs(
  */
 // clang-format on
 void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args);
+
+// clang-format off
+/**
+ * Set common (shared by all cores) runtime args for a kernel that are sent to all cores during runtime. This API needs to be called to update the common runtime args for the kernel.
+ * Maximum of 341 allowed runtime args per core (unique and common runtime args count toward same limit).
+ *
+ * Return value: void
+ *
+ * | Argument     | Description                                                            | Type                                                   | Valid Range                                                         | Required |
+ * |--------------|------------------------------------------------------------------------|--------------------------------------------------------|---------------------------------------------------------------------|----------|
+ * | program      | The program containing kernels, circular buffers, semaphores           | const Program &                                        |                                                                     | Yes      |
+ * | kernel_id    | ID of the kernel that will receive the runtime args                    | KernelHandle (uint64_t)                                |                                                                     | Yes      |
+ * | runtime_args | The runtime args to be written                                         | std::initializer_list<const uint32_t>                  |                                                                     | Yes      |
+ */
+// clang-format on
+void SetCommonRuntimeArgs(
+    const Program& program, KernelHandle kernel_id, std::initializer_list<const uint32_t> runtime_args);
 
 // clang-format off
 /**
@@ -809,88 +849,6 @@ void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids = 
 
 // clang-format off
 /**
- * Begins capture on a trace, when the trace is in capture mode all programs pushed into the trace queue will have their execution delayed until the trace is instantiated and enqueued.
- * The capture must be later ended via EndTraceCapture, and finally scheduled to be executed via ReplayTrace.
- * Beginning a trace capture enabled buffer allocations until capture has ended.
- *
- * Return value: Trace ID
- *
- * | Argument        | Description                                                            | Type                          | Valid Range                        | Required |
- * |-----------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device          | The device holding being traced.                                       | IDevice*                      |                                    | Yes      |
- * | cq_id           | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
-*/
-// clang-format on
-uint32_t BeginTraceCapture(IDevice* device, uint8_t cq_id);
-
-// clang-format off
-/**
- * Completes capture on a trace, if captured commands do not conform to the rules of the trace, the trace will be invalidated.
- * This trace can be enqueued for execution via ReplayTrace on the same device command queue.
- * After ending a trace capture, buffer allocations on device are disabled until either a new trace begins capture,
- * or all traces on the device are released
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device holding being traced.                                       | IDevice*                      |                                    | Yes      |
- * | cq_id        | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
- * | tid          | A unique id from BeginTraceCapture for the trace being captured        | uint32_t                      |                                    | Yes      |
- */
-// clang-format on
-void EndTraceCapture(IDevice* device, uint8_t cq_id, uint32_t tid);
-
-// clang-format off
-/**
- * Replay a trace of previously generated commands and data.
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device holding the trace.                                          | IDevice*                      |                                    | Yes      |
- * | cq_id        | The command queue id associated with the trace.                        | uint8_t                       |                                    | Yes      |
- * | trace_id     | A unique id representing an existing captured trace.                   | uint32_t                      |                                    | Yes      |
- * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
- */
-// clang-format on
-void ReplayTrace(IDevice* device, uint8_t cq_id, uint32_t tid, bool blocking);
-
-// clang-format off
-/**
- * Release a previously instantiated trace, deallocating the associated trace buffers on device
- * This operation is not thread-safe, user must ensure that the trace being released is no longer needed by device threads
- * If this releases the last trace on a device, then buffer allocations are re-enabled
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device holding the trace.                                          | IDevice*                      |                                    | Yes      |
- * | trace_id     | A unique id representing an existing captured trace.                   | uint32_t                      |                                    | Yes      |
- */
-// clang-format on
-void ReleaseTrace(IDevice* device, uint32_t tid);
-
-// clang-format off
-/**
- * Enqueues a trace of previously generated commands and data.
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | cq           | The command queue object which dispatches the command to the hardware  | CommandQueue &                |                                    | Yes      |
- * | trace_id     | A unique id representing an existing on-device trace, which has been   | uint32_t                      |                                    | Yes      |
- * |              | instantiated via InstantiateTrace where the trace_id is returned       |                               |                                    |          |
- * | blocking     | Whether or not this is a blocking operation                            | bool                          |                                    | Yes      |
- */
-// clang-format on
-void EnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking);
-
-// clang-format off
-/**
  * Begin Light Metal Binary capturing on host and all devices. This will trace host API calls and device (metal trace) workloads to a
  * binary blob returned to caller when tracing is finished, which can later be rerun directly from binary.
  * Note: This LightMetalBinary Trace/Replay feature is currently under active development and is not fully supported, use at own risk.
@@ -912,23 +870,7 @@ LightMetalBinary LightMetalEndCapture();
 
 // clang-format off
 /**
- * Load an existing trace descriptor onto a particular device and command queue and assign it as user-provided trace id. Useful for Light Metal Binary replay.
- *
- * Return value: void
- *
- * | Argument     | Description                                                            | Type                          | Valid Range                        | Required |
- * |--------------|------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
- * | device       | The device to load the trace onto.                                     | IDevice *                     |                                    | Yes      |
- * | cq_id        | The command queue id to load the trace onto.                           | uint8_t                       |                                    | Yes      |
- * | trace_id     | A unique id to represent the trace on device.                          | uint32_t                      |                                    | Yes      |
- * | trace_desc   | The trace descriptor to load onto the device.                          | TraceDescriptor&              |                                    | Yes      |
- */
-// clang-format on
-void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc);
-
-// clang-format off
-/**
- * Read device side profiler data for all devices in the mesh device and dump results into device side CSV log
+ * Read device side profiler data for all devices in the mesh device
  *
  * This function only works in PROFILER builds. Please refer to the "Device Program Profiler" section for more information.
  *
@@ -937,13 +879,13 @@ void LoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, const TraceDes
  * | Argument      | Description                                           | Type                     | Valid Range               | Required |
  * |---------------|-------------------------------------------------------|--------------------------|---------------------------|----------|
  * | mesh_device   | The mesh device containing the devices to be profiled | MeshDevice&              |                           | Yes      |
- * | state         | The dump state to use for this profiler dump          | ProfilerDumpState        |                           | No       |
+ * | state         | The state to use for this profiler read               | ProfilerReadState        |                           | No       |
  * | metadata      | Metadata to include in the profiler results           | ProfilerOptionalMetadata |                           | No       |
  * */
 // clang-format on
-void DumpMeshDeviceProfileResults(
+void ReadMeshDeviceProfilerResults(
     distributed::MeshDevice& mesh_device,
-    ProfilerDumpState state = ProfilerDumpState::NORMAL,
+    ProfilerReadState state = ProfilerReadState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
 // clang-format off

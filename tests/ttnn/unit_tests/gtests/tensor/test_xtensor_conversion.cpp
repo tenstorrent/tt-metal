@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/container/vector.hpp>
 #include <gtest/gtest.h>
 #include <xtensor/containers/xarray.hpp>
 #include <xtensor/generators/xbuilder.hpp>
@@ -47,7 +46,11 @@ TensorSpec get_tensor_spec(const ttnn::Shape& shape) {
 
 TEST(XtensorConversionTest, SpanToXtensor) {
     std::vector<int> data = {1, 2, 3, 4, 5, 6};
-    tt::stl::Span<const int> data_span(data.data(), data.size());
+
+    // std::vector must have a non-const, non-volatile value_type
+    //  xarray uses std::vector<T> as a template parameter
+    //  if T is deduced as const int, then the span_to_xtensor_view which returns xt::xarray<T> will fail to compile
+    std::span<int> data_span(data.data(), data.size());
     ttnn::Shape shape({2, 3});
 
     auto result = span_to_xtensor_view(data_span, shape);

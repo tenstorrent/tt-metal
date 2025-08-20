@@ -4,7 +4,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mesh_trace.hpp"
 
-#include <boost/move/utility_core.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
 #include <stdint.h>
@@ -152,7 +151,6 @@ std::shared_ptr<MeshTraceBuffer> MeshTrace::create_empty_mesh_trace_buffer() {
 }
 
 void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<MeshTraceBuffer>& trace_buffer) {
-    auto mesh_device = mesh_cq.device();
     uint64_t unpadded_size = trace_buffer->desc->total_trace_size;
     size_t page_size = trace_dispatch::compute_interleaved_trace_buf_page_size(
         unpadded_size, mesh_cq.device()->allocator()->get_num_banks(BufferType::DRAM));

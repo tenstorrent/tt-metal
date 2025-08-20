@@ -5,7 +5,6 @@
 #include <fmt/base.h>
 #include <tt-metalium/host_api.hpp>
 #include <functional>
-#include <map>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -46,21 +45,20 @@ void RunTest(DPrintFixture* fixture, IDevice* device) {
 
     // Run a kernel that just waits on a signal that never comes (BRISC only).
     constexpr CoreCoord core = {0, 0}; // Print on first core only
-    KernelHandle brisc_print_kernel_id = CreateKernel(
+    CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/misc/print_hang.cpp",
         core,
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default}
-    );
+        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Run the program, we expect it to throw on waiting for CQ to finish
 try {
     fixture->RunProgram(device, program);
 } catch (std::runtime_error& e) {
-    const string expected = "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.";
-    const string error = string(e.what());
+    const std::string expected = "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.";
+    const std::string error = std::string(e.what());
     log_info(tt::LogTest, "Caught exception (one is expected in this test)");
-    EXPECT_TRUE(error.find(expected) != string::npos);
+    EXPECT_TRUE(error.find(expected) != std::string::npos);
 }
 
     // Check the print log against golden output.

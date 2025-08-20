@@ -125,7 +125,7 @@ tt::stl::hash::hash_t OldInfraDeviceOperation<OutputTensors>::compute_program_ha
 }
 
 template <typename OutputTensors>
-auto OldInfraDeviceOperation<OutputTensors>::create_op_performance_model(
+OpPerformanceModelGeneral<OutputTensors> OldInfraDeviceOperation<OutputTensors>::create_op_performance_model(
     const operation_attributes_t& attributes,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {

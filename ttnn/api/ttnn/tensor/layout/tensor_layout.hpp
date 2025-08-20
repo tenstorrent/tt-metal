@@ -14,6 +14,8 @@
 
 namespace tt::tt_metal {
 
+class IDevice;
+
 using Strides = std::vector<size_t>;
 
 // TensorLayout describes how a tensor is laid out in memory
@@ -21,7 +23,11 @@ using Strides = std::vector<size_t>;
 // shape) And provides information required to physically lay out the tensor in memory
 class TensorLayout {
 public:
-    TensorLayout(DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config);
+    TensorLayout(
+        DataType dtype,
+        const PageConfig& page_config,
+        const MemoryConfig& memory_config,
+        const Alignment& alignment = {});
 
     // static method makes it easy to find and remove all of its usages in the codebase - thats why it is not a
     // constructor
@@ -46,6 +52,10 @@ public:
 
     size_t compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const;
     size_t compute_page_size_bytes(const ttnn::Shape& shape) const;
+
+    size_t compute_consumed_memory_bytes_per_bank(const ttnn::Shape& shape, const IDevice& device) const;
+    size_t compute_consumed_memory_bytes_per_bank(
+        const ttnn::Shape& shape, size_t page_alignment, size_t num_banks) const;
 
     // This method is deprecated and should be replaced with get_strides() / get_physical_size()
     // It computes padded shape on the fly from shape and alignment
@@ -87,10 +97,6 @@ public:
         DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
 
 private:
-    // Private to not expose alignment parameter to the public API
-    TensorLayout(
-        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
-
     void initialize_alignment();
 
     DataType dtype_ = DataType::BFLOAT16;

@@ -4,6 +4,7 @@
 
 #include "ternary_composite_op.hpp"
 #include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 
 namespace ttnn::operations::ternary {
 
@@ -38,23 +39,23 @@ Tensor _addcdiv(
             input_c.storage_type() == StorageType::DEVICE,
         "Ternary operation requires input tensors to be on Device.");
 
-    Tensor t_div =
-        ttnn::multiply(input_b, ttnn::reciprocal(input_c, output_mem_config), std::nullopt, output_mem_config);
+    Tensor t_div = ttnn::div(input_b, input_c, true, std::nullopt, std::nullopt, output_mem_config);
     Tensor t_factor = ttnn::multiply(t_div, value, std::nullopt, output_mem_config);
     t_div.deallocate();
     Tensor result = ttnn::add(input_a, t_factor, std::nullopt, output_mem_config);
-    float t_inf = std::numeric_limits<float>::infinity();
-    Tensor t_nan = ttnn::full_like(input_a, std::nanf(""));
-    return ttnn::where(
-        ttnn::eqz(input_c, output_mem_config),
-        (value == 0)
-            ? t_nan
-            : ttnn::where(
-                  ttnn::eqz(input_b, output_mem_config),
-                  t_nan,
-                  ttnn::multiply(ttnn::sign(input_b, output_mem_config), t_inf, std::nullopt, output_mem_config)),
-        result,
+
+    if (result.dtype() == DataType::FLOAT32) {
+        return result;
+    }
+
+    // For non-FP32: 0.5 * inf != inf but 1.7014e+3 and 0/0 = 0 for non-fp32
+    Tensor t_inf = ttnn::multiply(
+        ttnn::sign(t_factor, output_mem_config),
+        std::numeric_limits<float>::infinity(),
+        std::nullopt,
         output_mem_config);
+    result = ttnn::where(ttnn::eqz(input_c, output_mem_config), t_inf, result, output_mem_config);
+    return result;
 }
 
 // lerp(input, end, weight) = start   weight * (end - start)

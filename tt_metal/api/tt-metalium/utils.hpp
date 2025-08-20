@@ -6,16 +6,13 @@
 
 #include <cstddef>
 #include <functional>
-#include <map>
 #include <string>
 #include <type_traits>
 
-using std::string;
-
 namespace tt {
 namespace utils {
-bool run_command(const string& cmd, const string& log_file, bool verbose);
-void create_file(const string& file_path_str);
+bool run_command(const std::string& cmd, const std::string& log_file, bool verbose);
+void create_file(const std::string& file_path_str);
 const std::string& get_reports_dir();
 
 // Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies

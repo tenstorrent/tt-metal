@@ -20,11 +20,9 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/ternary/where/where.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "tools/profiler/op_profiler.hpp"
-#include <magic_enum/magic_enum.hpp>
-#include <utility>
 
 namespace ttnn::operations::binary_backward {
 
@@ -549,7 +547,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     const Tensor& grad,
     const Tensor& input_a,
     const Tensor& input_b,
-    string approximate,
+    std::string approximate,
     const std::optional<MemoryConfig>& output_mem_config) {
     TT_FATAL(
         (approximate == "none" || approximate == "tanh"), "Incorrect approximation type (expected 'none', 'tanh')");
@@ -567,7 +565,7 @@ std::vector<Tensor> ExecuteBackwardBiasGelu::invoke(
     const Tensor& grad,
     const Tensor& input_tensor,
     float bias,
-    string approximate,
+    std::string approximate,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     TT_FATAL(

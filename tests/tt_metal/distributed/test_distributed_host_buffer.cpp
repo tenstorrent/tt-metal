@@ -25,7 +25,7 @@ TEST(DistributedHostBufferTest, InvalidLocalShape) {
     distributed::MeshShape local_shape(2, 4);  // 2x4 > 2x3
     distributed::MeshCoordinate local_offset(0, 0);
 
-    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset));
+    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr));
 }
 
 TEST(DistributedHostBufferTest, InvalidLocalOffset) {
@@ -33,7 +33,7 @@ TEST(DistributedHostBufferTest, InvalidLocalOffset) {
     distributed::MeshShape local_shape(1, 2);
     distributed::MeshCoordinate local_offset(2, 0);  // Offset 2 in first dimension exceeds global shape
 
-    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset));
+    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr));
 }
 
 TEST(DistributedHostBufferTest, InvalidCombination) {
@@ -41,7 +41,7 @@ TEST(DistributedHostBufferTest, InvalidCombination) {
     distributed::MeshShape local_shape(1, 2);
     distributed::MeshCoordinate local_offset(1, 2);  // Offset + shape exceeds global shape
 
-    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset));
+    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr));
 }
 
 TEST(DistributedHostBufferTest, DimensionMismatch) {
@@ -49,7 +49,7 @@ TEST(DistributedHostBufferTest, DimensionMismatch) {
     distributed::MeshShape local_shape(1, 1, 1);  // 3D shape vs 2D global shape
     distributed::MeshCoordinate local_offset(1, 0);
 
-    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset));
+    EXPECT_ANY_THROW(DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr));
 }
 
 TEST(DistributedHostBufferTest, EmplaceAndGetBuffer) {
@@ -105,7 +105,7 @@ TEST(DistributedHostBufferTest, EmplaceAndGetBufferWithLocalMeshShape) {
     distributed::MeshShape local_shape(2, 1);
     distributed::MeshCoordinate local_offset(0, 1);
 
-    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset);
+    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr);
     EXPECT_EQ(buffer.shape().mesh_size(), 6);  // 2×3 = 6
 
     buffer.emplace_shard(distributed::MeshCoordinate(0, 0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
@@ -213,7 +213,7 @@ TEST(DistributedHostBufferTest, TransformWithLocalShape) {
     distributed::MeshShape local_shape(2, 1);
     distributed::MeshCoordinate local_offset(1, 0);
 
-    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset);
+    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr);
     EXPECT_EQ(buffer.shape().mesh_size(), 3);  // 3×1 = 3
 
     buffer.emplace_shard(distributed::MeshCoordinate(0, 0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
@@ -286,7 +286,7 @@ TEST(DistributedHostBufferTest, ApplyWithLocalShape) {
     distributed::MeshShape local_shape(2, 1);
     distributed::MeshCoordinate local_offset(1, 0);
 
-    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset);
+    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr);
     EXPECT_EQ(buffer.shape().mesh_size(), 3);  // 3×1 = 3
 
     buffer.emplace_shard(distributed::MeshCoordinate(0, 0), []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
@@ -302,6 +302,19 @@ TEST(DistributedHostBufferTest, ApplyWithLocalShape) {
     ASSERT_THAT(values, SizeIs(2));
     EXPECT_THAT(values[0], ElementsAre(4, 5, 6));  // Global index 1
     EXPECT_THAT(values[1], ElementsAre(7, 8, 9));  // Global index 2
+}
+
+TEST(DistributedHostBufferTest, IsLocal) {
+    distributed::MeshShape global_shape(2, 2);
+    distributed::MeshShape local_shape(1, 2);
+    distributed::MeshCoordinate local_offset(1, 0);
+
+    auto buffer = DistributedHostBuffer::create(global_shape, local_shape, local_offset, /*context=*/nullptr);
+
+    EXPECT_FALSE(buffer.is_local(distributed::MeshCoordinate(0, 0)));
+    EXPECT_FALSE(buffer.is_local(distributed::MeshCoordinate(0, 1)));
+    EXPECT_TRUE(buffer.is_local(distributed::MeshCoordinate(1, 0)));
+    EXPECT_TRUE(buffer.is_local(distributed::MeshCoordinate(1, 1)));
 }
 
 }  // namespace

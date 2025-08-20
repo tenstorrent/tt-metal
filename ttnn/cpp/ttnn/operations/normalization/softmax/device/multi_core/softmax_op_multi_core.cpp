@@ -3,8 +3,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <math.h>
 #include <optional>
+#include <string>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -191,7 +191,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
                                                       out0_is_dram,
                                                       num_datum_padded};
-    std::map<string, string> softmax_defines, writer_defines;
+    std::map<std::string, std::string> softmax_defines, writer_defines;
     if (mask.has_value()) {
         softmax_defines["FUSED_SCALE_MASK"] = "1";
     }
@@ -316,7 +316,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
     union {
         float f;
         uint32_t u;
-    } s;
+    } s{};
     s.f = scale.value_or(1.0f);  // scale for fused scale-mask-softmax
     for (uint32_t i = 0; i < grid_size.x * grid_size.y; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -510,7 +510,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_multi_core(
             union {
                 float f;
                 uint32_t u;
-            } s;
+            } s{};
             s.f = scale.value_or(1.0f);  // scale for fused scale-mask-softmax
 
             auto& cached_reader_args = GetRuntimeArgs(program, reader_kernels_id);
@@ -721,7 +721,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
         is_dram_mask = mask->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
     }
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_wt, (std::uint32_t)is_dram_mask};
-    std::map<string, string> softmax_defines;
+    std::map<std::string, std::string> softmax_defines;
     // hw_dims_only_causal_mask does not support RM Layout atm
     bool use_row_major_kernel = (mask.has_value() and mask->layout() == tt::tt_metal::Layout::ROW_MAJOR);
     if (use_row_major_kernel) {
@@ -863,7 +863,7 @@ tt::tt_metal::operation::ProgramWithCallbacks scale_mask_softmax_sharded_multi_c
     union {
         float f;
         uint32_t u;
-    } s;
+    } s{};
     s.f = scale.value_or(1.0f);  // scale for fused scale-mask-softmax
     uint32_t mask_start_tile_id = 0;
 

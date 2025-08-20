@@ -4,7 +4,7 @@
 
 #include <boost/move/utility_core.hpp>
 #include <fmt/base.h>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <stdint.h>
 #include <tt-logger/tt-logger.hpp>
 #include <initializer_list>
@@ -60,11 +60,11 @@ void run_create_tensor_test(tt::tt_metal::distributed::MeshDevice* device, const
 
     TensorSpec tensor_spec(input_shape, TensorLayout(dtype, PageConfig(Layout::TILE), mem_cfg));
     ASSERT_EQ(input_buf_size_datums * datum_size_bytes, tensor_spec.compute_packed_buffer_size_bytes());
-    auto input_buffer = tt::tt_metal::tensor_impl::allocate_mesh_buffer_on_device(device, tensor_spec);
+    auto input_buffer = tt::tt_metal::tensor_impl::allocate_device_buffer(device, tensor_spec);
 
     auto input_storage = tt::tt_metal::DeviceStorage{input_buffer, {tt::tt_metal::distributed::MeshCoordinate{0, 0}}};
 
-    Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{});
+    Tensor input_tensor = Tensor(input_storage, tensor_spec, ReplicateTensor{}, TensorTopology{});
 
     ttnn::write_buffer(io_cq, input_tensor, {host_data});
 
@@ -87,7 +87,7 @@ class CreateTensorTest : public ttnn::TTNNFixtureWithDevice,
                          public ::testing::WithParamInterface<CreateTensorParams> {};
 
 TEST_P(CreateTensorTest, Tile) {
-    CreateTensorParams params = GetParam();
+    const CreateTensorParams& params = GetParam();
     run_create_tensor_test(device_, params.shape);
 }
 
@@ -102,7 +102,7 @@ INSTANTIATE_TEST_SUITE_P(
         CreateTensorParams{.shape = ttnn::Shape({0})}));
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& value) {
-    os << magic_enum::enum_name(value);
+    os << enchantum::to_string(value);
     return os;
 }
 

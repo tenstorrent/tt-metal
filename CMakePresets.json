@@ -24,7 +24,7 @@
         "description": "Run Clang Tidy",
         "binaryDir": "${sourceDir}/.build/clang-tidy",
         "cacheVariables": {
-          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-17;--warnings-as-errors=*"},
+          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--warnings-as-errors=*"},
           "CMAKE_VERIFY_INTERFACE_HEADER_SETS": {"value": "TRUE"},
           "CMAKE_EXPORT_COMPILE_COMMANDS": {"value": "TRUE"},
           "CMAKE_DISABLE_PRECOMPILE_HEADERS": {"value": "TRUE"}
@@ -36,7 +36,7 @@
         "description": "Run Clang Tidy and apply fixes",
         "binaryDir": "${sourceDir}/.build/clang-tidy-fix",
         "cacheVariables": {
-          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-17;--fix"}
+          "CMAKE_CXX_CLANG_TIDY": {"value": "clang-tidy-20;--fix"}
         }
       },
       {

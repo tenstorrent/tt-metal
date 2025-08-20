@@ -207,10 +207,9 @@ To support work distribution, the kernel is updated so that each core processes 
         constexpr uint32_t cb_id_out = tt::CBIndex::c_16;
 
         const uint32_t tile_bytes = get_tile_size(cb_id_out);
-        const DataFormat data_format = get_dataformat(cb_id_out);
 
-        const InterleavedAddrGenFast<true> c = {
-            .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+        constexpr auto c_args = TensorAccessorArgs<0>();
+        const auto c = TensorAccessor(c_args, dst_addr, tile_bytes);
 
         // Each core writes only its assigned tiles
         for (uint32_t i = 0; i < num_tiles; ++i) {
@@ -241,7 +240,7 @@ The compute kernel does not handle IO directly and is not concerned with how wor
 
         // Instead of processing all tiles, we process only the assigned amount of tiles.
         for (uint32_t i = 0; i < num_output_tiles; ++i) {
-            acquire_dst();
+            tile_regs_acquire();
             // Same inner loop as in the single core example, only the outer loop is adjusted
             // to produce the assigned number of tiles.
             for (uint32_t kt = 0; kt < Kt; kt++) {
@@ -254,11 +253,14 @@ The compute kernel does not handle IO directly and is not concerned with how wor
                 cb_pop_front(cb_in1, 1);
             }
 
+            tile_regs_commit();
+            tile_regs_wait();
+
             cb_reserve_back(cb_out, 1);
             pack_tile(0, cb_out);
             cb_push_back(cb_out, 1);
 
-            release_dst();
+            tile_regs_release();
         }
     }
 
@@ -279,15 +281,13 @@ The reader kernel is responsible for reading the input data from the DRAM buffer
         constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
 
         const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-        const DataFormat in0_data_format = get_dataformat(cb_id_in0);
         const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
-        const DataFormat in1_data_format = get_dataformat(cb_id_in1);
 
-        const InterleavedAddrGenFast<true> a = {
-            .bank_base_address = src0_addr, .page_size = in0_tile_bytes, .data_format = in0_data_format};
+        constexpr auto a_args = TensorAccessorArgs<0>();
+        const auto a = TensorAccessor(a_args, src0_addr, in0_tile_bytes);
 
-        const InterleavedAddrGenFast<true> b = {
-            .bank_base_address = src1_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
+        constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
+        const auto b = TensorAccessor(b_args, src1_addr, in1_tile_bytes);
 
         // Loop through the output tiles assigned to this core
         for (uint32_t output_tile = 0; output_tile < num_output_tiles; output_tile++) {
@@ -333,19 +333,24 @@ With the work distribution calculated, you can now create the kernels and set up
 .. code-block:: cpp
 
     MathFidelity math_fidelity = MathFidelity::HiFi4;  // High fidelity math for accurate results
+    std::vector<uint32_t> reader_args;
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_multi_core/kernels/dataflow/reader_mm_output_tiles_partitioned.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = {}});
+            .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
 
+    std::vector<uint32_t> writer_args;
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_multi_core/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
         all_cores,
         tt_metal::DataMovementConfig{
-            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = {}});
+            .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args});
 
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,

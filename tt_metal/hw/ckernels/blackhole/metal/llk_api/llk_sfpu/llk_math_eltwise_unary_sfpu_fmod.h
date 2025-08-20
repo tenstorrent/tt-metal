@@ -20,7 +20,7 @@ inline void llk_math_eltwise_unary_sfpu_fmod_init(uint param0, uint param1) {
 template <bool APPROXIMATE>
 inline void llk_math_eltwise_unary_sfpu_fmod(
     uint dst_index, uint param0, uint param1, int vector_mode = (int)VectorMode::RC) {
-    llk_math_eltwise_unary_sfpu_params<APPROXIMATE>(
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_fmod<APPROXIMATE>, dst_index, vector_mode, param0, param1);
 }
 

@@ -6,6 +6,8 @@
 
 #include "profiler_no_op_program_factory.hpp"
 
+#include <enchantum/enchantum.hpp>
+
 namespace ttml::metal::ops::profiler_no_op::device {
 
 ProfilerNoopOperation::program_factory_t ProfilerNoopOperation::select_program_factory(
@@ -27,14 +29,14 @@ void ProfilerNoopOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor.device()->arch() == tt::ARCH::WORMHOLE_B0,
             "ProfilerNoop operation is only supported on Wormhole. Device arch: {}. Tensor name: {}",
-            magic_enum::enum_name(tensor.device()->arch()),
+            enchantum::to_string(tensor.device()->arch()),
             name);
 
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
             "ProfilerNoop operation requires '{}' to be on DEVICE. Got storage type: '{}'",
             name,
-            magic_enum::enum_name(tensor.storage_type()));
+            enchantum::to_string(tensor.storage_type()));
 
         TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
 
@@ -42,26 +44,26 @@ void ProfilerNoopOperation::validate_on_program_cache_miss(
             tensor.layout() == required_layout,
             "Tensor '{}' must have layout '{}', but got '{}'",
             name,
-            magic_enum::enum_name(required_layout),
-            magic_enum::enum_name(tensor.layout()));
+            enchantum::to_string(required_layout),
+            enchantum::to_string(tensor.layout()));
 
         TT_FATAL(
             tensor.dtype() == required_dtype,
             "Tensor '{}' must have data type '{}', but got '{}'",
             name,
-            magic_enum::enum_name(required_dtype),
-            magic_enum::enum_name(tensor.dtype()));
+            enchantum::to_string(required_dtype),
+            enchantum::to_string(tensor.dtype()));
 
         TT_FATAL(
             tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
             "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
             name,
-            magic_enum::enum_name(tensor.memory_config().memory_layout()));
+            enchantum::to_string(tensor.memory_config().memory_layout()));
     };
 
     const auto& input_tensor = tensor_args.input;
     const auto& preallocated_output_tensor = tensor_args.preallocated_output;
-    check_tensor(input_tensor, "Input", tt::tt_metal::Layout::TILE, tt::tt_metal::DataType::BFLOAT16);
+    check_tensor(input_tensor, "Input", tt::tt_metal::Layout::ROW_MAJOR, tt::tt_metal::DataType::BFLOAT16);
     if (preallocated_output_tensor.has_value()) {
         check_tensor(
             preallocated_output_tensor.value(),
@@ -108,9 +110,11 @@ ttsl::hash::hash_t ProfilerNoopOperation::compute_program_hash(
 }
 
 std::tuple<operation_attributes_t, tensor_args_t> ProfilerNoopOperation::invoke(
-    const ttnn::Tensor& input_tensor, const std::optional<ttnn::Tensor>& preallocated_output) {
+    const ttnn::Tensor& input_tensor,
+    const std::string& identifier,
+    const std::optional<ttnn::Tensor>& preallocated_output) {
     return {
-        operation_attributes_t{},
+        operation_attributes_t{.identifier = identifier},
         tensor_args_t{
             .input = input_tensor,
             .preallocated_output = preallocated_output,

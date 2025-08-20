@@ -1,1 +1,1 @@
-../../../ttnn/integration_tests/ufld_v2/test_ttnn_ufld_v2.py
+../../../../models/demos/ufld_v2/tests/pcc/test_ttnn_ufld_v2.py

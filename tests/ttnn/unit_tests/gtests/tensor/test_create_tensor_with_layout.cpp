@@ -40,7 +40,7 @@ class CreateTensorWithLayoutTest : public ttnn::TTNNFixtureWithDevice,
                                    public ::testing::WithParamInterface<CreateTensorParams> {};
 
 TEST_P(CreateTensorWithLayoutTest, Tile) {
-    CreateTensorParams params = GetParam();
+    const CreateTensorParams& params = GetParam();
 
     auto tensor = tt::tt_metal::create_device_tensor(TensorSpec(params.inputs.shape, params.inputs.layout), device_);
     EXPECT_EQ(tensor.padded_shape(), params.expected.padded_shape);

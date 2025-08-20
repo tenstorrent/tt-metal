@@ -34,7 +34,7 @@ TEST_F(AutogradTest, TestSum) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data1 = {1.F, 2.F, 3.F, 4.F};
     std::vector<float> test_data2 = {4.F, 3.F, 2.F, 1.F};
-    auto shape = ttml::core::create_shape({1, 1, 1, 4});
+    auto shape = ttnn::Shape({1, 1, 1, 4});
     auto tensor1 = ttml::core::from_vector(test_data1, shape, device);
     auto tensor2 = ttml::core::from_vector(test_data2, shape, device);
 
@@ -63,7 +63,7 @@ TEST_F(AutogradTest, TestMul) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data1 = {1.F, 2.F, 3.F, 4.F};
     std::vector<float> test_data2 = {4.F, 3.F, 2.F, 1.F};
-    auto shape = ttml::core::create_shape({1, 1, 1, 4});
+    auto shape = ttnn::Shape({1, 1, 1, 4});
     auto tensor1 = ttml::core::from_vector(test_data1, shape, device);
     auto tensor2 = ttml::core::from_vector(test_data2, shape, device);
 
@@ -87,14 +87,14 @@ TEST_F(AutogradTest, BroadCastBatchTest) {
     using namespace ttml::ops;
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data1 = {1.F, 2.F, 3.F, 4.F};
-    auto shape = ttml::core::create_shape({1, 1, 1, 4});
+    auto shape = ttnn::Shape({1, 1, 1, 4});
     auto tensor1 = ttml::core::from_vector(test_data1, shape, device);
     auto t1 = ttml::autograd::create_tensor(tensor1);
     uint32_t new_batch = 4;
     auto res = ttml::ops::broadcast_batch(t1, new_batch);
     res->backward();
     auto t1_back = ttml::core::to_vector(t1->get_grad());
-    auto batch_shape = ttml::core::create_shape({4, 1, 1, 4});
+    auto batch_shape = ttnn::Shape({4, 1, 1, 4});
     auto new_shape = res->get_value().logical_shape();
     auto back_shape = t1->get_grad().logical_shape();
 

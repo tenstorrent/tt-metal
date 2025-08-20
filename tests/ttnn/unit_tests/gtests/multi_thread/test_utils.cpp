@@ -22,7 +22,6 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/ccl/erisc_datamover_builder_helper.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 
 namespace ttnn {
@@ -49,22 +48,6 @@ static constexpr size_t TEST_EDM_FABRIC_SUBDEVICE_INDEX = 1;
 using namespace tt;
 using namespace tt_metal;
 
-Tensor dispatch_ops_to_device(IDevice* dev, Tensor input_tensor, QueueId cq_id) {
-    using ttnn::operations::unary::UnaryOpType;
-    using ttnn::operations::unary::UnaryWithParam;
-
-    Tensor output_tensor = ttnn::mul_sfpu(cq_id, input_tensor, 2);
-    for (int i = 0; i < 3; i++) {
-        output_tensor = ttnn::neg(cq_id, output_tensor);
-        output_tensor = ttnn::neg(cq_id, output_tensor);
-        output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
-    }
-    output_tensor = ttnn::neg(cq_id, output_tensor);
-    output_tensor = ttnn::mul_sfpu(cq_id, output_tensor, 2);
-    output_tensor = ttnn::add_sfpu(cq_id, output_tensor, 128);
-    return output_tensor;
-}
-
 SubdeviceInfo create_subdevices(const std::vector<IDevice*>& devices) {
     SubdeviceInfo subdevice_info;
     std::unordered_map<chip_id_t, SubDeviceManagerId> sub_device_manager_ids;
@@ -80,7 +63,7 @@ SubdeviceInfo create_subdevices(const std::vector<IDevice*>& devices) {
             {device->id(), device->get_sub_device_ids().at(TEST_WORKERS_SUBDEVICE_INDEX)});
         subdevice_info.fabric_subdevice_id.insert(
             {device->id(), device->get_sub_device_ids().at(TEST_EDM_FABRIC_SUBDEVICE_INDEX)});
-        device->set_sub_device_stall_group({subdevice_info.worker_subdevice_id.at(device->id())});
+        device->set_sub_device_stall_group({{subdevice_info.worker_subdevice_id.at(device->id())}});
     }
 
     return subdevice_info;
@@ -105,7 +88,7 @@ void setup_test_with_persistent_fabric(
     std::optional<SubdeviceInfo>& subdevice_managers,
     std::optional<std::vector<Program>>& fabric_programs,
     std::vector<Program*>& fabric_program_ptrs,
-    std::optional<ttnn::ccl::EdmLineFabricOpInterface>& line_fabric,
+    std::optional<tt::tt_fabric::EdmLineFabricOpInterface>& line_fabric,
     std::optional<size_t> num_links) {
     log_info(tt::LogTest, "Enabling persistent fabric");
     fabric_programs = std::vector<Program>(devices.size());
@@ -115,7 +98,7 @@ void setup_test_with_persistent_fabric(
             return &p;
         });
 
-    line_fabric = ttnn::ccl::EdmLineFabricOpInterface(devices, fabric_program_ptrs, num_links.value_or(1));
+    line_fabric = tt::tt_fabric::EdmLineFabricOpInterface(devices, fabric_program_ptrs, num_links.value_or(1));
     line_fabric->set_firmware_context_switch_interval(0);
 
     TT_FATAL(fabric_programs.has_value(), "Fabric programs must be set if fabric is enabled");
@@ -129,55 +112,20 @@ void setup_test_with_persistent_fabric(
 void persistent_fabric_teardown_sequence(
     const std::vector<IDevice*>& devices,
     std::optional<SubdeviceInfo>& subdevice_managers,
-    ttnn::ccl::EdmLineFabricOpInterface& line_fabric,
+    tt::tt_fabric::EdmLineFabricOpInterface& line_fabric,
     tt::tt_fabric::TerminationSignal termination_mode) {
     log_info(tt::LogTest, "Tearing down fabric");
 
     // Wait for workers to finish
-    auto d0_worker_subdevice = devices[0]->get_sub_device_ids()[TEST_WORKERS_SUBDEVICE_INDEX];
-    tt_metal::Finish(devices[0]->command_queue(), {subdevice_managers->worker_subdevice_id.at(devices[0]->id())});
+    tt_metal::Finish(devices[0]->command_queue(), {{subdevice_managers->worker_subdevice_id.at(devices[0]->id())}});
 
     // Teardown the fabric
     line_fabric.teardown_from_host(termination_mode);
 
     // wait for fabric teardown to finish
     std::ranges::for_each(devices, [&](IDevice* d) {
-        tt_metal::Finish(d->command_queue(), {subdevice_managers->fabric_subdevice_id.at(d->id())});
+        tt_metal::Finish(d->command_queue(), {{subdevice_managers->fabric_subdevice_id.at(d->id())}});
     });
 }
 
-std::tuple<
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore,
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore,
-    ttnn::global_semaphore::MultiDeviceGlobalSemaphore>
-create_global_semaphores(std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device, IDevice* device) {
-    auto from_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device->get_devices(),
-        device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-        0,                             // initial value
-        tt::tt_metal::BufferType::L1,  // buffer type
-        10                             // attempts
-    );
-
-    auto to_remote_multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device->get_devices(),
-        device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-        0,                             // initial value
-        tt::tt_metal::BufferType::L1,  // buffer type
-        10                             // attempts
-    );
-
-    auto multi_device_global_semaphore = ttnn::global_semaphore::create_global_semaphore_with_same_address(
-        mesh_device->get_devices(),
-        device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
-        0,                             // initial value
-        tt::tt_metal::BufferType::L1,  // buffer type
-        10                             // attempts
-    );
-
-    return {
-        from_remote_multi_device_global_semaphore,
-        to_remote_multi_device_global_semaphore,
-        multi_device_global_semaphore};
-}
 }  // namespace ttnn::distributed::test

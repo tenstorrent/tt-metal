@@ -15,8 +15,6 @@ namespace ttnn {
 
 void AllGatherConcat::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     const auto input_core_ranges = input_tensor.buffer()->shard_spec().grid().ranges();
     const auto& padded_input_shape = input_tensor.padded_shape();
@@ -112,7 +110,6 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherConcat::create_program_at
     }
 
     log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_concat_llama_sharded is called");
-    CoreCoord compute_with_storage_grid_size = input_tensors[0].device()->compute_with_storage_grid_size();
     return all_gather_concat_llama_sharded(
         input_tensors[0],
         input_tensors[1],

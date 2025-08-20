@@ -22,10 +22,11 @@ void MAIN {
 
     constexpr bool use_pack_untilize = tiles_per_row <= MAX_PACK_UNTILIZE_WIDTH;
 
+    compute_kernel_hw_startup(src_cb_id, out_cb_id0);
     if constexpr (use_pack_untilize) {
         pack_untilize_init<tiles_per_row>(src_cb_id, out_cb_id0);
     } else {
-        untilize_init(src_cb_id, out_cb_id0);
+        untilize_init(src_cb_id);
     }
 
     constexpr uint32_t tiles_per_block = block_size * tiles_per_row;

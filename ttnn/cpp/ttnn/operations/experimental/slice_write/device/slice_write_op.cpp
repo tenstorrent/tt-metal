@@ -15,7 +15,6 @@ namespace ttnn::operations::experimental {
 void SliceWriteDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     using namespace tt::constants;
-    const bool has_step = std::any_of(this->step.cbegin(), this->step.cend(), [](uint32_t s) { return s != 1; });
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0).value();
     const auto output_padded_shape = output_tensor.padded_shape();
@@ -55,8 +54,11 @@ void SliceWriteDeviceOperation::validate_with_output_tensors(
         "Slice write doesn't support slicing along the last dimension. Slice start [-1] should be 0");
     TT_FATAL(
         this->slice_end[-1] == output_padded_shape[-1],
-        "Slice write doesn't support slicing along the last dimension. Slice end [-1] should be equal to output shape "
-        "[-1]");
+        "Slice write doesn't support slicing along the last dimension. Slice end [-1] {} should be equal to output "
+        "shape "
+        "[-1] {}",
+        this->slice_end[-1],
+        output_padded_shape[-1]);
 }
 
 std::vector<ttnn::Tensor> SliceWriteDeviceOperation::create_output_tensors(

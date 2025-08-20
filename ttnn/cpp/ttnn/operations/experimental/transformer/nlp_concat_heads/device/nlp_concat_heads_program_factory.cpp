@@ -7,6 +7,7 @@
 #include <tt-metalium/util.hpp>
 #include "nlp_concat_heads_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::transformer {
 
@@ -16,8 +17,6 @@ using namespace tt;
 tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
     const auto& ashape = a.padded_shape();
-
-    tt_metal::IDevice* device = a.device();
 
     tt::DataFormat cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
 
@@ -64,7 +63,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
     }
     uint32_t g1_numcores = core_group_1.num_cores();
-    uint32_t g2_numcores = core_group_2.num_cores();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
@@ -79,7 +77,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
     uint32_t src0_cb_index = 0, out_cb_index = 16;
 
     bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
     tt::tt_metal::KernelHandle reader_kernel_id = 0, writer_kernel_id = 0;
     if (in_sharded) {
@@ -112,11 +109,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
             (std::uint32_t)in0_c,
             (std::uint32_t)in0_HtWt,
         };
-        std::vector<uint32_t> writer_compile_time_args = {
-            // interleaved accessor args
-            (std::uint32_t)src0_cb_index,
-            (std::uint32_t)out_is_dram,
-        };
+        std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
+        tt_metal::TensorAccessorArgs(*out_buffer).append_to(writer_compile_time_args);
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads/device/kernels/dataflow/"

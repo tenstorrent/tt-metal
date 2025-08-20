@@ -58,7 +58,7 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
 
     // Just wait a few seconds to let the link retrain
     std::this_thread::sleep_for(std::chrono::seconds(5));
-    vector<string> expected_strings;
+    vector<std::string> expected_strings;
     for (const CoreCoord &eth_core : device->get_active_ethernet_cores()) {
         if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device->id(), eth_core)) {
             continue;

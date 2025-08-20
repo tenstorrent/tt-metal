@@ -30,20 +30,10 @@ void fabric_set_unicast_route(volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_head
 #if defined(DYNAMIC_ROUTING_ENABLED)
     if constexpr (std::is_same_v<SocketT, SocketSenderInterface>) {
         fabric_set_unicast_route(
-            (MeshPacketHeader*)fabric_header_addr,
-            eth_chan_directions::COUNT,
-            0,
-            socket.downstream_chip_id,
-            socket.downstream_mesh_id,
-            0);
+            fabric_header_addr, eth_chan_directions::COUNT, 0, socket.downstream_chip_id, socket.downstream_mesh_id, 0);
     } else if constexpr (std::is_same_v<SocketT, SocketReceiverInterface>) {
         fabric_set_unicast_route(
-            (MeshPacketHeader*)fabric_header_addr,
-            eth_chan_directions::COUNT,
-            0,
-            socket.upstream_chip_id,
-            socket.upstream_mesh_id,
-            0);
+            fabric_header_addr, eth_chan_directions::COUNT, 0, socket.upstream_chip_id, socket.upstream_mesh_id, 0);
     } else {
         static_assert(always_false<SocketT>, "Unsupported socket type passed to set_fabric_unicast_route");
     }
@@ -138,7 +128,8 @@ void fabric_socket_notify_receiver(
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{downstream_bytes_sent_noc_addr, socket.bytes_sent});
     fabric_connection.wait_for_empty_write_slot();
-    fabric_connection.send_payload_blocking_from_address((uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 #endif
 
@@ -265,7 +256,8 @@ void fabric_socket_notify_sender(
     fabric_header_addr->to_noc_unicast_inline_write(
         NocUnicastInlineWriteCommandHeader{upstream_bytes_acked_noc_addr, socket.bytes_acked});
     fabric_connection.wait_for_empty_write_slot();
-    fabric_connection.send_payload_blocking_from_address((uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
+    fabric_connection.send_payload_flush_blocking_from_address(
+        (uint32_t)fabric_header_addr, sizeof(PACKET_HEADER_TYPE));
 }
 #endif
 

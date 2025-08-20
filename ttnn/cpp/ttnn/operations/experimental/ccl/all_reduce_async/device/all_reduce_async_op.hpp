@@ -34,6 +34,7 @@ struct AllReduceAsync {
     const GlobalSemaphore semaphore;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     bool use_noc1_only;
+    bool use_optimal_ccl_for_llama;
     uint32_t cluster_axis;
     const distributed::MeshDevice* mesh_device;
 
@@ -46,6 +47,7 @@ struct AllReduceAsync {
         GlobalSemaphore semaphore,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         bool use_noc1_only,
+        bool use_optimal_ccl_for_llama,
         uint32_t cluster_axis,
         const distributed::MeshDevice* mesh_device) :
         num_links(num_links),
@@ -56,6 +58,7 @@ struct AllReduceAsync {
         semaphore(semaphore),
         sub_device_id(sub_device_id),
         use_noc1_only(use_noc1_only),
+        use_optimal_ccl_for_llama(use_optimal_ccl_for_llama),
         cluster_axis(cluster_axis),
         mesh_device(mesh_device) {}
     // Add attributes method for reflection
@@ -70,6 +73,7 @@ struct AllReduceAsync {
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
         attrs.emplace_back("use_noc1_only", use_noc1_only);
+        attrs.emplace_back("use_optimal_ccl_for_llama", use_optimal_ccl_for_llama);
         attrs.emplace_back("cluster_axis", cluster_axis);
         return attrs;
     }
@@ -98,7 +102,8 @@ AllReduceAsync create_all_reduce_async_struct(
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphores,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool use_noc1_only);
+    bool use_noc1_only,
+    bool use_optimal_ccl_for_llama);
 
 }  // namespace all_reduce_async_detail
 }  // namespace ccl
@@ -120,7 +125,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_async_minimal_multi_cor
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    bool use_noc1_only);
+    bool use_noc1_only,
+    bool use_optimal_ccl_for_llama);
 
 namespace operations {
 namespace experimental {
@@ -137,7 +143,8 @@ Tensor all_reduce_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool use_noc1_only = false);
+    bool use_noc1_only = false,
+    bool use_optimal_ccl_for_llama = false);
 
 std::vector<Tensor> all_reduce_async(
     const std::vector<Tensor>& input_tensors,
@@ -150,7 +157,8 @@ std::vector<Tensor> all_reduce_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt,
-    bool use_noc1_only = false);
+    bool use_noc1_only = false,
+    bool use_optimal_ccl_for_llama = false);
 
 }  // namespace ccl
 }  // namespace experimental

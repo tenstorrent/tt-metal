@@ -19,14 +19,15 @@ class Conv:
             packer_l1_acc=False,
             math_approx_mode=False,
         )
+        self.conv_output_dtype = conv_param.dtype
         self.conv_config = ttnn.Conv2dConfig(
-            dtype=conv_param.dtype,
             weights_dtype=ttnn.bfloat8_b,
             activation=activation,
             shard_layout=conv_param.shard_layout,
             reshard_if_not_optimal=conv_param.reshard_if_not_optimal,
             deallocate_activation=conv_param.deallocate_activation,
             enable_act_double_buffer=True,
+            enable_weights_double_buffer=True,
             enable_split_reader=True if conv_param.shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED else False,
             output_layout=ttnn.TILE_LAYOUT,
         )
@@ -80,5 +81,6 @@ class Conv:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            dtype=self.conv_output_dtype,
         )
         return x, output_height, output_width

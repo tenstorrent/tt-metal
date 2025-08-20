@@ -41,7 +41,8 @@ using std::uint16_t;
 using std::uint32_t;
 using std::uint64_t;
 
-const ll_api::memory& get_risc_binary(std::string_view path, ll_api::memory::Loading loading) {
+const ll_api::memory& get_risc_binary(
+    std::string_view path, ll_api::memory::Loading loading, std::function<void(ll_api::memory&)> update_callback) {
     static struct {
       std::unordered_map<std::string, std::unique_ptr<ll_api::memory const>> map;
       std::mutex mutex;
@@ -50,15 +51,19 @@ const ll_api::memory& get_risc_binary(std::string_view path, ll_api::memory::Loa
 
     std::unique_lock lock(cache.mutex);
     auto [slot, inserted] = cache.map.try_emplace(std::string(path));
-    ll_api::memory const* ptr = nullptr;
+    const ll_api::memory* ptr = nullptr;
     if (inserted) {
       // We're the first with PATH. Create and insert.
       lock.unlock();
-      ptr = new ll_api::memory(path, loading);
+      ll_api::memory* mutable_ptr = new ll_api::memory(path, loading);
+      if (update_callback) {
+          update_callback(*mutable_ptr);
+      }
 
       lock.lock();
       // maps have iterator stability, so SLOT is still valid.
-      slot->second = decltype(slot->second)(ptr);
+      slot->second = decltype(slot->second)(mutable_ptr);
+      ptr = mutable_ptr;
       // We can't wake just those waiting on this slot, so wake them
       // all. Should be a rare event anyway.
       cache.cvar.notify_all();
@@ -126,10 +131,16 @@ void send_reset_go_signal(chip_id_t chip, const CoreCoord& virtual_core) {
     uint64_t go_signal_adrr =
         tt_metal::MetalContext::instance().hal().get_dev_addr(dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG);
 
-    go_msg_t reset_msg;
+    go_msg_t reset_msg{};
     reset_msg.signal = RUN_MSG_RESET_READ_PTR_FROM_HOST;
     tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         &reset_msg, sizeof(go_msg_t), tt_cxy_pair(chip, virtual_core), go_signal_adrr);
+    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(chip);
+    uint32_t go_message_index_addr = tt_metal::MetalContext::instance().hal().get_dev_addr(
+        dispatch_core_type, tt_metal::HalL1MemAddrType::GO_MSG_INDEX);
+    uint32_t zero = 0;
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        &zero, sizeof(uint32_t), tt_cxy_pair(chip, virtual_core), go_message_index_addr);
 }
 
 void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t *msg, go_msg_t *go_msg,  uint64_t base_addr, bool send_go) {
@@ -175,7 +186,6 @@ bool test_load_write_read_risc_binary(
                                    .hal()
                                    .get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx)
                                    .local_init_addr;
-    auto core_type = tt::tt_metal::MetalContext::instance().hal().get_programmable_core_type(core_type_idx);
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
@@ -203,13 +213,6 @@ void write_binary_to_address(ll_api::memory const& mem, chip_id_t chip_id, const
         tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             &*mem_ptr, len_words * sizeof(uint32_t), tt_cxy_pair(chip_id, core), address);
     });
-}
-
-CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
-    return tt::tt_metal::MetalContext::instance()
-        .get_cluster()
-        .get_soc_desc(chip_id)
-        .get_preferred_worker_core_for_dram_view(dram_channel_id);
 }
 
 namespace internal_ {
@@ -291,10 +294,6 @@ void wait_until_cores_done(
             }
         }
         loop_count++;
-
-        // Continuously polling cores on simulator can cause it to run much slower than real hardware.
-        if (is_simulator)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other

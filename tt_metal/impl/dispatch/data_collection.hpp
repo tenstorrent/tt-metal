@@ -5,10 +5,9 @@
 #include <device.hpp>
 #include <host_api.hpp>
 #include <stdint.h>
+#include <optional>
 #include <vector>
 
-#include "command_queue_interface.hpp"
-#include "tt_backend_api_types.hpp"
 #include "program/program_impl.hpp"
 
 enum class CoreType;
@@ -24,7 +23,6 @@ enum data_collector_t {
     DISPATCH_DATA_SEMAPHORE,
     DISPATCH_DATA_RTARGS,
     DISPATCH_DATA_BINARY,
-    DISPATCH_DATA_COUNT
 };
 
 /* Record a single dispatch write, to be dumped with stats on program exit. Should only be called once per transaction
@@ -34,10 +32,13 @@ enum data_collector_t {
  *      program - program this transaction is part of.
  *      type - what type of transaction this counts as, one of data_collector_t.
  *      transaction_size - size in bytes of this transaction.
- *      riscv - riscv core that this transaction is used for, only relevant for DISPATCH_DATA_BINARY transactions.
+ *      processor - processor that this transaction is used for, only relevant for DISPATCH_DATA_BINARY transactions.
  */
 void RecordDispatchData(
-    uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv = RISCV::MAX);
+    uint64_t program_id,
+    data_collector_t type,
+    uint32_t transaction_size,
+    std::optional<tt_metal::HalProcessorIdentifier> processor = std::nullopt);
 
 // Record the KernelGroups present in this program (per core type). Should only be called per program created, not
 // program enqueued.

@@ -1,0 +1,240 @@
+tests:
+  0:
+    name: "DRAM Packet Sizes"
+
+  1:
+    name: "DRAM Core Locations"
+    comment: |
+      This test appears to be broken. The graph is showing numbers that dont make sense.
+
+  3:
+    name: "DRAM Directed Ideal"
+    comment: |
+      This test shows the ideal read and write bandwidth when transfering multiple 8KB packets.
+      The read bandwidth is what is expected, however write bandwidth is expected to be 64
+      B/cycle rather than 35 B/cycle. There may be some configuration problem with the dram
+      controller/phy or this may be the physical limit of the dram.
+
+  4:
+    name: "One to One Packet Sizes"
+
+  5:
+    name: "One from One Packet Sizes"
+
+  6:
+    name: "One to All Unicast 2x2 Packet Sizes"
+
+  7:
+    name: "One to All Unicast 5x5 Packet Sizes"
+
+  8:
+    name: "One to All Unicast Packet Sizes"
+
+  9:
+    name: "One to All Multicast 2x2 Packet Sizes"
+
+  10:
+    name: "One to All Multicast 5x5 Packet Sizes"
+
+  11:
+    name: "One to All Multicast Packet Sizes"
+
+  12:
+    name: "One to All Multicast Linked 2x2 Packet Sizes"
+
+  13:
+    name: "One to All Multicast Linked 5x5 Packet Sizes"
+
+  14:
+    name: "One to All Multicast Linked Packet Sizes"
+
+  15:
+    name: "One from All Packet Sizes"
+
+  16:
+    name: "Loopback Packet Sizes"
+
+  17:
+    name: "Reshard Hardcoded Small"
+    comment: |
+      This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions
+      and transactions size. Reshard perf is dictated based on the number of transactions and the
+      transaction size. A small number of transactions will result in small perf due to large
+      round trip latency. It is suggested to use a large number of transactions, with large transaction
+      size to get the best performance.
+
+  18:
+    name: "Reshard Hardcoded Medium"
+    comment: |
+      This is a 2 reader reshard. It seems to be getting expected perf based on number of transactions
+      and transactions size. Reshard perf is dictated based on the number of transactions and the
+      transaction size. A small number of transactions will result in small perf due to large
+      round trip latency. It is suggested to use a large number of transactions, with large transaction
+      size to get the best performance.
+
+  19:
+    name: "Reshard Hardcoded Many Cores"
+    comment: |
+      This is a 8 reader reshard. It seems to be getting expected perf based on number of transactions
+      and transactions size. Reshard perf is dictated based on the number of transactions and the
+      transaction size. A small number of transactions will result in small perf due to large
+      round trip latency. It is suggested to use a large number of transactions, with large transaction
+      size to get the best performance.
+
+  20:
+    name: "Reshard Hardcoded 2 Cores to Many Cores"
+    comment: |
+      This is a 2 core to 8 reader reshard. It seems to be getting expected perf based on number of
+      transactions and transactions size. Reshard perf is dictated based on the number of transactions
+      and the transaction size. A small number of transactions will result in small perf due to large
+      round trip latency. It is suggested to use a large number of transactions, with large transaction
+      size to get the best performance.
+
+  21:
+    name: "Conv Act with halo 3x3"
+    comment: |
+      Convolution has a large number of transactions and a small transaction size. The performance is
+      similar to what it would be for a similarly configured one from one. Convolution may benefit from
+      having multiple cores doing different parts of the convolution at the same time. This would
+      result in a larger effective bandwidth.
+
+  22:
+    name: "Conv Act with halo 3x3 Small"
+    comment: |
+      Convolution has a large number of transactions and a small transaction size. The performance is
+      similar to what it would be for a similarly configured one from one. Convolution may benefit from
+      having multiple cores doing different parts of the convolution at the same time. This would
+      result in a larger effective bandwidth.
+
+  23:
+    name: "Conv Halo Gather"
+    comment: |
+      The performance of this test is similar to how other tests perform based on the number of
+      transactions and the transaction size, but with extra degradation due to needing to read
+      parameters from L1.
+
+  30:
+    name: "One from All Directed Ideal"
+
+  50:
+    name: "One to One Directed Ideal"
+
+  51:
+    name: "One from One Directed Ideal"
+
+  52:
+    name: "One to All Unicast Directed Ideal"
+
+  53:
+    name: "One to All Multicast Directed Ideal"
+
+  54:
+    name: "One to All Multicast Linked Directed Ideal"
+
+  55:
+    name: "Loopback Directed Ideal"
+
+  61:
+    name: "DRAM Interleaved Page Numbers"
+
+  62:
+    name: "DRAM Interleaved Page Core Locations"
+
+  63:
+    name: "DRAM Interleaved Page Read Numbers"
+
+  64:
+    name: "DRAM Interleaved Page Write Numbers"
+
+  65:
+    name: "DRAM Interleaved Page Directed Ideal"
+
+  66:
+    name: "L1 Interleaved Page Numbers"
+
+  67:
+    name: "L1 Interleaved Page Core Locations"
+
+  68:
+    name: "L1 Interleaved Page Read Numbers"
+
+  69:
+    name: "L1 Interleaved Page Write Numbers"
+
+  71:
+    name: "L1 Interleaved Page Directed Ideal"
+
+  72:
+    name: "DRAM Interleaved Page Read Noc Swap"
+
+  73:
+    name: "DRAM Interleaved Page Write Noc Swap"
+
+  74:
+    name: "L1 Interleaved Page Read Noc Swap"
+
+  75:
+    name: "L1 Interleaved Page Write Noc Swap"
+
+  80:
+    name: "One Packet Read Sizes"
+
+  81:
+    name: "One Packet Write Sizes"
+
+  82:
+    name: "One Packet Read Directed Ideal"
+
+  83:
+    name: "One Packet Write Directed Ideal"
+
+  100:
+    name: "Multicast Schemes (Loopback Enabled)"
+
+  101:
+    name: "Multicast Schemes (Loopback Disabled)"
+
+  150:
+    name: "One to One Virtual Channels"
+
+  151:
+    name: "One from One Virtual Channels"
+
+  152:
+    name: "One to All Unicast Virtual Channels"
+
+  153:
+    name: "One from All Virtual Channels"
+
+  154:
+    name: "All to All Virtual Channels"
+
+  155:
+    name: "All from All Virtual Channels"
+
+  200:
+    name: "Deinterleave Single Core"
+    comment: |
+      With a single core the graphs shows performance increases as the theshold increases.
+      This is because frequent flushes dont hide the round trip latency.
+
+  201:
+    name: "Deinterleave Multi Core"
+    comment: |
+      With multiple cores the graph shows that a small theshold always provides bad performance.
+      This is because frequent flushes dont hide the round trip latency. At larger thesholds,
+      the performance starts to fluctuate due to head-of-line blocking and unfairness in the NOC.
+      Performance fluctuates because the flush disturbes the steady state and will randomly create
+      traffic that sometimes has head of line blocking, and sometimes not.
+
+  300:
+    name: "All to All Directed Ideal"
+
+  301:
+    name: "All to All Packet Sizes"
+
+  310:
+    name: "All from All Directed Ideal"
+
+  311:
+    name: "All from All Packet Sizes"

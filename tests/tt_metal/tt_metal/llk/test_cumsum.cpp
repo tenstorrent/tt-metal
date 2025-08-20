@@ -10,7 +10,6 @@
 #include <map>
 #include <memory>
 #include <string>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -106,16 +105,16 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     tt_metal::CircularBufferConfig l1_src_cb_config = tt_metal::CircularBufferConfig(dram_buffer_size, {{0, tt::DataFormat::Float16_b}})
         .set_page_size(0, single_tile_size);
-    auto l1_src_cb = tt_metal::CreateCircularBuffer(program, core, l1_src_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_src_cb_config);
 
     auto dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
     tt_metal::CircularBufferConfig l1_dst_cb_config = tt_metal::CircularBufferConfig(dram_buffer_size, {{16, tt::DataFormat::Float16_b}})
         .set_page_size(16, single_tile_size);
-    auto l1_dst_cb = tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
 
-    string reader_kernel_name, writer_kernel_name;
-    std::map<string, string> defines = {};
+    std::string reader_kernel_name, writer_kernel_name;
+    std::map<std::string, std::string> defines = {};
     std::vector<uint32_t> compile_args = {};
 
     if (test_config.rowwise) {
@@ -143,7 +142,7 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    auto compute_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/cumsum.cpp",
         core,

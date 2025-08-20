@@ -6,26 +6,8 @@
 
 constexpr uint32_t INPUT_SIZE = 32;
 
-FORCE_INLINE uint64_t get_index_noc_address(uint32_t tile_idx, uint32_t offset = 0) {
-    const std::uint32_t index_tensor_addr = get_arg_val<uint32_t>(1);
-    constexpr bool index_stick_size_is_power_of_two = get_compile_time_arg_val(4) == 1;
-    constexpr bool index_is_dram = get_compile_time_arg_val(1) == 1;
-
-    if constexpr (index_stick_size_is_power_of_two) {
-        constexpr uint32_t index_log2_stick_size = get_compile_time_arg_val(5);
-        InterleavedPow2AddrGen<index_is_dram> index = {
-            .bank_base_address = index_tensor_addr, .log_base_2_of_page_size = index_log2_stick_size};
-        return get_noc_addr(tile_idx, index, offset);
-    } else {
-        constexpr uint32_t index_page_size = get_compile_time_arg_val(3);
-        InterleavedAddrGen<index_is_dram> index = {
-            .bank_base_address = index_tensor_addr, .page_size = index_page_size};
-        return get_noc_addr(tile_idx, index, offset);
-    }
-}
-
 FORCE_INLINE uint32_t get_index(uint32_t input_l1_addr, uint32_t idx) {
-    constexpr bool is_index_bfloat16 = get_compile_time_arg_val(6) == 1;
+    constexpr bool is_index_bfloat16 = get_compile_time_arg_val(5) == 1;
     if constexpr (is_index_bfloat16) {
         auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(input_l1_addr);
         union {
@@ -86,7 +68,7 @@ FORCE_INLINE void generate_mask(uint32_t index_l1_addr, uint32_t chunk_id, uint3
 }
 
 FORCE_INLINE void generate_zeros_cb(uint32_t input_l1_addr) {
-    constexpr bool is_output_bfloat16 = get_compile_time_arg_val(7) == 1;
+    constexpr bool is_output_bfloat16 = get_compile_time_arg_val(6) == 1;
     auto input_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(input_l1_addr);
 
     if constexpr (is_output_bfloat16) {
@@ -104,17 +86,17 @@ FORCE_INLINE void generate_zeros_cb(uint32_t input_l1_addr) {
 
 void kernel_main() {
     const uint32_t grad_tensor_addr = get_arg_val<uint32_t>(0);
+    const uint32_t index_tensor_addr = get_arg_val<uint32_t>(1);
     const uint32_t output_tensor_addr = get_arg_val<uint32_t>(2);
     const uint32_t tiles_per_hidden = get_arg_val<uint32_t>(3);
     const uint32_t hidden_offset = get_arg_val<uint32_t>(4);
     const uint32_t tiles_per_core = get_arg_val<uint32_t>(5);
 
-    constexpr bool grad_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool out_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr uint32_t max_tiles_per_core = get_compile_time_arg_val(8);
-    constexpr uint32_t batch_size = get_compile_time_arg_val(9);
-    constexpr uint32_t seq_len_tiles = get_compile_time_arg_val(10);
-    constexpr uint32_t num_embeddings = get_compile_time_arg_val(11);
+    constexpr uint32_t max_tiles_per_core = get_compile_time_arg_val(0);
+    constexpr uint32_t batch_size = get_compile_time_arg_val(1);
+    constexpr uint32_t seq_len_tiles = get_compile_time_arg_val(2);
+    constexpr uint32_t num_embeddings = get_compile_time_arg_val(3);
+    constexpr uint32_t index_page_size = get_compile_time_arg_val(4);
 
     constexpr uint32_t cb_grad = tt::CBIndex::c_0;
     constexpr uint32_t cb_index = tt::CBIndex::c_1;
@@ -125,14 +107,14 @@ void kernel_main() {
 
     constexpr uint32_t grad_page_size = get_tile_size(cb_grad);
     constexpr uint32_t out_page_size = get_tile_size(cb_id_out0);
-    constexpr DataFormat grad_data_format = get_dataformat(cb_grad);
-    constexpr DataFormat out_data_format = get_dataformat(cb_id_out0);
 
-    const InterleavedAddrGenFast<grad_is_dram> grad_s = {
-        .bank_base_address = grad_tensor_addr, .page_size = grad_page_size, .data_format = grad_data_format};
+    constexpr auto grad_args = TensorAccessorArgs<7>();
+    constexpr auto index_args = TensorAccessorArgs<grad_args.next_compile_time_args_offset()>();
+    constexpr auto out_args = TensorAccessorArgs<index_args.next_compile_time_args_offset()>();
 
-    const InterleavedAddrGenFast<out_is_dram> out_s = {
-        .bank_base_address = output_tensor_addr, .page_size = out_page_size, .data_format = out_data_format};
+    const auto grad_s = TensorAccessor(grad_args, grad_tensor_addr, grad_page_size);
+    const auto index_s = TensorAccessor(index_args, index_tensor_addr, index_page_size);
+    const auto out_s = TensorAccessor(out_args, output_tensor_addr, out_page_size);
 
     uint32_t index_block_size = get_tile_size(cb_index) >> 5;  // we only need 32 elements
     uint32_t index_l1_addr = get_write_ptr(cb_index);          // static
@@ -158,7 +140,7 @@ void kernel_main() {
 
     uint32_t grad_tile_idx = hidden_offset;
     for (uint32_t b = 0; b < batch_size; ++b) {
-        uint64_t index_seq_noc_addr = get_index_noc_address(b);
+        uint64_t index_seq_noc_addr = get_noc_addr(b, index_s);
         for (uint32_t s = 0; s < seq_len_tiles; ++s) {
             noc_async_read(index_seq_noc_addr, index_l1_addr, index_block_size);
             noc_async_read_barrier();

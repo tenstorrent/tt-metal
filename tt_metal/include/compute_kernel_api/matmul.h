@@ -262,4 +262,36 @@ ALWI void mm_block_init_short_with_dt(
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
 }
 
+// clang-format off
+/**
+ * A short version of matmul_block initialization.
+ * It is used to reconfigure srcA and srcB of the compute engine back to matmul mode.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                | Type     | Valid Range                               | Required |
+ * |----------------|------------------------------------------------------------|----------|-------------------------------------------|----------|
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)     | uint32_t | 0 to 31                                   | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)    | uint32_t | 0 to 31                                   | True     |
+ * | old_in0_cb_id  | The identifier of the old in0_cb_id circular buffer (CB)   | uint32_t | 0 to 31                                   | True     |
+ * | old_in1_cb_id  | The identifier of the old in1_cb_id circular buffer (CB)   | uint32_t | 0 to 31                                   | True     |
+ * | ct_dim         | The coloumn dimension for the output block.                | uint32_t | Must be equal to block B column dimension | False    |
+ * | rt_dim         | The row dimension for the output block.                    | uint32_t | Must be equal to block A row dimension    | False    |
+ * | kt_dim         | The inner dimension.                                       | uint32_t | Must be equal to block A column dimension | False    |
+ */
+// clang-format on
+ALWI void mm_block_init_short_with_both_dt(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t old_in0_cb_id,
+    uint32_t old_in1_cb_id,
+    const uint32_t transpose = 0,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1) {
+    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
+    MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
+    mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+}
+
 }  // namespace ckernel

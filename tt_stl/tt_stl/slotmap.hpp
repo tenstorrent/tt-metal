@@ -135,7 +135,6 @@ private:
         = default;
     };
 
-private:
     static constexpr index_type max_index = KeyT::max_index;
     static constexpr index_type invalid_index = std::numeric_limits<index_type>::max();
     std::vector<Slot> slots;

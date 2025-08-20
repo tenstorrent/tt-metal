@@ -17,28 +17,29 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
             return (
                 (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
                 (a == UINT16 && b == UINT16));
-        case SUB: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
-        case MUL: return ((a == FLOAT32 && b == FLOAT32) || (a == UINT16 && b == UINT16));
+        case SUB:
+        case MUL: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
         case DIV:
         case RSUB:
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
-        case SQUARED_DIFFERENCE:
-        case LOGICAL_AND:
         case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
+        case LOGICAL_AND:
         case LOGICAL_OR:
         case LOGICAL_XOR:
+        case SQUARED_DIFFERENCE:
         case GT:
         case LT:
-        case GTE:
-        case LTE:
+        case GE:
+        case LE:
         case EQ:
         case NE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
         case LCM:
         case GCD: return (a == INT32 && b == INT32);
         case LEFT_SHIFT:
-        case RIGHT_SHIFT: return ((a == INT32 || a == UINT32) && (b == INT32 || b == UINT32));
+        case RIGHT_SHIFT:
+        case LOGICAL_RIGHT_SHIFT: return ((a == INT32 || a == UINT32) && (b == INT32 || b == UINT32));
         case BITWISE_XOR:
         case BITWISE_OR:
         case BITWISE_AND: return ((a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
@@ -47,6 +48,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case DEQUANT:
         case MAXIMUM:
         case MINIMUM:
+        case XLOGY:
         case POWER: return true;
         default: return false;
     }
@@ -283,10 +285,10 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
             a_dim,
             b_dim);
 
-        if (i <= -5) {
+        if (i <= -6) {
             TT_FATAL(
                 a_dim == b_dim,
-                "Broadcasting rule violation for rank >= 5 : dim {}, Broadcast is supported upto rank 4, dim a: {}, "
+                "Broadcasting rule violation for rank >= 6 : dim {}, Broadcast is supported up to rank 5, dim a: {}, "
                 "dim b: {}",
                 i,
                 a_dim,
@@ -416,9 +418,9 @@ tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
 
     if (input_tensor_b.has_value()) {
         TT_ASSERT(
-            std::holds_alternative<DeviceStorage>(input_tensor_b->get_storage()),
+            std::holds_alternative<DeviceStorage>(input_tensor_b->storage()),
             "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(input_tensor_b->get_storage()));
+            tt::stl::get_active_type_name_in_variant(input_tensor_b->storage()));
 
         return operation::hash_operation<BinaryNgDeviceOperation>(
             attributes,
@@ -469,7 +471,8 @@ BinaryNgDeviceOperation::invoke(
             std::nullopt,
             memory_config.value_or(
                 output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
-            input_tensor_a.dtype(),
+            input_tensor_a.dtype(),  // TODO: For mixed dtypes we need to set this value to the appropriate dtype
+                                     // depending on which LLK is meant to be used.
             output_dtype,
             get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor),
             std::nullopt,

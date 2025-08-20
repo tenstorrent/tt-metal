@@ -1,0 +1,150 @@
+name: "[internal] Blackhole Multi-card Demo tests impl"
+
+on:
+  workflow_call:
+    inputs:
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
+        required: true
+        type: string
+      runner-label:
+        required: false
+        type: string
+        default: "BH-LLMBox"
+      extra-tag:
+        required: false
+        type: string
+        default: "pipeline-perf"
+      num_devices:
+        required: false
+        type: number
+        default: 4
+
+jobs:
+  multi-card-demo-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} performance"
+            arch: blackhole
+            cmd: LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel ${{ inputs.num_devices }}
+            owner_id: U05RWH3QUPM # Salar Hosseini
+          - name: "llama3.1-8b ${{ inputs.runner-label }} data-parallel=${{ inputs.num_devices }} stress"
+            arch: blackhole
+            cmd: LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-stress-1" --data_parallel ${{ inputs.num_devices }} --max_generated_tokens 22000
+            owner_id: U03PUAKE719 # Miguel Tairum
+    name: ${{ matrix.test-group.name }}
+    runs-on:
+      - "in-service"
+      - arch-blackhole
+      - "${{ inputs.runner-label }}"
+      - "${{ inputs.extra-tag }}"
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        LD_LIBRARY_PATH: /work/build/lib
+        PYTHONPATH: /work
+        TT_METAL_HOME: /work
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ inputs.extra-tag == 'pipeline-functional' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data' }}:/localdev/blackhole_demos/huggingface_data:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run demo regression tests
+        timeout-minutes: 70
+        run: |
+          if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
+            pip install -r /work/models/tt_transformers/requirements.txt
+          fi
+          ${{ matrix.test-group.cmd }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}
+  multi-card-demo-tests-large:
+    if: ${{ inputs.num_devices >= 4 }}
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: "llama3.3-70b ${{ inputs.runner-label }} batch-32 performance"
+            arch: blackhole
+            cmd: LLAMA_DIR=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.3-70B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32"
+            owner_id: U03PUAKE719 # Miguel Tairum
+    name: ${{ matrix.test-group.name }}
+    runs-on:
+      - "in-service"
+      - arch-blackhole
+      - "${{ inputs.runner-label }}"
+      - "${{ inputs.extra-tag }}"
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
+      env:
+        ARCH_NAME: ${{ inputs.arch }}
+        LOGURU_LEVEL: INFO
+        LD_LIBRARY_PATH: /work/build/lib
+        PYTHONPATH: /work
+        TT_METAL_HOME: /work
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - ${{ inputs.extra-tag == 'pipeline-functional' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data' }}:/localdev/blackhole_demos/huggingface_data:ro
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        with:
+          runner-label: ${{ inputs.runner-label }}
+      - name: Run demo regression tests
+        timeout-minutes: 70
+        run: |
+          if [[ "${{ matrix.test-group.name }}" == *"llama"* ]]; then
+            pip install -r /work/models/tt_transformers/requirements.txt
+          fi
+          ${{ matrix.test-group.cmd }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}

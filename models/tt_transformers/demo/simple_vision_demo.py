@@ -20,6 +20,7 @@ IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 import os
 import time
 
+import numpy as np
 import pytest
 import torch
 
@@ -44,8 +45,20 @@ def get_batch_sampler(temperature, top_p, tokenizer):
     return sample
 
 
+def create_random_image(width, height):
+    """Create a random RGB image of specified dimensions."""
+    # Generate random RGB values
+    random_array = np.random.randint(0, 256, (height, width, 3), dtype=np.uint8)
+    return PIL_Image.fromarray(random_array, "RGB")
+
+
 def create_multimodal_model(
-    mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False, checkpoint=None
+    mesh_device,
+    max_batch_size,
+    max_seq_len,
+    dtype=ttnn.bfloat16,
+    use_paged_kv_cache=False,
+    checkpoint=None,
 ):
     from models.tt_transformers.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
@@ -75,7 +88,13 @@ def create_multimodal_model(
 
 
 def prepare_generator_args(
-    num_devices, data_parallel, mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False
+    num_devices,
+    data_parallel,
+    mesh_device,
+    max_batch_size,
+    max_seq_len,
+    dtype=ttnn.bfloat16,
+    use_paged_kv_cache=False,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -101,9 +120,17 @@ def prepare_generator_args(
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
-        )
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
     ],
     indirect=True,
 )
@@ -129,7 +156,9 @@ def prepare_generator_args(
         # 4,
     ],
 )
-@pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": True, "trace_region_size": 14951424, "num_command_queues": 2}], indirect=True
+)
 def test_multimodal_demo_text(
     mesh_device,
     warmup_iters,
@@ -172,21 +201,45 @@ def test_multimodal_demo_text(
 
     xattn_caches = [model.setup_cache(model_args[i].max_batch_size) for i, model in enumerate(generator.model)]
 
+    # Create random images for trace capture with specific dimensions
+    trace_img_560x560 = create_random_image(560, 560)
+
+    trace_img_1120x560 = create_random_image(1120, 560)
+
+    trace_img_560x1120 = create_random_image(560, 1120)
+
+    trace_img_1120x1120 = create_random_image(1120, 1120)
+
     with open(IMG_PATH / "ocr_image.jpeg", "rb") as f:
         ocr_image = PIL_Image.open(f).convert("RGB")
 
     with open(IMG_PATH / "clutter.jpeg", "rb") as f:
         clutter = PIL_Image.open(f).convert("RGB")
 
+    # Trace capture dialogs with random images
+    trace_dialogs = [
+        [UserMessage(content=[ImageMedia(image=trace_img_560x560), "Describe this image."])],
+        [UserMessage(content=[ImageMedia(image=trace_img_1120x560), "What do you see in this image?"])],
+        [UserMessage(content=[ImageMedia(image=trace_img_560x1120), "What do you see in this image?"])],
+        [UserMessage(content=[ImageMedia(image=trace_img_1120x1120), "Analyze this image."])],
+    ]
+
+    if len(trace_dialogs) < max_batch_size:
+        trace_dialogs *= max_batch_size // len(trace_dialogs)
+
+    num_trace_batches = len(trace_dialogs) // max_batch_size
+
     if not include_text_only_prompts:
         with open(IMG_PATH / "dog.jpg", "rb") as f:
             img = PIL_Image.open(f).convert("RGB")
+        logger.info(f"Dog image dimensions: {img.size} (width x height)")
 
         with open(IMG_PATH / "pasta.jpeg", "rb") as f:
             img2 = PIL_Image.open(f).convert("RGB")
+        logger.info(f"Pasta image dimensions: {img2.size} (width x height)")
 
+        # Regular testing dialogs with original images
         dialogs = [
-            # image understanding
             [UserMessage(content=[ImageMedia(image=img), "Write a haiku for this image."])],
             [UserMessage(content=[ImageMedia(image=img2), "What is for dinner?"])],
             [UserMessage(content=[ImageMedia(image=ocr_image), "What is the full text of this image? Do OCR"])],
@@ -213,8 +266,9 @@ def test_multimodal_demo_text(
 
     for iter_num in range(warmup_iters + 1):
         logger.info(f"Iteration {iter_num}")
+        current_dialogs = trace_dialogs + dialogs
         for batch_idx in range(num_batches):
-            batch_dialogs = dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
+            batch_dialogs = current_dialogs[batch_idx * max_batch_size : (batch_idx + 1) * max_batch_size]
             for dialog in batch_dialogs:
                 for msg in dialog:
                     print(f"{msg.role.capitalize()}: {msg.content}\n")
@@ -243,7 +297,7 @@ def test_multimodal_demo_text(
                 tokens[i, : len(seq)] = torch.tensor(seq, dtype=torch.long)
 
             prefill_start = time.perf_counter()
-            if batch_idx == 0:  # Get compile time for first batch
+            if batch_idx < num_trace_batches:  # Get compile time for first batch
                 with profiler("compile_prefill", iteration=batch_idx):
                     (
                         batch_logits,
@@ -381,18 +435,19 @@ def test_multimodal_demo_text(
     )
     logger.info("")
 
+    logger.info(f"is_ci_env: {is_ci_env}")
     if is_ci_env and max_batch_size == 1 and enable_trace:  # Only profiling these parametrizations
         tt_device_name = model_args[0].device_name
         base_model_name = model_args[0].base_model_name
         target_prefill_tok_s = {
-            "N300_Llama-3.2-11B": 13.2,
-            "T3K_Llama-3.2-11B": 13.2,
+            "N300_Llama-3.2-11B": 23,
+            "T3K_Llama-3.2-11B": 20,
             "T3K_Llama-3.2-90B": 3,
         }[f"{tt_device_name}_{base_model_name}"]
 
         target_decode_tok_s_u = {
             "N300_Llama-3.2-11B": 21.5,
-            "T3K_Llama-3.2-11B": 33,
+            "T3K_Llama-3.2-11B": 35,
             "T3K_Llama-3.2-90B": 6,
         }[f"{tt_device_name}_{base_model_name}"]
 

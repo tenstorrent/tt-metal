@@ -16,52 +16,98 @@ except ImportError:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "kagglehub"])
     import kagglehub
 
-shutil.rmtree("/home/ubuntu/.cache/kagglehub/datasets/mateuszbuda/lgg-mri-segmentation/versions/2")
 
-# Define dataset and target folder
-DATASET = "mateuszbuda/lgg-mri-segmentation"
-TARGET_FOLDER = "models/experimental/segmentation_evaluation/imageset"
-# REQUIRED_SUBFOLDER = "lgg-mri-segmentation/kaggle_3m/TCGA_CS_4944_20010208"
+def download_lgg_dataset():
+    # Define dataset and target folder
+    DATASET = "mateuszbuda/lgg-mri-segmentation"
+    TARGET_FOLDER = "models/experimental/segmentation_evaluation/imageset"
 
-# Download the dataset
-logger.info(f"Downloading dataset: {DATASET}...")
-dataset_path = kagglehub.dataset_download(DATASET)
-logger.info(f"dataset_path: {dataset_path}")
+    # Optionally remove previous cache if needed (only if you always want fresh download)
+    cache_dir = "/home/ubuntu/.cache/kagglehub/datasets/mateuszbuda/lgg-mri-segmentation/versions/2"
+    if os.path.exists(cache_dir):
+        logger.info(f"Removing cached dataset: {cache_dir}")
+        shutil.rmtree(cache_dir)
 
-if not os.path.exists(dataset_path):
-    logger.error(f"Error: Dataset was not downloaded to '{dataset_path}'.")
-    sys.exit(1)
+    # Download the dataset
+    logger.info(f"Downloading dataset: {DATASET}...")
+    dataset_path = kagglehub.dataset_download(DATASET)
+    logger.info(f"Dataset downloaded to: {dataset_path}")
 
-# Check if dataset_path contains files/folders
-if not os.listdir(dataset_path):
-    logger.error(f"Error: Dataset directory '{dataset_path}' is empty.")
-    sys.exit(1)
+    if not os.path.exists(dataset_path):
+        logger.error(f"Error: Dataset was not downloaded to '{dataset_path}'.")
+        sys.exit(1)
 
-# Ensure target folder exists
-os.makedirs(TARGET_FOLDER, exist_ok=True)
+    if not os.listdir(dataset_path):
+        logger.error(f"Error: Dataset directory '{dataset_path}' is empty.")
+        sys.exit(1)
 
-# source_subfolder = os.path.join(dataset_path, REQUIRED_SUBFOLDER)
+    # Create target directory
+    os.makedirs(TARGET_FOLDER, exist_ok=True)
 
-# Check if required subfolder exists
-# if not os.path.exists(source_subfolder):
-#     logger.error(
-#         f"Error: Required subfolder '{REQUIRED_SUBFOLDER}' not found in '{dataset_path}'\n"
-#         f"This usually happens when the dataset download failed or the folder is corrupted.\n"
-#         f"Try deleting the folder:\n  'models/experimental/segmentation_evaluation/imageset'\n"
-#         f"Then rerun this script to download it again."
-#     )
-#     sys.exit(1)
+    source_root = os.path.join(dataset_path, "lgg-mri-segmentation/kaggle_3m")
+    for folder in os.listdir(source_root):
+        src = os.path.join(source_root, folder)
+        dst = os.path.join(TARGET_FOLDER, folder)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst, dirs_exist_ok=True)
 
-source_root = os.path.join(dataset_path, "lgg-mri-segmentation/kaggle_3m")
-for folder in os.listdir(source_root):
-    src = os.path.join(source_root, folder)
-    dst = os.path.join(TARGET_FOLDER, folder)
-    if os.path.isdir(src):
-        shutil.copytree(src, dst, dirs_exist_ok=True)
+    logger.info(f"Successfully moved '{source_root}' to '{TARGET_FOLDER}'")
+
+    # Ensure prediction output folder also exists
+    os.makedirs("models/experimental/segmentation_evaluation/pred_image_set", exist_ok=True)
 
 
-# shutil.move(source_subfolder, os.path.join(TARGET_FOLDER, os.path.basename(REQUIRED_SUBFOLDER)))
+def download_ade20k_dataset(dest_root="models/demos/segformer/demo/validation_data_ade20k", max_samples=2000):
+    if os.path.exists(dest_root) and len(os.listdir(os.path.join(dest_root, "images"))) >= max_samples:
+        print(f"ADE20K dataset already exists with {len(os.listdir(os.path.join(dest_root, 'images')))} images.")
+        return
 
-logger.info(f"Successfully moved '{source_root}' to '{TARGET_FOLDER}'")
+    # Optionally remove previous cache if needed (only if you always want fresh download)
+    cache_dir = "/home/ubuntu/.cache/kagglehub/datasets/awsaf49/ade20k-dataset/versions/2"
+    if os.path.exists(cache_dir):
+        logger.info(f"Removing cached dataset: {cache_dir}")
+        shutil.rmtree(cache_dir)
 
-os.makedirs("models/experimental/segmentation_evaluation/pred_image_set", exist_ok=True)
+    os.makedirs(dest_root, exist_ok=True)
+    logger.info("Downloading ADE20K dataset from Kaggle...")
+
+    dataset_path = kagglehub.dataset_download("awsaf49/ade20k-dataset")
+    logger.info(f"ADE20K downloaded to: {dataset_path}")
+
+    if not os.path.exists(dataset_path) or not os.listdir(dataset_path):
+        logger.error("ADE20K dataset not properly downloaded or is empty.")
+        return
+
+    # Move only first 500 validation images and masks
+    image_src = os.path.join(dataset_path, "ADEChallengeData2016", "images", "validation")
+    mask_src = os.path.join(dataset_path, "ADEChallengeData2016", "annotations", "validation")
+
+    image_dst = os.path.join(dest_root, "images")
+    mask_dst = os.path.join(dest_root, "annotations")
+
+    os.makedirs(image_dst, exist_ok=True)
+    os.makedirs(mask_dst, exist_ok=True)
+
+    img_files = sorted(os.listdir(image_src))[:max_samples]
+    mask_files = sorted(os.listdir(mask_src))[:max_samples]
+
+    for f in img_files:
+        shutil.move(os.path.join(image_src, f), os.path.join(image_dst, f))
+
+    for f in mask_files:
+        shutil.move(os.path.join(mask_src, f), os.path.join(mask_dst, f))
+    logger.info(f"Moved {len(img_files)} images and {len(mask_files)} masks to {dest_root}")
+
+
+def main(model_name):
+    if model_name == "vanilla_unet":
+        download_lgg_dataset()
+    elif model_name == "segformer":
+        download_ade20k_dataset()
+
+
+if __name__ == "__main__":
+    import sys
+
+    model_name = sys.argv[1] if len(sys.argv) > 1 else "vanilla_unet"
+    main(model_name)

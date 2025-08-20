@@ -192,7 +192,6 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -202,11 +201,9 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
-    auto cb_src0 =
-        create_circular_buffer(program, all_cores, kSrc0CbIndex, data_fmt_in, single_tile_size_in, kNumInputTiles);
+    create_circular_buffer(program, all_cores, kSrc0CbIndex, data_fmt_in, single_tile_size_in, kNumInputTiles);
 
-    auto cb_output =
-        create_circular_buffer(program, all_cores, kOutputCbIndex, data_fmt_out, single_tile_size_out, kNumOutputTiles);
+    create_circular_buffer(program, all_cores, kOutputCbIndex, data_fmt_out, single_tile_size_out, kNumOutputTiles);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -222,7 +219,7 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     std::vector<uint32_t> writer_compile_args = {
         static_cast<uint32_t>(kOutputCbIndex), static_cast<uint32_t>(dst_is_dram)};
 
-    DropoutKernels kernels;
+    DropoutKernels kernels{};
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, kReaderKernelPath);
 
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, kWriterKernelPath);

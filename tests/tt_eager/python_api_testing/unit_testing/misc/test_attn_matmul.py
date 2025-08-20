@@ -7,7 +7,7 @@ import pytest
 import torch
 
 import ttnn
-from models.utility_functions import comp_pcc, skip_for_blackhole
+from models.utility_functions import comp_pcc
 import ttnn
 
 
@@ -29,7 +29,6 @@ def generate_input_shapes():
     yield [q_len, q_heads, batch_size, K], [batch_size, kv_heads, K, seq_len]
 
 
-@skip_for_blackhole("Bad pcc on BH. Issue #21875")
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
@@ -102,7 +101,6 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
             assert allclose, f"FAILED: {output}"
 
 
-@skip_for_blackhole("Bad pcc on BH. Issue #21875")
 @pytest.mark.parametrize("in0_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("in1_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("out_dtype", [ttnn.bfloat16, ttnn.bfloat8_b])

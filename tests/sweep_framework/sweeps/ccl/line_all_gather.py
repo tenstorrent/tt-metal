@@ -12,7 +12,9 @@ from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_ti
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn import ShardTensorToMesh
+
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -63,9 +65,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
 def mesh_device_fixture():
     assert ttnn.get_num_devices() >= 8, "Not T3000!"
-    device_ids = ttnn.get_t3k_physical_device_ids_ring()
-    num_devices_requested = len(device_ids)
-    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, num_devices_requested))
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 8))
     print("ALL GATHER: Opened device mesh")
 
     yield (mesh_device, "T3000 Mesh")
@@ -104,13 +104,16 @@ def run(
     input_tensor_mesh = ttnn.to_device(ttnn_tensor, t3k_mesh_device)
 
     for i in range(num_iters):
-        start_time = start_measuring_time()
-        tt_out_tensor = ttnn.all_gather(
-            input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
-        )
-        e2e_perf = stop_measuring_time(start_time)
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+        # Note: Early return here bypasses multi-iteration result checks. his must be restored when the new implementation is added.
+        return [("skipped", LEGACY_CCL_SKIP), None]
+        # start_time = start_measuring_time()
+        # tt_out_tensor = ttnn.all_gather(
+        #     input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
+        # )
+        # e2e_perf = stop_measuring_time(start_time)
 
-        logger.info(f"Done iteration {i}")
+        # logger.info(f"Done iteration {i}")
 
     for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
         tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()

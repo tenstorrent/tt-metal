@@ -53,7 +53,6 @@ void py_bind_rs_matmul(pybind11::module& module) {
             [](const decltype(ttnn::experimental::llama_rs_matmul)& self,
                const ttnn::Tensor& input_tensor,               // mm0 used
                const ttnn::Tensor& weight_tensor,              // mm1 used
-               const ttnn::Tensor& rs_tensor,                  // rs1
                ttnn::Tensor& intermediate_packet_buffer,       // rs2
                int32_t dim,                                    // rs3
                const GlobalSemaphore& cross_device_semaphore,  // rs4
@@ -61,6 +60,8 @@ void py_bind_rs_matmul(pybind11::module& module) {
                const MeshDevice& mesh_device,                  // rs 6
                const uint32_t num_links,                       // rs 7 default 1
                const tt::tt_metal::SubDeviceId& subdevice_id,
+               const std::optional<const ttnn::Tensor>& second_weight_tensor,
+               const std::optional<const ttnn::Tensor>& rs_tensor,  // rs1
                tt::tt_fabric::Topology topology,
                const std::optional<ttnn::MemoryConfig>& memory_config_rs,  // rs 8 default std::nullopt
                const std::optional<ttnn::MemoryConfig>& memory_config_mm,  // mm4 used but default std::nullopt
@@ -83,7 +84,6 @@ void py_bind_rs_matmul(pybind11::module& module) {
                     queue_id,
                     input_tensor,
                     weight_tensor,
-                    rs_tensor,
                     intermediate_packet_buffer,
                     dim,
                     cross_device_semaphore,
@@ -91,6 +91,8 @@ void py_bind_rs_matmul(pybind11::module& module) {
                     mesh_device,
                     num_links,
                     subdevice_id,
+                    second_weight_tensor,
+                    rs_tensor,
                     topology,
                     memory_config_rs,
                     memory_config_mm,
@@ -108,7 +110,6 @@ void py_bind_rs_matmul(pybind11::module& module) {
             },
             py::arg("input_tensor"),
             py::arg("weight_tensor"),
-            py::arg("rs_tensor"),
             py::arg("intermediate_packet_buffer"),
             py::arg("dim"),
             py::arg("cross_device_semaphore"),
@@ -117,6 +118,8 @@ void py_bind_rs_matmul(pybind11::module& module) {
             py::arg("num_links"),
             py::arg("subdevice_id"),
             py::kw_only(),
+            py::arg("second_weight_tensor") = std::nullopt,
+            py::arg("rs_tensor") = std::nullopt,
             py::arg("topology") = tt::tt_fabric::Topology::Linear,
             py::arg("memory_config_rs") = std::nullopt,
             py::arg("memory_config_mm") = std::nullopt,

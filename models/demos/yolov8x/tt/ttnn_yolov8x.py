@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -92,7 +92,6 @@ class TtConv:
 
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat16,
             activation="",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -100,7 +99,6 @@ class TtConv:
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
             enable_split_reader=self.enable_split_reader,
-            enable_subblock_padding=False,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
@@ -117,6 +115,8 @@ class TtConv:
 
         if self.block_shard:
             conv_config.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+            conv_config.enable_act_double_buffer = True
+            conv_config.enable_weights_double_buffer = True
 
         if self.width_shard:
             conv_config.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
@@ -163,6 +163,7 @@ class TtConv:
             memory_config=None,
             return_weights_and_bias=True,
             return_output_dim=True,
+            dtype=ttnn.bfloat16,
         )
 
         if self.is_detect_cv2:
@@ -341,19 +342,21 @@ class TtSppf:
         cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
         y = [cv1]
 
+        output = y[-1]
         for i in range(3):
             output = ttnn.max_pool2d(
-                input_tensor=y[-1],
+                input_tensor=output,
                 batch_size=self.batch_size,
                 input_h=out_h,
                 input_w=out_w,
-                channels=y[-1].shape[-1],
+                channels=output.shape[-1],
                 kernel_size=[5, 5],
                 stride=[1, 1],
                 padding=[2, 2],
                 dilation=[1, 1],
             )
-            y.append(output)
+            output_interleaved = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+            y.append(output_interleaved)
 
         x = sharded_concat(y)
         for i in range(len(y)):
@@ -638,6 +641,18 @@ class TtDetectionModel:
         self.detect_22 = TtDetect(device, parameters, "model.22", detect_config)
 
     def __call__(self, x):
+        N, C, H, W = x.shape
+        min_channels = 16
+        if C < min_channels:
+            channel_padding_needed = min_channels - C
+            nchw = ttnn.pad(x, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
+        else:
+            nchw = x
+        nhwc = ttnn.permute(nchw, (0, 2, 3, 1))  # NCHW -> NHWC
+        ttnn.deallocate(nchw)
+        ttnn.deallocate(x)
+        nhwc = ttnn.reallocate(nhwc)
+        x = ttnn.reshape(nhwc, [1, 1, nhwc.shape[0] * nhwc.shape[1] * nhwc.shape[2], nhwc.shape[-1]])
         conv_0, out_h, out_w = self.conv_0(x)
         conv_1, out_h, out_w = self.conv_1(conv_0)
         ttnn.deallocate(conv_0)

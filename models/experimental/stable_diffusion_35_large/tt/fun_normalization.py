@@ -9,8 +9,8 @@ from dataclasses import dataclass
 import torch
 import ttnn
 
-from . import utils
-from .utils import from_torch_fast
+from .utils import from_torch_fast, from_torch_fast_2d
+from .parallel_config import StableDiffusionParallelManager, DiTParallelConfig
 
 
 @dataclass
@@ -50,13 +50,13 @@ class TtLayerNormParameters:
         distributed: bool = True,
         weight_shape: list[int] | None = None,
         eps: float = 1e-5,
+        parallel_config: DiTParallelConfig,
     ) -> TtLayerNormParameters:
-        _, mesh_width = device.shape
-        distributed = distributed and mesh_width > 1
+        distributed = distributed and parallel_config.tensor_parallel.factor > 1
+        mesh_width = parallel_config.tensor_parallel.factor
 
         weight = state.get("weight")
         bias = state.get("bias")
-
         if distributed:
             # ttnn.layer_norm_post_all_gather currently requires weight and bias
             if weight is None:
@@ -70,26 +70,32 @@ class TtLayerNormParameters:
             weight = weight.reshape([-1, h])
             bias = bias.reshape([-1, h])
 
-        mesh_mapper = ttnn.ShardTensor2dMesh(device, tuple(device.shape), (None, -1)) if distributed else None
+        dims = [None, None]
+        dims[parallel_config.tensor_parallel.mesh_axis] = -1
+        mesh_mapper = ttnn.ShardTensor2dMesh(device, tuple(device.shape), dims) if distributed else None
         layout = ttnn.ROW_MAJOR_LAYOUT if distributed else ttnn.TILE_LAYOUT
         if distributed and dtype != ttnn.float32:
             dtype = ttnn.bfloat16
 
         return cls(
-            weight=from_torch_fast(
+            weight=from_torch_fast_2d(
                 weight,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=[None, None],
                 layout=layout,
                 dtype=dtype,
-                device=device,
                 mesh_mapper=mesh_mapper,
             )
             if weight is not None
             else None,
-            bias=from_torch_fast(
+            bias=from_torch_fast_2d(
                 bias,
+                mesh_device=device,
+                mesh_shape=tuple(device.shape),
+                dims=[None, None],
                 layout=layout,
                 dtype=dtype,
-                device=device,
                 mesh_mapper=mesh_mapper,
             )
             if bias is not None
@@ -102,8 +108,8 @@ class TtLayerNormParameters:
 def sd_rms_norm(x: ttnn.Tensor, parameters: TtRmsNormParameters, deallocate: bool = False) -> ttnn.Tensor:
     output = ttnn.rms_norm(x, weight=parameters.weight, epsilon=parameters.eps)
 
-    if deallocate:
-        ttnn.deallocate(x)
+    # if deallocate:
+    #     ttnn.deallocate(x)
 
     return output
 
@@ -111,9 +117,12 @@ def sd_rms_norm(x: ttnn.Tensor, parameters: TtRmsNormParameters, deallocate: boo
 def sd_layer_norm(
     x: ttnn.Tensor,
     parameters: TtLayerNormParameters,
+    parallel_manager: StableDiffusionParallelManager,
     memory_config: ttnn.MemoryConfig | None = None,
     program_config: ttnn.ProgramConfig | None = None,
     compute_kernel_config: ttnn.DeviceComputeKernelConfig | None = None,
+    cfg_index: int = 0,
+    is_spatial: bool = True,
 ) -> ttnn.Tensor:
     if not parameters.distributed:
         return ttnn.layer_norm(
@@ -137,17 +146,22 @@ def sd_layer_norm(
         dtype=ttnn.bfloat16,
     )
 
-    stats = utils.all_gather(
+    buffer_name = "spatial_layernorm_buffer" if is_spatial else "prompt_layernorm_buffer"
+    stats_gathered = ttnn.experimental.all_gather_async(
         stats,
-        dim=-1,
+        dim=len(x.shape) - 1,
+        cluster_axis=parallel_manager.dit_parallel_config.tensor_parallel.mesh_axis,
         mesh_device=x.device(),
-        # all_gather currently requires linear topology when specifying a cluster axis
-        topology=ttnn.Topology.Linear,
+        topology=parallel_manager.dit_parallel_config.topology,
+        multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(cfg_index),
+        persistent_output_tensor=parallel_manager.get_ping_pong_buffer(cfg_index, buffer_name),
+        memory_config=memory_config,
+        num_links=parallel_manager.num_links,
     )
 
     x = ttnn.layer_norm_post_all_gather(
         x,
-        stats,
+        stats_gathered,
         weight=parameters.weight,
         bias=parameters.bias,
         epsilon=parameters.eps,

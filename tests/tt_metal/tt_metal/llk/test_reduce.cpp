@@ -13,7 +13,6 @@
 #include <cmath>
 #include <cstdint>
 #include <functional>
-#include <initializer_list>
 #include <map>
 #include <memory>
 #include <string>
@@ -135,7 +134,6 @@ void add_reader_writer_kernels(
     const std::shared_ptr<tt_metal::Buffer>& dst_dram_buffer) {
     uint32_t tile_H = test_config.tile_shape.get_tile_shape()[0], tile_W = test_config.tile_shape.get_tile_shape()[1];
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1] * test_config.shape[0];
-    uint32_t HW = H * W;
     uint32_t N = test_config.shape[0] * test_config.shape[1];
     uint32_t Wt = W / tile_W;
     uint32_t Ht = H / tile_H;
@@ -146,7 +144,7 @@ void add_reader_writer_kernels(
             bfloat16 bfloat_scaler_value = bfloat16(scaler);
             uint32_t packed_scaler_value = pack_two_bfloat16_into_uint32({bfloat_scaler_value, bfloat_scaler_value});
             std::vector<uint32_t> reader_compile_args = {(std::uint32_t)true, packed_scaler_value};
-            std::map<string, string> reader_defines = {{"REDUCE_SCALER", "1"}};
+            std::map<std::string, std::string> reader_defines = {{"REDUCE_SCALER", "1"}};
 
             auto unary_reader_kernel = tt_metal::CreateKernel(
                 program,
@@ -260,8 +258,6 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
 
     uint32_t tile_H = test_config.tile_shape.get_tile_shape()[0], tile_W = test_config.tile_shape.get_tile_shape()[1];
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1] * test_config.shape[0];
-    uint32_t HW = H * W;
-    uint32_t N = test_config.shape[0] * test_config.shape[1];
     TT_FATAL((tile_H == 16 && tile_W == 32) || (tile_H == 32 && tile_W == 32), "Error: Invalid tile shape");
     TT_FATAL(W % tile_W == 0 && H % tile_H == 0, "Error: Tensor height/width must be multiple of tile height/width");
     TT_FATAL(H > 0 && W > 0 && NC > 0, "Error: All tensor dims must be greater than 0");
@@ -324,7 +320,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
             num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_bytes)
             .set_tile_dims(src0_cb_index, test_config.tile_shape);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_buffer_tiles = 32;
@@ -333,13 +329,13 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
             num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_bytes)
             .set_tile_dims(ouput_cb_index, test_config.tile_shape);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     tt_metal::CircularBufferConfig cb_temp_reduce_tile_config =
         tt_metal::CircularBufferConfig(2 * (2 * TILE_WIDTH * TILE_HEIGHT), {{CBIndex::c_2, tt::DataFormat::Float16_b}})
             .set_page_size(CBIndex::c_2, single_tile_bytes)
             .set_tile_dims(CBIndex::c_2, tt_metal::Tile({32, 32}));
-    auto cb_temp_reduce_tile = tt_metal::CreateCircularBuffer(program, core, cb_temp_reduce_tile_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_temp_reduce_tile_config);
 
     add_reader_writer_kernels(program, core, test_config, src_dram_buffer, dst_dram_buffer);
 
@@ -349,7 +345,8 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         uint(NC),
     };
 
-    std::map<string, string> reduce_defines = {{"REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim)}};
+    std::map<std::string, std::string> reduce_defines = {
+        {"REDUCE_DIM", get_reduce_dim_define_string(test_config.reduce_dim)}};
     switch (test_config.reduce_type) {
         case ReduceType::SUM: {
             reduce_defines["REDUCE_OP"] = "PoolType::SUM";
@@ -369,7 +366,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
 
     std::string compute_kernel_name = get_compute_kernel_name(test_config.reduce_dim);
 
-    auto reduce_compute_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         compute_kernel_name,
         core,
@@ -379,8 +376,6 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
             .dst_full_sync_en = test_config.dst_full_sync_en,
             .compile_args = compute_kernel_args,
             .defines = reduce_defines});
-
-    auto seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);

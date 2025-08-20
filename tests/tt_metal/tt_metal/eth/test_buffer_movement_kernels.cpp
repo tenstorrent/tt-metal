@@ -199,11 +199,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
     const uint32_t& max_transfer_size) {
     bool pass = true;
 
-    const uint32_t input0_cb_index = 0;
-    const uint32_t output_cb_index = 16;
-
     TT_FATAL(cfg.num_pages * cfg.page_size_bytes == cfg.size_bytes, "Error");
-    constexpr uint32_t num_pages_cb = 1;
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Sender Device
@@ -413,13 +409,20 @@ TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip1ToChip0) {
 
 TEST_F(N300DeviceFixture, ActiveEthKernelsSendInterleavedBufferChip0ToChip1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    GTEST_SKIP();
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
     uint32_t MAX_BUFFER_SIZE =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
-    for (const auto& sender_eth_core : sender_device->get_active_ethernet_cores(true)) {
+    if (sender_device->get_ethernet_sockets(receiver_device->id()).empty()) {
+        GTEST_SKIP() << "No connected ethernet sockets";
+    }
+
+    for (const auto& sender_eth_core : sender_device->get_ethernet_sockets(receiver_device->id())) {
+        if (not tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(
+                sender_device->id(), sender_eth_core)) {
+            continue;
+        }
         CoreCoord receiver_eth_core = std::get<1>(sender_device->get_connected_ethernet_core(sender_eth_core));
 
         log_info(
@@ -485,6 +488,8 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t MAX_BUFFER_SIZE =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    uint32_t page_size = 2 * 32 * 32;
+    uint32_t num_pages = MAX_BUFFER_SIZE / page_size;
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() == receiver_device->id()) {
@@ -508,9 +513,9 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
                     sender_eth_core.str(),
                     receiver_eth_core.str());
                 BankedConfig test_config = BankedConfig{
-                    .num_pages = 200,
-                    .size_bytes = 200 * 2 * 32 * 32,
-                    .page_size_bytes = 2 * 32 * 32,
+                    .num_pages = num_pages,
+                    .size_bytes = num_pages * page_size,
+                    .page_size_bytes = page_size,
                     .input_buffer_type = BufferType::L1,
                     .output_buffer_type = BufferType::DRAM};
 
@@ -531,9 +536,9 @@ TEST_F(DeviceFixture, ActiveEthKernelsSendInterleavedBufferAllConnectedChips) {
                     test_config,
                     MAX_BUFFER_SIZE));
                 test_config = BankedConfig{
-                    .num_pages = 200,
-                    .size_bytes = 200 * 2 * 32 * 32,
-                    .page_size_bytes = 2 * 32 * 32,
+                    .num_pages = num_pages,
+                    .size_bytes = num_pages * page_size,
+                    .page_size_bytes = page_size,
                     .input_buffer_type = BufferType::DRAM,
                     .output_buffer_type = BufferType::L1};
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(
@@ -620,6 +625,8 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t MAX_BUFFER_SIZE =
         MetalContext::instance().hal().get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    uint32_t page_size = 2 * 32 * 32;
+    uint32_t num_pages = MAX_BUFFER_SIZE / page_size;
     for (const auto& sender_device : devices_) {
         for (const auto& receiver_device : devices_) {
             if (sender_device->id() >= receiver_device->id()) {
@@ -643,9 +650,9 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
                     sender_eth_core.str(),
                     receiver_eth_core.str());
                 BankedConfig test_config = BankedConfig{
-                    .num_pages = 200,
-                    .size_bytes = 200 * 2 * 32 * 32,
-                    .page_size_bytes = 2 * 32 * 32,
+                    .num_pages = num_pages,
+                    .size_bytes = num_pages * page_size,
+                    .page_size_bytes = page_size,
                     .input_buffer_type = BufferType::L1,
                     .output_buffer_type = BufferType::DRAM};
 
@@ -666,9 +673,9 @@ TEST_F(CommandQueueMultiDeviceProgramFixture, ActiveEthKernelsSendInterleavedBuf
                     test_config,
                     MAX_BUFFER_SIZE));
                 test_config = BankedConfig{
-                    .num_pages = 200,
-                    .size_bytes = 200 * 2 * 32 * 32,
-                    .page_size_bytes = 2 * 32 * 32,
+                    .num_pages = num_pages,
+                    .size_bytes = num_pages * page_size,
+                    .page_size_bytes = page_size,
                     .input_buffer_type = BufferType::DRAM,
                     .output_buffer_type = BufferType::L1};
                 ASSERT_TRUE(unit_tests::erisc::kernels::chip_to_chip_interleaved_buffer_transfer(

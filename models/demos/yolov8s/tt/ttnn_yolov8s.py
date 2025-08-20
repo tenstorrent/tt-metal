@@ -148,8 +148,8 @@ class TtConv:
         self.weights, self.bias = self.parameters[path]
 
     def _initialize_conv_config(self):
+        self.output_dtype = ttnn.bfloat16
         conv_config = ttnn.Conv2dConfig(
-            dtype=ttnn.bfloat16,
             weights_dtype=ttnn.bfloat16,
             activation="" if self.is_detect_cv2 else "silu",
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -158,7 +158,6 @@ class TtConv:
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
             enable_split_reader=self.enable_split_reader,
-            enable_subblock_padding=False,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
@@ -181,7 +180,7 @@ class TtConv:
 
         if self.bfloat8:
             conv_config.weights_dtype = ttnn.bfloat8_b
-            conv_config.dtype = ttnn.bfloat8_b
+            self.output_dtype = ttnn.bfloat8_b
 
         return conv_config
 
@@ -222,6 +221,7 @@ class TtConv:
             memory_config=None,
             return_weights_and_bias=True,
             return_output_dim=True,
+            dtype=self.output_dtype,
         )
 
         if self.is_detect_cv2:

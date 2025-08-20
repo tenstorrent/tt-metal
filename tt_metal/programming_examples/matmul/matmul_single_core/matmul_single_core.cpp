@@ -11,6 +11,7 @@
 #include <tt-metalium/command_queue.hpp>
 #include <bmm_op.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "tt-metalium/core_coord.hpp"
 
 using namespace tt::constants;
@@ -115,33 +116,44 @@ void matmul_single_core(
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t src1_cb_index = CBIndex::c_1;
     CircularBufferConfig cb_src1_config =
         CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
     CircularBufferConfig cb_output_config =
         CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
             .set_page_size(output_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     // Create the data movement kernels and the compute kernel
+    std::vector<uint32_t> reader_compile_time_args;
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_compile_time_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = NOC::RISCV_1_default,
+            .compile_args = reader_compile_time_args});
 
+    std::vector<uint32_t> writer_compile_time_args;
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = writer_compile_time_args});
 
     // Compile time arguments for the kernels
     // Note that these take effect at the kernel's compile time. Chaning these values will require recompilation of the
@@ -152,7 +164,7 @@ void matmul_single_core(
         Kt,  // Kt
         Nt   // Nt
     };
-    auto matmul_single_core_kernel_id = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "matmul/matmul_single_core/kernels/compute/mm.cpp",
         core,
@@ -181,10 +193,6 @@ void matmul_single_core(
 
 int main() {
     bool pass = true;
-
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
 
     try {
         // Open device

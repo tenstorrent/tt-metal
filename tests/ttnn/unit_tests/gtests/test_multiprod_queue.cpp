@@ -39,12 +39,11 @@ using ::tt::tt_metal::is_device_tensor;
 
 using MultiProducerCommandQueueTest = ttnn::MultiCommandQueueSingleDeviceFixture;
 
-// #21556: Disabled until we have clarity about user space multi-threading support
-TEST_F(MultiProducerCommandQueueTest, DISABLED_Stress) {
+TEST_F(MultiProducerCommandQueueTest, Stress) {
     // Spawn 2 application level threads intefacing with the same device through the async engine.
     // This leads to shared access of the work_executor and host side worker queue.
     // Test thread safety.
-    IDevice* device = this->device_;
+    auto device = this->device_;
 
     const ttnn::Shape tensor_shape{1, 1, 1024, 1024};
     const MemoryConfig mem_cfg = MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
@@ -84,8 +83,7 @@ TEST_F(MultiProducerCommandQueueTest, DISABLED_Stress) {
     t1.join();
 }
 
-// #21556: Disabled until we have clarity about user space multi-threading support
-TEST_F(MultiProducerCommandQueueTest, DISABLED_EventSync) {
+TEST_F(MultiProducerCommandQueueTest, EventSync) {
     // Verify that the event_synchronize API stalls the calling thread until
     // the device records the event being polled.
     // Thread 0 = writer thread. Thread 1 = reader thread.

@@ -15,7 +15,6 @@
 #include "assert.hpp"
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
-#include "hal.hpp"
 #include "hal_types.hpp"
 #include "host_api.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -23,7 +22,6 @@
 #include "system_memory_manager.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "utils.hpp"
 
 namespace tt {
 namespace tt_metal {
@@ -48,29 +46,29 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
     host_dispatch_dump_file.open(host_file);
     device_dispatch_dump_file.open(device_file);
 
-    std::vector<std::pair<string, std::vector<string>>> host_map;
+    std::vector<std::pair<std::string, std::vector<std::string>>> host_map;
 
-    string line;
-    string type;
+    std::string line;
+    std::string type;
 
     while (std::getline(host_dispatch_dump_file, line)) {
-        if (line.find("*") != string::npos) {
+        if (line.find("*") != std::string::npos) {
             continue;
         } else if (
-            line.find("BINARY SPAN") != string::npos or line.find("SEM") != string::npos or
-            line.find("CB") != string::npos) {
+            line.find("BINARY SPAN") != std::string::npos or line.find("SEM") != std::string::npos or
+            line.find("CB") != std::string::npos) {
             type = line;
         } else {
-            std::vector<string> host_data = {line};
-            while (std::getline(host_dispatch_dump_file, line) and (line.find("*") == string::npos)) {
+            std::vector<std::string> host_data = {line};
+            while (std::getline(host_dispatch_dump_file, line) and (line.find("*") == std::string::npos)) {
                 host_data.push_back(line);
             }
             host_map.push_back(make_pair(type, std::move(host_data)));
         }
     }
 
-    std::vector<std::vector<string>> device_map;
-    std::vector<string> device_data;
+    std::vector<std::vector<std::string>> device_map;
+    std::vector<std::string> device_data;
     while (std::getline(device_dispatch_dump_file, line) and line != "EXIT_CONDITION") {
         if (line == "CHUNK") {
             if (not device_data.empty()) {
@@ -88,7 +86,7 @@ void match_device_program_data_with_host_program_data(const char* host_file, con
     for (const auto& [type, host_data] : host_map) {
         bool match = false;
 
-        for (const std::vector<string>& device_data : device_map) {
+        for (const std::vector<std::string>& device_data : device_map) {
             if (host_data == device_data) {
                 log_info(tt::LogMetal, "Matched on {}", type);
                 match = true;
@@ -120,7 +118,7 @@ void wait_for_program_vector_to_arrive_and_compare_to_host_program_vector(
         while (!device_dispatch_dump_file.eof()) {
             std::getline(device_dispatch_dump_file, line);
 
-            if (line.find("EXIT_CONDITION") != string::npos) {
+            if (line.find("EXIT_CONDITION") != std::string::npos) {
                 device_dispatch_dump_file.close();
 
                 match_device_program_data_with_host_program_data(
@@ -302,7 +300,7 @@ void print_progress_bar(float progress, bool init = false) {
     int bar_position = static_cast<int>(progress * progress_bar_width);
     if (bar_position > prev_bar_position) {
         std::cout << "[";
-        std::cout << string(bar_position, '=') << string(progress_bar_width - bar_position, ' ');
+        std::cout << std::string(bar_position, '=') << std::string(progress_bar_width - bar_position, ' ');
         std::cout << "]" << int(progress * 100.0) << " %\r" << std::flush;
         prev_bar_position = bar_position;
     }
@@ -560,7 +558,7 @@ void dump_command_queue_raw_data(
 
     // The following variables depend on completion Q vs issue Q
     uint32_t write_ptr, read_ptr, base_addr, bytes_to_read = 0;
-    string queue_type_name;
+    std::string queue_type_name;
     if (queue_type == CQ_COMPLETION_QUEUE) {
         write_ptr = get_cq_completion_wr_ptr<true>(
                         sysmem_manager.get_device_id(), cq_interface.id, sysmem_manager.get_cq_size())
@@ -623,7 +621,6 @@ void dump_command_queue_raw_data(
 
             out_file << "0x" << std::setfill('0') << std::setw(8) << line_addr << ": ";
             for (uint32_t idx = 0; idx < 16; idx++) {
-                uint8_t val = read_data[line_offset + idx];
                 out_file << " " << std::setfill('0') << std::setw(2) << +read_data[line_offset + idx];
             }
             if (line_addr == write_ptr) {
@@ -640,8 +637,6 @@ void dump_command_queue_raw_data(
 
 void dump_cqs(std::ofstream& cq_file, std::ofstream& iq_file, SystemMemoryManager& sysmem_manager, bool dump_raw_data) {
     for (SystemMemoryCQInterface& cq_interface : sysmem_manager.get_cq_interfaces()) {
-        chip_id_t mmio_device_id = tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(
-            sysmem_manager.get_device_id());
         // Dump completion queue + issue queue
         dump_completion_queue_entries(cq_file, sysmem_manager, cq_interface);
         dump_issue_queue_entries(iq_file, sysmem_manager, cq_interface);

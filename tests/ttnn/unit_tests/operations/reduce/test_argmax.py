@@ -11,35 +11,64 @@ from tests.ttnn.utils_for_testing import check_with_pcc
 
 
 @pytest.mark.parametrize(
-    argnames="tensor_shape, dim, keepdim, use_multicore",
+    argnames="tensor_shape, dim, keepdim, use_multicore, dtype",
     argvalues=[
-        ([], None, True, True),
-        ([32], -1, False, False),
-        ([32, 0], 1, True, True),
-        ([64], -1, True, False),
-        ([1, 512], -1, True, True),
-        ([1, 1024], -1, True, True),
-        ([1, 65], -1, True, True),
-        ([8, 10, 129], 2, True, False),
-        ([1, 8, 160], -1, False, True),
-        ([1, 256, 1024 * 8], -1, False, True),
-        ([32, 32, 32, 1], -1, True, True),
+        ([], None, True, True, torch.bfloat16),
+        ([32], -1, False, False, torch.float32),
+        ([32, 0], 1, True, True, torch.bfloat16),
+        ([64], -1, True, False, torch.bfloat16),
+        ([1, 512], -1, True, True, torch.float32),
+        ([1, 1024], -1, True, True, torch.int32),
+        ([1, 65], -1, True, True, torch.uint8),
+        ([8, 10, 129], 2, True, False, torch.bfloat16),
+        ([1, 8, 160], -1, False, True, torch.bfloat16),
+        ([1, 256, 1024 * 8], -1, False, True, torch.float32),
+        ([32, 32, 32, 1], -1, True, True, torch.float32),
+        ([128], -1, True, True, torch.float32),
+        ([256], -1, False, False, torch.bfloat16),
+        ([64, 128], -1, True, True, torch.float32),
+        ([64, 128], -1, False, True, torch.int32),
+        ([32, 64, 128], -1, True, True, torch.float32),
+        ([32, 64, 128], -1, True, False, torch.bfloat16),
+        ([16, 32, 64, 128], -1, True, True, torch.bfloat16),
+        ([16, 32, 64, 128], -1, True, False, torch.float32),
+        ([16, 32, 64, 128], -1, True, True, torch.int32),
+        ([8, 16, 32, 64], -1, True, True, torch.float32),
+        ([8, 16, 32, 64], -1, False, True, torch.bfloat16),
+        ([4, 8, 16, 32], -1, False, False, torch.float32),
+        ([100, 200], -1, True, True, torch.bfloat16),
+        ([100, 200], -1, False, False, torch.float32),
+        ([50, 100, 200], -1, True, True, torch.int32),
+        ([25, 50, 100], -1, False, True, torch.uint8),
+        ([12, 24, 48, 96], -1, True, False, torch.bfloat16),
     ],
 )
-def test_argmax(device, tensor_shape, dim, keepdim, use_multicore):
+def test_argmax(device, tensor_shape, dim, keepdim, use_multicore, dtype):
     """
     Test the compatibility of the torch and ttnn output for argmax of different
-    tensor shapes and dim values.
+    tensor shapes, dim values, and data types.
     Checks for the exactness of shape, values, and dtype of the output tensors.
     Some operations raise exceptions in torch, we check if the same behavior is observed in ttnn.
     Note: We do not enforce the same exception type or message.
     """
     rank = len(tensor_shape)
 
-    torch_tensor = (
-        torch.randn(*tensor_shape, dtype=torch.bfloat16) if rank > 0 else torch.randn((), dtype=torch.bfloat16)
-    )
-    ttnn_tensor = ttnn.from_torch(torch_tensor, device=device)
+    # Create tensor based on data type
+    if dtype in [torch.int32, torch.uint8]:
+        # Use randint for integer types
+        torch_tensor = (
+            torch.randint(0, 100, tensor_shape, dtype=dtype) if rank > 0 else torch.randint(0, 100, (), dtype=dtype)
+        )
+    else:
+        # Use randn for floating point types
+        torch_tensor = torch.randn(*tensor_shape, dtype=dtype) if rank > 0 else torch.randn((), dtype=dtype)
+
+    # Convert torch uint8 to appropriate ttnn type
+    if dtype == torch.uint8:  # PyTorch does not have uint32/uint16, so we use uint8
+        ttnn_dtype = ttnn.uint32
+        ttnn_tensor = ttnn.from_torch(torch_tensor, device=device, dtype=ttnn_dtype)
+    else:
+        ttnn_tensor = ttnn.from_torch(torch_tensor, device=device)
 
     torch_op, ttnn_op = getattr(torch, "argmax"), getattr(ttnn, "argmax")
 

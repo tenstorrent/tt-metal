@@ -850,6 +850,7 @@ void try_advance(command_context_t<Addrgen>& cmd_ctx) {
                 cmd_ctx.cmd_specific_ctx.inline_value_ctx.value) {
                 DPRINT << "Completing waitval command\n";
                 cmd_ctx.complete_current_command();
+                invalidate_l1_cache();
             }
             break;
 
@@ -971,7 +972,7 @@ void kernel_main() {
 #endif
 
     if (fabric_connection.is_logically_connected()) {
-        fabric_connection.open();
+        fabric_connection.open<true>();
     }
     while (stream_done_mask != finish_value) {
         if ((stream_done_mask & 0x1) == 0) {

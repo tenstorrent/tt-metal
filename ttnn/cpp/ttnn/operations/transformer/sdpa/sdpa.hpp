@@ -115,6 +115,56 @@ struct ExecuteRingJointAttention {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
+struct ExecuteFlashMLAPrefill {
+    static ttnn::Tensor invoke(
+        QueueId queue_id,
+        const ttnn::Tensor& input_tensor_q,
+        const ttnn::Tensor& input_tensor_k,
+        uint32_t head_dim_v,
+        const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,
+        bool is_causal = true,
+        std::optional<float> scale = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor_q,
+        const ttnn::Tensor& input_tensor_k,
+        uint32_t head_dim_v,
+        const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,
+        bool is_causal = true,
+        std::optional<float> scale = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+};
+
+struct ExecuteChunkedFlashMLAPrefill {
+    static ttnn::Tensor invoke(
+        QueueId queue_id,
+        const ttnn::Tensor& input_tensor_q,
+        const ttnn::Tensor& input_tensor_k,
+        uint32_t head_dim_v,
+        const ttnn::Tensor& page_table_tensor,
+        int64_t chunk_start_idx,
+        std::optional<float> scale = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor_q,
+        const ttnn::Tensor& input_tensor_k,
+        uint32_t head_dim_v,
+        const ttnn::Tensor& page_table_tensor,
+        int64_t chunk_start_idx,
+        std::optional<float> scale = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+};
+
 }  // namespace operations::transformer
 
 namespace transformer {
@@ -134,6 +184,13 @@ constexpr auto joint_scaled_dot_product_attention = ttnn::register_operation<
 constexpr auto ring_joint_scaled_dot_product_attention = ttnn::register_operation<
     "ttnn::transformer::ring_joint_scaled_dot_product_attention",
     ttnn::operations::transformer::ExecuteRingJointAttention>();
+
+constexpr auto flash_mla_prefill = ttnn::
+    register_operation<"ttnn::transformer::flash_mla_prefill", ttnn::operations::transformer::ExecuteFlashMLAPrefill>();
+
+constexpr auto chunked_flash_mla_prefill = ttnn::register_operation<
+    "ttnn::transformer::chunked_flash_mla_prefill",
+    ttnn::operations::transformer::ExecuteChunkedFlashMLAPrefill>();
 
 }  // namespace transformer
 

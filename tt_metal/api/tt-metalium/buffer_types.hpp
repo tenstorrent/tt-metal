@@ -21,6 +21,13 @@ enum class ShardOrientation {
     COL_MAJOR,
 };
 
+enum class ShardDistributionStrategy {
+    // Distribute each shard to each of the cores in a linearized list in a round-robin manner.
+    ROUND_ROBIN_1D = 0,
+    // Distribute a 2D grid of shards to a 2D grid of cores with one to one mapping.
+    GRID_2D = 1,
+};
+
 enum class ShardMode {
     PHYSICAL,  // TODO: Deprecate this option to treat shard shape as physical
     LOGICAL,
