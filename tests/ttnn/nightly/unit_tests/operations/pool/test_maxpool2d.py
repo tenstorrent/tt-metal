@@ -199,7 +199,23 @@ def run_max_pool(
 
     # adjust the TTNN output to match the expected shape
     ttnn_output = ttnn.to_torch(ttnn_output)
-    ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
+
+    # Get actual output dimensions from PyTorch reference instead of pre-calculated values
+    # This fixes the dilation shape mismatch issue
+    pytorch_out_n, pytorch_out_c, pytorch_out_h, pytorch_out_w = torch_output.shape
+
+    # Verify the sizes match before reshaping
+    expected_flat_size = pytorch_out_n * pytorch_out_h * pytorch_out_w * pytorch_out_c
+    actual_flat_size = ttnn_output.numel()
+
+    if expected_flat_size != actual_flat_size:
+        raise RuntimeError(
+            f"TTNN output size mismatch: expected {expected_flat_size}, got {actual_flat_size}. "
+            f"Expected shape: [{pytorch_out_n}, {pytorch_out_c}, {pytorch_out_h}, {pytorch_out_w}]"
+        )
+
+    # Use actual dimensions from PyTorch reference for correct reshaping
+    ttnn_output = ttnn_output.reshape(pytorch_out_n, pytorch_out_h, pytorch_out_w, pytorch_out_c)  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
 
     # test for equivalance
