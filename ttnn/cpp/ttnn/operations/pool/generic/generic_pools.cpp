@@ -38,16 +38,17 @@ static Tensor pool2d_invoke(
     std::optional<int32_t> divisor_override = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
-    bool in_place_halo = false) {
+    bool in_place_halo = false,
+    const Layout output_layout = Layout::ROW_MAJOR) {
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     log_info(tt::LogOp, "input tensor layout: {}", input_tensor.layout());
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
-    bool is_out_tiled = is_in_tiled;
+    bool is_out_tiled = (output_layout == Layout::TILE);
 
     if (is_out_tiled) {
-        log_info(tt::LogOp, "Input tensor is tiled, using TILE_LAYOUT for output as well.");
+        log_info(tt::LogOp, "Output layout requested: TILE_LAYOUT");
     } else {
-        log_info(tt::LogOp, "Input tensor is not tiled, using ROW_MAJOR_LAYOUT for output.");
+        log_info(tt::LogOp, "Output layout requested: ROW_MAJOR_LAYOUT");
     }
 
     validate_input_params(
@@ -199,6 +200,7 @@ static Tensor pool2d_invoke(
         sliding_window_config,
         pool_type,
         input_tensor.dtype(),  // input_tensor.dtype(), // currently only bfp16 output is supported
+        output_layout,
         out_memory_config,
         count_include_pad,
         divisor_override,
@@ -230,7 +232,7 @@ Tensor MaxPool2DOp::invoke(
     const Layout output_layout) {
     TT_FATAL(output_data_format == DataType::BFLOAT16, "Currently only BFLOAT16 output data format is supported");
     TT_FATAL(output_layout == Layout::ROW_MAJOR || output_layout == Layout::TILE, "Only ROW_MAJOR and TILE output layouts are supported");
-    
+
     return pool2d_invoke(
         queue_id,
         input_tensor,
@@ -248,7 +250,8 @@ Tensor MaxPool2DOp::invoke(
         std::nullopt,  // divisor_override
         memory_config,
         applied_shard_scheme,
-        in_place_halo);
+        in_place_halo,
+        output_layout);
 }
 
 Tensor AvgPool2DOp::invoke(
@@ -284,7 +287,8 @@ Tensor AvgPool2DOp::invoke(
         divisor_override,
         memory_config,
         applied_shard_scheme,
-        in_place_halo);
+        in_place_halo,
+        Layout::ROW_MAJOR);  // AvgPool maintains ROW_MAJOR for now
 }
 
 }  // namespace operations::pool

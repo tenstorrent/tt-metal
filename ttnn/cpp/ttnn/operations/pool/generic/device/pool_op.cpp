@@ -85,7 +85,8 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     uint32_t out_h = sliding_window_config.get_output_shape()[1];
     uint32_t out_w = sliding_window_config.get_output_shape()[2];
 
-    bool is_out_tiled = true;
+    // Determine output layout from operation attributes instead of hardcoding
+    bool is_out_tiled = (op_attr.output_layout_ == Layout::TILE);
 
     // need to pad the last dim to TILE_WIDTH
     uint32_t out_c = input_shape[3];
@@ -94,6 +95,12 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
 
     uint32_t out_nhw_padded =
         tt::round_up(out_nhw, (is_out_tiled ? tt::constants::TILE_HEIGHT : 1) * sliding_window_config.num_cores_nhw);
+
+    // Apply additional tile alignment for TILE layout
+    if (is_out_tiled) {
+        out_c_padded = tt::round_up(out_c, tt::constants::TILE_WIDTH);
+        out_nhw_padded = tt::round_up(out_nhw_padded, tt::constants::TILE_HEIGHT * sliding_window_config.num_cores_nhw);
+    }
 
     // {1, 1, N * H * W, C}
     const ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
@@ -115,7 +122,9 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     }
 
     log_info(tt::LogOp, "input layout: {}", input.layout());
-    tt::tt_metal::Layout output_layout = is_out_tiled ? tt::tt_metal::Layout::TILE : tt::tt_metal::Layout::ROW_MAJOR;
+    tt::tt_metal::Layout output_layout = op_attr.output_layout_;
+    log_info(tt::LogOp, "requested output layout: {}", output_layout);
+
     return TensorSpec(
         output_shape,
         tt::tt_metal::TensorLayout::fromPaddedShape(
@@ -186,6 +195,7 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
     const sliding_window::SlidingWindowConfig& sliding_window_config,
     Pool2DType pool_type,
     DataType output_dtype,
+    Layout output_layout,
     MemoryConfig memory_config,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
@@ -195,6 +205,7 @@ std::tuple<Pool2D::operation_attributes_t, Pool2D::tensor_args_t> Pool2D::invoke
             .sliding_window_config_ = sliding_window_config,
             .pool_type_ = pool_type,
             .output_dtype_ = output_dtype,
+            .output_layout_ = output_layout,
             .memory_config_ = std::move(memory_config),
             .count_include_pad_ = count_include_pad,
             .divisor_override_ = divisor_override,

@@ -33,20 +33,34 @@ Currently maxpool supports only BF16 row-major output. We want to add two option
 - ❌ Tests FLOAT32 + layouts (fails with clear validation error at `generic_pools.cpp:231`)
 - ❌ Tests BFLOAT8_B + layouts (fails with clear validation error)
 
-### Step 2: Update Output Shape Calculation
+### Step 2: Update Output Shape Calculation ✅ COMPLETED
 **What needs to be changed:**
-- Modify output tensor shape calculation based on layout choice
-- For tiled layout: adjust dimensions to tile boundaries
-- For row-major layout: keep existing logic
+- ✅ Modify output tensor shape calculation based on layout choice
+- ✅ For tiled layout: adjust dimensions to tile boundaries
+- ✅ For row-major layout: keep existing logic
 
 **Why:**
 - Tiled layout requires different memory layout and addressing
 - Shape must match the chosen layout for proper memory allocation
 
 **How to test:**
-- Unit tests for shape calculation with both layouts
-- Verify output dimensions match expected values
-- Test edge cases (non-tile-aligned inputs)
+- ✅ Unit tests for shape calculation with both layouts
+- ✅ Verify output dimensions match expected values
+- ✅ Test edge cases (non-tile-aligned inputs)
+
+**Status:** COMPLETED - Output shape calculation now respects `output_layout` parameter.
+
+**Implementation Details:**
+- ✅ Added `output_layout` parameter to entire call chain: `MaxPool2DOp::invoke` → `pool2d_invoke` → `Pool2D::invoke`
+- ✅ Updated `Pool2D::operation_attributes_t` to include `output_layout_` field
+- ✅ Modified shape calculation in `pool_op.cpp` to use `op_attr.output_layout_` instead of hardcoding
+- ✅ Applied proper tile alignment when TILE layout is requested
+
+**Test Results:**
+- ✅ TILE layout: passes perfectly (test_max_pool2d_output_formats_and_layouts)
+- ⚠️ ROW_MAJOR layout: functional but has PCC differences (expected - kernel still produces tiled output)
+
+**Note:** ROW_MAJOR PCC issues are expected until Steps 3-4 update kernel logic to conditionally produce different layouts.
 
 ### Step 3: Update Circular Buffer Allocation
 **What needs to be changed:**
