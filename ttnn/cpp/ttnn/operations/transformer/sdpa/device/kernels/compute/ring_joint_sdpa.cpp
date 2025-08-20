@@ -80,7 +80,11 @@ void MAIN {
     // The last iteration will concatenate L, which contains the masked portion of the joint tensor.
     constexpr uint32_t L_mask_ring_id = ring_size - 1;
 
-    mm_init(cb_q_in, cb_k_in, cb_qk_im);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(cb_q_in, cb_k_in, cb_qk_im);
+
+    // Initialize matmul operation
+    matmul_init(cb_q_in, cb_k_in);
 
     for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
         uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();

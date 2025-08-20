@@ -6,6 +6,7 @@
 
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -17,7 +18,11 @@ void MAIN {
     uint32_t in1_block_tile_cnt = get_compile_time_arg_val(5);
     uint32_t out_block_tile_cnt = get_compile_time_arg_val(6);
 
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+
+    // Initialize matmul operation
+    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
 
     acquire_dst();
     for (uint32_t b = 0; b < block_cnt; ++b) {
@@ -29,7 +34,7 @@ void MAIN {
             for (uint32_t c = 0; c < dst_tile_cols; ++c) {
                 int in1_block_tile_index = 0;
                 for (uint32_t i = 0; i < block_tile_dim; ++i) {
-                    matmul_tiles(
+                    matmul_tile(
                         tt::CBIndex::c_0,
                         tt::CBIndex::c_1,
                         in0_block_tile_index + i,
