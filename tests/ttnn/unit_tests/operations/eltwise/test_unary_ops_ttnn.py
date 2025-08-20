@@ -1045,7 +1045,7 @@ def test_unary_log1p_ttnn(input_shapes, device):
     golden_function = ttnn.get_golden_function(ttnn.log1p)
     torch_output_tensor = golden_function(torch_input_tensor)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
+    assert_with_pcc(output_tensor, torch_output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize(
@@ -1064,8 +1064,17 @@ def test_unary_log1p_ttnn(input_shapes, device):
         (torch.bfloat16, ttnn.bfloat16),
     ],
 )
+@pytest.mark.parametrize(
+    "ttnn_op",
+    [
+        ttnn.log,
+        ttnn.log1p,
+        ttnn.log2,
+        ttnn.log10,
+    ],
+)
 @pytest.mark.parametrize("fast_and_approx", [False, True])
-def test_unary_log_ttnn(input_shapes, torch_dtype, ttnn_dtype, fast_and_approx, device):
+def test_unary_log_like_fast_approx_ttnn(input_shapes, torch_dtype, ttnn_dtype, ttnn_op, fast_and_approx, device):
     torch.manual_seed(0)
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
     if fast_and_approx:
@@ -1084,15 +1093,15 @@ def test_unary_log_ttnn(input_shapes, torch_dtype, ttnn_dtype, fast_and_approx, 
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     cq_id = 0
-    output_tensor_tt = ttnn.log(input_tensor, queue_id=cq_id, fast_and_approximate_mode=fast_and_approx)
+    output_tensor_tt = ttnn_op(input_tensor, queue_id=cq_id, fast_and_approximate_mode=fast_and_approx)
     output_tensor = ttnn.to_torch(output_tensor_tt)
 
-    golden_function = ttnn.get_golden_function(ttnn.log)
+    golden_function = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_function(torch_input_tensor)
     if ttnn_dtype == ttnn.float32 or fast_and_approx:
-        assert_allclose(output_tensor_tt, torch_output_tensor, atol=0.05)
+        assert_allclose(output_tensor_tt, torch_output_tensor, atol=0.0625)
     else:
-        assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999
+        assert_with_pcc(output_tensor, torch_output_tensor, pcc=0.999)
 
 
 @pytest.mark.parametrize("scalar", [1, 2, -10, -25, 15.5, 28.5, -13.5, -29.5, 0, -0, -5, 8, 100, -100])
