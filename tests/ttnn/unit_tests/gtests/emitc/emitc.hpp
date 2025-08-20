@@ -12,7 +12,6 @@
 #include "ttnn/device.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/conv/conv_transpose2d/conv_transpose2d.hpp"

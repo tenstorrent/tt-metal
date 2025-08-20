@@ -60,11 +60,6 @@ target_sources(
         mesh_partition/mesh_partition.cpp
         mesh_partition/device/mesh_partition_device_operation.cpp
         mesh_partition/device/mesh_partition_program_factory.cpp
-        reduce_scatter/device/host/reduce_scatter_full_worker_grid.cpp
-        reduce_scatter/device/reduce_scatter_op.cpp
-        reduce_scatter/reduce_scatter.cpp
-        reduce_scatter/host/reduce_scatter_worker_builder.cpp
-        reduce_scatter/host/reduce_scatter_common.cpp
         barrier/device/host/barrier_full_worker_grid.cpp
         barrier/device/barrier_op.cpp
         barrier/barrier.cpp

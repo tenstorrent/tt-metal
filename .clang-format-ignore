@@ -19,8 +19,6 @@ ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp
 ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.cpp
 ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp
 ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp
-ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.cpp
-ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp
 ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp
 ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp
 ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp
