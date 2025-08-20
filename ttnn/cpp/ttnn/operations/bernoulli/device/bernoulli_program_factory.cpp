@@ -8,6 +8,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::bernoulli {
@@ -64,13 +65,13 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed1_config);
 
     const std::string kernels_dir_path = "ttnn/cpp/ttnn/operations/bernoulli/device/kernels/";
-    const uint32_t input_is_dram = input.buffer()->buffer_type() == BufferType::DRAM ? 1 : 0;
-    const std::vector<uint32_t> reader_compile_time_args{in_cb_id, input_is_dram};
+    std::vector<uint32_t> reader_compile_time_args{in_cb_id};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
     const std::string reader_file_path = kernels_dir_path + "reader_bernoulli.cpp";
     const std::vector<uint32_t> compute_compile_time_args{intermed_cb_id};
     const std::string compute_file_path = kernels_dir_path + "compute_bernoulli.cpp";
-    const uint32_t output_is_dram = output.buffer()->buffer_type() == BufferType::DRAM ? 1 : 0;
-    const std::vector<uint32_t> writer_compile_time_args{in_cb_id, intermed_cb_id, intermed1_cb_id, output_is_dram};
+    std::vector<uint32_t> writer_compile_time_args{in_cb_id, intermed_cb_id, intermed1_cb_id};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
     const std::string writer_file_path = kernels_dir_path + "writer_bernoulli.cpp";
 
     std::map<std::string, std::string> writer_defines;

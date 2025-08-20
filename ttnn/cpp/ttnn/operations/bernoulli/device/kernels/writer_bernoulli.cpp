@@ -10,17 +10,15 @@ void kernel_main() {
     constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t intermed_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t intermed1_cb_id = get_compile_time_arg_val(2);
-    constexpr bool output_is_dram = get_compile_time_arg_val(3) == 1;
 
     auto out_addr = get_arg_val<uint32_t>(0);
     auto start_id = get_arg_val<uint32_t>(1);
     auto num_tiles = get_arg_val<uint32_t>(2);
     uint32_t end_id = start_id + num_tiles;
 
-    const InterleavedAddrGenFast<output_is_dram> output_addrg = {
-        .bank_base_address = out_addr,
-        .page_size = get_tile_size(intermed1_cb_id),
-        .data_format = get_dataformat(intermed1_cb_id)};
+    const uint32_t tile_size_bytes = get_tile_size(intermed1_cb_id);
+    constexpr auto out_args = TensorAccessorArgs<3>();
+    const auto output_addrg = TensorAccessor(out_args, out_addr, tile_size_bytes);
 
     cb_reserve_back(intermed1_cb_id, 1);
     uint32_t intermed1_cb_write_ptr = get_write_ptr(intermed1_cb_id);
