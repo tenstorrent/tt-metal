@@ -18,36 +18,44 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
-        # (8, 768, 1, 512, 32, 2, 8, 8),  # base case
-        # (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
-        # (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
-        # (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
-        # (1, 2560, 1, 512, 32, 2, 8, 8),  # test mcast num_out_blocks 2
-        # (1, 2560, 1, 1024, 32, 4, 8, 8),  # test mcast num_out_blocks 4
-        # (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
-        # (2, 768, 1, 512, 32, 2, 8, 8),  # test batch size 2 (still multicast)
-        # (8, 768, 1, 512, 32, 2, 8, 8),  # test batch size 8 (no multicast)
-        # (8, 768, 1, 512, 32, 3, 8, 8),  # test batch size 8 (no multicast), but uneven num_out_blocks divisor
-        # (1, 128, 1, 512, 32, 2, 4, 4),  # test all groups on core fit in less than one tile, so need to reduce col core count
-        # # # SDXL 1024x1024 resoultion
-        # (1, 640, 128, 128, 32, 3, 4, 4),
-        # (1, 960, 128, 128, 32, 6, 2, 2),
+        (8, 768, 1, 512, 32, 2, 8, 8),  # base case
+        (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
+        (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
+        (1, 480, 1, 64, 8, 1, 1, 1),  # test last group ends less than max tile span
+        (1, 2560, 1, 512, 32, 2, 8, 8),  # test mcast num_out_blocks 2
+        (1, 2560, 1, 1024, 32, 4, 8, 8),  # test mcast num_out_blocks 4
+        (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size
+        (2, 768, 1, 512, 32, 2, 8, 8),  # test batch size 2 (still multicast)
+        (8, 768, 1, 512, 32, 2, 8, 8),  # test batch size 8 (no multicast)
+        (8, 768, 1, 512, 32, 3, 8, 8),  # test batch size 8 (no multicast), but uneven num_out_blocks divisor
+        (
+            1,
+            128,
+            1,
+            512,
+            32,
+            2,
+            4,
+            4,
+        ),  # test all groups on core fit in less than one tile, so need to reduce col core count
+        # # SDXL 1024x1024 resoultion
+        (1, 640, 128, 128, 32, 3, 4, 4),
+        (1, 960, 128, 128, 32, 6, 2, 2),
         # VAE
         # tensor is too large, but good example
-        # (1, 256, 1024, 1024, 32, 128, 8, 4),
-        # (1, 256, 515, 512, 32, 32, 4, 4),
-        # (1, 512, 128, 128, 32, 4, 1, 4),
-        # (1, 512, 256, 256, 32, 16, 4, 4),
-        # (1, 512, 512, 512, 32, 32, 4, 4),
-        # (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
-        # (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
-        # (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
-        # (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
-        # (1, 256, 512, 512, 32, 16, 8, 8),  # SD 1.4 VAE
-        # (1, 128, 512, 512, 32, 22, 4, 4),  # SD 1.4 VAE
+        (1, 256, 1024, 1024, 32, 128, 8, 4),
+        (1, 256, 515, 512, 32, 32, 4, 4),
+        (1, 512, 128, 128, 32, 4, 1, 4),
+        (1, 512, 256, 256, 32, 16, 4, 4),
+        (1, 512, 512, 512, 32, 32, 4, 4),
+        (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
+        (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
+        (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
+        (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
+        (1, 256, 512, 512, 32, 16, 8, 8),  # SD 1.4 VAE
+        (1, 128, 512, 512, 32, 22, 4, 4),  # SD 1.4 VAE
         # sd35
         # //4 indicats the number of device. Default number of blocks used is (w*h)/(128*128)
-        (1, 128 // 4, 64, 64, 32 // 4, 1, 8, 8),
         (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
         (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
         (1, 512 // 4, 512, 512, 32 // 4, 8, 8, 8),
