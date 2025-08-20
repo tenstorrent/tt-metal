@@ -58,6 +58,24 @@ void WriteShard(
 }
 
 template <typename DType>
+void WriteShardWithConversion(
+    MeshCommandQueue& mesh_cq,
+    const std::shared_ptr<MeshBuffer>& mesh_buffer,
+    tt::DataFormat data_format,
+    std::vector<DType>& src,
+    tt::DataFormat src_data_format,
+    const MeshCoordinate& coord,
+    bool blocking = false) {
+    std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
+        .shard_coord = coord,
+        .host_data = src.data(),
+        .region = std::nullopt,
+    }};
+    mesh_cq.enqueue_write_shards_with_conversion(
+        mesh_buffer, data_format, shard_data_transfers, src_data_format, blocking);
+}
+
+template <typename DType>
 void ReadShard(
     MeshCommandQueue& mesh_cq,
     std::vector<DType>& dst,
@@ -88,6 +106,17 @@ void EnqueueWriteMeshBuffer(
     const std::vector<DType>& src,
     bool blocking = false) {
     mesh_cq.enqueue_write_mesh_buffer(mesh_buffer, src.data(), blocking);
+}
+
+template <typename DType>
+void EnqueueWriteMeshBufferWithConversion(
+    MeshCommandQueue& mesh_cq,
+    std::shared_ptr<MeshBuffer>& mesh_buffer,
+    tt::DataFormat data_format,
+    const std::vector<DType>& src,
+    tt::DataFormat src_data_format,
+    bool blocking = false) {
+    mesh_cq.enqueue_write_mesh_buffer_with_conversion(mesh_buffer, data_format, src.data(), src_data_format, blocking);
 }
 
 template <typename DType>
