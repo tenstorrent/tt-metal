@@ -266,6 +266,7 @@ std::uint64_t get_noc_addr(std::uint32_t addr, uint8_t noc = noc_index) {
 
 template <bool DRAM>
 struct InterleavedAddrGen {
+    static constexpr bool is_dram = DRAM;
     uint32_t bank_base_address;  // Base address for the whole tensor.
     const uint32_t page_size;    // Num bytes in page.
     const uint32_t aligned_page_size =
@@ -295,6 +296,7 @@ struct InterleavedAddrGen {
 
 template <bool DRAM>
 struct InterleavedPow2AddrGen {
+    static constexpr bool is_dram = DRAM;
     const uint32_t bank_base_address;
     const uint32_t log_base_2_of_page_size;  // WARNING: This struct is used for optimized get_noc_addr in which case
                                              // you know that bank_unit_size is a power of 2
@@ -328,6 +330,7 @@ struct InterleavedPow2AddrGen {
 
 template <bool DRAM, uint32_t tile_hw = 1024>
 struct InterleavedAddrGenFast {
+    static constexpr bool is_dram = DRAM;
     uint32_t bank_base_address;  // Base address for the whole tensor.
     // TODO: Remove page_size from argument list. This can be derived from data_format
     uint32_t page_size;      // Num bytes in bank unit.
@@ -358,6 +361,7 @@ struct InterleavedAddrGenFast {
 // TODO: need static assert + host assert that page size <= 8192, hard constraint
 template <bool DRAM>
 struct InterleavedPow2AddrGenFast {
+    static constexpr bool is_dram = DRAM;
     uint32_t bank_base_address;              // Base address for the whole tensor.
     const uint32_t log_base_2_of_page_size;  // Num bytes in bank unit.
     static constexpr uint32_t log_base_2_of_allocator_alignment =

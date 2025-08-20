@@ -1247,14 +1247,14 @@ public:
     }
 
 private:
-    ControlPlane* control_plane_ptr_;
-    Topology topology_;
-    RoutingType routing_type_;
+    ControlPlane* control_plane_ptr_{};
+    Topology topology_{0};
+    RoutingType routing_type_{0};
     MeshShape mesh_shape_;
     std::set<MeshId> available_mesh_ids_;
-    tt::tt_fabric::FabricConfig current_fabric_config_;
     std::vector<FabricNodeId> local_available_node_ids_;
     std::vector<FabricNodeId> global_available_node_ids_;
+    tt::tt_fabric::FabricConfig current_fabric_config_{FabricConfig::DISABLED};
     std::shared_ptr<MeshDevice> mesh_device_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;

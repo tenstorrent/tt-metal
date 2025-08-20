@@ -353,8 +353,8 @@ private:
 
     bool supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) const;
 
-    ARCH arch_;
-    TargetDevice target_type_;
+    ARCH arch_{tt::ARCH::Invalid};
+    TargetDevice target_type_{0};
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
     std::unique_ptr<tt::umd::Cluster> driver_;
