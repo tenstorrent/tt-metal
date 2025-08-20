@@ -74,11 +74,6 @@ if ([ ! -z "$patch" ]); then
 fi
 
 
-./create_venv.sh
-source $PYTHON_ENV_DIR/bin/activate
-pip install -r models/tt_transformers/requirements.txt
-
-
 echo "Current location: `pwd`"
 echo "Current branch: `git rev-parse --abbrev-ref HEAD`"
 echo "Current commit: `git rev-parse HEAD`"
@@ -105,6 +100,18 @@ while [[ "$found" = "false" ]]; do
 
    if [[ $build_rc -ne 0 ]]; then
       echo "Build failed; skipping this commit"
+      git bisect skip
+      continue
+   fi
+
+   venv_rc=0
+   ./create_venv.sh || venv_rc=$?
+   source $PYTHON_ENV_DIR/bin/activate || venv_rc=$?
+   pip install -r models/tt_transformers/requirements.txt || venv_rc=$?
+   echo "::endgroup::"
+
+   if [[ $venv_rc -ne 0 ]]; then
+      echo "Python environment setup failed; skipping this commit"
       git bisect skip
       continue
    fi
