@@ -631,7 +631,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     union {
         float f;
         uint32_t u;
-    } scale_union;
+    } scale_union{};
     scale_union.f = scale.value_or(1.0f);
 
     // Create core groups for reduce cores
@@ -726,6 +726,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     };
     if (use_attention_sink) {
         tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
+    } else {
+        reader_compile_time_args_common.push_back(0);
     }
 
     std::vector<uint32_t> writer_compile_time_args_common = {
