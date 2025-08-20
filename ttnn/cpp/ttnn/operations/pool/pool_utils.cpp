@@ -232,12 +232,22 @@ uint32_t calculate_L1_usage(
         in_cb_config_1_size = in_cb_npages * in_cb_pagesize;
     }
 
-    // after reduction
-    const uint32_t out_cb_pagesize =
-        tt::tile_size(params.data_format);  // there is just one row of channels after each reduction (or 1
-                                            // block of c if its greater than 8 tiles)
-    const uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] *
-                                   output_memory.shard_spec().value().shape[1] / tt::constants::TILE_HW;
+    // after reduction - layout-aware CB allocation (matches actual CB allocation logic)
+    uint32_t out_cb_pagesize;
+    uint32_t out_cb_npages;
+    const bool is_output_tiled = (output_layout == Layout::TILE);
+
+    if (is_output_tiled) {
+        // Tiled output: use tile-based allocation
+        out_cb_pagesize = tt::tile_size(params.data_format);
+        out_cb_npages = output_memory.shard_spec().value().shape[0] * output_memory.shard_spec().value().shape[1] /
+                        tt::constants::TILE_HW;
+    } else {
+        // Row-major output: use stick-based allocation
+        out_cb_pagesize =
+            std::min(tt::constants::TILE_WIDTH, output_memory.shard_spec().value().shape[1]) * params.nbytes;
+        out_cb_npages = output_memory.shard_spec().value().shape[0] * params.in_ntiles_c;
+    }
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
     uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
@@ -248,7 +258,6 @@ uint32_t calculate_L1_usage(
 
     // Conditionally include temp CB memory only for TILED output (matches CB allocation logic)
     uint32_t temp_cb_size = 0;
-    const bool is_output_tiled = (output_layout == Layout::TILE);
 
     if (is_output_tiled) {
         const uint32_t temp_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;

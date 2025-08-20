@@ -187,13 +187,14 @@ void MAIN {
                 }
             } else {
                 // ROW_MAJOR output: pack directly to output CB (original behavior)
-                cb_reserve_back(out_cb_id, max_tiles_per_iter);
                 if (last_c_block) {
-                    pack_untilize_dest<1>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    pack_untilize_dest<partial_iter_output_tiles>(
+                        out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    cb_push_back(out_cb_id, partial_iter_output_tiles);
                 } else {
-                    pack_untilize_dest<1>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                    cb_push_back(out_cb_id, max_tiles_per_iter);
                 }
-                cb_push_back(out_cb_id, max_tiles_per_iter);
             }
             tile_regs_release();
 

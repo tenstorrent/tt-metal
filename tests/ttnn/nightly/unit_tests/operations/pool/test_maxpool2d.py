@@ -242,10 +242,10 @@ def run_max_pool(
         atol = 0.35
 
     # torch.set_printoptions(threshold=float("inf"))
-    print("ttnn out")
-    print(ttnn_output)
-    print("torch out")
-    print(torch_output)
+    # print("ttnn out")
+    # print(ttnn_output)
+    # print("torch out")
+    # print(torch_output)
     assert_with_pcc(ttnn_output, torch_output, pcc_thresh)
     allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
     isequal = torch.equal(ttnn_output, torch_output)
@@ -260,29 +260,29 @@ def run_max_pool(
     (
         (  # resnet shapes
             [1, 320, 64, 64],
-            # [16, 64, 112, 112],
+            [16, 64, 112, 112],
             # # hpr shapes
-            # [8, 32, 132, 20],
-            # [32, 32, 264, 40],
-            # [4, 16, 1056, 160],
-            # [16, 16, 528, 80],
+            [8, 32, 132, 20],
+            [32, 32, 264, 40],
+            [4, 16, 1056, 160],
+            [16, 16, 528, 80],
             # # wide for vgg
-            # [1, 256, 56, 56],
-            # [1, 512, 28, 28],
+            [1, 256, 56, 56],
+            [1, 512, 28, 28],
             # # wide yolo kernel
-            # [1, 512, 10, 10],
-            # [1, 96, 112, 112],
-            # [1, 192, 132, 20],
+            [1, 512, 10, 10],
+            [1, 96, 112, 112],
+            [1, 192, 132, 20],
             # # wide non-8 multiple tests
-            # [1, 800, 32, 32],
-            # [1, 640, 32, 32],
-            # [1, 576, 32, 32],
-            # [1, 384, 32, 32],
+            [1, 800, 32, 32],
+            [1, 640, 32, 32],
+            [1, 576, 32, 32],
+            [1, 384, 32, 32],
             # # C=16 test
-            # [1, 16, 12, 12],
+            [1, 16, 12, 12],
             # # partial grid tests
-            # [1, 32, 10, 10],  # BH
-            # [1, 32, 6, 6],  # WH
+            [1, 32, 10, 10],  # BH
+            [1, 32, 6, 6],  # WH
         )
     ),
 )
@@ -290,8 +290,8 @@ def run_max_pool(
     "kernel_size",
     (
         (3, 3),  # 1 face 1 chunk
-        # (5, 5),  # 2 faces 1 chunk
-        # (7, 7),  # 2 chunks
+        (5, 5),  # 2 faces 1 chunk
+        (7, 7),  # 2 chunks
         (9, 9),  # 3 chunks
     ),
 )
@@ -315,14 +315,14 @@ def run_max_pool(
     "dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        # True,
+        True,
     ],
 )
 def test_run_max_pool_height_shard(

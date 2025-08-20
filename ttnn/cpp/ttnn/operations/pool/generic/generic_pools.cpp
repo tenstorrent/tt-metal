@@ -39,6 +39,7 @@ static Tensor pool2d_invoke(
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     bool in_place_halo = false,
+    const DataType output_data_format = DataType::BFLOAT16,
     const Layout output_layout = Layout::ROW_MAJOR) {
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     log_info(tt::LogOp, "input tensor layout: {}", input_tensor.layout());
@@ -205,7 +206,7 @@ static Tensor pool2d_invoke(
         haloed_tensor,
         sliding_window_config,
         pool_type,
-        input_tensor.dtype(),  // input_tensor.dtype(), // currently only bfp16 output is supported
+        output_data_format,  // Use the explicitly specified output data format
         output_layout,
         out_memory_config,
         count_include_pad,
@@ -257,6 +258,7 @@ Tensor MaxPool2DOp::invoke(
         memory_config,
         applied_shard_scheme,
         in_place_halo,
+        output_data_format,
         output_layout);
 }
 
@@ -294,6 +296,7 @@ Tensor AvgPool2DOp::invoke(
         memory_config,
         applied_shard_scheme,
         in_place_halo,
+        DataType::BFLOAT16,  // AvgPool always uses BFLOAT16 output
         Layout::ROW_MAJOR);  // AvgPool maintains ROW_MAJOR for now
 }
 
