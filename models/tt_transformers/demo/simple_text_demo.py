@@ -558,8 +558,8 @@ def test_demo_text(
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
-    # if is_ci_env and (("accuracy" in test_id) or not ci_only):
-    # pytest.skip("CI only runs the CI-only tests")
+    if is_ci_env and (("accuracy" in test_id) or not ci_only):
+        pytest.skip("CI only runs the CI-only tests")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
@@ -618,10 +618,10 @@ def test_demo_text(
 
         tg_enabled = (data_parallel == 4 and is_33_70b) or (data_parallel in [4, 16, 32] and is_31_8b)
 
-        # if num_devices == 32 and not tg_enabled:
-        #     pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
-        # if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b):
-        #     pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
+        if num_devices == 32 and not tg_enabled:
+            pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
+        if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b):
+            pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
 
     if not stop_at_eos:
         logger.info(f"The decode generation will only stop at the max_generated_tokens limit == {max_generated_tokens}")
