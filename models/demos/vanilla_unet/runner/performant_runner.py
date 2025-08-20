@@ -91,10 +91,8 @@ class VanillaUNetPerformantRunner:
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(self.device)
-
         ttnn_output_tensor = self.runner_infra.output_tensor
-        return ttnn_output_tensor  # get_model_result(ttnn_output_tensor, self.resolution)
+        return ttnn_output_tensor
 
     def _validate(self, input_tensor, result_output_tensor):
         torch_output_tensor = self.runner_infra.torch_output_tensor
@@ -103,9 +101,7 @@ class VanillaUNetPerformantRunner:
     def run(self, torch_input_tensor, check_pcc=False):
         n, c, h, w = torch_input_tensor.shape
         tt_inputs_host, _ = self.runner_infra._setup_l1_sharded_input(self.device, torch_input_tensor)
-
         output = self._execute_vanilla_unet_trace_2cqs_inference(tt_inputs_host)
-
         if check_pcc:
             self._validate(torch_input_tensor, output)
 

@@ -4,6 +4,14 @@
 >
 > Please refer to the front-page [README](../../README.md) for the latest verified release for each model.
 
+## August 18, 2025
+
+### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)
+- Integrated Qwen2.5-VL into the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
+
+### [TT-Transformers](https://github.com/tenstorrent/tt-metal/tree/main/models/tt_transformers)
+- Ported all CCLs ops to use [TT-Fabric](https://github.com/tenstorrent/tt-metal/tree/main/tech_reports/TT-Fabric/TT-Fabric-Architecture.md).
+
 ## August 6, 2025
 
 ### [Qwen 2.5-VL](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/qwen25_vl)
@@ -51,7 +59,7 @@
 ## April 7, 2025
 
 ### [Llama 3.1-70B - Galaxy](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3_70b_galaxy)
-- Achieved 45 t/s/u (and still working on further improvements) on Wormhole Galaxy for decode mode, with batch size 32 and 128 input sequence length. The included optimizations were: 1) using DRAM prefetching to remove memory bottlenecks for matmuls, 2) using [Sub-Devices](../tech_reports/SubDevices/SubDevices.md) to run multiple ops in parallel, 3) using CCLs enabled by [TT-Fabric](../tech_reports/TT-Fabric/TT-Fabric-Architecture.md).
+- Achieved 45 t/s/u (and still working on further improvements) on Wormhole Galaxy for decode mode, with batch size 32 and 128 input sequence length. The included optimizations were: 1) using DRAM prefetching to remove memory bottlenecks for matmuls, 2) using [Sub-Devices](https://github.com/tenstorrent/tt-metal/tree/main/tech_reports/SubDevices/SubDevices.md) to run multiple ops in parallel, 3) using CCLs enabled by [TT-Fabric](https://github.com/tenstorrent/tt-metal/tree/main/tech_reports/TT-Fabric/TT-Fabric-Architecture.md).
 - Created a functional prefill + decode demo which can be run via [text_demo.py](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3_70b_galaxy/demo/text_demo.py).
 
 ## March 24, 2025

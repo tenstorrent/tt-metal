@@ -133,7 +133,7 @@ create_program(
                 tt_metal::CircularBufferConfig(
                     cb0_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(src0_cb_index, single_tile_size);
-            auto cb_src0 = tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
+            tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
             uint32_t src1_cb_index = tt::CBIndex::c_1;
             uint32_t cb1_tiles = in1_block_tiles * 2;  // double buffer
@@ -141,14 +141,14 @@ create_program(
                 tt_metal::CircularBufferConfig(
                     cb1_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(src1_cb_index, single_tile_size);
-            auto cb_src1 = tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
+            tt_metal::CreateCircularBuffer(program_, core, cb_src1_config);
 
             CoreRangeSet cores(std::set<CoreRange>{CoreRange(core, core)});
             tt_metal::CircularBufferConfig cb_output_config =
                 tt_metal::CircularBufferConfig(out_CB_size, partials_and_out_data_format_spec)
                     .set_page_size(ouput_cb_index, single_tile_size)
                     .set_page_size(interm0_cb_index, single_tile_size);
-            auto cb_output = tt_metal::CreateCircularBuffer(program_, cores, cb_output_config);
+            tt_metal::CreateCircularBuffer(program_, cores, cb_output_config);
         }
     }
 
@@ -222,7 +222,7 @@ create_program(
         uint(out_subblock_w),
         uint(out_subblock_num_tiles)};
 
-    auto mm_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/matmul_large_block_zm.cpp",
         all_cores,

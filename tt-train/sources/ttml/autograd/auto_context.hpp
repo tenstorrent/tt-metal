@@ -8,6 +8,7 @@
 #include <memory>
 #include <random>
 
+#include "core/distributed/ccl_resources.hpp"
 #include "core/mesh_device.hpp"
 #include "core/tt_profiler.hpp"
 #include "graph.hpp"
@@ -15,8 +16,6 @@
 namespace ttml::autograd {
 
 enum class GradMode { ENABLED, DISABLED };
-
-using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
 
 class AutoContext {
 public:
@@ -45,7 +44,8 @@ public:
 
     ~AutoContext() = default;  // to make it work with unique_ptr.
 
-    ttnn::distributed::MeshDevice& get_device();
+    [[nodiscard]] ttnn::distributed::MeshDevice& get_device();
+    [[nodiscard]] std::shared_ptr<ttnn::distributed::MeshDevice> get_device_ptr();
 
     [[nodiscard]] tt::tt_metal::distributed::MeshShape get_mesh_shape() const;
 
@@ -57,10 +57,13 @@ public:
 
     void initialize_distributed_context(int argc, char** argv);
 
-    [[nodiscard]] DistributedContext& get_distributed_context() const;
+    [[nodiscard]] std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> get_distributed_context()
+        const;
 
     core::TTProfiler& get_profiler();
     void close_profiler();
+
+    [[nodiscard]] core::distributed::CCLResources& get_ccl_resources();
 
 private:
     AutoContext();
@@ -73,8 +76,10 @@ private:
     tt::tt_metal::distributed::MeshShape m_mesh_shape = tt::tt_metal::distributed::MeshShape(1, 1);
     std::unique_ptr<core::MeshDevice> m_device;
 
-    std::shared_ptr<DistributedContext> m_distributed_context;
+    std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext> m_distributed_context;
     std::unique_ptr<core::TTProfiler> m_profiler;
+
+    std::unique_ptr<core::distributed::CCLResources> m_ccl_resources{};
 
     friend class ttsl::Indestructible<AutoContext>;
 };

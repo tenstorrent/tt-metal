@@ -50,20 +50,21 @@ jobs:
             cmd: |
               ./build/test/tt_metal/distributed/distributed_unit_tests
               ./tests/tt_metal/multihost/run_multiprocess_socket_tests.sh
-          - name: eth and misc
+          - name: eth, misc, and user kernel path
             cmd: |
               ./build/test/tt_metal/unit_tests_eth
               ./build/test/tt_metal/unit_tests_misc
+              rm -rf /tmp/kernels
+              mkdir -p /tmp/kernels
+              TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*
           - name: tools
             cmd: |
               ./tests/scripts/run_tools_tests.sh
               ./build/test/tt_metal/unit_tests_debug_tools
           - name: ttnn tensor accessor
             cmd: "./build/test/ttnn/unit_tests_ttnn_accessor"
-          - name: user kernel path
-            cmd: |
-              rm -rf /tmp/kernels
-              TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*
+          - name: data movement
+            cmd: ./build/test/tt_metal/unit_tests_data_movement
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     container:
       image: ${{ inputs.docker-image }}
