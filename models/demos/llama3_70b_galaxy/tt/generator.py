@@ -486,9 +486,15 @@ class Generator:
         )
         return trace_tok_rm
 
-    def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=True):
-        logits, read_event = self.model.process_output_decode(tt_logits)
-        return logits, read_event
+    def read_decode_output(self, tt_out, async_read=True):
+        if not async_read:
+            return tt_out.cpu()
+
+        logits, read_event = self.model.process_output_decode(tt_out)
+        return logits, [read_event]
+
+    def process_decode_output_host(self, tt_out, is_tokens=True):
+        return ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])[0, 0, 0, :]
 
     def chat_completion(
         self,
