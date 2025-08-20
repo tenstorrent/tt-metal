@@ -289,6 +289,8 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
     tt::tt_metal::KernelHandle unary_writer_kernel_id;
     if (pad_output_row) {
         writer_compile_time_args_vec.push_back((std::uint32_t)temp_pad_cb_index);
+        writer_compile_time_args_vec.push_back(output.element_size());
+
         unary_writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
@@ -751,7 +753,11 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         program, compute_kernel, total_cores, ComputeConfig{.fp32_dest_acc_en = false, .compile_args = compute_args});
 
     std::vector<uint32_t> writer_compile_time_args_vec = {
-        cb_untilized_index, cb_output_index, cb_padding_index, input_padded_shape.rank() /* == 4*/};
+        cb_untilized_index,
+        cb_output_index,
+        cb_padding_index,
+        input_padded_shape.rank() /* == 4*/,
+        output.element_size()};
 
     std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram, misalignment};
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(

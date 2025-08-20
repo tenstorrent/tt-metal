@@ -238,6 +238,7 @@ struct ConvDRAMParamters {
     CoreCoord compute_grid;
     ttnn::Shape weights_shape;
     DataType weights_datatype;
+    DataType input_datatype;
     DataType output_datatype;
     bool enable_bias;
     bool mm_conv;

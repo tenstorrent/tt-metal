@@ -1066,6 +1066,12 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                                            ? params.output_height
                                            : params.output_width;
 
+    // Output of halo op is always ROW_MAJOR, so input for convs is either DataType::FLOAT32 or DataType::BFLOAT16
+    const tt::tt_metal::DataType conv_input_dtype = (params.input_datatype == tt::tt_metal::DataType::FLOAT32)
+                                                        ? tt::tt_metal::DataType::FLOAT32
+                                                        : tt::tt_metal::DataType::BFLOAT16;
+    const uint32_t input_datum_size = conv_input_dtype == tt::tt_metal::DataType::FLOAT32 ? 4 : 2;
+
     uint32_t slice_rounding_value = 1;
     if (conv_config.output_layout == tt_metal::Layout::TILE) {
         // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
@@ -1199,7 +1205,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         auto shard_shape = sliced_input_tensor_memory_config.shard_spec().value().shape;
 
         // Output of padded slice is always BFloat16, so size is 2 bytes.
-        uint32_t input_size = shard_shape[0] * shard_shape[1] * 2;
+        uint32_t input_size = shard_shape[0] * shard_shape[1] * input_datum_size;
 
         // Halo output is always BFloat16 in Conv DRAM
         uint32_t approx_max_halo_bytes = estimate_halo_output_elems(

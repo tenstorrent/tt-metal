@@ -28,6 +28,7 @@ void kernel_main() {
     constexpr uint32_t cb_out_id = get_compile_time_arg_val(1);
     constexpr uint32_t cb_padding_id = get_compile_time_arg_val(2);
     constexpr uint32_t num_dims = get_compile_time_arg_val(3);
+    constexpr uint32_t output_elem_size = get_compile_time_arg_val(4);
 
     const uint32_t output_coord_addr = get_arg_addr(4);
     const uint32_t output_start_in_input_addr = get_arg_addr(4 + num_dims);
@@ -51,14 +52,21 @@ void kernel_main() {
     uint32_t block_row_size = read_size / tt::constants::TILE_HEIGHT;
     const uint32_t pad_addr = get_read_ptr(cb_padding_id);
     if (padded_channels_ntiles > 0) {
-        volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pad_addr);
-        for (uint32_t i = 0; i < num_tiles_per_read * tt::constants::TILE_WIDTH; ++i) {
-            pad_ptr[i] = 0;
+        if constexpr (output_elem_size == 4) {
+            volatile tt_l1_ptr uint32_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pad_addr);
+            for (uint32_t i = 0; i < num_tiles_per_read * tt::constants::TILE_WIDTH; ++i) {
+                pad_ptr[i] = 0;
+            }
+        } else if constexpr (output_elem_size == 2) {
+            volatile tt_l1_ptr uint16_t* pad_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(pad_addr);
+            for (uint32_t i = 0; i < num_tiles_per_read * tt::constants::TILE_WIDTH; ++i) {
+                pad_ptr[i] = 0;
+            }
         }
     }
 
-    uint64_t pad_noc_addr =
-        get_noc_addr(pad_addr + (num_tiles_per_read - padded_channels_ntiles) * tt::constants::TILE_WIDTH * 2);
+    uint64_t pad_noc_addr = get_noc_addr(
+        pad_addr + (num_tiles_per_read - padded_channels_ntiles) * tt::constants::TILE_WIDTH * output_elem_size);
 #ifdef DEBUG
     DPRINT << "total_num_tiles: " << total_num_tiles << ", num_tiles_per_read: " << num_tiles_per_read
            << ", tile_size: " << tile_size << ", read_size: " << read_size << "block row size " << block_row_size
@@ -99,10 +107,13 @@ void kernel_main() {
 
         noc_async_read(noc_read_addr, write_addr, read_rows_size * block_row_size);
         uint32_t pad_write_addr =
-            write_addr + (num_tiles_per_read - padded_channels_ntiles) * tt::constants::TILE_WIDTH * 2;
+            write_addr + (num_tiles_per_read - padded_channels_ntiles) * tt::constants::TILE_WIDTH * output_elem_size;
         if (padded_channels_ntiles > 0) {
             for (uint32_t row_index = 0; row_index < read_rows_size; row_index++) {
-                noc_async_read(pad_noc_addr, pad_write_addr, padded_channels_ntiles * tt::constants::TILE_WIDTH * 2);
+                noc_async_read(
+                    pad_noc_addr,
+                    pad_write_addr,
+                    padded_channels_ntiles * tt::constants::TILE_WIDTH * output_elem_size);
                 pad_write_addr += block_row_size;
             }
         }

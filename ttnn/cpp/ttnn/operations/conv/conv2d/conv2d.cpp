@@ -208,6 +208,7 @@ Result conv2d_DRAM(
                         .compute_grid = compute_grid_size,
                         .weights_shape = weight_tensor.padded_shape(),
                         .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
+                        .input_datatype = input_tensor.dtype(),
                         .output_datatype = output_dtype,
                         .enable_bias = bias_tensor.has_value(),
                         .mm_conv = mm_conv,
@@ -248,11 +249,6 @@ Result conv2d_DRAM(
     TT_FATAL(
         input_tensor_on_device.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Input Tensor to Conv DRAM should be in Interleaved Memory Layout");
-
-    TT_FATAL(
-        input_tensor_on_device.dtype() == ttnn::DataType::BFLOAT16 ||
-            input_tensor_on_device.dtype() == ttnn::DataType::BFLOAT8_B,
-        "Input Tensor to Conv DRAM should be either BFLOAT8_B or BFLOAT16 format");
 
     Tensor dram_output_tensor = tt_metal::create_device_tensor(
         TensorSpec(
