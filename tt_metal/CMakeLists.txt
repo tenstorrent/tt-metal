@@ -13,10 +13,11 @@ target_compile_options(
     tt_metal
     PRIVATE
         -g
-        -O2
-        -fsanitize-coverage=trace-pc-guard
+        -fsanitize-coverage=func,trace-pc-guard
 )
-target_link_options(tt_metal PRIVATE -fsanitize-coverage=trace-pc-guard)
+target_link_options(tt_metal PRIVATE -rdynamic)
+
+target_link_options(tt_metal PRIVATE -fsanitize-coverage=func,trace-pc-guard)
 target_link_libraries(
     tt_metal
     PRIVATE
