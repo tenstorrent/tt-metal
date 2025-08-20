@@ -1639,6 +1639,16 @@ void pytensor_module(py::module& m_tensor) {
 
                     py_list = tt_tensor.to_list()
             )doc")
+        .def(
+            "tensor_topology",
+            [](const Tensor& self) { return self.tensor_topology(); },
+            R"doc(
+                Get the topology of the tensor.
+
+                .. code-block:: python
+
+                    topology = tt_tensor.tensor_topology()
+            )doc")
         .def_property(
             "tensor_id",
             [](const Tensor& self) { return self.tensor_id; },
