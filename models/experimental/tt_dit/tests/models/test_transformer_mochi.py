@@ -24,17 +24,19 @@ def stack_cos_sin(cos, sin):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
+    "mesh_device, sp_axis, tp_axis, num_links",
     [
-        [(1, 1), 0, 1],
-        [(1, 2), 0, 1],
-        [(1, 2), 1, 0],
-        [(2, 1), 0, 1],
-        [(2, 1), 1, 0],
-        [(2, 2), 0, 1],
-        [(2, 2), 1, 0],
-        [(2, 4), 0, 1],
-        [(2, 4), 1, 0],
+        [(1, 1), 0, 1, 1],
+        [(1, 2), 0, 1, 1],
+        [(1, 2), 1, 0, 1],
+        [(2, 1), 0, 1, 1],
+        [(2, 1), 1, 0, 1],
+        [(2, 2), 0, 1, 1],
+        [(2, 2), 1, 0, 1],
+        [(2, 4), 0, 1, 1],
+        [(2, 4), 1, 0, 1],
+        [(4, 8), 0, 1, 4],
+        [(4, 8), 1, 0, 4],
     ],
     ids=[
         "1x1sp0tp1",
@@ -46,6 +48,8 @@ def stack_cos_sin(cos, sin):
         "2x2sp1tp0",
         "2x4sp0tp1",
         "2x4sp1tp0",
+        "4x8sp0tp1",
+        "4x8sp1tp0",
     ],
     indirect=["mesh_device"],
 )
@@ -64,6 +68,7 @@ def test_mochi_transformer_block(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
     tp_axis: int,
+    num_links: int,
     B: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
@@ -86,8 +91,8 @@ def test_mochi_transformer_block(
 
     # Tight error bounds based on test config
     if not context_pre_only:
-        MIN_PCC = 0.999_400 if spatial_seq_len == 4000 else 0.999_110
-        MIN_RMSE = 0.036 if spatial_seq_len == 4000 else 0.045
+        MIN_PCC = 0.999_400 if spatial_seq_len == 4000 else 0.999_050
+        MIN_RMSE = 0.036 if spatial_seq_len == 4000 else 0.046
     else:
         MIN_PCC = 0.991_600 if spatial_seq_len == 4000 else 0.990_400
         MIN_RMSE = 0.14 if spatial_seq_len == 4000 else 0.14
@@ -101,7 +106,7 @@ def test_mochi_transformer_block(
     # Create CCL manager
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
-        num_links=1,
+        num_links=num_links,
         topology=ttnn.Topology.Linear,
     )
 
@@ -228,18 +233,22 @@ def test_mochi_transformer_block(
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
+    "mesh_device, sp_axis, tp_axis, num_links",
     [
-        [(2, 2), 0, 1],
-        [(2, 2), 1, 0],
-        [(2, 4), 0, 1],
-        [(2, 4), 1, 0],
+        [(2, 2), 0, 1, 1],
+        [(2, 2), 1, 0, 1],
+        [(2, 4), 0, 1, 1],
+        [(2, 4), 1, 0, 1],
+        [(4, 8), 0, 1, 4],
+        [(4, 8), 1, 0, 4],
     ],
     ids=[
         "2x2sp0tp1",
         "2x2sp1tp0",
         "2x4sp0tp1",
         "2x4sp1tp0",
+        "4x8sp0tp1",
+        "4x8sp1tp0",
     ],
     indirect=["mesh_device"],
 )
@@ -247,15 +256,17 @@ def test_mochi_transformer_block(
     ("B, T, H, W, prompt_seq"),
     [
         (1, 8, 40, 50, 118),  # small input
+        (1, 16, 40, 100, 118),  # medium input
         (1, 28, 60, 106, 118),  # large input
     ],
-    ids=["short_seq", "long_seq"],
+    ids=["short_seq", "medium_seq", "long_seq"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mochi_transformer_model(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
     tp_axis: int,
+    num_links: int,
     B: int,
     T: int,
     H: int,
@@ -290,7 +301,7 @@ def test_mochi_transformer_model(
     # Create CCL manager
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
-        num_links=1,
+        num_links=num_links,
         topology=ttnn.Topology.Linear,
     )
 

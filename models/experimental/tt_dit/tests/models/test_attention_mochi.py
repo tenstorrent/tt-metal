@@ -24,17 +24,19 @@ def stack_cos_sin(cos, sin):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
+    "mesh_device, sp_axis, tp_axis, num_links",
     [
-        [(1, 1), 0, 1],
-        [(1, 2), 0, 1],
-        [(1, 2), 1, 0],
-        [(2, 1), 0, 1],
-        [(2, 1), 1, 0],
-        [(2, 2), 0, 1],
-        [(2, 2), 1, 0],
-        [(2, 4), 0, 1],
-        [(2, 4), 1, 0],
+        [(1, 1), 0, 1, 1],
+        [(1, 2), 0, 1, 1],
+        [(1, 2), 1, 0, 1],
+        [(2, 1), 0, 1, 1],
+        [(2, 1), 1, 0, 1],
+        [(2, 2), 0, 1, 1],
+        [(2, 2), 1, 0, 1],
+        [(2, 4), 0, 1, 1],
+        [(2, 4), 1, 0, 1],
+        [(4, 8), 0, 1, 4],
+        [(4, 8), 1, 0, 4],
     ],
     ids=[
         "1x1sp0tp1",
@@ -46,6 +48,8 @@ def stack_cos_sin(cos, sin):
         "2x2sp1tp0",
         "2x4sp0tp1",
         "2x4sp1tp0",
+        "4x8sp0tp1",
+        "4x8sp1tp0",
     ],
     indirect=["mesh_device"],
 )
@@ -64,6 +68,7 @@ def test_mochi_attention(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
     tp_axis: int,
+    num_links: int,
     B: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
@@ -104,7 +109,7 @@ def test_mochi_attention(
     # Create CCL manager
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
-        num_links=1,
+        num_links=num_links,
         topology=ttnn.Topology.Linear,
     )
 
