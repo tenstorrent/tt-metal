@@ -214,7 +214,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
         num_blocks_per_core_group_1,  // batch
         out_block_tiles,
 
-        untilize_out};
+        untilize_out,  // untilize_out
+        false          // get_batch_from_reader
+    };
 
     std::map<std::string, std::string> mm_kernel_defines;
     if (packer_l1_acc_en) {
@@ -264,7 +266,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
             num_blocks_per_core_group_2,  // batch
             out_block_tiles,
 
-            untilize_out};
+            untilize_out,  // untilize_out
+            false          // get_batch_from_reader
+        };
         auto mm_kernel_group_2_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_large_block_zm_fused_bias_activation.cpp",

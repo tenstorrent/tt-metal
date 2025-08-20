@@ -393,7 +393,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
             (std::uint32_t)0,      // batchB
             (std::uint32_t)false,  // sparsity_is_dram
             (std::uint32_t)0,      // sparsity_log2_of_pagesize
-            (std::uint32_t)true    // bcast_A
+            (std::uint32_t)true,   // bcast_A
+            (std::uint32_t)false,  // get_batch_from_reader
         };
     }
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
@@ -472,7 +473,8 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)B  // batch
+        (std::uint32_t)B,     // batch
+        (std::uint32_t)false  // get_batch_from_reader
     };
     std::vector<uint32_t> in1_receiver_writer_compile_time_args = {
         // interleaved accessor args
@@ -722,7 +724,9 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0_in1(
         B,                       // batch,
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out};
+        untilize_out,  // untilize_out
+        false          // get_batch_from_reader
+    };
 
     // Create compute kernel
     // bool fp32_dest_acc_en = true;

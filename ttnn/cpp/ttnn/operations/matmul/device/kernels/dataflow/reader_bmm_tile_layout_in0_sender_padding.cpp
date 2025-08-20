@@ -8,6 +8,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "pad_tile.hpp"
+#include "ckernel.h"
 
 void kernel_main() {
     uint32_t rt_args_idx = 0;
@@ -61,8 +62,12 @@ void kernel_main() {
     constexpr bool sparsity_is_dram = (bool)get_compile_time_arg_val(22);
     constexpr uint32_t sparsity_log2_of_pagesize = get_compile_time_arg_val(23);
     constexpr bool bcast_A = (bool)get_compile_time_arg_val(24);
+    constexpr bool get_batch_from_reader = (bool)get_compile_time_arg_val(25);
 
-    constexpr bool fuse_op = (bool)get_compile_time_arg_val(25);
+    constexpr bool fuse_op = (bool)get_compile_time_arg_val(26);
+
+    constexpr uint32_t nnz_cb_id = tt::CBIndex::c_25;
+    constexpr uint32_t IGNORE_BATCH = 0x2;
 
     // When sparsity is disabled, we just loop once
     constexpr uint32_t batchB_lim = batchB == 0 ? 1u : batchB;
@@ -146,7 +151,31 @@ void kernel_main() {
 
         for (uint32_t bB = 0; bB < batchB_lim; ++bB) {
             if constexpr (batchB > 0) {
-                if (reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB] == 0) {
+                const auto is_batch_valid =
+                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr_sparsity)[bB] != 0;
+
+                if constexpr (get_batch_from_reader) {
+#ifndef SKIP_MCAST
+                    // First broadcast this to other cores
+                    noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
+                    noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, is_batch_valid ? VALID : IGNORE_BATCH);
+                    ckernel::wait(100);
+                    noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
+                    ckernel::wait(400);
+                    noc_semaphore_set_multicast(
+                        in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
+                    ckernel::wait(1);
+                    // Reset the semaphore value to VALID
+                    noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+#endif
+                    // We need to pass the value to compute UNPACK regardless of the value of is_batch_valid
+                    cb_reserve_back(nnz_cb_id, 1);
+                    auto nnz_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(nnz_cb_id));
+                    nnz_ptr[0] = is_batch_valid;
+                    cb_push_back(nnz_cb_id, 1);
+                }
+
+                if (!is_batch_valid) {
                     if constexpr (!bcast_A) {
                         in0_tensor_start_tile_id += MtKt;
                     }
