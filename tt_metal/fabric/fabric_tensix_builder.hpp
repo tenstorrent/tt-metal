@@ -165,6 +165,10 @@ private:
     // Direction for routing
     eth_chan_directions direction_;
 
+    // Channel connection liveness check disable array - mutable to allow modification in const methods
+    mutable std::array<bool, FabricEriscDatamoverConfig::num_sender_channels>
+        channel_connection_liveness_check_disable_array_;
+
     // Helper methods for kernel compilation
     std::vector<uint32_t> get_compile_time_args() const;
     std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program& program) const;

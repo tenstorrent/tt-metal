@@ -509,8 +509,7 @@ public:
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
         FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
-        eth_chan_directions direction = eth_chan_directions::EAST,
-        bool disable_internal_sender_channels = false);
+        eth_chan_directions direction = eth_chan_directions::EAST);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -521,8 +520,7 @@ public:
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
         FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
-        eth_chan_directions direction = eth_chan_directions::EAST,
-        bool disable_internal_sender_channels = false);
+        eth_chan_directions direction = eth_chan_directions::EAST);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_fabric_channel(uint32_t vc);

@@ -366,6 +366,7 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     noc_y_(noc_y),
     fabric_mux_config_(fabric_mux_config),
     direction_(direction) {
+    channel_connection_liveness_check_disable_array_.fill(false);
     TT_FATAL(device_ != nullptr, "Device cannot be null");
     TT_FATAL(fabric_mux_config_ != nullptr, "FabricMuxConfig cannot be null");
 }
@@ -435,6 +436,8 @@ tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_conne
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
 
     log_info(tt::LogTest, "calling FabricTensixDatamoverBuilder {} {}", noc_x_, noc_y_);
+
+    channel_connection_liveness_check_disable_array_[channel_id] = true;
 
     return tt::tt_fabric::SenderWorkerAdapterSpec{
         noc_x_,                                                                  // edm_noc_x
@@ -543,8 +546,12 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args() cons
     // fabric_stream_ids_ack_to_upstream.begin(), fabric_stream_ids_ack_to_upstream.end());
 
     // Add persistent channels flags - all channels are persistent except the worker channel.
-    std::vector<uint32_t> is_persistent_channels(num_full_size_channels, 1);
-    is_persistent_channels[worker_channel] = 0;
+    std::vector<uint32_t> is_persistent_channels(num_full_size_channels, 0);
+    for (uint8_t i = 0; i < num_full_size_channels; i++) {
+        if (channel_connection_liveness_check_disable_array_[i]) {
+            is_persistent_channels[i] = 1;
+        }
+    }
     ct_args.insert(ct_args.end(), is_persistent_channels.begin(), is_persistent_channels.end());
 
     return ct_args;

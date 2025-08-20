@@ -354,20 +354,29 @@ Tests:
   #     - type: all_to_all
 
   - name: "FabricMuxSimpleUnicastWriteLinear"
-    # sync: true
+    sync: true
     fabric_setup:
-      topology: Linear
+      topology: Ring
       fabric_tensix_config: Mux
 
-    senders:
-      - device: [0, 3]
-        patterns:
-          - ftype: unicast
-            ntype: unicast_write
-            size: 1024
-            num_packets: 100
-            destination:
-              device: [0, 0]
+    defaults:
+      ftype: unicast
+      ntype: unicast_write
+      size: 1024
+      num_packets: 100
+    patterns:
+      - type: full_ring
+    # senders:
+    #   - device: [0, 0]
+    #     patterns:
+    #       # - destination:
+    #       #     device: [0, 1]
+    #       # - destination:
+    #       #     device: [0, 3]
+    #       - destination:
+    #           device: [0, 2]
+    #       # - destination:
+    #       #     device: [0, 4]
 
   # - name: "FabricMuxAllToAllUnicastMesh"
   #   fabric_setup:

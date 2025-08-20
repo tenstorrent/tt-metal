@@ -1082,8 +1082,6 @@ void build_tt_fabric_program(
         for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
-            // Disable sender channels if fabric tensix is enabled and this is NOT the dispatch link
-            bool disable_internal_sender_channels = fabric_tensix_enabled && link_idx != dispatch_link_idx;
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 device,
                 *fabric_program_ptr,
@@ -1093,8 +1091,7 @@ void build_tt_fabric_program(
                 curr_edm_config,
                 false, /* build_in_worker_connection_mode */
                 fabric_edm_type,
-                control_plane.routing_direction_to_eth_direction(direction),
-                disable_internal_sender_channels);
+                control_plane.routing_direction_to_eth_direction(direction));
             edm_builders.insert({eth_chan, edm_builder});
 
             if (fabric_tensix_enabled) {

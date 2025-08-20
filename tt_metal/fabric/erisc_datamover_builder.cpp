@@ -1354,8 +1354,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     const FabricEriscDatamoverConfig& config,
     bool build_in_worker_connection_mode,
     FabricEriscDatamoverType fabric_edm_type,
-    eth_chan_directions direction,
-    bool disable_internal_sender_channels) {
+    eth_chan_directions direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return FabricEriscDatamoverBuilder::build(
         device,
@@ -1366,8 +1365,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         config,
         build_in_worker_connection_mode,
         fabric_edm_type,
-        direction,
-        disable_internal_sender_channels);
+        direction);
 }
 
 FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
@@ -1379,8 +1377,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
     const FabricEriscDatamoverConfig& config,
     bool build_in_worker_connection_mode,
     FabricEriscDatamoverType fabric_edm_type,
-    eth_chan_directions direction,
-    bool disable_internal_sender_channels) {
+    eth_chan_directions direction) {
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_buffer_index_semaphore_id;
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_flow_control_semaphore_id;
     std::array<size_t, FabricEriscDatamoverConfig::num_sender_channels> sender_channels_connection_semaphore_id;
@@ -1431,18 +1428,6 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         }
     }
 
-    // Create a modified config if sender channels should be disabled
-    // This is determined by the caller based on fabric tensix configuration and dispatch link detection
-    FabricEriscDatamoverConfig modified_config = config;
-    if (disable_internal_sender_channels) {
-        // Modify RISC configs to disable sender channels except index 0
-        for (auto& risc_config : modified_config.risc_configs) {
-            // Disable all sender channels except channel 0
-            for (uint32_t i = 1; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
-                risc_config.set_sender_channel_serviced(i, false);
-            }
-        }
-    }
     return FabricEriscDatamoverBuilder(
         ethernet_core,
         device->ethernet_core_from_logical_core(ethernet_core).x,
@@ -1456,7 +1441,7 @@ FabricEriscDatamoverBuilder FabricEriscDatamoverBuilder::build(
         sender_channels_connection_semaphore_id,
         sender_channels_buffer_index_semaphore_id,
 
-        modified_config,
+        config,
         direction,
         build_in_worker_connection_mode,
         fabric_edm_type);
@@ -1608,14 +1593,6 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
     this->downstream_edm_vcs_worker_registration_address[vc_idx] = adapter_spec.edm_connection_handshake_addr;
     this->downstream_edm_vcs_worker_location_info_address[vc_idx] = adapter_spec.edm_worker_location_info_addr;
     this->downstream_sender_channels_num_buffers.fill(adapter_spec.num_buffers_per_channel);
-
-    log_info(tt::LogTest, "ds_noc_x {} ds_noc_y {}", ds_noc_x, ds_noc_y);
-    log_info(tt::LogTest, "channel_id {}", channel_id);
-    log_info(tt::LogTest, "buffer_index_semaphore_id {}", adapter_spec.buffer_index_semaphore_id);
-    log_info(tt::LogTest, "edm_l1_sem_addr {}", adapter_spec.edm_l1_sem_addr);
-    log_info(tt::LogTest, "edm_connection_handshake_addr {}", adapter_spec.edm_connection_handshake_addr);
-    log_info(tt::LogTest, "edm_worker_location_info_addr {}", adapter_spec.edm_worker_location_info_addr);
-    log_info(tt::LogTest, "num_buffers_per_channel {}", adapter_spec.num_buffers_per_channel);
 }
 
 eth_chan_directions FabricEriscDatamoverBuilder::get_direction() const { return this->direction; }
