@@ -1312,6 +1312,9 @@ void run_receiver_channel_step_impl(
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     bool unwritten_packets;
+
+    receiver_channel_trid_tracker.update_is_next_completion_transaction_available();
+
     if constexpr (enable_first_level_ack) {
         auto& ack_counter = receiver_channel_pointers.ack_counter;
         bool pkts_received = pkts_received_since_last_check > 0;
@@ -1329,6 +1332,7 @@ void run_receiver_channel_step_impl(
     }
 
     if (unwritten_packets) {
+        receiver_channel_trid_tracker.update_is_next_write_transaction_available();
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
         tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
@@ -1372,13 +1376,13 @@ void run_receiver_channel_step_impl(
                 can_forward_packet_completely(cached_routing_fields, downstream_edm_interface[receiver_channel]);
         }
         if constexpr (enable_trid_flush_check_on_noc_txn) {
-            bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+            bool trid_flushed = receiver_channel_trid_tracker.next_write_transaction_available();
             can_send_to_all_local_chip_receivers &= trid_flushed;
         }
         if (can_send_to_all_local_chip_receivers) {
             did_something = true;
-            uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
-                receiver_buffer_index);
+            uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter();
+
             if constexpr (is_2d_fabric) {
 #if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
                 receiver_forward_packet<receiver_channel>(
@@ -1402,10 +1406,11 @@ void run_receiver_channel_step_impl(
         bool unflushed_writes = !wr_flush_counter.is_caught_up_to(wr_sent_counter);
         if (unflushed_writes) {
             auto receiver_buffer_index = wr_flush_counter.get_buffer_index();
-            bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+            bool next_trid_flushed = receiver_channel_trid_tracker.next_completion_transaction_available();
             if (next_trid_flushed) {
                 wr_flush_counter.increment();
-                receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
+                receiver_channel_trid_tracker.clear_trid_at_buffer_slot();
+                receiver_channel_trid_tracker.increment_completion_trid();
             }
         }
 
@@ -1428,17 +1433,18 @@ void run_receiver_channel_step_impl(
         auto& completion_counter = receiver_channel_pointers.completion_counter;
         // Currently unclear if it's better to loop here or not...
         bool unflushed_writes = !completion_counter.is_caught_up_to(wr_sent_counter);
-        auto receiver_buffer_index = completion_counter.get_buffer_index();
-        bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+        bool next_trid_flushed = receiver_channel_trid_tracker.next_completion_transaction_available();
         bool can_send_completion = unflushed_writes && next_trid_flushed;
         if constexpr (!ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK) {
             can_send_completion = can_send_completion && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
         }
         if (can_send_completion) {
+            auto receiver_buffer_index = completion_counter.get_buffer_index();
             receiver_send_completion_ack<ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK>(
                 receiver_channel_response_credit_sender,
                 receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
-            receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
+            receiver_channel_trid_tracker.clear_trid_at_buffer_slot();
+            receiver_channel_trid_tracker.increment_completion_trid();
             completion_counter.increment();
         }
     }
