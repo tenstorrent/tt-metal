@@ -22,8 +22,20 @@ void print_python_call_stack() {
         py::module traceback = py::module::import("traceback");
         py::object stack = traceback.attr("format_stack")();
         std::cout << "Python call stack for ttnn.add():\n";
+
+        // Filter out pytest and environment frames, only show user code
         for (py::handle frame : stack) {
-            std::cout << py::str(frame).cast<std::string>();
+            std::string frame_str = py::str(frame).cast<std::string>();
+
+            // Skip frames that are from pytest, pybind, or other internal stuff
+            if (frame_str.find("/pytest") != std::string::npos || frame_str.find("/pluggy/") != std::string::npos ||
+                frame_str.find("/python3.10/site-packages/") != std::string::npos ||
+                frame_str.find("ttnn/__init__.py") != std::string::npos ||
+                frame_str.find("decorators.py") != std::string::npos) {
+                continue;
+            }
+
+            std::cout << frame_str;
         }
         std::cout << std::flush;
     } catch (const std::exception& e) {
