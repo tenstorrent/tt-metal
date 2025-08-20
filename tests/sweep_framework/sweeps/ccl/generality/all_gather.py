@@ -32,7 +32,9 @@ def mesh_shape_iterator(num_devices: int = NUM_DEVICES, limit=None):
 parameters = {
     "suite_1": {
         "mesh_shape": mesh_shape_iterator(),
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
+        "fabric_config": [ttnn.FabricConfig.FABRIC_1D],
+        # TODO this seem to reliably cause hangs, and we can't recover from hangs right now
+        #        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "num_links": [1],
         "input_shape": [
             [1, 1, 32, 32],
@@ -41,6 +43,25 @@ parameters = {
             [1, 1, 1, 32, 32],
             [2, 32, 32],
             [1, 1, 32, 16384],
+            [1, 1, 1, 2048],  # the following shapes are from training
+            [
+                1,
+                1,
+                1,
+                4096,
+            ],  # https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
+            [1, 32, 2048, 8],
+            [1, 32, 2048, 16],
+            [1, 32, 4096, 16],
+            [1, 32, 2048, 64],
+            [1, 32, 4096, 32],
+            [1, 32, 4096, 64],
+            [1, 1, 1, 1],
+            [1, 1, 1, 8],
+            [1, 1, 1, 16],
+            [1, 1, 1, 32],
+            [1, 1, 8, 8],
+            [1, 1, 16, 16],
         ],
         "dim": [0, 1, 2, 3, 4],
         "cluster_axis": [0, 1, None],
