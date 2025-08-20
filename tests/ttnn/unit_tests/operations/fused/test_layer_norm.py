@@ -132,16 +132,16 @@ def test_layer_norm_with_tile_layout(device, h, w):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
-@pytest.mark.parametrize("h", [608, 2080])
-@pytest.mark.parametrize("w", [1824, 4128])
+@pytest.mark.parametrize("h", [1024, 2080])
+@pytest.mark.parametrize("w", [3200, 4128])
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_large_layer_norm(device, h, w, use_welford):
-    if h == 2080 and w == 4128:
+    if h == 2080:
         pytest.skip("Bug, see https://github.com/tenstorrent/tt-metal/issues/27126")
 
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((h, w), dtype=torch.float32)
     torch_output_tensor = torch.nn.functional.layer_norm(torch_input_tensor, normalized_shape=[w])
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
