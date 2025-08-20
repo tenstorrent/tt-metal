@@ -354,8 +354,10 @@ Tensor RequantOp::invoke(
     const Tensor* out_scale_p = std::get_if<Tensor>(&out_scale);
     const Tensor* out_zero_point_p = std::get_if<Tensor>(&out_zero_point);
 
-    // Only use optimized per-channel path when axis is provided AND all parameters are tensors
+    // Use the fused per-channel tensor path when axis is provided AND all params are tensors.
     // Mixed scalar/tensor cases will fall through to composite fallback.
+    // NOTE: Benchmarks show this path is not faster; it's selected
+    //       for simpler shape handling (explicit per-channel expansion).
     const bool all_params_are_tensors = in_scale_p && in_zero_point_p && out_scale_p && out_zero_point_p;
 
     if (has_axis && all_params_are_tensors) {
@@ -370,23 +372,19 @@ Tensor RequantOp::invoke(
         const bool out_zero_point_is_per_channel =
             out_zero_point_p && out_zero_point_p->logical_volume() == input_shape[axis_v];
 
-        if (in_scale_p && in_zero_point_p) {
-            TT_FATAL(
-                in_scale_is_per_channel == in_zero_point_is_per_channel,
-                "Input scale and input zero-point must both be per-channel or both be per-tensor, but got: "
-                "input scale {} per-channel, input zero-point {} per-channel",
-                in_scale_is_per_channel ? "is" : "is not",
-                in_zero_point_is_per_channel ? "is" : "is not");
-        }
+        TT_FATAL(
+            in_scale_is_per_channel == in_zero_point_is_per_channel,
+            "Input scale and input zero-point must both be per-channel or both be per-tensor, but got: "
+            "input scale {} per-channel, input zero-point {} per-channel",
+            in_scale_is_per_channel ? "is" : "is not",
+            in_zero_point_is_per_channel ? "is" : "is not");
 
-        if (out_scale_p && out_zero_point_p) {
-            TT_FATAL(
-                out_scale_is_per_channel == out_zero_point_is_per_channel,
-                "Output scale and output zero-point must both be per-channel or both be per-tensor, but got: "
-                "output scale {} per-channel, output zero-point {} per-channel",
-                out_scale_is_per_channel ? "is" : "is not",
-                out_zero_point_is_per_channel ? "is" : "is not");
-        }
+        TT_FATAL(
+            out_scale_is_per_channel == out_zero_point_is_per_channel,
+            "Output scale and output zero-point must both be per-channel or both be per-tensor, but got: "
+            "output scale {} per-channel, output zero-point {} per-channel",
+            out_scale_is_per_channel ? "is" : "is not",
+            out_zero_point_is_per_channel ? "is" : "is not");
 
         if (in_scale_p) {
             check_scale_tensor_args(input_tensor, in_scale_p, axis_v, rank, in_scale_is_per_channel);
@@ -412,35 +410,18 @@ Tensor RequantOp::invoke(
                 "Per-channel output scale & zero-point tensors must have matching shapes");
         }
 
-        Tensor in_scale_full, in_zero_point_full, out_scale_full, out_zero_point_full;
+        // Shape expansion and typecasting for the scale and zero-point tensors.
+        auto expand_or_cast = [&](const Tensor& v, bool is_per_channel, DataType dt) -> Tensor {
+            return is_per_channel ? reshape_per_channel_vector_args(v, input_shape, axis_v, dt) : ttnn::typecast(v, dt);
+        };
 
-        if (in_scale_p) {
-            in_scale_full = in_scale_is_per_channel
-                                ? reshape_per_channel_vector_args(*in_scale_p, input_shape, axis_v, DataType::FLOAT32)
-                                : ttnn::typecast(*in_scale_p, DataType::FLOAT32);
-        }
+        const Tensor in_scale_full = expand_or_cast(*in_scale_p, in_scale_is_per_channel, DataType::FLOAT32);
+        const Tensor in_zero_point_full =
+            expand_or_cast(*in_zero_point_p, in_zero_point_is_per_channel, DataType::FLOAT32);
+        const Tensor out_scale_full = expand_or_cast(*out_scale_p, out_scale_is_per_channel, DataType::FLOAT32);
+        const Tensor out_zero_point_full =
+            expand_or_cast(*out_zero_point_p, out_zero_point_is_per_channel, DataType::FLOAT32);
 
-        if (in_zero_point_p) {
-            in_zero_point_full =
-                in_zero_point_is_per_channel
-                    ? reshape_per_channel_vector_args(*in_zero_point_p, input_shape, axis_v, DataType::FLOAT32)
-                    : ttnn::typecast(*in_zero_point_p, DataType::FLOAT32);
-        }
-
-        if (out_scale_p) {
-            out_scale_full = out_scale_is_per_channel
-                                 ? reshape_per_channel_vector_args(*out_scale_p, input_shape, axis_v, DataType::FLOAT32)
-                                 : ttnn::typecast(*out_scale_p, DataType::FLOAT32);
-        }
-
-        if (out_zero_point_p) {
-            out_zero_point_full =
-                out_zero_point_is_per_channel
-                    ? reshape_per_channel_vector_args(*out_zero_point_p, input_shape, axis_v, DataType::FLOAT32)
-                    : ttnn::typecast(*out_zero_point_p, DataType::FLOAT32);
-        }
-
-        // Perform the computation using broadcasting.
         const Tensor scale_recip_full = ttnn::divide(
             queue_id, in_scale_full, out_scale_full, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
         const Tensor in_zero_point_scaled_full = ttnn::multiply(
@@ -494,14 +475,14 @@ Tensor RequantOp::invoke(
 
     return std::visit(
         tt::stl::overloaded{
-            // Enable fast path for all scalar scales & zero-points, fallback to composite ops otherwise
+            // Enable fast path for all scalar scales & zero-points, fallback to composite ops otherwise.
             [&](const float in_scale,
                 const int32_t in_zero_point,
                 const float out_scale,
                 const int32_t out_zero_point) {
                 // Expansion of q' = [(q - z_in) * s_in] / s_out + z_out
                 const float scale_recip = in_scale / out_scale;
-                // z is passed to and consumed by the LLK as f32 anyway, might as well preserve some accuracy here
+                // z is passed to and consumed by the LLK as f32 anyway, might as well preserve some accuracy here.
                 const float zero_point = out_zero_point - in_zero_point * scale_recip;
 
                 const std::array post_activation{unary::UnaryWithParam{unary::UnaryOpType::ZERO_POINT, zero_point}};
@@ -518,20 +499,29 @@ Tensor RequantOp::invoke(
                     post_activation);
             },
             [&](const auto& in_scale, const auto& in_zero_point, const auto& out_scale, const auto& out_zero_point) {
-                check_per_tensor_scale(in_scale);
-                check_per_tensor_zero_point(in_zero_point);
-                check_per_tensor_scale(out_scale);
-                check_per_tensor_zero_point(out_zero_point);
+                // The composite op fallback, generic but uses more ops and has worse accuracy.
+                // Pass axis only to operations that have tensor parameters.
+                constexpr bool has_tensor_in_scale = std::is_same_v<std::decay_t<decltype(in_scale)>, Tensor>;
+                constexpr bool has_tensor_out_scale = std::is_same_v<std::decay_t<decltype(out_scale)>, Tensor>;
 
-                // The composite op fallback, generic but uses more ops and has worse accuracy
+                const std::optional<int> dequant_axis = has_tensor_in_scale ? axis : std::nullopt;
+                const std::optional<int> quant_axis = has_tensor_out_scale ? axis : std::nullopt;
+
                 const Tensor dequantized = DequantOp::invoke(
-                    queue_id, input_tensor, in_scale, in_zero_point, axis, std::nullopt, std::nullopt, std::nullopt);
+                    queue_id,
+                    input_tensor,
+                    in_scale,
+                    in_zero_point,
+                    dequant_axis,
+                    std::nullopt,
+                    std::nullopt,
+                    std::nullopt);
                 return QuantOp::invoke(
                     queue_id,
                     dequantized,
                     out_scale,
                     out_zero_point,
-                    axis,
+                    quant_axis,
                     c_dtype,
                     memory_config,
                     optional_output_tensor);
