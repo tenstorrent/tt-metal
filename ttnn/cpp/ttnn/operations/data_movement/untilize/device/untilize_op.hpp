@@ -11,6 +11,8 @@
 
 namespace ttnn::operations::data_movement {
 
+uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor);
+
 namespace untilize_helpers {
 
 uint32_t get_num_cores(CoreCoord grid_size, uint32_t nblocks);
