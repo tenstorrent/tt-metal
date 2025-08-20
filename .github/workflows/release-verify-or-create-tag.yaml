@@ -39,6 +39,7 @@ jobs:
           branch: ${{ github.ref_name }}
           version_format: "v${major}.${minor}.${patch}"
           bump_each_commit: ${{ inputs.bump_each_commit }}
+          bump_each_commit_patch_pattern: "(PATCH)"
       - name: Get release candidate version
         id: get-release-candidate-version
         run: |
