@@ -1596,8 +1596,10 @@ void gen_smoke_test(
 
 void gen_relay_linear_h_test(
     IDevice* device, vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_sizes, DeviceData& device_data) {
-    static constexpr uint32_t min_read_size = 128;
-    static constexpr uint32_t max_read_size = 4096;  // Keep reasonable size for test
+    static constexpr uint32_t min_read_size = 32;
+    const uint32_t max_read_size =
+        std::min(scratch_db_size_g, prefetch_q_entries_g * (uint32_t)sizeof(DispatchSettings::prefetch_q_entry_type)) -
+        64;
 
     bool done = false;
     while (!done) {
