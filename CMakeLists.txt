@@ -162,6 +162,16 @@ target_link_libraries(
         numa
 )
 
+add_library(tt_cov_hooks SHARED ${CMAKE_SOURCE_DIR}/instrument_hooks.cpp)
+target_link_libraries(
+    tt_cov_hooks
+    PRIVATE
+        dl
+        pthread
+)
+
+install(TARGETS tt_cov_hooks EXPORT Metalium LIBRARY DESTINATION lib ARCHIVE DESTINATION lib RUNTIME DESTINATION bin)
+
 add_compile_options(
     "$<$<STREQUAL:${CMAKE_SYSTEM_PROCESSOR},x86_64>:-march=x86-64-v3>"
     -fPIC

@@ -22,7 +22,6 @@ endif()
 add_library(ttnn_core ${LIB_TYPE})
 add_library(TTNN::Core ALIAS ttnn_core)
 
-target_sources(ttnn_core PRIVATE ${CMAKE_SOURCE_DIR}/instrument_hooks.cpp)
 target_compile_options(
     ttnn_core
     PRIVATE
@@ -41,7 +40,7 @@ target_link_libraries(
     ttnn_core
     PRIVATE
         dl
-        stdc++
+        tt_cov_hooks
 )
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")

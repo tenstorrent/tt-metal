@@ -8,7 +8,6 @@ add_library(tt_metal)
 add_library(TT::Metalium ALIAS tt_metal)
 add_library(Metalium::Metal ALIAS tt_metal) # For backwards compatibility
 
-target_sources(tt_metal PRIVATE ${CMAKE_SOURCE_DIR}/instrument_hooks.cpp)
 target_compile_options(
     tt_metal
     PRIVATE
@@ -27,7 +26,7 @@ target_link_libraries(
     tt_metal
     PRIVATE
         dl
-        stdc++
+        tt_cov_hooks
 )
 
 set_target_properties(

@@ -141,7 +141,8 @@ static void* processing_thread_func(void* arg) {
             if (dladdr(caller_addr, &caller_info) && caller_info.dli_fname) {
                 const char* caller_so_path = caller_info.dli_fname;
 
-                if (strstr(caller_so_path, "libtt_metal.so")) {
+                if (strstr(caller_so_path, "libtt_metal.so") || strstr(caller_so_path, "_ttnn.so") ||
+                    strstr(caller_so_path, "_ttnncpp.so")) {
                     char func_name_buf[1024];
                     char file_path_buf[1024];
                     char line_num_buf[32];
