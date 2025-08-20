@@ -643,7 +643,7 @@ Tensor AvgPool2DOp::invoke(
         kernel_size,
         stride,
         padding,
-        std::nullopt,  // dilation
+        std::nullopt,  // dilation not supported for AvgPool2D
         ceil_mode,
         count_include_pad,
         divisor_override,
@@ -747,7 +747,7 @@ Tensor AdaptiveAvgPool2DOp::invoke(
         params.kernel_size,
         params.stride,
         params.padding,
-        std::nullopt,  // dilation
+        std::nullopt,  // dilation not supported for adaptive pooling
         false,         // ceil_mode = false
         false,         // count_include_pad = FALSE (ignores padding values)
         std::nullopt,  // divisor_override
@@ -787,7 +787,6 @@ Tensor AdaptiveMaxPool2DOp::invoke(
 
     // Use shared uniform adaptive pooling parameter calculation
     auto params = calculate_uniform_adaptive_params(input_h, input_w, output_h, output_w);
-    std::array<uint32_t, 2> dilation = {1, 1};
 
     log_debug(
         tt::LogOp,
@@ -831,7 +830,7 @@ Tensor AdaptiveMaxPool2DOp::invoke(
         params.kernel_size,
         params.stride,
         params.padding,
-        dilation,
+        std::nullopt,  // dilation not supported for adaptive pooling
         false,         // ceil_mode = false
         false,         // count_include_pad = FALSE (consistent with avg pool approach)
         std::nullopt,  // divisor_override
