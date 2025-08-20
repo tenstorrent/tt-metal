@@ -102,6 +102,7 @@ def test_sd35_pipeline(
         enable_t5_text_encoder=enable_t5_text_encoder,
         guidance_cond=guidance_cond,
         parallel_config=parallel_config,
+        num_links=num_links,
         height=image_h,
         width=image_w,
         model_location_generator=model_location_generator,

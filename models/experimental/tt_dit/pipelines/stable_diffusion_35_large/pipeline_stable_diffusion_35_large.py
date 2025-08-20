@@ -99,6 +99,7 @@ class StableDiffusion3Pipeline:
         enable_t5_text_encoder: bool = True,
         guidance_cond: int,
         parallel_config: DiTParallelConfig,
+        num_links: int,
         # ccl_manager: CCLManager,
         # encoder_parallel_manager: EncoderParallelManager,
         # vae_parallel_manager: VAEParallelConfig,
@@ -119,7 +120,7 @@ class StableDiffusion3Pipeline:
         self.submesh_devices = self._mesh_device.create_submeshes(ttnn.MeshShape(*submesh_shape))
 
         self.ccl_managers = [
-            CCLManager(submesh_device, num_links=1, topology=ttnn.Topology.Linear)
+            CCLManager(submesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
             for submesh_device in self.submesh_devices
         ]
         # Hacky submesh reshapes and assignment to parallelize encoders and VAE
