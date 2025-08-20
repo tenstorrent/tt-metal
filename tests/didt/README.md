@@ -22,7 +22,7 @@ We support N150, N300, T3000, 6U Galaxy systems, and single/multi chip Blackhole
 
 Alternatively, running with `all` will run the test on as many devices as are detected on the system.
 
-### Targetting specific device
+### Targeting specific device
 
 On all multi-device systems, you can target a specific device using its ID in the parametrization `logical_chip_{id}_`:
 
@@ -31,7 +31,7 @@ On all multi-device systems, you can target a specific device using its ID in th
 Galaxy example
 `pytest tests/didt/test_ff1_matmul.py::test_specific_chip_ff1_matmul -k "without_gelu and galaxy and logical_chip_3_"`
 
-### Targetting specific board
+### Targeting specific board
 
 On T3000 systems, you can target a specific board (local and remote chip together) using the ID of the local device in the parametrization `board_id_{id}`:
 

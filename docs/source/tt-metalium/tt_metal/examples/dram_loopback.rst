@@ -232,7 +232,7 @@ Download the result and verify output
 -------------------------------------
 
 Then we can finally read back the data from the output buffer and assert that
-it matches what we sent. Again the final ``true`` argument causes the data transfer to be blocking. Thus we know that the data is fully avaliable when the function returns.
+it matches what we sent. Again the final ``true`` argument causes the data transfer to be blocking. Thus we know that the data is fully available when the function returns.
 
 .. code-block:: cpp
 
