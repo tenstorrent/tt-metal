@@ -24,7 +24,6 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/allocator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/bank_manager.cpp
@@ -110,7 +109,6 @@ target_link_libraries(
         common
         Tracy::TracyClient
     PRIVATE
-        Boost::smart_ptr
         FlatBuffers::FlatBuffers
         range-v3::range-v3
         TT::Metalium::Common
