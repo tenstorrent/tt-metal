@@ -24,20 +24,21 @@ def stack_cos_sin(cos, sin):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis, num_links",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links",
     [
-        [(1, 1), 0, 1, 1],
-        [(1, 2), 0, 1, 1],
-        [(1, 2), 1, 0, 1],
-        [(2, 1), 0, 1, 1],
-        [(2, 1), 1, 0, 1],
-        [(2, 2), 0, 1, 1],
-        [(2, 2), 1, 0, 1],
-        [(2, 4), 0, 1, 1],
-        [(2, 4), 1, 0, 1],
-        [(1, 8), 1, 0, 1],
-        [(4, 8), 0, 1, 4],
-        [(4, 8), 1, 0, 4],
+        [(1, 1), (1, 1), 0, 1, 1],
+        [(1, 2), (1, 2), 0, 1, 1],
+        [(1, 2), (1, 2), 1, 0, 1],
+        [(2, 1), (2, 1), 0, 1, 1],
+        [(2, 1), (2, 1), 1, 0, 1],
+        [(2, 2), (2, 2), 0, 1, 1],
+        [(2, 2), (2, 2), 1, 0, 1],
+        [(2, 4), (2, 4), 0, 1, 1],
+        [(2, 4), (2, 4), 1, 0, 1],
+        [(1, 8), (1, 8), 1, 0, 1],
+        [(4, 8), (2, 8), 1, 0, 4],
+        [(4, 8), (4, 8), 0, 1, 4],
+        [(4, 8), (4, 8), 1, 0, 4],
     ],
     ids=[
         "1x1sp0tp1",
@@ -50,6 +51,7 @@ def stack_cos_sin(cos, sin):
         "2x4sp0tp1",
         "2x4sp1tp0",
         "1x8sp1tp0",
+        "2x8sp1tp0",
         "4x8sp0tp1",
         "4x8sp1tp0",
     ],
@@ -68,6 +70,7 @@ def stack_cos_sin(cos, sin):
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mochi_transformer_block(
     mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple[int, int],
     sp_axis: int,
     tp_axis: int,
     num_links: int,
@@ -78,6 +81,8 @@ def test_mochi_transformer_block(
     is_fsdp: bool,
 ) -> None:
     torch_dtype = torch.float32
+    parent_mesh_device = mesh_device
+    mesh_device = parent_mesh_device.create_submesh(ttnn.MeshShape(*mesh_shape))
 
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
