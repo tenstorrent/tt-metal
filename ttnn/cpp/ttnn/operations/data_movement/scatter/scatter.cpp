@@ -150,7 +150,7 @@ Tensor pre_scatter_transform_tensor(
     }
     // if layout is tile, convert to row-major first
     if (processed_tensor.layout() != Layout::ROW_MAJOR) {
-        processed_tensor = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR);
+        processed_tensor = ttnn::to_layout(processed_tensor, Layout::ROW_MAJOR);
     }
     // transposing a row-major tensor here
     processed_tensor = reduction_common::perform_transpose(processed_tensor, is_dim_last_idx, dim, -1);
