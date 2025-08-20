@@ -737,7 +737,8 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
     std::map<std::string, std::string> writer_defines;
     if (num_tiles_channel_per_core * TILE_WIDTH * num_cores_channels > output_shape[-1]) {
         writer_defines["UNPAD_INPUT_WIDTH"] = "1";
