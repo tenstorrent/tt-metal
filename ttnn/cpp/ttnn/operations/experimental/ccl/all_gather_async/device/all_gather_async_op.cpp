@@ -223,6 +223,8 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 device_index,
                 this->topology,
                 this->semaphore.at(0),
+                this->barrier_semaphore,
+                this->using_persistent_buffers,
                 this->sub_device_id,
                 this->use_optimal_ccl_for_llama);
 
