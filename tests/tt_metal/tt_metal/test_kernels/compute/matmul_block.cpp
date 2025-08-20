@@ -21,26 +21,14 @@ void MAIN {
 #if (WITH_DT == 1)
     // Intentionally wrong init with different data formats
     matmul_block_init(
-        tt::CBIndex::c_0,
-        tt::CBIndex::c_2,
-        tt::CBIndex::c_16,
-        false,
-        dst_tile_cols - 1,
-        dst_tile_rows - 1,
-        block_tile_dim - 1);
+        tt::CBIndex::c_0, tt::CBIndex::c_2, false, dst_tile_cols - 1, dst_tile_rows - 1, block_tile_dim - 1);
     // Corrected init short with dt
     matmul_block_init_reconfig_data_format(
         tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #elif (WITH_DT == 0)
     // Intentionally wrong init with same data formats
     matmul_block_init(
-        tt::CBIndex::c_1,
-        tt::CBIndex::c_0,
-        tt::CBIndex::c_16,
-        false,
-        dst_tile_cols - 1,
-        dst_tile_rows - 1,
-        block_tile_dim - 1);
+        tt::CBIndex::c_1, tt::CBIndex::c_0, false, dst_tile_cols - 1, dst_tile_rows - 1, block_tile_dim - 1);
     // Corrected init short
     matmul_block_init(tt::CBIndex::c_0, tt::CBIndex::c_1, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #endif

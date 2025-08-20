@@ -21,8 +21,16 @@ namespace ckernel {
 /**
  * Initializes the matmul operation for subsequent tile operations. Must be called before matmul_tile.
  * This function is safe to call multiple times in fused kernels and only configures matmul-specific
- * hardware settings that differ from the generic compute_kernel_hw_startup(). Common MMIO configurations
- * like PACK settings are handled by compute_kernel_hw_startup().
+ * hardware settings that differ from the generic compute_kernel_hw_startup().
+ *
+ * - Unpacker: Configures matmul-specific dual-operand unpacking with CB data format mapping:
+ *   * in0_cb_id → srcB (supports partial face for 8x32 tiles)
+ *   * in1_cb_id → srcA (transpose operations applied here)
+ * - Math Engine: Initializes FPU with MATH_FIDELITY precision and MM_THROTTLE performance settings
+ * - Uses disaggregated configuration for matmul-specific tile dimensions and operand mappings
+ *
+ * Requires compute_kernel_hw_startup() to be called first for general UNPACK/MATH/PACK initialization.
+ * CB data formats and tile dimensions must match those configured in compute_kernel_hw_startup().
  *
  * Return value: None
  *
@@ -50,6 +58,13 @@ ALWI void matmul_init(uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t tra
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
  *
+ * Unpacker: Loads tiles from CBs into srcA/srcB registers with configured data format conversion
+ * Math Engine: Executes matrix multiplication using configured fidelity and throttle settings
+ *
+ * - in0_cb_id[in0_tile_index] goes into srcB (operand B, may be transposed)
+ * - in1_cb_id[in1_tile_index] goes into srcA (operand A)
+ * - srcA * srcB goes into DEST[dest_tile_index]
+ *
  * Return value: None
  *
  * | Param Type | Name             | Description                                                               | Type     | Valid Range                                      | Required |
@@ -76,9 +91,17 @@ ALWI void matmul_tile(
 // clang-format off
 /**
  * Performs tile-sized matrix multiplication *C=A\*B* between the tiles
- * located in SRCA and SRCB and writes the result to DEST. The DEST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking and
- * is only available on the compute engine.
+ * already loaded in SRCA and SRCB registers and writes the result to DEST.
+ * The DEST register buffer must be in acquired state via *acquire_dst* call.
+ * This call is blocking and is only available on the compute engine.
+ *
+ * This is a math-only operation that operates on pre-loaded data in srcA/srcB registers.
+ * Use after unpacker has loaded tiles via matmul_tile() unpacker phase, or when manually
+ * managing unpacker and math phases separately for performance optimization.
+ *
+ * Math Engine: Executes matrix multiplication using configured MATH_FIDELITY and MM_THROTTLE
+ * Face Processing: Handles variable number of tile faces (1-4) for different tile sizes
+ * Row-major destination layout with configured accumulation mode
  *
  * Return value: None
  *
@@ -98,6 +121,15 @@ ALWI void matmul_tile_math(uint32_t dest_tile_index) {
  * Initializes the matmul operation with data format reconfiguration for srcA.
  * This function should be used when switching from another operation that used
  * a different data format for srcA. Safe to call multiple times in fused kernels.
+ *
+ * Unpacker: Reconfigures data format mapping from old_srca_cb to in1_cb_id for srcA path
+ * Math Engine: Updates data format configuration for srcA operand processing
+ * Calls matmul_init() for complete matmul-specific hardware setup after reconfiguration
+ *
+ * Use case:
+ * Essential for fused kernels where the same srcA register was previously configured
+ * for a different operation (e.g., elementwise) with different data formats, and now
+ * needs to be reconfigured for matmul operation with potentially different CB and format.
  *
  * Return value: None
  *
@@ -120,8 +152,22 @@ ALWI void matmul_init_reconfig_data_format(
 /**
  * Initializes the matmul block operation for subsequent block operations. Must be called before matmul_block.
  * This function is safe to call multiple times in fused kernels and only configures matmul-specific
- * hardware settings that differ from the generic compute_kernel_hw_startup(). Common MMIO configurations
- * like PACK settings are handled by compute_kernel_hw_startup().
+ * hardware settings that differ from the generic compute_kernel_hw_startup().
+ *
+ * Unpacker: Configures block-aware dual-operand unpacking with multi-tile block dimensions
+ *   * in0_cb_id → srcB (supports partial face, handles rt_dim × kt_dim blocks)
+ *   * in1_cb_id → srcA (transpose operations, handles kt_dim × ct_dim blocks)
+ * Math Engine: Initializes FPU for block operations with MATH_FIDELITY and MM_THROTTLE
+ * Block Optimization: Configures reuse patterns based on block dimensions for efficiency
+ *
+ * Block dimensions:
+ * - block_ct_dim: Column tiles in output block (affects srcB reuse pattern)
+ * - block_rt_dim: Row tiles in output block (affects srcA reuse pattern)
+ * - block_kt_dim: Inner dimension tiles (accumulation depth)
+ * - Total output: block_rt_dim × block_ct_dim tiles per block
+ *
+ * Requires compute_kernel_hw_startup() to be called first.
+ * Block dimensions must match subsequent matmul_block() calls.
  *
  * Return value: None
  *
@@ -159,6 +205,19 @@ ALWI void matmul_block_init(
  * must be in acquired state via *acquire_dst* call. This call is blocking and
  * is only available on the compute engine.
  *
+ * Unpacker: Loads multi-tile blocks from CBs using block-aware addressing and stride patterns
+ * Math Engine: Executes block matrix multiplication with optimized data reuse
+ * Block Processing: Handles rt_dim × ct_dim output blocks with kt_dim inner dimension
+ * Automatic tile indexing within blocks based on configured block dimensions
+ *
+ * - in0_cb_id[in0_tile_index + block offsets] goes into srcB (rt_dim × kt_dim block)
+ * - in1_cb_id[in1_tile_index + block offsets] goes into srcA (kt_dim × ct_dim block)
+ * - Produces rt_dim × ct_dim output tiles in DEST starting at dest_tile_index
+ *
+ * Optimized data reuse patterns based on block dimensions
+ * Uses fidelity and throttle settings from matmul_block_init()
+ * Row-major destination tile arrangement
+ *
  * Return value: None
  *
  * | Param Type | Name             | Description                                                               | Type     | Valid Range                                      | Required |
@@ -195,6 +254,21 @@ ALWI void matmul_block(
  * Initializes the matmul block operation with data format reconfiguration for srcA.
  * This function should be used when switching from another operation that used
  * a different data format for srcA. Safe to call multiple times in fused kernels.
+ *
+ * Unpacker: Reconfigures data format mapping from old_in1_cb_id to in1_cb_id for srcA path
+ * Math Engine: Updates data format configuration for srcA operand in block operations
+ * Calls matmul_block_init() for complete block-aware matmul hardware setup after reconfiguration
+ * Preserves block dimension configurations (ct_dim, rt_dim, kt_dim) across reconfiguration
+ *
+ * Use case:
+ * Essential for fused kernels performing multiple block operations where srcA was previously
+ * configured for a different operation with different data formats or CB mappings. Commonly
+ * used in attention mechanisms where intermediate results are reused with format changes.
+ *
+ * Block context:
+ * Maintains block-aware unpacker configuration with updated data format mappings
+ * Supports complex fused operation sequences with varying data formats
+ * Optimizes hardware reconfiguration by only updating necessary format mappings
  *
  * Return value: None
  *

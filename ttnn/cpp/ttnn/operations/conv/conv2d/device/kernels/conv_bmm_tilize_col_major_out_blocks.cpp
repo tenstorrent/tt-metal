@@ -179,7 +179,6 @@ void MAIN {
                             in0_cb_id,
                             in1_cb_id,
                             in0_pretilize_cb_id,
-                            in0_pretilize_cb_id,
                             false,
                             out_subblock_w,
                             out_subblock_h,
@@ -203,14 +202,7 @@ void MAIN {
 #endif
 
                     matmul_block_init_reconfig_data_format(
-                        mm_in0_cb_id,
-                        in1_cb_id,
-                        in0_cb_id,
-                        in0_cb_id,
-                        false,
-                        out_subblock_w,
-                        out_subblock_h,
-                        in0_block_w);
+                        mm_in0_cb_id, in1_cb_id, in0_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
 
                 cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);

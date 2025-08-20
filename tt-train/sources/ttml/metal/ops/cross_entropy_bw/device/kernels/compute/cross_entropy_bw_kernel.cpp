@@ -343,8 +343,8 @@ void reduce_sum_exp_x() {
     // reduce_uninit();
 
     // We used matmul_tiles instead of reduce_tile, because reduce_tile causes a loss of precision. The same issue has
-    // been observed in moreh’s ops.
-    matmul_init(cb_exp_sum_before_reduction, cb_mat_mul_reduce, cb_exp_sum_after_reduction, 0);
+    // been observed in moreh's ops.
+    matmul_init(cb_exp_sum_before_reduction, cb_mat_mul_reduce, 0);
     matmul_tile(
         cb_exp_sum_before_reduction, cb_mat_mul_reduce, /* tile_idx */ 0, /* tile_idx */ 0, reduction_register, 0);
 

@@ -57,10 +57,10 @@ void MAIN {
 
     // need switching between ColMajor and RowMajor for at least 32 times, inefficient
     #ifdef ARCH_GRAYSKULL
-    matmul_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+    matmul_init(cb_in0, cb_in1, transpose_hw);
     #else
     // TODO: switch back to matmul block after didt solved
-    matmul_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+    matmul_init(cb_in0, cb_in1, transpose_hw);
     // // Hardware startup - common MMIO configurations
     compute_kernel_hw_startup(cb_in0, cb_in1, cb_intermed0);
 

@@ -30,7 +30,7 @@ void MAIN {
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
-    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1, out_cb_id, transpose_hw);
+    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1, transpose_hw);
 
     for (uint32_t nb = 0; nb < batch; nb++) {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
