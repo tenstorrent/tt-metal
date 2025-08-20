@@ -199,17 +199,29 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_height_shard
     auto all_cores = input_shard_spec.grid;
     const uint32_t num_cores = input_shard_spec.num_cores();
 
-    // No circular buffers needed for direct copy approach
-    const uint32_t input_cb_index = 0;  // Dummy values for compile-time args
-    const uint32_t output_cb_index = 1;
+    // Circular buffers will be created below
 
     const auto input_buffer = input.buffer();
     const auto output_buffer = output.buffer();
 
-    // Single kernel compile time arguments (following upsample 2D pattern)
+    // Data formats already defined above
+
+    // Calculate pages per core for sharded tensors
+    const uint32_t input_shard_height = input_shard_spec.shape[0];
+    const uint32_t output_shard_height = output_shard_spec.shape[0];
+
+    // Create output circular buffer only (input uses TensorAccessor)
+    uint32_t next_cb_index = tt::CBIndex::c_0;
+    const uint32_t aligned_output_stick_nbytes = round_up_to_mul16(aligned_stick_nbytes);  // L1 alignment is 16B
+    uint32_t out_cb_pagesize = aligned_output_stick_nbytes;
+    uint32_t out_cb_npages = output_shard_height;
+
+    auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
+        next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, output_cb_data_format, output_buffer);
+
+    // Single kernel compile time arguments
     std::vector<uint32_t> kernel_compile_time_args = {
-        (std::uint32_t)input_cb_index,
-        (std::uint32_t)output_cb_index,
+        (std::uint32_t)out_cb_id,
         (std::uint32_t)true,  // is_reader flag for NCRISC (will create two instances)
         (std::uint32_t)aligned_stick_nbytes,
         (std::uint32_t)scale_factor_d,
@@ -220,17 +232,15 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_height_shard
         (std::uint32_t)output_shape[3],  // output_w
     };
 
-    // Add input TensorAccessor args
+    // Add input TensorAccessor args (output uses CB)
     tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(kernel_compile_time_args);
-    // Add output TensorAccessor args
-    tt::tt_metal::TensorAccessorArgs(*output_buffer).append_to(kernel_compile_time_args);
 
     // Create separate NCRISC and BRISC kernels
     std::vector<uint32_t> reader_compile_time_args = kernel_compile_time_args;
-    reader_compile_time_args[2] = true;  // is_reader = true for NCRISC
+    reader_compile_time_args[1] = true;  // is_reader = true for NCRISC
 
     std::vector<uint32_t> writer_compile_time_args = kernel_compile_time_args;
-    writer_compile_time_args[2] = false;  // is_reader = false for BRISC
+    writer_compile_time_args[1] = false;  // is_reader = false for BRISC
 
     auto reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -249,12 +259,12 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_height_shard
     // Split work between reader and writer RISC cores - each physical core has 2 RISC cores
     const uint32_t pages_per_risc_core = (total_output_pages + (num_cores * 2) - 1) / (num_cores * 2);
 
-    // Set runtime arguments for all cores
+    // Set runtime arguments for all cores (input buffer + CB-based output)
     std::vector<uint32_t> runtime_arguments{
         input_buffer->address(),
-        output_buffer->address(),
         0,  // num_output_pages (will be set per core)
-        0   // start_output_page_id (will be set per core)
+        0,  // start_output_page_id (will be set per core)
+        0   // reader_num_pages (for writer offset calculation)
     };
 
     // Work distribution: each core processes its assigned output pages
@@ -277,43 +287,46 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_height_shard
         uint32_t writer_num_pages = writer_end_page_id - writer_start_page_id;
 
         // Set runtime args for reader kernel (NCRISC)
-        runtime_arguments[2] = reader_num_pages;      // num_output_pages
-        runtime_arguments[3] = reader_start_page_id;  // start_output_page_id
+        runtime_arguments[1] = reader_num_pages;      // num_output_pages
+        runtime_arguments[2] = reader_start_page_id;  // start_output_page_id
+        runtime_arguments[3] = reader_num_pages;      // reader_num_pages (same as its own for reader)
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, runtime_arguments);
 
         // Set runtime args for writer kernel (BRISC)
-        runtime_arguments[2] = writer_num_pages;      // num_output_pages
-        runtime_arguments[3] = writer_start_page_id;  // start_output_page_id
+        runtime_arguments[1] = writer_num_pages;      // num_output_pages
+        runtime_arguments[2] = writer_start_page_id;  // start_output_page_id
+        runtime_arguments[3] = reader_num_pages;      // reader_num_pages (for offset calculation)
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, runtime_arguments);
     }
 
-    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, num_cores](
+    auto override_runtime_args_callback = [reader_kernel_id, writer_kernel_id, out_cb, num_cores](
                                               const void* operation,
                                               tt::tt_metal::Program& program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>& optional_input_tensors,
                                               const std::vector<Tensor>& output_tensors) {
-        const auto input_buffer = input_tensors.at(0).buffer();
-        const auto output_buffer = output_tensors.at(0).buffer();
+        auto src_buffer = input_tensors.at(0).buffer();
+        auto dst_buffer = output_tensors.at(0).buffer();
 
+        // Update output CB address only (input uses TensorAccessor)
+        UpdateDynamicCircularBufferAddress(program, out_cb, *dst_buffer);
+
+        // Update input buffer address in runtime args for all cores
         const auto output_shard_spec = output_tensors.at(0).shard_spec().value();
         auto logical_cores = corerange_to_cores(
             output_shard_spec.grid,
             output_shard_spec.num_cores(),
             output_shard_spec.orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR);
 
-        // Update runtime args for all cores
         for (uint32_t i = 0; i < num_cores; ++i) {
             const auto& core = logical_cores[i];
             {
                 auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, reader_kernel_id, core);
-                runtime_args[0] = input_buffer->address();
-                runtime_args[1] = output_buffer->address();
+                runtime_args[0] = src_buffer->address();
             }
             {
                 auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, writer_kernel_id, core);
-                runtime_args[0] = input_buffer->address();
-                runtime_args[1] = output_buffer->address();
+                runtime_args[0] = src_buffer->address();
             }
         }
     };

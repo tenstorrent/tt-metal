@@ -6,30 +6,36 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    // Compile-time arguments (no config tensor!)
-    constexpr uint32_t in_cb_id = get_compile_time_arg_val(0);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t is_reader = get_compile_time_arg_val(2);  // NCRISC vs BRISC
+    // Compile-time arguments
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t is_reader = get_compile_time_arg_val(1);  // NCRISC vs BRISC
 
-    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(3);
-    constexpr uint32_t scale_factor_d = get_compile_time_arg_val(4);
-    constexpr uint32_t scale_factor_h = get_compile_time_arg_val(5);
-    constexpr uint32_t scale_factor_w = get_compile_time_arg_val(6);
-    constexpr uint32_t output_d = get_compile_time_arg_val(7);
-    constexpr uint32_t output_h = get_compile_time_arg_val(8);
-    constexpr uint32_t output_w = get_compile_time_arg_val(9);
+    constexpr uint32_t stick_nbytes = get_compile_time_arg_val(2);
+    constexpr uint32_t scale_factor_d = get_compile_time_arg_val(3);
+    constexpr uint32_t scale_factor_h = get_compile_time_arg_val(4);
+    constexpr uint32_t scale_factor_w = get_compile_time_arg_val(5);
+    constexpr uint32_t output_d = get_compile_time_arg_val(6);
+    constexpr uint32_t output_h = get_compile_time_arg_val(7);
+    constexpr uint32_t output_w = get_compile_time_arg_val(8);
 
-    // TensorAccessor setup like the working interleaved kernels
-    constexpr auto input_args = TensorAccessorArgs<10>();
-    constexpr auto output_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    // TensorAccessor for input
+    constexpr auto input_args = TensorAccessorArgs<9>();
 
     uint32_t input_addr = get_arg_val<uint32_t>(0);
-    uint32_t output_addr = get_arg_val<uint32_t>(1);
-    uint32_t num_output_pages = get_arg_val<uint32_t>(2);
-    uint32_t start_output_page_id = get_arg_val<uint32_t>(3);
+    uint32_t num_output_pages = get_arg_val<uint32_t>(1);
+    uint32_t start_output_page_id = get_arg_val<uint32_t>(2);
+    uint32_t reader_num_pages = get_arg_val<uint32_t>(3);
 
     const auto input_accessor = TensorAccessor(input_args, input_addr, stick_nbytes);
-    const auto output_accessor = TensorAccessor(output_args, output_addr, stick_nbytes);
+
+    // Output is local to this core - start from CB address and increment
+    uint32_t l1_write_addr = get_write_ptr(out_cb_id);
+
+    // For writer core (BRISC), start from the second half of the output CB
+    // to avoid collision with reader core (NCRISC)
+    if (!is_reader) {
+        l1_write_addr += reader_num_pages * stick_nbytes;
+    }
 
     // Calculate input dimensions
     const uint32_t input_d = output_d / scale_factor_d;
@@ -38,11 +44,10 @@ void kernel_main() {
 
     // Both RISC cores process their assigned work
     uint32_t pages_to_process = num_output_pages;
-    uint32_t start_page = start_output_page_id;
 
     // WORK FROM OUTPUT PERSPECTIVE: Process assigned output pages
     for (uint32_t page_idx = 0; page_idx < pages_to_process; ++page_idx) {
-        uint32_t output_page_id = start_page + page_idx;
+        uint32_t output_page_id = start_output_page_id + page_idx;
 
         // Convert output page ID to 3D coordinates (n, d, h, w)
         // For tensor [N, D, H, W, C]: page_id = n*(D*H*W) + d*(H*W) + h*W + w
@@ -68,12 +73,10 @@ void kernel_main() {
         uint32_t input_page_id =
             n * input_dhw_volume + input_d_coord * input_hw_volume + input_h_coord * input_w + input_w_coord;
 
-        // Direct copy from input NOC address to local output address
+        // Copy from input using TensorAccessor to local output CB
         uint64_t input_noc_addr = input_accessor.get_noc_addr(input_page_id);
-        uint32_t local_output_addr = output_accessor.get_noc_addr(output_page_id);
-
-        // Copy input directly to local output address
-        noc_async_read(input_noc_addr, local_output_addr, stick_nbytes);
+        noc_async_read(input_noc_addr, l1_write_addr, stick_nbytes);
+        l1_write_addr += stick_nbytes;
     }
     noc_async_read_barrier();
 }
