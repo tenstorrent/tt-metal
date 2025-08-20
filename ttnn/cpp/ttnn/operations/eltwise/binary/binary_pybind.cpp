@@ -47,24 +47,21 @@ std::string get_python_call_stack() {
 }
 
 // Function to generate hash from string
-std::string generate_hash(const std::string& input) {
+uint32_t generate_hash(const std::string& input) {
     std::hash<std::string> hasher;
     size_t hash_value = hasher(input);
-
-    // Convert to hex string for shorter representation
-    std::stringstream hex_stream;
-    hex_stream << std::hex << hash_value;
-    return hex_stream.str();
+    // Convert to uint32_t (truncate if necessary)
+    return static_cast<uint32_t>(hash_value);
 }
 
-// Function to write operation info to file
-void write_operation_info_to_file(const std::string& callstack, const std::string& args_info) {
+// Function to write operation info to file and return stack_id
+uint32_t write_operation_info_to_file(const std::string& callstack, const std::string& args_info) {
     // Create combined string for hashing
     std::string combined = callstack + args_info;
-    std::string stack_id = generate_hash(combined);
+    uint32_t stack_id = generate_hash(combined);
 
     // Create filename
-    std::string filename = "op_" + stack_id + ".txt";
+    std::string filename = "op_" + std::to_string(stack_id) + ".txt";
 
     // Write to file
     std::ofstream file(filename);
@@ -77,10 +74,12 @@ void write_operation_info_to_file(const std::string& callstack, const std::strin
         file << "**** END ARGS ***\n";
         file.close();
 
-        std::cout << "Operation info written to: " << filename << std::endl;
+        std::cout << "Operation dispatched with stack_id: " << stack_id << " -> " << filename << std::endl;
     } else {
         std::cout << "Failed to write operation info to file: " << filename << std::endl;
     }
+
+    return stack_id;
 }
 
 namespace detail {
@@ -2096,7 +2095,7 @@ void py_module(py::module& module) {
                             << " memory_config = " << input_tensor_a.memory_config() << std::endl;
                 args_stream << "scalar = " << scalar << std::endl;
 
-                write_operation_info_to_file(callstack, args_stream.str());
+                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
 
                 return self(
                     queue_id,
@@ -2145,7 +2144,7 @@ void py_module(py::module& module) {
                             << " data_type = " << input_tensor_b.dtype()
                             << " memory_config = " << input_tensor_b.memory_config() << std::endl;
 
-                write_operation_info_to_file(callstack, args_stream.str());
+                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
 
                 return self(
                     queue_id,
