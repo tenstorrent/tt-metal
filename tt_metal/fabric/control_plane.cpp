@@ -124,7 +124,16 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
         if (is_ubb && cluster.is_external_cable(chip_id, eth_ports[0])) {
             continue;
         }
-        if (eth_ports.size() >= num_ports_per_side) {
+        if (eth_ports.size() >= 1) {
+            if (eth_ports.size() >= num_ports_per_side) {
+                log_warning(
+                    tt::LogFabric,
+                    "Ethernet between chip {} and chip {} have {} expected ethernet ports, but only {} present",
+                    chip_id,
+                    connected_chip_id,
+                    num_ports_per_side,
+                    eth_ports.size());
+            }
             adjacent_chips.push_back(connected_chip_id);
         }
     }
