@@ -8,8 +8,9 @@
 #include <stdio.h>
 #include <stdint.h>
 #include <atomic>
+#include <string>
 
-// A simple, lock-free single-producer, multi-consumer ring buffer.
+// A simple, lock-free single-producer, single-consumer ring buffer.
 // This is safe for our use case where the hooks are the producers and one thread is the consumer.
 constexpr size_t BUFFER_SIZE = 65536;  // 64k entries, should be enough for most cases
 static void* g_call_buffer[BUFFER_SIZE];
@@ -65,17 +66,17 @@ static void addr_to_string(void* addr, char* buf, size_t size) {
             snprintf(buf, size, "%s", demangled_name);
             free(demangled_name);
         } else {
-            snprintf(buf, size, "could not demangle %s", info.dli_sname);
+            snprintf(buf, size, "??");
         }
     } else {
-        snprintf(buf, size, "could not resolve address %p", addr);
+        snprintf(buf, size, "??");
     }
 }
 
 /**
  * @brief Gets the source file and line number for a given address.
  *
- * This function shells out to the `addr2line` utility to resolve the address
+ * This function shells out to the `llvm-addr2line-17` utility to resolve the address
  * to a file and line number using the debug symbols in the shared object.
  *
  * @param info Dl_info struct for the address, containing the object path.
@@ -94,9 +95,9 @@ static void get_source_info(
     // Calculate the relative address within the shared object
     void* relative_addr = (void*)((char*)addr - (char*)info.dli_fbase);
 
-    // Construct the addr2line command
+    // Construct the addr2line command using the version-specific llvm tool
     char command[1024];
-    snprintf(command, sizeof(command), "addr2line -e %s %p", info.dli_fname, relative_addr);
+    snprintf(command, sizeof(command), "llvm-addr2line-17 -e %s %p", info.dli_fname, relative_addr);
 
     FILE* pipe = popen(command, "r");
     if (!pipe) {
@@ -121,9 +122,6 @@ static void get_source_info(
 
 /**
  * @brief The main function for the background processing thread.
- *
- * This thread consumes addresses from the ring buffer, resolves them,
- * and writes them to the log file.
  */
 static void* processing_thread_func(void* arg) {
     g_log_fd = open("execution_trace_clang.jsonl", O_WRONLY | O_CREAT | O_TRUNC, 0644);
@@ -140,22 +138,29 @@ static void* processing_thread_func(void* arg) {
             dladdr(caller_addr, &caller_info);
             const char* caller_so_path = caller_info.dli_fname ? caller_info.dli_fname : "";
 
+            // First, check if the call is coming from our target library.
             if (strstr(caller_so_path, "libtt_metal.so")) {
                 char func_name_buf[1024];
                 char file_path_buf[1024];
                 char line_num_buf[32];
 
-                addr_to_string(caller_addr, func_name_buf, sizeof(func_name_buf));
+                // Get the source info first, so we can filter on it.
                 get_source_info(
                     caller_info, caller_addr, file_path_buf, sizeof(file_path_buf), line_num_buf, sizeof(line_num_buf));
 
-                dprintf(
-                    g_log_fd,
-                    "{\"event\":\"enter\",\"func\":\"%s\",\"file\":\"%s\",\"line\":%s,\"so_path\":\"%s\"}\n",
-                    func_name_buf,
-                    file_path_buf,
-                    line_num_buf,
-                    caller_so_path);
+                // REFINED FILTER: Now, also check if the source file path contains "tt-metal".
+                // This excludes inlined standard library headers.
+                if (strstr(file_path_buf, "tt-metal/tt_metal")) {
+                    addr_to_string(caller_addr, func_name_buf, sizeof(func_name_buf));
+
+                    dprintf(
+                        g_log_fd,
+                        "{\"event\":\"enter\",\"func\":\"%s\",\"file\":\"%s:%s\",\"so_path\":\"%s\"}\n",
+                        func_name_buf,
+                        file_path_buf,
+                        line_num_buf,
+                        caller_so_path);
+                }
             }
             g_buffer_tail.store((tail + 1) % BUFFER_SIZE, std::memory_order_release);
         } else {
@@ -171,7 +176,7 @@ static void* processing_thread_func(void* arg) {
 /**
  * @brief Function to be called at program exit to clean up.
  */
-static void profiler_shutdown() {
+__attribute__((no_instrument_function)) static void profiler_shutdown() {
     g_done.store(true, std::memory_order_release);
     pthread_join(g_processing_thread, nullptr);
 }
@@ -179,17 +184,15 @@ static void profiler_shutdown() {
 /**
  * @brief A constructor function that runs when the library is loaded.
  */
-__attribute__((constructor)) static void profiler_init() {
-    // Register the shutdown function to be called at normal program termination.
+__attribute__((constructor, no_instrument_function)) static void profiler_init() {
     atexit(profiler_shutdown);
-    // Create the background thread that will process the buffer.
     pthread_create(&g_processing_thread, nullptr, processing_thread_func, nullptr);
 }
 
 extern "C" {
 
 // Clang's sanitizer coverage hook, called to initialize guard variables.
-void __sanitizer_cov_trace_pc_guard_init(uint32_t* start, uint32_t* stop) {
+void __attribute__((used)) __sanitizer_cov_trace_pc_guard_init(uint32_t* start, uint32_t* stop) {
     static uint64_t n;
     if (start == stop || *start) {
         return;
@@ -200,27 +203,21 @@ void __sanitizer_cov_trace_pc_guard_init(uint32_t* start, uint32_t* stop) {
 }
 
 // Clang's sanitizer coverage hook, called on function entry.
-// This function must be extremely fast and safe. It only writes to the buffer.
-void __sanitizer_cov_trace_pc_guard(uint32_t* guard) {
+void __attribute__((used)) __sanitizer_cov_trace_pc_guard(uint32_t* guard) {
     if (!*guard) {
         return;
     }
 
-    // Get the address of the function that called this one.
     void* caller = __builtin_return_address(0);
 
-    // Add the address to the ring buffer. This is the only work done in the hook.
     size_t head = g_buffer_head.load(std::memory_order_relaxed);
     size_t next_head = (head + 1) % BUFFER_SIZE;
 
-    // Check for buffer overflow. If the buffer is full, we drop the trace
-    // to avoid blocking the instrumented program.
     if (next_head != g_buffer_tail.load(std::memory_order_acquire)) {
         g_call_buffer[head] = caller;
         g_buffer_head.store(next_head, std::memory_order_release);
     }
 
-    // Mark this guard as processed.
     *guard = 0;
 }
 
