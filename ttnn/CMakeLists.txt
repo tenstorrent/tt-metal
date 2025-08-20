@@ -340,7 +340,6 @@ set(TTNN_P2P_PYBIND ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/point_to_poi
 
 set(CCL_TTNN_SRCS_PYBIND
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/ccl_${PY_BINDING}.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_gather/all_gather_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_to_all_combine/all_to_all_combine_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/all_to_all_dispatch/all_to_all_dispatch_${PY_BINDING}.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/mesh_partition/mesh_partition_${PY_BINDING}.cpp

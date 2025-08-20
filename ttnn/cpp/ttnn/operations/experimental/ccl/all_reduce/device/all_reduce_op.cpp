@@ -5,8 +5,6 @@
 #include "ttnn/operations/experimental/ccl/all_reduce/device/all_reduce_op.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
-#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
-#include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include <cstdint>
 

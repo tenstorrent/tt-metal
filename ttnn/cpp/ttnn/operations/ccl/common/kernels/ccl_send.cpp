@@ -11,7 +11,6 @@
 #include "ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types_device.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
-#include "ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 #include "debug/dprint.h"
 #include "api/ttnn/tensor/enum_types.hpp"
 #include <cstdint>

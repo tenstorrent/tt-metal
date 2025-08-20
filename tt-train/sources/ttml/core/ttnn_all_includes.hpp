@@ -30,7 +30,6 @@
 #include <ttnn/distributed/distributed_tensor.hpp>                                                         // NOLINT
 #include <ttnn/distributed/isocket.hpp>                                                                    // NOLINT
 #include <ttnn/distributed/types.hpp>                                                                      // NOLINT
-#include <ttnn/operations/ccl/all_gather/all_gather.hpp>                                                   // NOLINT
 #include <ttnn/operations/copy/typecast/typecast.hpp>                                                      // NOLINT
 #include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>                                   // NOLINT
 #include <ttnn/operations/core/to_dtype/to_dtype_op.hpp>                                                   // NOLINT

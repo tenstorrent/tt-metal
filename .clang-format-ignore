@@ -5,9 +5,6 @@ ttnn/cpp/ttnn/graph/graph_processor.cpp
 ttnn/cpp/ttnn/graph/graph_processor.hpp
 ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.cpp
 ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.hpp
-ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp
-ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp
-ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp
 ttnn/cpp/ttnn/operations/ccl/all_gather_v2/device/all_gather_op.hpp
 ttnn/cpp/ttnn/operations/ccl/all_gather_v2/device/multi_core/all_gather_op_multi_core_new.cpp
 ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp
