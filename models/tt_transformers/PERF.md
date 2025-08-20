@@ -2,7 +2,7 @@
 
 Performance and token accuracy using teacher forcing is collected from [demo/simple_text_demo.py](demo/simple_text_demo.py). You can generate this table by running these tests with the `lt` tool (tell it to run `table` or `pareto`) and pressing `m` whilst in the results section to export to markdown.
 
-Note that `test_accuracy.py` parses the below to determine expected values +- 0.5. In May 2025 we switched the default to measuring the accuracy by prefilling 512 tokens and generating another 511, rather than generating 128 tokens in earlier versions. This caused overall accuracy values to drop slightly.
+Note that token accuracy parses the below to determine expected values +- 0.5. In May 2025 we switched the default to measuring the accuracy by prefilling 512 tokens and generating another 511, rather than generating 128 tokens in earlier versions. This caused overall accuracy values to drop slightly.
 
 Also note that all the performance metrics below were taken for a maximum generation of 200 tokens, i.e., 200 decode iterations.
 
