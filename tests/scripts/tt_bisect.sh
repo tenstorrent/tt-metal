@@ -83,8 +83,12 @@ echo `git status`
 echo "git bisect start with good commit $good_commit and bad commit $bad_commit"
 git bisect start $bad_commit $good_commit --
 
-found=false
 
+
+echo "Environment variables:"
+env
+
+found=false
 while [[ "$found" = "false" ]]; do
    echo "::group::Building `git rev-parse HEAD`"
    if ([ ! -z "$patch" ]); then
