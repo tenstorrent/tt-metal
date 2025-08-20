@@ -2131,7 +2131,7 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
     md1->clear_loaded_sub_device_manager();
 }
 
-TEST_F(MeshSocketTest, AssertOnDuplicateCores) {
+TEST_F(MeshSocketTest, AssertOnDuplicateRecvCores) {
     auto [coord0, coord1] = get_random_mesh_coordinates(mesh_device_->shape());
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 1), coord1);
@@ -2168,7 +2168,7 @@ TEST_F(MeshSocketTest, AssertOnDuplicateCores) {
     SocketConfig socket_config_2 = {
         .socket_connection_config = {socket_connection}, .socket_mem_config = socket_mem_config};
 
-    EXPECT_THROW(MeshSocket::create_socket_pair(md0, md1, socket_config_0), std::exception);
+    EXPECT_NO_THROW(MeshSocket::create_socket_pair(md0, md1, socket_config_0));
     EXPECT_THROW(MeshSocket::create_socket_pair(md0, md1, socket_config_1), std::exception);
     // Having the sender and receiver on the same core is valid. Ensure that this doesn't fail.
     EXPECT_NO_THROW(MeshSocket::create_socket_pair(md0, md0, socket_config_2));

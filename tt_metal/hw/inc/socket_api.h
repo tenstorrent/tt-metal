@@ -60,7 +60,7 @@ SocketSenderInterface create_sender_socket_interface(uint32_t config_addr) {
     socket.downstream_fifo_addr = socket_config->downstream_fifo_addr;
     socket.downstream_bytes_sent_addr = socket_config->downstream_bytes_sent_addr;
     socket.downstream_fifo_total_size = socket_config->downstream_fifo_total_size;
-    socket.downstream_enc_addr =
+    socket.downstream_enc_base_addr =
         config_addr + sender_socket_md_size_bytes + socket_config->num_downstreams * bytes_acked_size_bytes;
 
     return socket;
@@ -68,7 +68,7 @@ SocketSenderInterface create_sender_socket_interface(uint32_t config_addr) {
 
 sender_downstream_encoding* get_downstream_encoding(const SocketSenderInterface& socket, uint32_t downstream_id) {
     return reinterpret_cast<sender_downstream_encoding*>(
-        socket.downstream_enc_addr + downstream_id * downstream_encoding_size_bytes);
+        socket.downstream_enc_base_addr + downstream_id * downstream_encoding_size_bytes);
 }
 
 void set_sender_socket_page_size(SocketSenderInterface& socket, uint32_t page_size) {
