@@ -65,11 +65,58 @@ static void addr_to_string(void* addr, char* buf, size_t size) {
             snprintf(buf, size, "%s", demangled_name);
             free(demangled_name);
         } else {
-            snprintf(buf, size, "??");
+            snprintf(buf, size, "could not demangle %s", info.dli_sname);
         }
     } else {
-        snprintf(buf, size, "??");
+        snprintf(buf, size, "could not resolve address %p", addr);
     }
+}
+
+/**
+ * @brief Gets the source file and line number for a given address.
+ *
+ * This function shells out to the `addr2line` utility to resolve the address
+ * to a file and line number using the debug symbols in the shared object.
+ *
+ * @param info Dl_info struct for the address, containing the object path.
+ * @param addr The absolute memory address to resolve.
+ * @param file_buf Buffer to store the resulting file path.
+ * @param file_buf_size Size of the file buffer.
+ * @param line_buf Buffer to store the resulting line number.
+ * @param line_buf_size Size of the line buffer.
+ */
+static void get_source_info(
+    const Dl_info& info, void* addr, char* file_buf, size_t file_buf_size, char* line_buf, size_t line_buf_size) {
+    // Default to unknown
+    snprintf(file_buf, file_buf_size, "??");
+    snprintf(line_buf, line_buf_size, "0");
+
+    // Calculate the relative address within the shared object
+    void* relative_addr = (void*)((char*)addr - (char*)info.dli_fbase);
+
+    // Construct the addr2line command
+    char command[1024];
+    snprintf(command, sizeof(command), "addr2line -e %s %p", info.dli_fname, relative_addr);
+
+    FILE* pipe = popen(command, "r");
+    if (!pipe) {
+        return;
+    }
+
+    char output[512];
+    if (fgets(output, sizeof(output), pipe) != nullptr) {
+        // The output is typically in the format "filepath:linenumber"
+        char* colon = strrchr(output, ':');
+        if (colon) {
+            // Split the string at the colon
+            *colon = '\0';
+            snprintf(file_buf, file_buf_size, "%s", output);
+            snprintf(line_buf, line_buf_size, "%s", colon + 1);
+            // Remove trailing newline from line number if present
+            line_buf[strcspn(line_buf, "\n")] = 0;
+        }
+    }
+    pclose(pipe);
 }
 
 /**
@@ -84,29 +131,34 @@ static void* processing_thread_func(void* arg) {
         return nullptr;
     }
 
-    // Process items until the main program is done AND the buffer is empty.
     while (!g_done.load(std::memory_order_acquire) || g_buffer_head.load() != g_buffer_tail.load()) {
         size_t tail = g_buffer_tail.load(std::memory_order_relaxed);
         if (tail != g_buffer_head.load(std::memory_order_acquire)) {
-            void* caller = g_call_buffer[tail];
+            void* caller_addr = g_call_buffer[tail];
 
             Dl_info caller_info;
-            dladdr(caller, &caller_info);
-            const char* caller_file = caller_info.dli_fname ? caller_info.dli_fname : "";
+            dladdr(caller_addr, &caller_info);
+            const char* caller_so_path = caller_info.dli_fname ? caller_info.dli_fname : "";
 
-            // FILTER: Only log if the caller is part of the target library.
-            if (strstr(caller_file, "libtt_metal.so")) {
-                char caller_name_buf[1024];
-                addr_to_string(caller, caller_name_buf, sizeof(caller_name_buf));
+            if (strstr(caller_so_path, "libtt_metal.so")) {
+                char func_name_buf[1024];
+                char file_path_buf[1024];
+                char line_num_buf[32];
+
+                addr_to_string(caller_addr, func_name_buf, sizeof(func_name_buf));
+                get_source_info(
+                    caller_info, caller_addr, file_path_buf, sizeof(file_path_buf), line_num_buf, sizeof(line_num_buf));
+
                 dprintf(
                     g_log_fd,
-                    "{\"event\":\"enter\",\"func\":\"%s\",\"caller_path\":\"%s\"}\n",
-                    caller_name_buf,
-                    caller_file);
+                    "{\"event\":\"enter\",\"func\":\"%s\",\"file\":\"%s\",\"line\":%s,\"so_path\":\"%s\"}\n",
+                    func_name_buf,
+                    file_path_buf,
+                    line_num_buf,
+                    caller_so_path);
             }
             g_buffer_tail.store((tail + 1) % BUFFER_SIZE, std::memory_order_release);
         } else {
-            // Buffer is empty, sleep for a bit to avoid busy-waiting
             usleep(100);
         }
     }
