@@ -30,7 +30,7 @@ constexpr uint8_t DEBUG_SANITIZE_NOC_SENTINEL_OK_8 = 0xda;
 struct stack_usage_info_t {
     CoreDescriptor core;
     uint16_t stack_free = uint16_t(~0);
-    uint16_t kernel_id;
+    uint16_t kernel_id{};
 };
 
 class WatcherDeviceReader {

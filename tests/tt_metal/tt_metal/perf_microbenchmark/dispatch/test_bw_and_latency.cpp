@@ -387,7 +387,7 @@ int main(int argc, char** argv) {
         }
 
         vector<uint32_t> blank(page_size_g / sizeof(uint32_t));
-        std::chrono::duration<double> elapsed_seconds;
+        std::chrono::duration<double> elapsed_seconds{};
         if (source_mem_g < 4 || source_mem_g == 6) {
             // Cache stuff
             for (int i = 0; i < warmup_iterations_g; i++) {
