@@ -18,21 +18,33 @@ namespace tt::tt_metal::distributed {
 
 namespace {
 
-std::unordered_map<MeshCoordinate, std::vector<std::pair<uint32_t, SocketConnection>>> group_socket_connections(
-    const SocketConfig& config, SocketEndpoint socket_endpoint) {
+struct SocketSenderSize {
+    const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    const uint32_t md_size_bytes = ((sizeof(sender_socket_md) + l1_alignment - 1) / l1_alignment) * l1_alignment;
+    const uint32_t ack_size_bytes = ((sizeof(uint32_t) + l1_alignment - 1) / l1_alignment) * l1_alignment;
+    const uint32_t enc_size_bytes =
+        ((sizeof(sender_downstream_encoding) + l1_alignment - 1) / l1_alignment) * l1_alignment;
+};
+
+// need to index the connections to properly read the FabricNodeId from peer descriptor.
+// This will get cleaned up with the improved socket APIs. See Issue #27207
+std::unordered_map<MeshCoordinate, std::unordered_map<CoreCoord, std::vector<std::pair<uint32_t, SocketConnection>>>>
+group_socket_connections(const SocketConfig& config, SocketEndpoint socket_endpoint) {
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
-    std::unordered_map<MeshCoordinate, std::vector<std::pair<uint32_t, SocketConnection>>> grouped_connections;
-    uint32_t connection_index = 0;
+    // Group by endpoint device coordinate, then by endpoint core
+    std::
+        unordered_map<MeshCoordinate, std::unordered_map<CoreCoord, std::vector<std::pair<uint32_t, SocketConnection>>>>
+            grouped_connections;
+    uint32_t conn_idx = 0;
     for (const auto& connection : config.socket_connection_config) {
-        grouped_connections[is_sender ? connection.sender_core.device_coord : connection.receiver_core.device_coord]
-            .push_back({connection_index, connection});
-        connection_index++;
+        auto& device_map = grouped_connections
+            [is_sender ? connection.sender_core.device_coord : connection.receiver_core.device_coord];
+        device_map[is_sender ? connection.sender_core.core_coord : connection.receiver_core.core_coord].push_back(
+            std::make_pair(conn_idx++, connection));
     }
     return grouped_connections;
 }
 
-// Helper function to assign unique IDs to receivers for each sender
-// Returns a map from SocketConnection to unique receiver ID for that sender
 std::unordered_map<SocketConnection, uint32_t> get_receiver_ids_per_sender(const SocketConfig& config) {
     std::unordered_map<SocketConnection, uint32_t> connection_to_receiver_id;
     std::unordered_map<MeshCoreCoord, uint32_t> sender_counter;
@@ -46,33 +58,16 @@ std::unordered_map<SocketConnection, uint32_t> get_receiver_ids_per_sender(const
     return connection_to_receiver_id;
 }
 
-// Helper function to group receivers by sender core
-// Returns a map from sender core to set of receiver cores
-std::unordered_map<MeshCoreCoord, std::unordered_set<MeshCoreCoord>> get_receivers_per_sender(const SocketConfig& config) {
-    std::unordered_map<MeshCoreCoord, std::unordered_set<MeshCoreCoord>> senders_to_receivers;
-    
-    for (const auto& connection : config.socket_connection_config) {
-        senders_to_receivers[connection.sender_core].insert(connection.receiver_core);
-    }
-    
-    return senders_to_receivers;
-}
-
-std::unordered_map<MeshCoreCoord, uint32_t> get_num_downstreams_per_core(const SocketConfig& config) {
+// Get the maximum number of downstreams per sender core to calcalate size of the metadata buffer.
+// This will get cleaned up along with improved socket APIs. See Issue #27207
+uint32_t get_max_num_downstreams_per_core(const SocketConfig& config) {
     std::unordered_map<MeshCoreCoord, uint32_t> num_downstreams_per_core;
+    uint32_t max_num_downstreams = 0;
     for (const auto& connection : config.socket_connection_config) {
         num_downstreams_per_core[connection.sender_core]++;
+        max_num_downstreams = std::max(max_num_downstreams, num_downstreams_per_core[connection.sender_core]);
     }
-    return num_downstreams_per_core;
-}
-
-uint32_t get_max_num_downstreams_per_core(const SocketConfig& config) {
-    const auto num_downstreams_per_core = get_num_downstreams_per_core(config);
-    return std::max_element(
-               num_downstreams_per_core.begin(),
-               num_downstreams_per_core.end(),
-               [](const auto& a, const auto& b) { return a.second < b.second; })
-        ->second;
+    return max_num_downstreams;
 }
 
 void validate_fabric_config_for_sockets(
@@ -189,15 +184,12 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
     const auto& socket_connections = config.socket_connection_config;
     const auto& socket_mem_config = config.socket_mem_config;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
-    const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    auto align_up = [l1_alignment](uint32_t v) { return ((v + l1_alignment - 1) / l1_alignment) * l1_alignment; };
     uint32_t config_buffer_size = 0;
     if (is_sender) {
         const auto max_num_downstreams = get_max_num_downstreams_per_core(config);
-        const uint32_t md_size_aligned = align_up(sizeof(sender_socket_md));
-        const uint32_t ack_stride = align_up(sizeof(uint32_t));
-        const uint32_t enc_stride = align_up(sizeof(sender_downstream_encoding));
-        config_buffer_size = md_size_aligned + max_num_downstreams * ack_stride + max_num_downstreams * enc_stride;
+        const SocketSenderSize sender_size;
+        config_buffer_size =
+            sender_size.md_size_bytes + max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes);
     } else {
         config_buffer_size = sizeof(receiver_socket_md);
     }
@@ -207,9 +199,9 @@ std::shared_ptr<MeshBuffer> create_socket_config_buffer(
         const auto& socket_device =
             is_sender ? connection.sender_core.device_coord : connection.receiver_core.device_coord;
         const auto& socket_core = is_sender ? connection.sender_core.core_coord : connection.receiver_core.core_coord;
-        // TT_FATAL(
-        //     socket_cores_per_device[socket_device].insert(socket_core).second,
-        //     "Cannot reuse sender or receiver cores in a single socket.");
+        TT_FATAL(
+            is_sender || socket_cores_per_device[socket_device].insert(socket_core).second,
+            "Cannot reuse receiver cores in a single socket.");
         all_cores_set.insert(socket_core);
     }
 
@@ -282,43 +274,36 @@ void write_socket_configs(
     const std::shared_ptr<MeshBuffer>& config_buffer,
     const SocketPeerDescriptor& local_descriptor,
     const SocketPeerDescriptor& peer_descriptor,
-    SocketEndpoint socket_endpoint,
-    uint32_t downstream_num) {
+    SocketEndpoint socket_endpoint) {
     auto mesh_device = config_buffer->device();
     auto& core_to_core_id = config_buffer->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
     bool is_sender = socket_endpoint == SocketEndpoint::SENDER;
     const auto& config = peer_descriptor.config;
     auto peer_config_buf_addr = peer_descriptor.config_buffer_address;
-   
+    const SocketSenderSize sender_size;
     tt_fabric::FabricConfig fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
-    const auto& l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    auto align_up = [l1_alignment](uint32_t v) { return ((v + l1_alignment - 1) / l1_alignment) * l1_alignment; };
-        if (is_sender) {
-        const auto senders_to_receivers = get_receivers_per_sender(config);
-        const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
-        const auto num_downstreams_per_core = get_num_downstreams_per_core(config);
-        const auto num_downstreams = get_max_num_downstreams_per_core(config);
-        uint32_t md_size_bytes = align_up(sizeof(sender_socket_md));
-        uint32_t ack_size_bytes = align_up(sizeof(uint32_t)) * num_downstreams;
-        uint32_t enc_size_bytes = align_up(sizeof(sender_downstream_encoding)) * num_downstreams;
-        uint32_t sender_total_size_bytes = md_size_bytes + ack_size_bytes + enc_size_bytes;
+    const auto grouped_connections = group_socket_connections(config, socket_endpoint);
+    const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
+    if (is_sender) {
+        const auto max_num_downstreams = get_max_num_downstreams_per_core(config);
+        const auto sender_total_size_bytes =
+            sender_size.md_size_bytes + max_num_downstreams * (sender_size.ack_size_bytes + sender_size.enc_size_bytes);
+
         std::vector<uint32_t> config_data(config_buffer->size() / sizeof(uint32_t), 0);
 
-        // Group by sender device coordinate, then by sender core
-        std::unordered_map<MeshCoordinate, std::unordered_map<CoreCoord, std::vector<SocketConnection>>> sender_grouped_connections;
-        for (const auto& connection : config.socket_connection_config) {
-            auto& device_map = sender_grouped_connections[connection.sender_core.device_coord];
-            device_map[connection.sender_core.core_coord].push_back(connection);
-        }
-
-        for (const auto& [device_coord, cores_map] : sender_grouped_connections) {
+        for (const auto& [device_coord, cores_map] : grouped_connections) {
+            if (cores_map.size() > 1) {
+                log_warning(
+                    tt::LogAlways,
+                    "Multiple sender cores on a single device may lead to errors due to Fabric limitations.");
+            }
             for (const auto& [sender_core_coord, connections] : cores_map) {
                 MeshCoreCoord sender_core = {device_coord, sender_core_coord};
 
                 uint32_t idx = core_to_core_id.at(sender_core.core_coord);
                 // write sender_socket_md (only once per sender core)
                 uint32_t md_offset = idx * sender_total_size_bytes / sizeof(uint32_t);
-                config_data[md_offset++] = num_downstreams_per_core.at(sender_core);  // num_downstreams
+                config_data[md_offset++] = connections.size();                        // num_downstreams
                 config_data[md_offset++] = peer_descriptor.data_buffer_address;       // write_ptr
                 config_data[md_offset++] = 0;                                         // bytes_sent
                 config_data[md_offset++] = peer_config_buf_addr;                      // downstream_bytes_sent_addr
@@ -327,33 +312,26 @@ void write_socket_configs(
                 config_data[md_offset++] = is_sender;                                 // is_sender
 
                 // Write downstream encodings for each receiver of this sender core
-                uint32_t enc_offset = idx * sender_total_size_bytes / sizeof(uint32_t) +
-                                      md_size_bytes / sizeof(uint32_t) + ack_size_bytes / sizeof(uint32_t);
+                uint32_t enc_offset = (idx * sender_total_size_bytes + sender_size.md_size_bytes +
+                                       sender_size.ack_size_bytes * connections.size()) /
+                                      sizeof(uint32_t);
 
                 // Write one encoding per receiver, ordered by receiver ID
-                for (const auto& connection : connections) {
+                for (const auto& [conn_idx, connection] : connections) {
                     uint32_t receiver_id = receiver_ids_per_sender.at(connection);
-                    
-                    // Find the connection index in the original config for mesh/chip IDs
-                    uint32_t conn_idx = 0;
-                    for (const auto& cfg_connection : config.socket_connection_config) {
-                        if (cfg_connection.sender_core == connection.sender_core && 
-                            cfg_connection.receiver_core == connection.receiver_core) {
-                            break;
-                        }
-                        conn_idx++;
-                    }
-
+                    auto mesh_id = tt::tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]};
+                    auto chip_id = MetalContext::instance().get_control_plane().get_mesh_graph().coordinate_to_chip(
+                        mesh_id, connection.receiver_core.device_coord);
                     auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
                         mesh_device->get_fabric_node_id(sender_core.device_coord),
-                        tt_fabric::FabricNodeId(
-                            tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
+                        tt_fabric::FabricNodeId(mesh_id, chip_id),
                         fabric_config,
                         SocketEndpoint::SENDER);
                     auto recv_virtual_core = mesh_device->worker_core_from_logical_core(connection.receiver_core.core_coord);
 
                     // Write to the correct slot based on receiver ID
-                    uint32_t receiver_enc_offset = enc_offset + receiver_id * (l1_alignment / sizeof(uint32_t));
+                    uint32_t receiver_enc_offset =
+                        enc_offset + receiver_id * (sender_size.enc_size_bytes / sizeof(uint32_t));
                     config_data[receiver_enc_offset] = *downstream_mesh_id;        // downstream_mesh_id
                     config_data[receiver_enc_offset + 1] = downstream_chip_id;     // downstream_chip_id
                     config_data[receiver_enc_offset + 2] = recv_virtual_core.y;    // downstream_noc_y
@@ -363,29 +341,14 @@ void write_socket_configs(
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);
         }
     } else {
-        const auto receiver_ids_per_sender = get_receiver_ids_per_sender(config);
         std::vector<receiver_socket_md> config_data(
             config_buffer->size() / sizeof(receiver_socket_md), receiver_socket_md());
 
-        // Group by receiver device coordinate, then by receiver core
-        std::unordered_map<MeshCoordinate, std::unordered_map<CoreCoord, SocketConnection>> receiver_grouped_connections;
-        for (const auto& connection : config.socket_connection_config) {
-            receiver_grouped_connections[connection.receiver_core.device_coord].emplace(connection.receiver_core.core_coord, connection);
-        }
-
-        for (const auto& [device_coord, cores_map] : receiver_grouped_connections) {
-            for (const auto& [recv_core_coord, connection] : cores_map) {
+        for (const auto& [device_coord, cores_map] : grouped_connections) {
+            for (const auto& [recv_core_coord, indexed_connections] : cores_map) {
+                const auto& [conn_idx, connection] =
+                    indexed_connections.front();  // Only one connection per receiver core for now
                 MeshCoreCoord recv_core = {device_coord, recv_core_coord};
-                
-                // Find the connection index in the original config for mesh/chip IDs
-                uint32_t conn_idx = 0;
-                for (const auto& cfg_connection : config.socket_connection_config) {
-                    if (cfg_connection.sender_core == connection.sender_core && 
-                        cfg_connection.receiver_core == connection.receiver_core) {
-                        break;
-                    }
-                    conn_idx++;
-                }
 
                 auto [upstream_mesh_id, upstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
                     tt_fabric::FabricNodeId(
@@ -406,8 +369,8 @@ void write_socket_configs(
                 md.upstream_chip_id = upstream_chip_id;
                 md.upstream_noc_y = sender_virtual_core.y;
                 md.upstream_noc_x = sender_virtual_core.x;
-                md.upstream_bytes_acked_addr = peer_config_buf_addr + align_up(sizeof(sender_socket_md)) +
-                                               align_up(sizeof(uint32_t)) * receiver_ids_per_sender.at(connection);
+                md.upstream_bytes_acked_addr = peer_config_buf_addr + sender_size.md_size_bytes +
+                                               sender_size.ack_size_bytes * receiver_ids_per_sender.at(connection);
                 md.is_sender = is_sender;
             }
             distributed::WriteShard(mesh_device->mesh_command_queue(0), config_buffer, config_data, device_coord, true);

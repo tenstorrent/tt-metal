@@ -41,8 +41,7 @@ void write_socket_configs(
     const std::shared_ptr<MeshBuffer>& config_buffer,
     const SocketPeerDescriptor& local_descriptor,
     const SocketPeerDescriptor& peer_descriptor,
-    SocketEndpoint socket_endpoint,
-    uint32_t downstream_num = 0);
+    SocketEndpoint socket_endpoint);
 
 SocketPeerDescriptor generate_local_endpoint_descriptor(
     const MeshSocket& socket_endpoint, std::optional<multihost::DistributedContextId> context_id = std::nullopt);
