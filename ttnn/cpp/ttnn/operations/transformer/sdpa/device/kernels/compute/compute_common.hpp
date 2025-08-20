@@ -17,7 +17,6 @@
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
-#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
@@ -456,11 +455,10 @@ void matmul_blocks(
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
-    // Hardware startup - common MMIO configurations
-    compute_kernel_hw_startup(in0_cb, in1_cb, transpose /*transpose*/);
 
     // Initialize matmul block operation
-    matmul_block_init(in0_cb, in1_cb, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
+    matmul_block_init(
+        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     uint32_t output_num_tiles = M * N;
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
@@ -524,11 +522,9 @@ void matmul_reduce(uint32_t in1_cb, const uint32_t& out_cb) {
      * Use matmul on Mx1 input to reduce rows within tile to produce Mx1 output.
      */
 
-    // Hardware startup - common MMIO configurations
-    compute_kernel_hw_startup(out_cb, in1_cb, 0 /*transpose*/);
-
     // Initialize matmul block operation
-    matmul_block_init(out_cb, in1_cb, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
+    matmul_block_init(
+        out_cb, in1_cb, 0 /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
 
     constexpr uint32_t output_num_tiles = M * N;
     constexpr uint32_t out_subblock_num_tiles = subblock_h * subblock_w;

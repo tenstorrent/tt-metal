@@ -172,7 +172,6 @@ void MAIN {
     } else {
         // Hardware startup - common MMIO configurations
         compute_kernel_hw_startup(cb_q_in, cb_k_in, cb_qk_im);
-
         // Initialize matmul operation
         matmul_init(cb_q_in, cb_k_in);
     }
