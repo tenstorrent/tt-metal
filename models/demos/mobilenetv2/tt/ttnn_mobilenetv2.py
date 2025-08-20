@@ -259,7 +259,17 @@ class TtMobileNetV2:
         if output_tensor.is_sharded():
             output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
 
-        output_tensor = ttnn.global_avg_pool2d(output_tensor)
+        # Replace global_avg_pool2d hack with proper TTNN adaptive average pooling
+        batch, height, width, channels = output_tensor.shape
+        output_tensor = ttnn.adaptive_avg_pool2d(
+            input_tensor=output_tensor,
+            batch_size=batch,
+            input_h=height,
+            input_w=width,
+            channels=channels,
+            output_size=(1, 1),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
 
         output_tensor = ttnn.reshape(output_tensor, (self.batchsize, -1))
 
