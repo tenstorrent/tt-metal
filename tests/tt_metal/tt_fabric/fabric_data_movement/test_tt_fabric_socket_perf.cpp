@@ -74,6 +74,9 @@ struct PerfParams {
     chip_id_t dst_chip = 1;     // logical chip id in that mesh
     uint32_t num_hops = 1;      // 1 = direct neighbor, >1 = farther away
     bool use_dram_dst = false;  // false -> land in L1 on dst; true -> land in DRAM
+
+    // not supported yet
+    uint32_t tensor_bytes = 1024 * 1024;
 };
 
 // Helper that maps (mesh, logical chip ids) -> physical ids and runs the unicast test
@@ -96,6 +99,7 @@ TEST_F(Fabric2DFixture, UnicastConn_CodeControlled) {
     p.dst_chip = 1;
     p.num_hops = 1;          // e.g., 1 for neighbor
     p.use_dram_dst = false;  // set true to land in DRAM on dst
+    p.tensor_bytes = 4 * 1024 * 1024;
 
     RunUnicastConnWithParams(this, p);
 }
