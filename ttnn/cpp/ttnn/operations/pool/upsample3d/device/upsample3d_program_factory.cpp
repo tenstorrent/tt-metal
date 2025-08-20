@@ -219,6 +219,16 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_height_shard
     auto [out_cb_id, out_cb] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, output_cb_data_format, output_buffer);
 
+    // Pre-compute input dimensions and volumes to avoid expensive divisions in kernel
+    const uint32_t input_d = output_shape[1] / scale_factor_d;
+    const uint32_t input_h = output_shape[2] / scale_factor_h;
+    const uint32_t input_w = output_shape[3] / scale_factor_w;
+
+    const uint32_t output_dhw_volume = output_shape[1] * output_shape[2] * output_shape[3];
+    const uint32_t output_hw_volume = output_shape[2] * output_shape[3];
+    const uint32_t input_dhw_volume = input_d * input_h * input_w;
+    const uint32_t input_hw_volume = input_h * input_w;
+
     // Single kernel compile time arguments
     std::vector<uint32_t> kernel_compile_time_args = {
         (std::uint32_t)out_cb_id,
@@ -230,6 +240,11 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample3d_multi_core_height_shard
         (std::uint32_t)output_shape[1],  // output_d
         (std::uint32_t)output_shape[2],  // output_h
         (std::uint32_t)output_shape[3],  // output_w
+        (std::uint32_t)output_dhw_volume,
+        (std::uint32_t)output_hw_volume,
+        (std::uint32_t)input_dhw_volume,
+        (std::uint32_t)input_hw_volume,
+        (std::uint32_t)input_w,  // needed for input page calculation
     };
 
     // Add input TensorAccessor args (output uses CB)

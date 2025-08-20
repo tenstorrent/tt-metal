@@ -18,8 +18,15 @@ void kernel_main() {
     constexpr uint32_t output_h = get_compile_time_arg_val(7);
     constexpr uint32_t output_w = get_compile_time_arg_val(8);
 
+    // Precomputed volumes and dimensions to avoid expensive div/mod in hot loop
+    constexpr uint32_t output_dhw_volume = get_compile_time_arg_val(9);
+    constexpr uint32_t output_hw_volume = get_compile_time_arg_val(10);
+    constexpr uint32_t input_dhw_volume = get_compile_time_arg_val(11);
+    constexpr uint32_t input_hw_volume = get_compile_time_arg_val(12);
+    constexpr uint32_t input_w = get_compile_time_arg_val(13);
+
     // TensorAccessor for input
-    constexpr auto input_args = TensorAccessorArgs<9>();
+    constexpr auto input_args = TensorAccessorArgs<14>();
 
     uint32_t input_addr = get_arg_val<uint32_t>(0);
     uint32_t num_output_pages = get_arg_val<uint32_t>(1);
@@ -37,39 +44,31 @@ void kernel_main() {
         l1_write_addr += reader_num_pages * stick_nbytes;
     }
 
-    // Calculate input dimensions
-    const uint32_t input_d = output_d / scale_factor_d;
-    const uint32_t input_h = output_h / scale_factor_h;
-    const uint32_t input_w = output_w / scale_factor_w;
-
     // Both RISC cores process their assigned work
     uint32_t pages_to_process = num_output_pages;
 
-    // WORK FROM OUTPUT PERSPECTIVE: Process assigned output pages
+    // OPTIMIZED HOT LOOP: All expensive div/mod operations eliminated
     for (uint32_t page_idx = 0; page_idx < pages_to_process; ++page_idx) {
         uint32_t output_page_id = start_output_page_id + page_idx;
 
-        // Convert output page ID to 3D coordinates (n, d, h, w)
-        // For tensor [N, D, H, W, C]: page_id = n*(D*H*W) + d*(H*W) + h*W + w
-        uint32_t output_dhw_volume = output_d * output_h * output_w;
+        // Convert output page ID to 3D coordinates using precomputed volumes
+        // Avoid expensive divisions by using precomputed constants
         uint32_t n = output_page_id / output_dhw_volume;
-        uint32_t remaining = output_page_id % output_dhw_volume;
+        uint32_t remaining = output_page_id - n * output_dhw_volume;  // Avoid modulo with subtraction
 
-        uint32_t output_hw_volume = output_h * output_w;
         uint32_t out_d = remaining / output_hw_volume;
-        remaining = remaining % output_hw_volume;
+        remaining = remaining - out_d * output_hw_volume;  // Avoid modulo
 
         uint32_t out_h = remaining / output_w;
-        uint32_t out_w = remaining % output_w;
+        uint32_t out_w = remaining - out_h * output_w;  // Avoid modulo
 
         // Calculate corresponding INPUT coordinates (nearest neighbor upsampling)
-        uint32_t input_d_coord = out_d / scale_factor_d;  // Integer division for nearest neighbor
+        // Using integer division but these are much cheaper since scale factors are small constants
+        uint32_t input_d_coord = out_d / scale_factor_d;
         uint32_t input_h_coord = out_h / scale_factor_h;
         uint32_t input_w_coord = out_w / scale_factor_w;
 
-        // Calculate input page ID from input coordinates
-        uint32_t input_dhw_volume = input_d * input_h * input_w;
-        uint32_t input_hw_volume = input_h * input_w;
+        // Calculate input page ID using precomputed volumes
         uint32_t input_page_id =
             n * input_dhw_volume + input_d_coord * input_hw_volume + input_h_coord * input_w + input_w_coord;
 
