@@ -1135,7 +1135,7 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         }
 
         const uint32_t output_sliced_dim =
-            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? output_height : output_width;
+            dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT ? output_height : output_width;
         TT_FATAL(
             dram_slice_config.num_slices > 1, " Number of slices should be greater than 1 for Conv2D DRAM Slicing");
         TT_FATAL(
@@ -1145,8 +1145,8 @@ static Conv2dWeightsBiasPrepConfig setup_conv_prep_config(
         const uint32_t min_output_slice_size =
             tt::div_up(tt::div_up(output_sliced_dim, slice_rounding_value), dram_slice_config.num_slices) *
             slice_rounding_value;
-
-        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
+            
+        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::DRAM_HEIGHT) {
             output_height = min_output_slice_size;
             input_height =
                 ((output_height - 1) * stride[0]) + ((kernel_size[0] - 1) * (dilation[0] - 1)) + kernel_size[0];
