@@ -290,15 +290,11 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
                 cb_wait_front(mm_src1, onetile);
             }
 
-            // Hardware startup - common MMIO configurations
-            compute_kernel_hw_startup(mm_src0, mm_src1);
-#if defined FP32_DEST_ACC_EN
-            reconfig_data_format(mm_src0, mm_src1);
-
             // Initialize matmul operation
             matmul_init(mm_src0, mm_src1);
+
 #if defined FP32_DEST_ACC_EN
-            reconfig_data_format(mm_src0);
+            reconfig_data_format(mm_src0, mm_src1);
 #endif
             matmul_tile(mm_src0, mm_src1, 0, 0, 0, false);
             tile_regs_commit();

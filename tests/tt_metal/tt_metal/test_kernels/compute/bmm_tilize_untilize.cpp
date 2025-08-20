@@ -227,15 +227,7 @@ void MAIN {
                             // do not pop front bias as it may be used again for subsequent blocks
                             cb_pop_front(out_for_bias_cb_id, out_subblock_num_tiles);
                             // reconfig for matmul
-                            // Hardware startup - common MMIO configurations
-                            compute_kernel_hw_startup(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
-                            // reconfig unpacker df for srcB
-                            // reconfig_data_format(in1_cb_id, in0_cb_id);
-
-                            // Initialize matmul operation
                             matmul_init(tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id);
-                            // reconfig unpacker df for srcB
-                            // reconfig_data_format(in1_cb_id);
                         }
 #endif
 
