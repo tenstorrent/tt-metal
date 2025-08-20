@@ -214,3 +214,8 @@ def test_model(
         prev_token_id = output_token_id.unsqueeze(0)
 
         iteration += 1
+
+        if prev_token_id == tokenizer.eos_token_id:
+            break
+
+    print("Generation complete")
