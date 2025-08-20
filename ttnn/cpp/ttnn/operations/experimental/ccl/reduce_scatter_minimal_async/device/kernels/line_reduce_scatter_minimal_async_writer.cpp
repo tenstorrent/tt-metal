@@ -90,8 +90,7 @@ void kernel_main() {
     uint32_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
-    bool signal_on_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    bool wait_on_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
 
@@ -211,19 +210,27 @@ void kernel_main() {
         tt::tt_fabric::fabric_client_connect_finish(*mux_connection_handle);
     }
 
-    // Due to the existing direction of fabric connections, forward writers will signal to backward writers
-    // and backward writers will signal to forward writers
-    if (signal_on_barrier_sem) {
-        uint64_t barrier_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-        pkt_hdr_seminc->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
-        tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
-        noc_async_writes_flushed();
-    }
-    if (wait_on_barrier_sem) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+    if (use_barrier_sem) {
+        if (num_targets_in_direction) {
+            // multicast to both the forward and backward worker on all devices in your line that your write to
+            ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
+
+            // device going in the same direction
+            uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
+                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
+            pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                same_direction_barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
+            tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
+
+            // device going in the opposite direction
+            uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
+                safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
+            pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                opposite_direction_barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
+            tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
+        }
+
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
