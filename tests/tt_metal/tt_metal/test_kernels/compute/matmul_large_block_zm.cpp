@@ -6,6 +6,7 @@
 
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 // #include "tools/profiler/kernel_profiler.hpp"
 namespace NAMESPACE {
@@ -24,7 +25,11 @@ void MAIN {
 
     bool spill = num_blocks > uint32_t(1);
 
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+
+    // Initialize matmul operation
+    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
     bool enable_reload = false;
 
     for (uint32_t block = 0; block < num_blocks; block++) {
@@ -45,7 +50,7 @@ void MAIN {
                         copy_tile(tt::CBIndex::c_24, i, i);
                     }
                     cb_pop_front(tt::CBIndex::c_24, out_subblock_num_tiles);
-                    mm_init_short(tt::CBIndex::c_0, tt::CBIndex::c_1);
+                    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
                 }
 
                 // Compute output sub-block from in0_subblock x in1_subblock
@@ -57,7 +62,7 @@ void MAIN {
                         for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                             int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                             int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                            matmul_tiles(
+                            matmul_tile(
                                 tt::CBIndex::c_0,
                                 tt::CBIndex::c_1,
                                 in0_index,

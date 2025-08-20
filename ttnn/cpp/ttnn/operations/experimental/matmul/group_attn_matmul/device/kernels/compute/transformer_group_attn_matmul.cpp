@@ -7,6 +7,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/pack_untilize.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 using std::uint32_t;
 
@@ -56,11 +57,15 @@ void MAIN {
 
     // need switching between ColMajor and RowMajor for at least 32 times, inefficient
     #ifdef ARCH_GRAYSKULL
-    mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+    matmul_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
     #else
     // TODO: switch back to matmul block after didt solved
-    mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
-    // mm_block_init(cb_in0, cb_in1, cb_intermed0, transpose_hw, out_subblock_w, out_subblock_h, in0_block_w);
+    matmul_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+    // // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_intermed0);
+
+    // Initialize matmul block operation
+    matmul_block_init(cb_in0, cb_in1, transpose_hw, out_subblock_w, out_subblock_h, in0_block_w);
     #endif
 
     for (uint32_t b = 0; b < batch; b++) {
@@ -92,7 +97,7 @@ void MAIN {
                                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                         uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                         uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw);
+                                        matmul_tile(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw);
                                         in1_index_inner_dim_offset += in1_per_core_w;
                                     }
                                     dst_index++;
@@ -109,7 +114,7 @@ void MAIN {
                                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                         uint32_t in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                         uint32_t in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                        matmul_tiles(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw);
+                                        matmul_tile(cb_in0, cb_in1, in0_index, in1_index, dst_index, transpose_hw);
                                         in1_index_inner_dim_offset += in1_per_core_w;
                                     }
                                     dst_index++;
