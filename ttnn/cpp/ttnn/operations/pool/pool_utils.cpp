@@ -184,7 +184,8 @@ uint32_t calculate_L1_usage(
     const MemoryConfig& output_memory,
     Pool2DType pool_type,
     bool count_include_pad,
-    std::optional<int32_t> divisor_override) {
+    std::optional<int32_t> divisor_override,
+    const Layout& output_layout) {
     const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (input_memory.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -245,11 +246,18 @@ uint32_t calculate_L1_usage(
         return factor * alignment_bytes;
     };
 
-    const uint32_t temp_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_WIDTH * params.nbytes;
-    const uint32_t temp_cb_npages = tt::constants::TILE_HEIGHT;
+    // Conditionally include temp CB memory only for TILED output (matches CB allocation logic)
+    uint32_t temp_cb_size = 0;
+    const bool is_output_tiled = (output_layout == Layout::TILE);
+
+    if (is_output_tiled) {
+        const uint32_t temp_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
+        const uint32_t temp_cb_npages = 1;
+        temp_cb_size = temp_cb_pagesize * temp_cb_npages;
+    }
 
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           align(out_cb_config_size) /* global, involved */ + temp_cb_pagesize * temp_cb_npages;
+           align(out_cb_config_size) /* global, involved */ + temp_cb_size;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
@@ -258,7 +266,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     uint32_t channels,
     Pool2DType pool_type,
     bool count_include_pad,
-    std::optional<int32_t> divisor_override) {
+    std::optional<int32_t> divisor_override,
+    const Layout& output_layout) {
     uint32_t batch_size = sliding_window_config.batch_size;
     auto output_shape = sliding_window_config.get_output_shape();
     auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
@@ -310,7 +319,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             get_memconfig(input_parallel_config.value()),
             pool_type,
             count_include_pad,
-            divisor_override);
+            divisor_override,
+            output_layout);
 
         return {.l1_usage = l1_usage, .config = input_parallel_config};
     };

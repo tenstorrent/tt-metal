@@ -235,7 +235,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
     std::optional<int32_t> divisor_override,
-    uint32_t memory_used) {
+    uint32_t memory_used,
+    const Layout& output_layout) {
     distributed::MeshDevice* device = input.device();
 
     const tt::tt_metal::DeviceStorage& reader_indices_storage = reader_indices.device_storage();
@@ -351,26 +352,46 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", in_cb_id_1, in_cb_pagesize, in_cb_npages);
     }
 
-    const uint32_t temp_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
-    ;
-    const uint32_t temp_cb_npages = 1;
+    // Check output layout early for conditional CB allocation
+    const bool is_output_tiled = (output_layout == Layout::TILE);
 
-    const auto [temp_cb_id, temp_out] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, temp_cb_pagesize, temp_cb_npages, params.data_format);
+    // Conditionally allocate temporary CB - only needed for TILED output
+    tt::tt_metal::CBHandle temp_out;
+    uint32_t temp_cb_id = 32;  // default invalid CB ID
+
+    if (is_output_tiled) {
+        // Only allocate temp CB for TILED output processing (kernel expects it)
+        const uint32_t temp_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
+        const uint32_t temp_cb_npages = 1;
+        std::tie(temp_cb_id, temp_out) = tt::tt_metal::create_cb(
+            next_cb_index++, program, all_cores, temp_cb_pagesize, temp_cb_npages, params.data_format);
+        log_info(
+            tt::LogOp,
+            "Allocated temp CB for TILED: CB {} :: PS = {}, NP = {}",
+            temp_cb_id,
+            temp_cb_pagesize,
+            temp_cb_npages);
+    } else {
+        log_info(tt::LogOp, "Skipping temp CB allocation for ROW_MAJOR output - not needed");
+    }
 
     // output of reduce == writer to write
-    // output rows in RM
-    // after reduction
-    const uint32_t out_cb_pagesize =
-        tt::tile_size(params.data_format);  // there is just one row of channels after each reduction (or 1
-                                            // block of c if its greater than 8 tiles)
-    const uint32_t out_cb_npages =
-        output.shard_spec().value().shape[0] * output.shard_spec().value().shape[1] / tt::constants::TILE_HW;
+    // layout-aware circular buffer allocation based on output_layout
+    uint32_t out_cb_pagesize;
+    uint32_t out_cb_npages;
 
-    //     const uint32_t out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, output.shard_spec().value().shape[1]) *
-    //                                  params.nbytes;  // there is just one row of channels after each reduction (or 1
-    //                                                  // block of c if its greater than 8 tiles)
-    // const uint32_t out_cb_npages = output.shard_spec().value().shape[0] * params.in_ntiles_c;
+    if (is_output_tiled) {
+        // Tiled output: use tile-based allocation (existing logic)
+        out_cb_pagesize = tt::tile_size(params.data_format);
+        out_cb_npages =
+            output.shard_spec().value().shape[0] * output.shard_spec().value().shape[1] / tt::constants::TILE_HW;
+        log_info(tt::LogOp, "Using TILED output CB allocation: PS={}, NP={}", out_cb_pagesize, out_cb_npages);
+    } else {
+        // Row-major output: use stick-based allocation
+        out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, output.shard_spec().value().shape[1]) * params.nbytes;
+        out_cb_npages = output.shard_spec().value().shape[0] * params.in_ntiles_c;
+        log_info(tt::LogOp, "Using ROW_MAJOR output CB allocation: PS={}, NP={}", out_cb_pagesize, out_cb_npages);
+    }
 
     const auto [out_cb_id, cb_out] = tt::tt_metal::create_cb(
         next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, params.data_format, output.buffer());
@@ -525,7 +546,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         output.memory_config(),
         pool_type,
         count_include_pad,
-        divisor_override);
+        divisor_override,
+        output_layout);
     uint32_t output_cb_size = post_allocate_size - memory_used;
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
@@ -596,6 +618,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
     const auto& sliding_window_config = op_attr.sliding_window_config_;
     const auto& pool_type = op_attr.pool_type_;
     const auto& out_mem_config = op_attr.memory_config_;
+    const auto& output_layout = op_attr.output_layout_;
     bool count_include_pad = op_attr.count_include_pad_;
     std::optional<int32_t> divisor_override = op_attr.divisor_override_;
 
@@ -670,7 +693,8 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         num_shards_c,
         out_mem_config,
         divisor_override,
-        op_attr.memory_used);
+        op_attr.memory_used,
+        output_layout);
 }
 
 void Pool2D::MultiCore::override_runtime_arguments(

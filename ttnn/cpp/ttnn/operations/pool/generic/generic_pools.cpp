@@ -115,7 +115,13 @@ static Tensor pool2d_invoke(
         } else {  // auto-sharding
             std::optional<sliding_window::ParallelConfig> sw_parallel_config =
                 pool::determine_pool_config_for_auto_shard(
-                    input_tensor, sliding_window_config, channels, pool_type, count_include_pad, divisor_override);
+                    input_tensor,
+                    sliding_window_config,
+                    channels,
+                    pool_type,
+                    count_include_pad,
+                    divisor_override,
+                    output_layout);
             TT_FATAL(
                 sw_parallel_config.has_value(),
                 "autosharding could not determine valid shard scheme, please check tensor dimensions");

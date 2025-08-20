@@ -1,0 +1,25 @@
+Hey!
+
+I want to support tiled output in a pool op.
+As you can see in a few previous commits, i changed compute kernel to do tilize after every 32 sticks are filled.
+Also I hardcoded tile layout in code. I added one more cb to buffer output sticks.
+What I want now, is to make this optional. I want to have 2 optional args in maxpool - out data format (default to BF16), and out layout (default is ROW MAJOR).
+Reason for this is to not break anything - currently we support just BF16 RM output. That means that you need to change output dims, cb allocation, etc.
+Can you make .md file where you will put initial plan? I want small steps, and for each step I want what needs to be changed, why, and how it would be tested. I want to do this step by step, and after each step I want to be sure that this is correct.
+
+Hang recover mechanism
+----------------------
+ nice! now before going to step 2, i want you to create hang recover mechanism. also, add this mechanism to reminder in plan (maybe some subsection). i want you do this    │
+│   mechanism every time we continue to develop, so you can have reminder for that.
+When hang is happened, I want you to trigger this mechanism.
+So you need to: do these steps first time:
+- create new instance of terminal
+- cd ~/tt-smi
+- pip install .
+- tt-smi -r 1
+Every other time, do this in same instance of termina:
+- tt-smi -r 1
+Don't close this terminal while working
+Also set timeout for hang detection to 30s.
+So this terminal is always opened (you do first set of it just once)
+For this first time implementing this mechanism, please remove some push_back from maxpool reader to make hang happen, to test this functionality.

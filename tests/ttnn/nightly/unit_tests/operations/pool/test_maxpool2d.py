@@ -175,6 +175,12 @@ def run_max_pool(
     # run ttnn maxpool2d
     print("ttnn_input dataformat is ")
     print(ttnn_input.dtype)
+    # Use default values if None is provided
+    if output_data_format is None:
+        output_data_format = ttnn.bfloat16
+    if output_layout is None:
+        output_layout = ttnn.ROW_MAJOR_LAYOUT
+
     ttnn_output = ttnn.max_pool2d(
         input_tensor=ttnn_input,
         batch_size=in_n,
