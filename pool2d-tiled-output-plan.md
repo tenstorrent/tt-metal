@@ -114,3 +114,24 @@ Currently maxpool supports only BF16 row-major output. We want to add two option
 - New functionality works correctly with both output formats
 - Performance is acceptable for both formats
 - Clear documentation for new parameters
+
+## Hang Recovery Mechanism
+During development, system hangs may occur when testing new functionality. To handle this:
+
+### Setup (First Time Only):
+1. Create new terminal instance
+2. `cd ~/tt-smi`
+3. `pip install .`
+4. Keep this terminal open throughout development
+
+### Recovery Process (Every Time Hang Occurs):
+1. In the tt-smi terminal: `tt-smi -r 1`
+2. Wait for device reset
+3. Continue development
+
+### Timeout Configuration:
+- Set hang detection timeout to 30 seconds
+- Always keep tt-smi terminal instance active
+- Use this mechanism before continuing to next development steps
+
+**⚠️ REMINDER: Apply hang recovery mechanism every time we continue development work**
