@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Script to generate test_op_{operation_id}.py files from table.yaml entries.
-Usage: python generate_tests.py table.yaml
+Usage: python generate_tests.py table.yaml [--op-id OPERATION_ID]
 """
 
 import json
@@ -9,6 +9,7 @@ import yaml
 import re
 import sys
 import os
+import argparse
 from pathlib import Path
 
 
@@ -297,7 +298,7 @@ def test_op_{operation_id}(device, {', '.join(param_names)}):
     return content
 
 
-def process_yaml_file(yaml_file_path):
+def process_yaml_file(yaml_file_path, target_op_id=None):
     """Process a single YAML file and generate test"""
     with open(yaml_file_path, "r") as f:
         data = yaml.safe_load(f)
@@ -310,6 +311,12 @@ def process_yaml_file(yaml_file_path):
             continue
 
         operation_id = entry["operation_id"]
+
+        # Skip if filtering by op_id and this isn't the one we want
+        # Convert target_op_id to int for comparison since YAML loads operation_id as int
+        if target_op_id is not None and operation_id != int(target_op_id):
+            continue
+
         operation = extract_operation(entry["callstack"])
 
         # Skip conv2d operations entirely - too hard to implement reliably
@@ -334,23 +341,29 @@ def process_yaml_file(yaml_file_path):
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python generate_tests.py <table.yaml>")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Generate test_op_{operation_id}.py files from table.yaml entries")
+    parser.add_argument("yaml_file", help="Path to the table.yaml file")
+    parser.add_argument("--op-id", type=str, help="Generate test only for specific operation ID")
 
-    yaml_file = sys.argv[1]
+    args = parser.parse_args()
 
-    if not os.path.exists(yaml_file):
-        print(f"Error: File {yaml_file} not found")
+    if not os.path.exists(args.yaml_file):
+        print(f"Error: File {args.yaml_file} not found")
         sys.exit(1)
 
     try:
-        generated_files = process_yaml_file(yaml_file)
-        print(f"\nSuccessfully generated {len(generated_files)} test files:")
+        generated_files = process_yaml_file(args.yaml_file, args.op_id)
+        if args.op_id:
+            if generated_files:
+                print(f"Successfully generated test file for operation_id {args.op_id}:")
+            else:
+                print(f"No test generated - operation_id {args.op_id} not found or skipped")
+        else:
+            print(f"\nSuccessfully generated {len(generated_files)} test files:")
         for f in generated_files:
             print(f"  - {f}")
     except Exception as e:
-        print(f"Error processing {yaml_file}: {e}")
+        print(f"Error processing {args.yaml_file}: {e}")
         sys.exit(1)
 
 
