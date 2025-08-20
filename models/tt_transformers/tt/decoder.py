@@ -112,7 +112,7 @@ class TransformerBlock(LightweightModule):
             tt_ccl=self.tt_ccl,
             TG=args.is_galaxy,
         )
-        if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in self.state_dict:
+        if f"layers.{layer_num}.pre_feedforward_layernorm.weight" in state_dict:
             self.pre_ff_norm = DistributedNorm(  # pre_feedforward_layernorm
                 RMSNorm(
                     device=mesh_device,
@@ -138,7 +138,7 @@ class TransformerBlock(LightweightModule):
             # If pre_feedforward_layernorm is not in state_dict, we do not use it
             self.pre_ff_norm = None
 
-        if f"layers.{layer_num}.post_feedforward_layernorm.weight" in self.state_dict:
+        if f"layers.{layer_num}.post_feedforward_layernorm.weight" in state_dict:
             self.post_ff_norm = DistributedNorm(  # post_feedforward_layernorm
                 RMSNorm(
                     device=mesh_device,
@@ -192,17 +192,11 @@ class TransformerBlock(LightweightModule):
 
         # Norms take fractured inputs and output replicated across devices
         attn_in = self.attention_norm(x, mode)
-        # return attn_in
         # Attention takes replicated inputs and produces fractured outputs
-        # if self.attention.is_sliding:
-        #     position_embeddings = rot_mats[1]
-        # else:
-        #     position_embeddings = rot_mats[0]
-        position_embeddings = rot_mats
         attn_out = self.attention.forward(
             attn_in,
             current_pos,
-            position_embeddings,
+            rot_mats,
             user_id,
             mode,
             page_table=page_table,
@@ -210,28 +204,18 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-        # return
-        # D = attn_out.shape[-1]*8
-        # torch_attn_out = ttnn.to_torch(
-        #     attn_out,
-        #     mesh_composer = ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1)
-        # )
-        # torch_attn_out = torch_attn_out[:,:,:,:D]
 
-        # with open("T3k_attn_output_torch.txt", "a") as f:
-        #     f.write("=== Flatten attn output ===\n")
-        #     for i, val in enumerate(torch_attn_out.flatten().tolist()):
-        #         f.write(f"Index {i:4d} | {val:.6f}\n")
-
-        # exit()
-        if self.pre_ff_norm == None:
-            attn_out = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None)
-
-            residual = attn_out
-
+        if self.pre_ff_norm is None:
+            hidden_states = ttnn.add(
+                residual, attn_out, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+            )
+            residual = hidden_states
+            if mode == "prefill":
+                x.deallocate(True)
         hidden_states = self.ff_norm(attn_out, mode)
-
         if self.pre_ff_norm is not None:
+            # The output of the ff_norm is replicated across the device
+            # but the residual is fractured across the devices
             if self.num_devices > 1:
                 hidden_states = tt_all_reduce(
                     hidden_states,
@@ -248,17 +232,13 @@ class TransformerBlock(LightweightModule):
 
                 if mode == "prefill":
                     hidden_states = ttnn.div(hidden_states, self.num_devices)
-
-            hidden_states = ttnn.add(residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
-
+            hidden_states = ttnn.add(
+                residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
+            )
             residual = hidden_states
-
             hidden_states = self.pre_ff_norm(hidden_states, mode)
 
-        if mode == "prefill":
-            x.deallocate(True)
-
-        # ttnn.deallocate(attn_out)
+        ttnn.deallocate(attn_out)
 
         if TG and mode == "decode":
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
@@ -272,7 +252,6 @@ class TransformerBlock(LightweightModule):
 
         if self.post_ff_norm is not None:
             hidden_states = self.post_ff_norm(hidden_states, mode)  # Gathered
-
             if self.num_devices > 1:
                 hidden_states = tt_all_reduce(
                     hidden_states,

@@ -250,7 +250,6 @@ def tt_all_gather(
             num_workers_per_link=2,
             num_buffers_per_channel=2,
         )
-
     input_tensor.deallocate(True)
     return gathered
 
