@@ -134,11 +134,12 @@ void kernel_main() {
     // For ReplicateGroup COLs/AXIS is 1, the device_begin_idx is the start of the row, and the device_end_idx is the
     // end of the row For ReplicateGroup ROWs/AXIS is 0, the device_begin_idx is the start of the column, and the
     // device_end_idx is the end of the column
-    constexpr uint32_t device_begin_idx = AXIS == 0 ? col : row * mesh_cols;
+    constexpr uint32_t device_begin_idx = axis == ReplicateGroup::COLS ? col : row * mesh_cols;
     constexpr uint32_t device_end_idx =
-        (AXIS == 0) ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
-                    : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
-    constexpr uint32_t device_stride = AXIS == 0 ? mesh_cols : 1;
+        (axis == ReplicateGroup::COLS)
+            ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
+            : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
+    constexpr uint32_t device_stride = axis == ReplicateGroup::COLS ? mesh_cols : 1;
 #else
     constexpr ReplicateGroup axis = ReplicateGroup::NONE;
     constexpr uint32_t dispatch_devices = num_devices;

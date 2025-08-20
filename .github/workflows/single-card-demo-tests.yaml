@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       requested-models:
-        description: "List of requested models as JSON array. Default is 'all'"
+        description: "List of requested models as JSON array, for example: [\"resnet\", \"sdxl\"]. Default is 'all'"
         default: "all"
         type: string
       run-perf-tests:
