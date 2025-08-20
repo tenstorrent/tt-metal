@@ -50,7 +50,7 @@ int main(int argc, char** argv) {
         cmdline_parser.print_help();
         return 0;
     }
-
+    cmdline_parser.get_filter();
     std::vector<ParsedTestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
     std::optional<tt::tt_fabric::fabric_tests::PhysicalMeshConfig> physical_mesh_config = std::nullopt;
@@ -123,6 +123,10 @@ int main(int argc, char** argv) {
     }
 
     for (auto& test_config : raw_test_configs) {
+        if(!cmdline_parser.check_filter(test_config)) {
+            log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
+            continue;
+        }
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
 
         const auto& topology = test_config.fabric_setup.topology;

@@ -270,6 +270,8 @@ public:
     CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {}
 
     std::optional<std::string> get_yaml_config_path();
+    void get_filter();
+    bool check_filter(ParsedTestConfig& test_config);
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
     std::vector<ParsedTestConfig> generate_default_configs();
     std::optional<uint32_t> get_master_seed();
@@ -280,6 +282,7 @@ public:
 
 private:
     const std::vector<std::string>& input_args_;
+    std::optional<std::string> filter;
 };
 
 const std::string no_default_test_yaml_config = "";
@@ -593,6 +596,22 @@ inline std::optional<std::string> CmdlineParser::get_yaml_config_path() {
     }
 
     return std::nullopt;
+}
+
+inline void CmdlineParser::get_filter() {
+    if(test_args::has_command_option(input_args_, "--filter")) {
+        filter = test_args::get_command_option(input_args_, "--filter", "");
+    }
+}
+
+inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config) {
+    if (filter.has_value()) {
+        //check name
+        if (test_config.name != filter.value()) {
+            return false;
+        }
+    }
+    return true;
 }
 
 inline void CmdlineParser::apply_overrides(std::vector<ParsedTestConfig>& test_configs) {
