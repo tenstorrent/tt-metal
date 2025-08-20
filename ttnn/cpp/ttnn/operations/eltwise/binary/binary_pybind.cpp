@@ -2111,7 +2111,7 @@ void py_module(py::module& module) {
 
                 std::stringstream args_stream;
                 args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
-                            << " data_type = " << input_tensor_a.dtype()
+                            << " data_type = " << input_tensor_a.dtype() << " layout = " << input_tensor_a.layout()
                             << " memory_config = " << input_tensor_a.memory_config() << std::endl;
                 args_stream << "scalar = " << scalar << std::endl;
 

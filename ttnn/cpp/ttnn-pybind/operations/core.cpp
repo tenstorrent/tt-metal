@@ -295,7 +295,9 @@ void py_module(py::module& module) {
 
                 std::stringstream args_stream;
                 args_stream << "input_tensor : shape = " << tensor.logical_shape() << " data_type = " << tensor.dtype()
-                            << " memory_config = " << tensor.memory_config() << std::endl;
+                            << " memory_config = " << tensor.memory_config() << " layout = " << tensor.layout()
+                            << std::endl;
+
                 args_stream << "target_memory_config = " << memory_config << std::endl;
                 if (dtype.has_value()) {
                     args_stream << "dtype = " << *dtype << std::endl;
