@@ -76,6 +76,9 @@ void MAIN {
     float window_channels[32 * 8];  // Buffer for channels from up to 8 sticks (2x2x2 window)
     float channel_maxes[32];        // Max values for each channel
 
+    // Bounds check - ensure we don't exceed buffer limits
+    uint32_t safe_channels = channels > 32 ? 32 : channels;
+
     // Process every filter window - loop to handle multiple windows
     for (uint32_t window = 0; window < num_windows; window++) {
         // Wait for input window to be available
@@ -84,43 +87,28 @@ void MAIN {
         // Reserve space for output
         cb_reserve_back(cb_output, 1);
 
-        // STEP A2: Complete Single Window Max Pooling Implementation
+        // DEBUG: Print window info
+        DPRINT << "Processing window " << window << " of " << num_windows << ENDL();
 
-        // Read all sticks in the 3D window and extract channel data
-        for (uint32_t stick_idx = 0; stick_idx < window_size; stick_idx++) {
-            volatile uint16_t* stick_data;
-            cb_get_tile(cb_input_window, stick_idx, (volatile void*)&stick_data);
+        // SIMPLIFIED STEP: Just copy first input stick to output (like working PASS 3)
+        // This ensures CB management is correct before adding max computation
 
-            // Extract channels from this stick
-            extract_channel_data(stick_data, channels, &window_channels[stick_idx * channels]);
+        // Get first stick from input window
+        volatile uint16_t* input_stick;
+        cb_get_tile(cb_input_window, 0, (volatile void*)&input_stick);
 
-            cb_release_tile(cb_input_window);
+        // Get output tile
+        volatile uint16_t* output_tile;
+        cb_get_tile(cb_output, 0, (volatile void*)&output_tile);
+
+        // Copy first stick to output
+        for (uint32_t i = 0; i < 512; i++) {  // 32x16 tile = 512 elements
+            output_tile[i] = input_stick[i];
         }
 
-        // Find max value for each channel across all sticks in the window
-        for (uint32_t c = 0; c < channels; c++) {
-            float channel_values_in_window[8];  // Up to 8 sticks in 2x2x2 window
-
-            // Collect this channel's values from all sticks in window
-            for (uint32_t stick_idx = 0; stick_idx < window_size; stick_idx++) {
-                channel_values_in_window[stick_idx] = window_channels[stick_idx * channels + c];
-            }
-
-            // Find max value for this channel
-            channel_maxes[c] = find_max_value(channel_values_in_window, window_size);
-        }
-
-        // For now, let's use the tile-based approach to output the first channel max
-        // This is a simplified approach for Step A2 - we'll improve this in Step A3
-        tile_regs_acquire();
-
-        // Copy the first input tile and then we'll modify it
-        copy_tile(cb_input_window, 0, 0);
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile(0, cb_output);
-        tile_regs_release();
+        // DEBUG: Print first few values
+        DPRINT << "Input[0-3]: " << input_stick[0] << " " << input_stick[1] << " " << input_stick[2] << " "
+               << input_stick[3] << ENDL();
 
         // Pop all input window elements
         for (uint32_t i = 0; i < window_size; i++) {
@@ -129,6 +117,9 @@ void MAIN {
 
         // Push output back
         cb_push_back(cb_output, 1);
+
+        // DEBUG: Print completion
+        DPRINT << "Window " << window << " completed successfully" << ENDL();
     }
 }
 

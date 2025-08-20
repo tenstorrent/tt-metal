@@ -87,6 +87,23 @@ Implement max pooling using the RISC-V processor in the compute kernel for direc
 
 **Success Criteria**: Robust implementation handles all cases and multiple windows correctly
 
+#### Step A4: Complete Max Functionality in RISC Approach
+**Goal**: Implement proper output mechanism to write computed max values in RISC approach
+
+**Implementation**:
+- Fix output tile writing to actually write computed max values (not dummy data)
+- Implement direct memory writing approach for computed channel maximums
+- Create proper tile data construction for output
+- Ensure computed max values reach the final output tensor
+
+**Testing**:
+- Test that output contains actual computed max values (8.0 from [1,2,3,4,5,6,7,8])
+- Validate with different input patterns and known expected outputs
+- Test single window scenarios with various channel counts
+- Verify end-to-end correctness: input → computation → output
+
+**Success Criteria**: RISC-V implementation outputs correct computed max values, not dummy data
+
 ---
 
 ## Phase B: FPU/SFPU Based Solution
