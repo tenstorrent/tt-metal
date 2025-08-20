@@ -72,6 +72,14 @@ void kernel_main() {
     constexpr uint32_t H_in_W_in = H_in * W_in;
     constexpr uint32_t window_size = kernel_t * kernel_h * kernel_w;
 
+    // Debug: Print reader kernel parameters
+    DPRINT << "READER KERNEL PARAMS:" << ENDL();
+    DPRINT << "  Input dims: T_in=" << T_in << ", H_in=" << H_in << ", W_in=" << W_in << ENDL();
+    DPRINT << "  Kernel: " << kernel_t << "x" << kernel_h << "x" << kernel_w << " = " << window_size << " sticks"
+           << ENDL();
+    DPRINT << "  Stride: " << stride_t << "x" << stride_h << "x" << stride_w << ENDL();
+    DPRINT << "  H_in_W_in=" << H_in_W_in << ENDL();
+
     // Process assigned output range
     for (uint32_t t_out = t_out_start; t_out < t_out_end; t_out++) {
         for (uint32_t h_out = h_out_start; h_out < h_out_end; h_out++) {
@@ -87,6 +95,14 @@ void kernel_main() {
                 uint32_t w_in_start = w_out * stride_w;
 
                 // Read 3D window: kernel_t × kernel_h × kernel_w sticks
+                DPRINT << "READER: Processing window for output (" << t_out << "," << h_out << "," << w_out << ")"
+                       << ENDL();
+                DPRINT << "  Input window start: (" << t_in_start << "," << h_in_start << "," << w_in_start << ")"
+                       << ENDL();
+                DPRINT << "  Kernel size: " << kernel_t << "x" << kernel_h << "x" << kernel_w << " = " << window_size
+                       << " sticks" << ENDL();
+
+                uint32_t stick_count = 0;
                 for (uint32_t kt = 0; kt < kernel_t; kt++) {
                     int32_t t_idx = (int32_t)(t_in_start + kt) - padding_t;
                     const bool outside_t = (t_idx < 0 || t_idx >= (int32_t)T_in);
@@ -115,10 +131,13 @@ void kernel_main() {
                             // Read stick (all channels at this spatial position)
                             const uint32_t in_page_idx =
                                 (uint32_t)(t_idx)*H_in_W_in + (uint32_t)(h_idx)*W_in + (uint32_t)(w_idx);
+
+                            // Read stick (all channels at this spatial position)
                             const uint64_t in_noc_addr = in_reader.get_noc_addr(in_page_idx);
                             noc_async_read(in_noc_addr, cb_write_addr, channels_bytes);
 
                             cb_write_addr += channels_bytes;
+                            stick_count++;
                         }
                     }
                 }

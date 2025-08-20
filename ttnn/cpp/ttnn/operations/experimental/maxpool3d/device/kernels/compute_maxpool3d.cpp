@@ -27,21 +27,6 @@ inline void extract_channel_data(volatile tt_l1_ptr uint16_t* stick_data, uint32
     }
 }
 
-// Helper function to find max value among an array of values
-inline float find_max_value(float* values, uint32_t count) {
-    if (count == 0) {
-        return 0.0f;
-    }
-
-    float max_val = values[0];
-    for (uint32_t i = 1; i < count; i++) {
-        if (values[i] > max_val) {
-            max_val = values[i];
-        }
-    }
-    return max_val;
-}
-
 // Helper function to construct output stick from channel max values
 inline void construct_output_stick(float* channel_maxes, uint32_t channels, volatile uint16_t* output_stick) {
     // Convert float max values back to bfloat16 and write to output stick
@@ -71,6 +56,12 @@ void MAIN {
     // Get number of filter windows from runtime args
     const uint32_t num_windows = get_arg_val<uint32_t>(0);
 
+    // DEBUG: Print compile-time arguments at start
+    DPRINT << "COMPILE TIME ARGS:" << ENDL();
+    DPRINT << "  kernel_t=" << kernel_t << ", kernel_h=" << kernel_h << ", kernel_w=" << kernel_w << ENDL();
+    DPRINT << "  channels=" << channels << ", window_size=" << window_size << ENDL();
+    DPRINT << "  num_windows=" << num_windows << ENDL();
+
     // Temporary buffers for processing
     float channel_buffer[32];  // Support up to 32 channels for now
     float window_channels[32 * 8];  // Buffer for channels from up to 8 sticks (2x2x2 window)
@@ -87,41 +78,56 @@ void MAIN {
         // Reserve space for output
         cb_reserve_back(cb_output, 1);
 
-        // STEP A6: BACK TO BASIC WORKING COPY - NO CONVERSION
-        // Just copy first stick to output to verify data access works
+        // Debug: Print window info
+        DPRINT << "Window " << window << ": window_size=" << window_size << " (kernel " << kernel_t << "x" << kernel_h
+               << "x" << kernel_w << ")" << ENDL();
 
-        volatile tt_l1_ptr uint16_t* input_stick;
-        cb_get_tile(cb_input_window, 0, (volatile tt_l1_ptr void*)&input_stick);
+        // STEP A10: IMPLEMENT CORRECT MAX POOLING LOGIC
+        // This will work correctly once reader sends different data for each stick
+        // Currently works harmlessly with duplicate data (returns the same value)
 
         volatile tt_l1_ptr uint16_t* output_tile;
         cb_get_tile(cb_output, 0, (volatile tt_l1_ptr void*)&output_tile);
 
-        // Debug: Print input data we're reading
-        DPRINT << "INPUT data - first 8 bfloat16 values:" << ENDL();
-        for (uint32_t i = 0; i < 8; i++) {
-            DPRINT << "  [" << i << "] = 0x" << HEX() << input_stick[i] << ENDL();
-        }
+        // Initialize output with first stick (start with first values as max)
+        volatile tt_l1_ptr uint16_t* first_stick;
+        cb_get_tile(cb_input_window, 0, (volatile tt_l1_ptr void*)&first_stick);
 
-        // Simple copy - this was working before
+        // Copy first stick as initial max values
         for (uint32_t i = 0; i < 512; i++) {
-            output_tile[i] = input_stick[i];
+            output_tile[i] = first_stick[i];
         }
 
-        // Debug: Print output data we're writing
-        DPRINT << "OUTPUT data - first 8 bfloat16 values:" << ENDL();
-        for (uint32_t i = 0; i < 8; i++) {
-            DPRINT << "  [" << i << "] = 0x" << HEX() << output_tile[i] << ENDL();
+        // Process remaining sticks and find channel-wise maximum
+        for (uint32_t stick_idx = 1; stick_idx < window_size; stick_idx++) {
+            volatile tt_l1_ptr uint16_t* current_stick;
+            cb_get_tile(cb_input_window, stick_idx, (volatile tt_l1_ptr void*)&current_stick);
+
+            // Compare each element and keep maximum
+            for (uint32_t i = 0; i < safe_channels; i++) {
+                // Simple bfloat16 comparison by converting to float
+                union {
+                    float f;
+                    uint32_t u;
+                } current, max_val;
+                current.u = ((uint32_t)current_stick[i]) << 16;
+                max_val.u = ((uint32_t)output_tile[i]) << 16;
+
+                if (current.f > max_val.f) {
+                    output_tile[i] = current_stick[i];
+                }
+            }
         }
 
-        // Debug: Convert first few values to see what they should be in float
-        DPRINT << "CONVERTED values:" << ENDL();
-        for (uint32_t i = 0; i < 4; i++) {
+        // Debug: Print max values found (first few channels)
+        DPRINT << "MAX VALUES COMPUTED (bfloat16):" << ENDL();
+        for (uint32_t c = 0; c < safe_channels && c < 4; c++) {
             union {
                 float f;
                 uint32_t u;
             } conv;
-            conv.u = ((uint32_t)input_stick[i]) << 16;
-            DPRINT << "  [" << i << "] bfloat16=0x" << HEX() << input_stick[i] << " -> float=" << conv.f << ENDL();
+            conv.u = ((uint32_t)output_tile[c]) << 16;
+            DPRINT << "  Channel[" << c << "] = 0x" << HEX() << output_tile[c] << " (float=" << conv.f << ")" << ENDL();
         }
 
         // Pop all input window elements
