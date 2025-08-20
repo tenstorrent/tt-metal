@@ -1,7 +1,7 @@
 # Yolov6l
 
 ### Platforms:
-    Wormhole (n150, n300)
+Wormhole (n150, n300)
 
 ### Introduction:
 YOLOv6-L is a large variant of the YOLOv6 family—an advanced real-time object detection model developed by Meituan. YOLOv6 is designed to offer high performance in both accuracy and speed, making it suitable for industrial applications like autonomous driving, surveillance, and robotics. Resource link - [source](https://github.com/meituan/YOLOv6)
