@@ -267,10 +267,9 @@ private:
 
 class CmdlineParser {
 public:
-    CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {}
+    CmdlineParser(const std::vector<std::string>& input_args);
 
     std::optional<std::string> get_yaml_config_path();
-    void get_filter();
     bool check_filter(ParsedTestConfig& test_config);
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
     std::vector<ParsedTestConfig> generate_default_configs();
@@ -282,8 +281,18 @@ public:
 
 private:
     const std::vector<std::string>& input_args_;
-    std::optional<std::string> filter;
+    std::optional<std::string> filter_type;
+    std::optional<std::string> filter_value;
 };
+
+CmdlineParser::CmdlineParser(const std::vector<std::string>& input_args) : input_args_(input_args) {
+    if (test_args::has_command_option(input_args_, "--filter")) {
+        auto filter = test_args::get_command_option(input_args_, "--filter", "");
+        auto splitter = filter.find('.');
+        filter_type = filter.substr(0, splitter);
+        filter_value = filter.substr(splitter + 1);
+    }
+}
 
 const std::string no_default_test_yaml_config = "";
 
@@ -598,17 +607,10 @@ inline std::optional<std::string> CmdlineParser::get_yaml_config_path() {
     return std::nullopt;
 }
 
-inline void CmdlineParser::get_filter() {
-    if(test_args::has_command_option(input_args_, "--filter")) {
-        filter = test_args::get_command_option(input_args_, "--filter", "");
-    }
-}
-
 inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config) {
-    if (filter.has_value()) {
-        //check name
-        if (test_config.name != filter.value()) {
-            return false;
+    if (filter_type.has_value()) {
+        if (filter_type == "name") {
+            return test_config.name == filter_value;
         }
     }
     return true;
@@ -787,6 +789,7 @@ inline void CmdlineParser::print_help() {
         LogTest,
         "  --built-tests-dump-file <filename>           Specify the filename for the dumped tests. Default: "
         "built_tests.yaml.");
+    log_info(LogTest, "  --filter <testname>           Specify a filter for the test suite");
 }
 
 // YamlConfigParser private helpers

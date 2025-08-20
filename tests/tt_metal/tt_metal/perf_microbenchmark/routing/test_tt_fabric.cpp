@@ -50,7 +50,6 @@ int main(int argc, char** argv) {
         cmdline_parser.print_help();
         return 0;
     }
-    cmdline_parser.get_filter();
     std::vector<ParsedTestConfig> raw_test_configs;
     tt::tt_fabric::fabric_tests::AllocatorPolicies allocation_policies;
     std::optional<tt::tt_fabric::fabric_tests::PhysicalMeshConfig> physical_mesh_config = std::nullopt;
@@ -122,6 +121,7 @@ int main(int argc, char** argv) {
         YamlTestConfigSerializer::dump(allocation_policies, output_stream);
     }
 
+    bool device_opened = false;
     for (auto& test_config : raw_test_configs) {
         if(!cmdline_parser.check_filter(test_config)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
@@ -133,6 +133,7 @@ int main(int argc, char** argv) {
         const auto& routing_type = test_config.fabric_setup.routing_type.value();
         log_info(tt::LogTest, "Opening devices with topology: {} and routing type: {}", topology, routing_type);
         test_context.open_devices(test_config.fabric_setup);
+        device_opened = true;
 
         log_info(tt::LogTest, "Building tests");
         auto built_tests = builder.build_tests({test_config});
@@ -177,7 +178,9 @@ int main(int argc, char** argv) {
         }
     }
 
-    test_context.close_devices();
+    if (device_opened) {
+        test_context.close_devices();
+    }
 
     // Check if any tests failed validation and throw at the end
     if (test_context.has_test_failures()) {
@@ -191,6 +194,10 @@ int main(int argc, char** argv) {
         TT_THROW("Some tests failed golden comparison validation. See summary above.");
     }
 
-    log_info(tt::LogTest, "All tests completed successfully");
+    if (device_opened) {
+        log_info(tt::LogTest, "All tests completed successfully");
+    } else {
+        log_info(tt::LogTest, "No tests found for provided filter");
+    }
     return 0;
 }
