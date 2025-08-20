@@ -46,7 +46,6 @@ void ScatterDeviceOperation::validate_on_program_cache_miss(
     //     "input_rank must equal index_rank (input_rank: {}, index_rank: {}).",
     //     input_rank,
     //     index_rank);
-
     TT_FATAL(
         input_dtype == src_dtype,
         "input_dtype differs from src_dtype (input_dtype: {}, src_dtype: {}).",
