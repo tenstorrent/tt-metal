@@ -1257,7 +1257,7 @@ private:
     std::vector<FabricNodeId> local_available_node_ids_;
     std::vector<FabricNodeId> global_available_node_ids_;
     tt::tt_fabric::FabricConfig current_fabric_config_{FabricConfig::DISABLED};
-    tt_fabric::FabricTensixConfig current_fabric_tensix_config_;
+    tt_fabric::FabricTensixConfig current_fabric_tensix_config_{tt_fabric::FabricTensixConfig::DISABLED};
     std::shared_ptr<MeshDevice> mesh_device_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;
