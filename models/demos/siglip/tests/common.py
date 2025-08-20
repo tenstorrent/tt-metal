@@ -24,6 +24,9 @@ def convert_state_dict(flat_dict):
         "k_proj": "wk",
         "v_proj": "wv",
         "out_proj": "wo",
+        # MLP weight mappings to TtLlamaImageFeedForward format
+        "fc1": "c_fc",
+        "fc2": "c_proj",
     }
     for m, n in mappings.items():
         flat_dict = {k.replace(m, n): v for k, v in flat_dict.items()}
