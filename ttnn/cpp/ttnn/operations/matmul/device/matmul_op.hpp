@@ -158,7 +158,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const Tensor& sparsity,
-    uint32_t nnz,
+    const std::optional<uint32_t> nnz,
     bool is_input_a_sparse,
     Tensor& output_tensor,
     CoreCoord compute_with_storage_grid_size,
@@ -281,7 +281,7 @@ Matmul create_matmul_struct(
     const std::vector<std::optional<Tensor>>& optional_output_tensors = {std::nullopt});
 
 struct SparseMatmul {
-    uint32_t nnz;
+    const std::optional<uint32_t> nnz;
     bool is_input_a_sparse;
     const std::optional<const MatmulProgramConfig> program_config = std::nullopt;
     const MemoryConfig output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;

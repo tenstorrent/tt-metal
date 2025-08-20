@@ -2836,7 +2836,7 @@ void SparseMatmul::validate(
         in1_tile_shape[1],
         bshape,
         in1_tile_shape);
-    TT_FATAL(this->nnz > 0, "nnz must be greater than 0");
+    TT_FATAL(this->nnz.value_or(1) > 0, "nnz ({}) must be greater than 0", this->nnz.value());
 
     // Check that nnz is less than or equal to the length of all batch dimensions
     uint32_t batch_length = 1;
@@ -2850,17 +2850,18 @@ void SparseMatmul::validate(
             batch_length *= bshape[i];
         }
     }
-    TT_FATAL(
-        this->nnz <= batch_length,
-        "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
-        this->nnz,
-        batch_length);
 
     // Check that sparsity has enough entries
     TT_FATAL(
         sparsity.logical_volume() == batch_length,
         "sparsity.logical_volume() ({}) must be equal to the product of all batch dimensions ({})",
         sparsity.logical_volume(),
+        batch_length);
+
+    TT_FATAL(
+        this->nnz.value_or(1) <= batch_length,
+        "nnz ({}) must be less than or equal to the length of all batch dimensions ({})",
+        this->nnz,
         batch_length);
 }
 

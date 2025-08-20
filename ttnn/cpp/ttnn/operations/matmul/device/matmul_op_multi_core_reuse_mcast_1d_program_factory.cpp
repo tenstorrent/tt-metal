@@ -341,9 +341,17 @@ process_mcast_in0_program_and_create_override_variables(
             (std::uint32_t)M * K,  // MtKt
             (std::uint32_t)B,      // batch
             // sparsity args
+<<<<<<< HEAD
             (std::uint32_t)0,   // batchB
             (std::uint32_t)0,   // sparsity_pagesize (placeholder since sparsity not used in this case)
             (std::uint32_t)true // bcast_A
+=======
+            (std::uint32_t)0,      // batchB
+            (std::uint32_t)false,  // sparsity_is_dram
+            (std::uint32_t)0,      // sparsity_log2_of_pagesize
+            (std::uint32_t)true,   // bcast_A
+            (std::uint32_t)false   // get_batch_from_reader
+>>>>>>> db0b8b6f2b (SparseMatmul: Add option for not providing nnz and reading it on the fly)
         };
     }
     in0_sender_compile_time_args.push_back((std::uint32_t)(fuse_op && fused_op_signaler->is_all_gather()));
@@ -421,7 +429,8 @@ process_mcast_in0_program_and_create_override_variables(
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)B  // batch
+        (std::uint32_t)B,     // batch
+        (std::uint32_t)false  // get_batch_from_reader
     };
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -587,7 +596,8 @@ process_mcast_in0_program_and_create_override_variables(
         B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out  // untilize_out
+        untilize_out,  // untilize_out
+        false          // get_batch_from_reader
     };
 
     // Create compute kernel
@@ -1108,9 +1118,10 @@ process_mcast_in1_program_and_create_override_variables(
         (std::uint32_t)B,      // batch
 
         // sparsity args
-        (std::uint32_t)0,   // batchB
-        (std::uint32_t)0,   // sparsity_pagesize (placeholder since sparsity not used in this case)
-        (std::uint32_t)true // bcast_A
+        (std::uint32_t)0,     // batchB
+        (std::uint32_t)0,     // sparsity_pagesize (placeholder since sparsity not used in this case)
+        (std::uint32_t)true,  // bcast_A
+        (std::uint32_t)false  // get_batch_from_reader
     };
     in0_sender_compile_time_args.push_back((std::uint32_t)fuse_op);
     tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(in0_sender_compile_time_args);
@@ -1331,7 +1342,8 @@ process_mcast_in1_program_and_create_override_variables(
         B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out  // untilize_out
+        untilize_out,  // untilize_out
+        false          // get_batch_from_reader
     };
 
     // Create compute kernel
@@ -2936,7 +2948,7 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     const Tensor& a,
     const Tensor& b,
     const Tensor& sparsity,
-    uint32_t nnz,
+    const std::optional<uint32_t> nnz,
     bool is_input_a_sparse,
     Tensor& output_tensor,
     CoreCoord compute_with_storage_grid_size,
@@ -3114,6 +3126,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
     bool sparsity_is_dram = sparsity_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
 
+    uint32_t num_batch_compute = nnz.value_or(sparsity.logical_volume());
+
     uint32_t in0_num_subblocks = (out_block_h / out_subblock_h);
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
     uint32_t in0_last_ktile_w = a.logical_shape()[-1] % in0_tile.get_tile_shape()[1];
@@ -3147,9 +3161,17 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)Mt * Kt,  // MtKt
         (std::uint32_t)B_A,      // batchA
         // sparsity args
+<<<<<<< HEAD
         (std::uint32_t)B_B,                               // batchB
         (std::uint32_t)B_B * (uint32_t)sizeof(uint32_t),  // sparsity_pagesize
         (std::uint32_t)!is_input_a_sparse,                // bcast_A
+=======
+        (std::uint32_t)B_B,  // batchB
+        (std::uint32_t)sparsity_is_dram,
+        (std::uint32_t)std::log2(B_B * (uint32_t)sizeof(uint32_t)),  // log2 of page size
+        (std::uint32_t)!is_input_a_sparse,                           // bcast_A
+        (std::uint32_t)!nnz.has_value(),                             // get_batch_from_reader
+>>>>>>> db0b8b6f2b (SparseMatmul: Add option for not providing nnz and reading it on the fly)
         // fuse op args
         (std::uint32_t)false,  // fuse_op
     };
@@ -3222,7 +3244,8 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         (std::uint32_t)in0_mcast_sender_semaphore_id,
         (std::uint32_t)in0_mcast_receiver_semaphore_id,
         // batch args
-        (std::uint32_t)nnz,  // batch
+        (std::uint32_t)num_batch_compute,  // batch
+        (std::uint32_t)!nnz.has_value(),   // get_batch_from_reader
     };
 
     std::map<std::string, std::string> mm_kernel_defines;
@@ -3309,10 +3332,11 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
         out_subblock_num_tiles,  // out_subblock_num_tiles
-        nnz,                     // batch_nnz
+        num_batch_compute,       // batch_nnz
         out_block_tiles,         // out_block_num_tiles
 
-        false  // untilize_out
+        false,            // untilize_out
+        !nnz.has_value()  // get_batch_from_reader
     };
 
     // Create compute kernel
@@ -3383,6 +3407,16 @@ tt::tt_metal::operation::ProgramWithCallbacks sparse_matmul_multi_core_reuse_mca
 
     auto cb_sparsity0 = tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config0);
     auto cb_sparsity1 = tt_metal::CreateCircularBuffer(program, all_cores, sparsity_cb_config1);
+
+    if (!nnz.has_value()) {
+        // Create circular buffers
+        uint32_t nnz_cb_index = tt::CBIndex::c_25;
+        const auto nnz_data_format = tt::DataFormat::UInt32;
+        const auto nnz_cb_size = sparsity.logical_volume() * tt::datum_size(nnz_data_format);
+        const auto nnz_cb_config = tt_metal::CircularBufferConfig(nnz_cb_size, {{nnz_cb_index, nnz_data_format}})
+                                       .set_page_size(nnz_cb_index, nnz_cb_size);
+        tt_metal::CreateCircularBuffer(program, all_cores, nnz_cb_config);
+    }
 
     if (interm0_data_format != output_data_format) {
         // output
