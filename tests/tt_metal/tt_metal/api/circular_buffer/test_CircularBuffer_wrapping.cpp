@@ -99,4 +99,35 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlocking) {
     EXPECT_EQ(host_buffer, EXPECTED_RESULT) << "Page corruption detected.";
 }
 
+TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
+    auto device = devices_.at(0);
+    Program program;
+    auto writer_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_writer.cpp",
+        WORKER_CORE,
+        ComputeConfig{});
+
+    WriterDataMovementConfig writer_config;
+    writer_config.defines = {{"PEEK_FRONT", "1"}};
+
+    auto reader_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_non_blocking_reader.cpp",
+        WORKER_CORE,
+        writer_config);
+
+    CreateCircularBuffer(
+        program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
+
+    auto result_buffer = Buffer::create(device, CB_PAGE_SIZE, CB_PAGE_SIZE, BufferType::L1);
+    SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address()});
+
+    EnqueueProgram(device->command_queue(), program, true);
+
+    std::vector<uint32_t> host_buffer;
+    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), sizeof(uint32_t), host_buffer);
+    EXPECT_FALSE(host_buffer.front()) << "Reader should have detected that the CB is full.";
+}
+
 }  // namespace tt::tt_metal
