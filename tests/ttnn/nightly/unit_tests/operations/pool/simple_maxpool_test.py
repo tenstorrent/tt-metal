@@ -14,6 +14,9 @@ padding = [1, 1]
 dilation = [1, 1]
 shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
 ceil_mode = False
+ttnn_dtype = ttnn.bfloat16
+# ttnn_dtype = ttnn.bfloat8_b
+
 tensor_shape = (in_n, in_c, in_h, in_w)  # NCHW format
 
 # Create tensor filled with height and width coordinates
@@ -33,7 +36,10 @@ torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
 ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
 torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
 torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
-ttnn_input = ttnn.from_torch(torch_input_reshaped, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+ttnn_layout = ttnn.ROW_MAJOR_LAYOUT
+if ttnn_dtype == ttnn.bfloat8_b:
+    ttnn_layout = ttnn.TILE_LAYOUT
+ttnn_input = ttnn.from_torch(torch_input_reshaped, ttnn_dtype, layout=ttnn_layout, device=device)
 
 # print("Output without indices:")
 # print(ttnn.to_torch(ttnn_output))
@@ -131,8 +137,11 @@ else:
 ttnn_output_reshaped = ttnn_output_torch.reshape(in_n, out_h, out_w, in_c)
 ttnn_indices_reshaped = ttnn_indices_torch.reshape(in_n, out_h, out_w, in_c)
 
-output_match = torch.allclose(torch_output_reshaped, ttnn_output_reshaped)
-indices_match = torch.allclose(torch_indices_reshaped.float(), ttnn_indices_reshaped.float())
+atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+if ttnn_dtype == ttnn.bfloat8_b:
+    atol = 0.35
+output_match = torch.allclose(torch_output_reshaped, ttnn_output_reshaped, atol=atol, rtol=rtol)
+indices_match = torch.equal(torch_indices_reshaped, ttnn_indices_reshaped)
 
 print(f"Output values match (allclose): {output_match}")
 print(f"Indices values match (allclose): {indices_match}")
@@ -215,7 +224,10 @@ if not indices_match:
             # 1. The values must be the same
             # 2. Both indices must be within the same kernel window
 
-            values_same = abs(torch_input_val - ttnn_input_val) < 1e-6
+            if ttnn_dtype == ttnn.bfloat8_b:
+                values_same = math.isclose(torch_input_val, ttnn_input_val, abs_tol=atol, rel_tol=rtol)
+            else:
+                values_same = torch_input_val == ttnn_input_val
 
             # Calculate the top-left corner of the kernel window for this output position
             # Given output position (h, w), the top-left of the kernel window is:
