@@ -1047,6 +1047,16 @@ uint32_t estimate_halo_output_elems(
     return approx_max_halo_size;
 };
 
+Conv2dSliceConfig::SliceType determine_conv_slice_type(uint32_t input_height, uint32_t input_width) {
+    float threshold_ratio = 3.0;
+    if (input_height > input_width * threshold_ratio) {
+        log_info(LogOp, "Determined Conv DRAM Slice Type as HEIGHT");
+        return Conv2dSliceConfig::SliceType::HEIGHT;
+    }
+    log_info(LogOp, "Determined Conv DRAM Slice Type as WIDTH");
+
+    return Conv2dSliceConfig::SliceType::WIDTH;
+}
 uint32_t calculate_conv_dram_slice_L1_usage(
     const ConvDRAMParamters& params, MeshDevice* device, const Conv2dSliceConfig& dram_slice_config) {
     Conv2dConfig conv_config = params.conv_config;
