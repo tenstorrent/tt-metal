@@ -258,5 +258,7 @@ void RunEDMConnectionStressTest(
     const std::vector<size_t>& workers_count,
     const std::vector<size_t>& test_rows);
 
+void RunTestUnicastSmoke(BaseFabricFixture* fixture);
+
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
