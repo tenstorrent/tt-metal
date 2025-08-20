@@ -13,14 +13,8 @@
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/erisc_datamover_builder.hpp>
 #include "hostdevcommon/fabric_common.h"
-#include <array>
-#include <cstddef>
-#include <map>
-#include <optional>
-#include <utility>
-#include <variant>
 #include <vector>
-#include <random>
+#include "tt_metal/fabric/fabric_context.hpp"
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -39,8 +33,6 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "tt_metal/fabric/fabric_context.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_fabric {
