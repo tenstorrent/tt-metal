@@ -72,11 +72,11 @@ static const std::vector<DataT> EXPECTED_RESULT = {WRAP_WRITE_VALUE, WRAP_WRITE_
 static constexpr std::size_t RESULT_BUFFER_PAGE_SIZE = CB_PAGE_SIZE;
 static constexpr std::size_t RESULT_BUFFER_SIZE = RESULT_BUFFER_PAGE_SIZE;
 static constexpr auto RESULT_BUFFER_TYPE = BufferType::L1;
-static const std::vector<std::uint32_t> RESULT_BUFFER_INIT_DATA(RESULT_BUFFER_PAGE_SIZE / sizeof(uint32_t), 0);
+static const std::vector<DataT> RESULT_BUFFER_INIT_DATA(RESULT_BUFFER_PAGE_SIZE / sizeof(DataT), 0);
 
-auto create_result_buffer(IDevice* device) {
+std::shared_ptr<Buffer> create_result_buffer(IDevice* device) {
     auto result_buffer = Buffer::create(device, RESULT_BUFFER_PAGE_SIZE, RESULT_BUFFER_SIZE, RESULT_BUFFER_TYPE);
-    std::vector<std::uint32_t> init_data(RESULT_BUFFER_INIT_DATA);
+    std::vector<DataT> init_data(RESULT_BUFFER_INIT_DATA);
     detail::WriteToDeviceL1(device, WORKER_CORE, result_buffer->address(), init_data);
     return result_buffer;
 }
@@ -112,7 +112,7 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlocking) {
 }
 
 TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
-    static constexpr uint32_t SUCCESS_TOKEN = 0xC0FFEE;
+    static constexpr DataT SUCCESS_TOKEN = 0xC0FFEE;
 
     auto device = devices_.at(0);
     Program program;
@@ -139,14 +139,13 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
 
     EnqueueProgram(device->command_queue(), program, true);
 
-    std::vector<std::uint32_t> host_buffer;
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), sizeof(std::uint32_t), host_buffer);
-    log_info(LogTest, "host_buffer: {}", host_buffer.front());
+    std::vector<DataT> host_buffer;
+    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), sizeof(DataT), host_buffer);
     EXPECT_EQ(host_buffer.front(), SUCCESS_TOKEN) << "Reader should have detected that the CB is full.";
 }
 
 TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
-    static constexpr uint32_t SUCCESS_TOKEN = 0xBABE;
+    static constexpr DataT SUCCESS_TOKEN = 0xBABE;
 
     auto device = devices_.at(0);
     Program program;
@@ -174,9 +173,8 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingBack) {
 
     EnqueueProgram(device->command_queue(), program, true);
 
-    std::vector<std::uint32_t> host_buffer;
-    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), sizeof(std::uint32_t), host_buffer);
-    log_info(LogTest, "host_buffer: {}", host_buffer.front());
+    std::vector<DataT> host_buffer;
+    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), sizeof(DataT), host_buffer);
     EXPECT_EQ(host_buffer.front(), SUCCESS_TOKEN) << "Writer should have detected that the CB is full.";
 }
 
