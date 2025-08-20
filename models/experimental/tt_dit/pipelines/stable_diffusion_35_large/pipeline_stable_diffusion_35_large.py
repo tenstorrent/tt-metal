@@ -27,7 +27,6 @@ from ....stable_diffusion_35_large.tt.clip_encoder import (
     TtCLIPConfig,
 )
 from ....stable_diffusion_35_large.tt.t5_encoder import TtT5Encoder, TtT5EncoderParameters
-from ....stable_diffusion_35_large.tt.fun_vae_decoder.fun_vae_decoder import TtVaeDecoderParameters
 
 # NOTE: SD35Transformer is the new tt-dit implementation
 from ...models.transformers.transformer_sd35 import SD35Transformer2DModel
@@ -322,9 +321,6 @@ class StableDiffusion3Pipeline:
             self.vae_parallel_manager.device.reshape(
                 ttnn.MeshShape(*self.encoder_parallel_manager.tensor_parallel.mesh_shape)
             )
-        self._vae_parameters = TtVaeDecoderParameters.from_torch(
-            torch_vae_decoder=self._torch_vae.decoder, dtype=ttnn.bfloat16, parallel_config=self.vae_parallel_manager
-        )
 
         self._vae_decoder = VAEDecoder.from_torch(
             torch_ref=self._torch_vae.decoder,

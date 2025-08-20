@@ -183,6 +183,7 @@ class DistributedLayerNorm:
 """
 Groupnorm that supports data parallel computation.
 The number of channels and groups will be updated to match the distribution of the data across the mesh.
+Set mesh_axis to None to disable data parallelism.
 """
 
 

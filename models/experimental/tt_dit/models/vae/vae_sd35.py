@@ -428,6 +428,20 @@ class VAEDecoder:
         mesh_axis=None,
         parallel_manager=None,
     ):
+        """
+        Initialize the VAEDecoder.
+        Args:
+            block_out_channels: The number of channels for the updecoder blocks. They are also used to support other layers and blocks
+            in_channels: The number of channels in the input image.
+            out_channels: The number of channels in the output image.
+            layers_per_block: The number of Resnet layers (blocks) in each updecoder.
+            norm_num_groups: The number of groups in the normalization layer.
+            torch_ref: The reference to the torch model.
+            mesh_device: The device to use for the model.
+            mesh_axis: The axis to use for the model.
+            parallel_manager: The parallel manager to use for the model.
+        """
+        # TODO: Add support for torch_ref
         if torch_ref is None:
             self.conv_in = Conv2d(
                 in_channels,

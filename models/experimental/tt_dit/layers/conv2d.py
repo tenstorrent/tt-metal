@@ -9,7 +9,7 @@ from ..utils.tensor import bf16_tensor_host
 # TODO: Add support for coll and row parallel conv2d
 class Conv2d:
     """
-    Conv2d with support for tensor parallelism. Data, Seqence Parallelism TBD.
+    Conv2d with support for tensor parallelism. Data and Seqence Parallelism TBD.
 
     """
 
@@ -62,6 +62,7 @@ class Conv2d:
         },
     }
 
+    # TODO: Allow weight initilization?
     def __init__(
         self,
         in_channels=None,
@@ -88,8 +89,7 @@ class Conv2d:
             mesh_device: Mesh device to use.
             mesh_axis: Axis to use for mesh parallelism.
             parallel_manager: Parallel manager to use.
-            torch_ref: Reference to the torch layer.
-
+            torch_ref: Reference to the torch layer. Paramaters from this will be used to iniitialize the layer
         Returns:
             Conv2d layer.
         """
@@ -150,8 +150,8 @@ class Conv2d:
 
     def __call__(self, x):
         """
-        Gather the tensor if it is sharded, since we only support TP.
-        Data is left in the state of the final compute. The burden is on the next layer to prepare is input as needed.
+        Gather the tensor if it is sharded, since we only support TP. Will be extended to support DP and SP as needed.
+        Data is left in the state of the final compute. The burden is on the next layer to prepare its input as needed.
         TODO: Add support for DP and SP
         """
         if self.is_sharded_tensor(x):
