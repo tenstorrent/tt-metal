@@ -2107,7 +2107,8 @@ void py_module(py::module& module) {
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy);
+                    use_legacy,
+                    stack_id);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),
@@ -2156,7 +2157,8 @@ void py_module(py::module& module) {
                     activations,
                     input_tensor_a_activations,
                     input_tensor_b_activations,
-                    use_legacy);
+                    use_legacy,
+                    stack_id);
             },
             py::arg("input_tensor_a"),
             py::arg("input_tensor_b"),

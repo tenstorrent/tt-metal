@@ -70,7 +70,8 @@ struct BinaryNgDeviceOperation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            tensor_return_value_t& output,
+            const std::optional<uint32_t>& stack_id = std::nullopt);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
@@ -99,7 +100,8 @@ struct BinaryNgDeviceOperation {
         const std::optional<Tensor>& optional_output_tensor,
         tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations);
+        tt::stl::Span<const unary::UnaryWithParam> post_activations,
+        const std::optional<uint32_t>& stack_id = std::nullopt);
 
     // tensor-scalar invocation
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
@@ -111,7 +113,8 @@ struct BinaryNgDeviceOperation {
         const std::optional<Tensor>& optional_output_tensor,
         tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations);
+        tt::stl::Span<const unary::UnaryWithParam> post_activations,
+        const std::optional<uint32_t>& stack_id = std::nullopt);
 };
 
 }  // namespace ttnn::operations::binary_ng
