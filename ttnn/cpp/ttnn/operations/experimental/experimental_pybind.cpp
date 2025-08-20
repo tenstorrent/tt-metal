@@ -10,6 +10,7 @@
 #include "ttnn/operations/experimental/cnn/convert_to_chw/convert_to_chw_pybind.hpp"
 #include "ttnn/operations/experimental/cnn/convert_to_hwc/convert_to_hwc_pybind.hpp"
 #include "ttnn/operations/experimental/conv3d/conv3d_pybind.hpp"
+#include "ttnn/operations/experimental/maxpool3d/maxpool3d_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/argmax/argmax_pybind.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc_pybind.hpp"
 #include "ttnn/operations/experimental/slice_write/slice_write_pybind.hpp"
@@ -89,6 +90,7 @@ void py_module(py::module& module) {
     cnn::detail::bind_convert_to_hwc(module);
 
     ttnn::operations::experimental::conv3d::detail::py_bind_conv3d(module);
+    ttnn::operations::experimental::maxpool3d::detail::py_bind_maxpool3d(module);
 
     copy::detail::py_bind_typecast(module);
 
