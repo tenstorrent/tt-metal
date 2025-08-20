@@ -62,6 +62,7 @@ class TtBottleneck(nn.Module):
                 TtConv2dParameters.from_torch(shortcut_state, device=device, dtype=dtype),
                 stride=shortcut_stride,
                 padding=(0, 0),
+                slice_count=4,
             )
 
         # Extract normalization parameters
@@ -204,7 +205,8 @@ class TtBottleneck(nn.Module):
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # Store input for residual connection
-        identity = x
+        identity = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(x)
 
         # Process shortcut if needed
         if self.has_shortcut:

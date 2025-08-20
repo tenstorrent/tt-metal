@@ -6,9 +6,9 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class DeepLabStem(nn.Module):
+class StemBlock(nn.Module):
     """
-    PyTorch implementation of DeepLabStem.
+    PyTorch implementation of StemBlock for ResNet.
 
     Based on the model structure, the stem contains:
     - conv1: Conv2d(3, 64, kernel_size=(3, 3), stride=(2, 2), padding=(1, 1), bias=False)
@@ -47,5 +47,8 @@ class DeepLabStem(nn.Module):
         x = self.conv3(x)
         x = self.conv3.norm(x)
         x = F.relu(x)
+
+        # Max pooling with kernel_size=3, stride=2, padding=1
+        x = F.max_pool2d(x, kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
 
         return x
