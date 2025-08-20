@@ -172,7 +172,7 @@ void DistributedHostBuffer::emplace_shards(
         for (const auto& coord : coords) {
             auto& shard = shards_.at(coord);
             if (shard.is_local()) {
-                shard->buffer = produce_buffer();
+                shard->buffer = produce_buffer(coord);
                 shard->is_populated = true;
             }
         }
@@ -181,7 +181,7 @@ void DistributedHostBuffer::emplace_shards(
         taskflow.for_each(coords.begin(), coords.end(), [&](const auto& coord) {
             auto& shard = shards_.at(coord);
             if (shard.is_local()) {
-                shard->buffer = produce_buffer();
+                shard->buffer = produce_buffer(coord);
                 shard->is_populated = true;
             }
         });

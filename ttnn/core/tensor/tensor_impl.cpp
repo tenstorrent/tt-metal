@@ -538,7 +538,7 @@ Tensor to_host(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
 
     distributed_host_buffer.emplace_shards(
         storage.coords,
-        [&]() { return allocate_host_buffer(tensor.tensor_spec()); },
+        [&](const distributed::MeshCoordinate&) { return allocate_host_buffer(tensor.tensor_spec()); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);

@@ -329,7 +329,9 @@ TEST(DistributedHostBufferTest, EmplaceShardsSequential) {
         distributed::MeshCoordinate(1, 2),
     };
 
-    buffer.emplace_shards(shard_coords, []() { return HostBuffer(std::vector<int>{1, 2, 3}); });
+    buffer.emplace_shards(shard_coords, [](const distributed::MeshCoordinate& coord) {
+        return HostBuffer(std::vector<int>{coord[0] + 1, coord[1] + 1});
+    });
 
     EXPECT_THAT(buffer.shard_coords(), ElementsAreArray(shard_coords));
     EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(0, 0)).has_value());
@@ -338,11 +340,11 @@ TEST(DistributedHostBufferTest, EmplaceShardsSequential) {
     EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(1, 1)).has_value());
     EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(1, 2)).has_value());
 
-    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(0, 0))->view_as<int>(), Pointwise(Eq(), {1, 2, 3}));
-    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(0, 1))->view_as<int>(), Pointwise(Eq(), {1, 2, 3}));
-    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 0))->view_as<int>(), Pointwise(Eq(), {1, 2, 3}));
-    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 1))->view_as<int>(), Pointwise(Eq(), {1, 2, 3}));
-    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 2))->view_as<int>(), Pointwise(Eq(), {1, 2, 3}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(0, 0))->view_as<int>(), Pointwise(Eq(), {1, 1}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(0, 1))->view_as<int>(), Pointwise(Eq(), {1, 2}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 0))->view_as<int>(), Pointwise(Eq(), {2, 1}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 1))->view_as<int>(), Pointwise(Eq(), {2, 2}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 2))->view_as<int>(), Pointwise(Eq(), {2, 3}));
 
     // Out of global bounds.
     EXPECT_ANY_THROW(buffer.get_shard(distributed::MeshCoordinate(2, 0)));
@@ -361,7 +363,9 @@ TEST(DistributedHostBufferTest, EmplaceShardsParallel) {
 
     buffer.emplace_shards(
         shard_coords,
-        []() { return HostBuffer(std::vector<int>{1, 2, 3}); },
+        [](const distributed::MeshCoordinate& coord) {
+            return HostBuffer(std::vector<int>{coord[0] + 1, coord[1] + 1});
+        },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     EXPECT_THAT(buffer.shard_coords(), ElementsAreArray(shard_coords));
@@ -370,6 +374,12 @@ TEST(DistributedHostBufferTest, EmplaceShardsParallel) {
     EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(1, 0)).has_value());
     EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(1, 1)).has_value());
     EXPECT_TRUE(buffer.get_shard(distributed::MeshCoordinate(1, 2)).has_value());
+
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(0, 0))->view_as<int>(), Pointwise(Eq(), {1, 1}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(0, 1))->view_as<int>(), Pointwise(Eq(), {1, 2}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 0))->view_as<int>(), Pointwise(Eq(), {2, 1}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 1))->view_as<int>(), Pointwise(Eq(), {2, 2}));
+    EXPECT_THAT(buffer.get_shard(distributed::MeshCoordinate(1, 2))->view_as<int>(), Pointwise(Eq(), {2, 3}));
 
     // Out of global bounds.
     EXPECT_ANY_THROW(buffer.get_shard(distributed::MeshCoordinate(2, 0)));

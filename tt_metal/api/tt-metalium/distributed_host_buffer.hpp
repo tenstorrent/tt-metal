@@ -52,7 +52,7 @@ public:
     // Emplaces the shard at the specified `coord`, calling `produce_buffer` to create the buffer only when needed.
     // No-op if the index is out of local bounds.
     // Throws if the index is out of global bounds.
-    using ProduceBufferFn = std::function<HostBuffer()>;
+    using ProduceBufferFn = std::function<HostBuffer(const distributed::MeshCoordinate&)>;
     void emplace_shard(const distributed::MeshCoordinate& coord, const std::function<HostBuffer()>& produce_buffer);
 
     // Returns true if the shard at the specified `coord` is local, false if remote.
