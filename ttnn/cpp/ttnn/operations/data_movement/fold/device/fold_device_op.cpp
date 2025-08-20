@@ -83,7 +83,11 @@ Fold::spec_return_value_t Fold::compute_output_specs(
             tt::tt_metal::TensorLayout(
                 input_tensor.dtype(), tt::tt_metal::PageConfig(input_tensor.layout()), mem_config))};
     } else if (op_attr.is_dram_interleaved) {
-        ttnn::Shape output_logical_shape({input_shape[0], input_shape[1], input_shape[2], input_shape[3]});
+        ttnn::Shape output_logical_shape(
+            {input_shape[0],
+             input_shape[1] / op_attr.stride_h,
+             input_shape[2] / op_attr.stride_w,
+             input_shape[3] * op_attr.stride_h * op_attr.stride_w});
         return {TensorSpec(
             output_logical_shape,
             tt::tt_metal::TensorLayout(
