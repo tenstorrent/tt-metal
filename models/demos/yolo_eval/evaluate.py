@@ -15,8 +15,7 @@ from loguru import logger
 from sklearn.metrics import average_precision_score, precision_recall_curve
 
 import ttnn
-from models.demos.utils.common_demo_utils import save_yolo_predictions_by_model
-from models.demos.yolo_eval.utils import LoadImages, postprocess, preprocess
+from models.demos.utils.common_demo_utils import LoadImages, postprocess, preprocess, save_yolo_predictions_by_model
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
 from models.utility_functions import disable_persistent_kernel_cache
 

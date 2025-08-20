@@ -18,6 +18,8 @@ from skimage.io import imsave
 from tqdm import tqdm
 
 import ttnn
+from models.demos.vanilla_unet.common import VANILLA_UNET_L1_SMALL_SIZE
+from models.demos.yolov9c.common import YOLOV9C_L1_SMALL_SIZE
 from models.utility_functions import disable_persistent_kernel_cache
 
 
@@ -287,7 +289,7 @@ def evaluation(
 
         import fiftyone
 
-        from models.demos.yolo_eval.utils import LoadImages, preprocess
+        from models.demos.utils.common_demo_utils import LoadImages, preprocess
         from models.demos.yolov9c.demo.demo_utils import get_consistent_color, postprocess
         from models.demos.yolov9c.runner.performant_runner import YOLOv9PerformantRunner
 
@@ -569,28 +571,11 @@ def evaluation(
 
 
 def run_vanilla_unet(device, model_type, res, model_location_generator, reset_seeds, batch_size):
-    from models.demos.vanilla_unet.reference.unet import UNet
+    from models.demos.vanilla_unet.common import load_torch_model
     from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
 
     total_batch_size = batch_size * device.get_num_devices()
-    weights_path = "models/demos/vanilla_unet/unet.pt"
-    if not os.path.exists(weights_path):
-        os.system("bash models/demos/vanilla_unet/weights_download.sh")
-
-    state_dict = torch.load(weights_path, map_location=torch.device("cpu"))
-    ds_state_dict = {k: v for k, v in state_dict.items()}
-
-    reference_model = UNet()
-
-    new_state_dict = {}
-    keys = [name for name, parameter in reference_model.state_dict().items()]
-    values = [parameter for name, parameter in ds_state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
-    reference_model.load_state_dict(new_state_dict)
-    reference_model.eval()
-
+    reference_model = load_torch_model(model_location_generator)
     ttnn_model = VanillaUNetPerformantRunner(
         device,
         batch_size,
@@ -602,14 +587,14 @@ def run_vanilla_unet(device, model_type, res, model_location_generator, reset_se
     if not os.path.exists("models/demos/segmentation_evaluation/imageset"):
         os.system("python models/demos/segmentation_evaluation/dataset_download.py vanilla_unet")
 
-    model_name = "vgg_unet"
+    model_name = "vanilla_unet"
     input_dtype = ttnn.bfloat16
     input_memory_config = ttnn.L1_MEMORY_CONFIG
     evaluation(
         device=device,
         res=res,
         model_type=model_type,
-        model=vgg_unet_trace_2cq if model_type == "tt_model" else model_seg,
+        model=ttnn_model if model_type == "tt_model" else reference_model,
         input_dtype=input_dtype,
         input_memory_config=input_memory_config,
         model_name=model_name,
@@ -669,7 +654,7 @@ def run_vgg_unet(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": (7 * 8192) + 1730, "trace_region_size": 1605632, "num_command_queues": 2}],
+    [{"l1_small_size": VANILLA_UNET_L1_SMALL_SIZE, "trace_region_size": 1605632, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize("res", [(480, 640)])
@@ -690,7 +675,7 @@ def test_vanilla_unet(device, model_type, res, model_location_generator, reset_s
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": (7 * 8192) + 1730, "trace_region_size": 1605632, "num_command_queues": 2}],
+    [{"l1_small_size": VANILLA_UNET_L1_SMALL_SIZE, "trace_region_size": 1605632, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize("res", [(480, 640)])
@@ -738,46 +723,32 @@ def test_vgg_unet_dp(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": (7 * 8192) + 1730, "trace_region_size": 1605632, "num_command_queues": 2}],
-    indirect=True,
+    "use_pretrained_weight",
+    [
+        True,
+    ],
+    ids=[
+        "pretrained_weight_true",
+    ],
 )
-@pytest.mark.parametrize("res", [(480, 640)])
-def test_vanilla_unet(device, model_type, res, model_location_generator, reset_seeds, batch_size=1):
-    from models.demos.vanilla_unet.common import load_torch_model
-    from models.demos.vanilla_unet.runner.performant_runner import VanillaUNetPerformantRunner
-
-    reference_model = load_torch_model(model_location_generator=model_location_generator)
-
-    ttnn_model = VanillaUNetPerformantRunner(
-        device,
-        batch_size,
-        act_dtype=ttnn.bfloat8_b,
-        weight_dtype=ttnn.bfloat8_b,
-        model_location_generator=model_location_generator,
-    )
-
-    if not os.path.exists("models/demos/segmentation_evaluation/imageset"):
-        os.system("python models/demos/segmentation_evaluation/dataset_download.py vanilla_unet")
-
-    model_name = "vanilla_unet"
-    input_dtype = ttnn.bfloat16
-    input_memory_config = ttnn.L1_MEMORY_CONFIG
-
-    evaluation(
-        device=device,
-        res=res,
-        model_type=model_type,
-        model=ttnn_model if model_type == "tt_model" else reference_model,
-        input_dtype=input_dtype,
-        input_memory_config=input_memory_config,
-        model_name=model_name,
-        model_location_generator=model_location_generator,
+@pytest.mark.parametrize(
+    "batch_size",
+    ((1),),
+)
+@pytest.mark.parametrize("res", [(256, 256)])
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": 32768, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+)
+def test_vgg_unet(device, model_type, use_pretrained_weight, res, model_location_generator, reset_seeds, batch_size):
+    return run_vgg_unet(
+        device, model_type, use_pretrained_weight, res, model_location_generator, reset_seeds, batch_size
     )
 
 
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 79104, "trace_region_size": 23887872, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV9C_L1_SMALL_SIZE, "trace_region_size": 23887872, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "use_weights_from_ultralytics",
@@ -808,12 +779,12 @@ def test_yolov9c(
     model_location_generator,
     reset_seeds,
 ):
-    from models.demos.yolov9c.demo.demo_utils import load_torch_model
+    from models.demos.yolov9c.common import load_torch_model
 
     disable_persistent_kernel_cache()
     enable_segment = model_task == "segment"
 
-    torch_model = load_torch_model(use_weights_from_ultralytics=use_weights_from_ultralytics, model_task=model_task)
+    torch_model = load_torch_model(model_location_generator=model_location_generator, model_task=model_task)
 
     model_name = "yolov9c"
     input_dtype = ttnn.bfloat16

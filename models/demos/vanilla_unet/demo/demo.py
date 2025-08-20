@@ -29,9 +29,14 @@ def run_unet_demo_single_image(
     resolution=(480, 640),
     filename="result_ttnn_1.png",
 ):
-    weights_path = "models/demos/vanilla_unet/unet.pt"
-    if not os.path.exists(weights_path):
-        os.system("bash models/demos/vanilla_unet/weights_download.sh")
+    if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
+        weights_path = "models/demos/vanilla_unet/unet.pt"
+        if not os.path.exists(weights_path):
+            os.system("bash models/demos/vanilla_unet/weights_download.sh")
+    else:
+        weights_path = (
+            model_location_generator("vision-models/unet_vanilla", model_subdir="", download_if_ci_v2=True) / "unet.pt"
+        )
 
     pred_dir = "models/demos/vanilla_unet/demo/pred"
     # Create the directory if it doesn't exist
@@ -41,7 +46,7 @@ def run_unet_demo_single_image(
     args = argparse.Namespace(
         device="cpu",  # Choose "cpu" or "cuda:0" based on your setup
         batch_size=1,
-        weights="models/demos/vanilla_unet/unet.pt",  # Path to the pre-trained model weights
+        weights=weights_path,  # Path to the pre-trained model weights
         image="models/demos/vanilla_unet/demo/images/TCGA_CS_4944_20010208_1.tif",  # Path to your input image
         mask="models/demos/vanilla_unet/demo/images/TCGA_CS_4944_20010208_1_mask.tif",  # Path to your input mask
         image_size=resolution,  # Resize input image to this size
