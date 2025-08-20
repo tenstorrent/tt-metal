@@ -9,9 +9,9 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov8s_world.common import YOLOV8SWORLD_L1_SMALL_SIZE
 from models.demos.yolov8s_world.runner.performant_runner import YOLOv8sWorldPerformantRunner
-from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import get_mesh_mappers
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import is_wormhole_b0, run_for_wormhole_b0

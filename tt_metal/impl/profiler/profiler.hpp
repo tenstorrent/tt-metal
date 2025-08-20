@@ -51,6 +51,9 @@ struct pair_hash {
     }
 };
 
+constexpr uint32_t TRACE_RISC_ID = 6;
+constexpr uint32_t ERISC_RISC_ID = 5;
+
 // defined locally in profiler.cpp
 class FabricRoutingLookup;
 
@@ -69,6 +72,12 @@ struct ZoneDetails {
     enum class ZoneNameKeyword : uint16_t {
         BRISC_FW,
         ERISC_FW,
+        NCRISC_FW,
+        TRISC_FW,
+        BRISC_KERNEL,
+        ERISC_KERNEL,
+        NCRISC_KERNEL,
+        TRISC_KERNEL,
         SYNC_ZONE,
         PROFILER,
         DISPATCH,
@@ -82,6 +91,12 @@ struct ZoneDetails {
     static inline std::unordered_map<std::string, ZoneNameKeyword> zone_name_keywords_map = {
         {"BRISC-FW", ZoneNameKeyword::BRISC_FW},
         {"ERISC-FW", ZoneNameKeyword::ERISC_FW},
+        {"NCRISC-FW", ZoneNameKeyword::NCRISC_FW},
+        {"TRISC-FW", ZoneNameKeyword::TRISC_FW},
+        {"BRISC-KERNEL", ZoneNameKeyword::BRISC_KERNEL},
+        {"ERISC-KERNEL", ZoneNameKeyword::ERISC_KERNEL},
+        {"NCRISC-KERNEL", ZoneNameKeyword::NCRISC_KERNEL},
+        {"TRISC-KERNEL", ZoneNameKeyword::TRISC_KERNEL},
         {"SYNC-ZONE", ZoneNameKeyword::SYNC_ZONE},
         {"PROFILER", ZoneNameKeyword::PROFILER},
         {"DISPATCH", ZoneNameKeyword::DISPATCH},
@@ -94,7 +109,7 @@ struct ZoneDetails {
     std::string zone_name;
     std::string source_file;
     uint64_t source_line_num;
-    std::array<bool, static_cast<uint16_t>(ZoneNameKeyword::COUNT)> zone_name_keyword_flags;
+    std::array<bool, static_cast<uint16_t>(ZoneNameKeyword::COUNT)> zone_name_keyword_flags{};
 
     ZoneDetails(const std::string& zone_name, const std::string& source_file, uint64_t source_line_num) :
         zone_name(zone_name), source_file(source_file), source_line_num(source_line_num) {
@@ -118,18 +133,18 @@ struct SyncInfo {
 };
 
 struct DeviceProfilerDataPoint {
-    chip_id_t device_id;
-    int core_x;
-    int core_y;
+    chip_id_t device_id{};
+    int core_x{};
+    int core_y{};
     std::string risc_name;
-    uint32_t timer_id;
-    uint64_t timestamp;
-    uint64_t data;
-    uint32_t run_host_id;
+    uint32_t timer_id{};
+    uint64_t timestamp{};
+    uint64_t data{};
+    uint32_t run_host_id{};
     std::string zone_name;
     std::string op_name;
-    kernel_profiler::PacketTypes packet_type;
-    uint64_t source_line;
+    kernel_profiler::PacketTypes packet_type{kernel_profiler::PacketTypes::ZONE_START};
+    uint64_t source_line{};
     std::string source_file;
     nlohmann::json meta_data;
 };
@@ -144,16 +159,16 @@ struct FabricEventDataPoints {
 class DeviceProfiler {
 private:
     // Device architecture
-    tt::ARCH device_arch;
+    tt::ARCH device_arch{tt::ARCH::Invalid};
 
     // Device ID
-    chip_id_t device_id;
+    chip_id_t device_id{};
 
     // Device frequency
-    int device_core_frequency;
+    int device_core_frequency{};
 
     // Last fast dispatch read performed flag
-    bool is_last_fd_read_done;
+    bool is_last_fd_read_done{};
 
     // Smallest timestamp
     uint64_t smallest_timestamp = (1lu << 63);
@@ -269,7 +284,7 @@ public:
     std::vector<uint32_t> profile_buffer;
 
     // Number of bytes reserved in each DRAM bank for storing device profiling data
-    uint32_t profile_buffer_bank_size_bytes;
+    uint32_t profile_buffer_bank_size_bytes{};
 
     // Device events
     std::unordered_set<tracy::TTDeviceEvent> device_events;

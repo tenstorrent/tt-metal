@@ -296,19 +296,9 @@ def from_torch(
         memory_config = spec.memory_config
         tile = spec.tile
 
-    if layout is None:
-        layout = ttnn.ROW_MAJOR_LAYOUT
-
     if memory_config is not None and memory_config.is_sharded():
         if memory_config.shard_spec is None and memory_config.nd_shard_spec is None:
             raise RuntimeError("ttnn.from_torch: Shard spec must not be None for sharded tensors")
-
-    if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
-        if layout != ttnn.TILE_LAYOUT:
-            raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
-
-    if memory_config is not None and device is None:
-        raise RuntimeError("ttnn.from_torch: device must be specified when memory_config is specified")
 
     return ttnn.Tensor(
         tensor=tensor,
@@ -594,8 +584,7 @@ def as_tensor(
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
     mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper] = None,
-    use_device_tilizer: bool = False,
-    enable_multihost_format: Optional[bool] = None,
+    enable_multihost_format: bool = False,
 ) -> ttnn.Tensor:
     """
     Converts the `torch.Tensor` tensor into a `ttnn.Tensor`.
@@ -611,7 +600,6 @@ def as_tensor(
         cache_file_name (str | pathlib.Path, optional): The cache file name. Defaults to `None`.
         preprocess (Callable[[ttnn.Tensor], ttnn.Tensor], optional): The function to preprocess the tensor before serializing/converting to ttnn. Defaults to `None`.
         mesh_mapper (ttnn.CppTensorToMesh, optional): The TensorToMesh to define the mapping from torch to multi-device. Defaults to `None`.
-        use_device_tilizer (bool, optional): The flag that toggles whether to use host vs. device tilizer. Defaults to `False`.
         enable_multihost_format (bool, optional): Whether to use the multi-host format for the cache file. Defaults to `False`.
 
             - For Grayskull, the on-device tilizer will truncate mantissa bits for bfp* formats.
@@ -630,17 +618,9 @@ def as_tensor(
     dtype_name = dtype.name if dtype is not None else "None"
     layout_name = layout.name if layout is not None else "None"
 
-    if enable_multihost_format is None:
-        # TODO: #16067 - Remove `using_distributed_env`, when we remove the legacy format.
-        enable_multihost_format = ttnn.using_distributed_env()
-
-    if use_device_tilizer:
-        if device is None:
-            raise RuntimeError("device must be specified when use_device_tilizer is True")
-        if memory_config is None:
-            raise RuntimeError("memory_config must be specified when use_device_tilizer is True")
-        if layout != ttnn.TILE_LAYOUT:
-            raise RuntimeError("layout must be TILE_LAYOUT when use_device_tilizer is True")
+    # TODO: #16067 - Remove `using_distributed_env`, when we remove the legacy format.
+    if ttnn.using_distributed_env():
+        enable_multihost_format = True
 
     if device is not None and memory_config is None:
         raise RuntimeError("memory_config must be specified when device is specified")
@@ -655,25 +635,14 @@ def as_tensor(
     ):
         if preprocess:
             tensor = preprocess(tensor)
-        if use_device_tilizer:
-            tensor = ttnn.from_torch(
-                tensor,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mesh_mapper,
-                device=device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            tensor = ttnn.to_layout(tensor, layout, dtype=dtype, memory_config=memory_config)
-        else:
-            tensor = ttnn.from_torch(
-                tensor,
-                dtype=dtype,
-                layout=layout,
-                mesh_mapper=mesh_mapper,
-                memory_config=memory_config,
-                device=device,
-            )
-        return tensor
+        return ttnn.from_torch(
+            tensor,
+            dtype=dtype,
+            layout=layout,
+            mesh_mapper=mesh_mapper,
+            memory_config=memory_config,
+            device=device,
+        )
 
     if cache_file_name is None:
         return torch_to_ttnn(tensor, dtype, layout, device, memory_config, mesh_mapper)
@@ -687,7 +656,16 @@ def as_tensor(
             mesh_mapper: Optional[ttnn.CppTensorToMesh | ttnn.ReplicateTensorToMeshWrapper],
             enable_multihost_format: bool,
         ):
-            tensor = torch_to_ttnn(tensor, dtype, layout, device, memory_config, mesh_mapper)
+            # Generate the tensor on host, and dump it to the cache file.
+            tensor = torch_to_ttnn(
+                tensor=tensor,
+                dtype=dtype,
+                layout=layout,
+                device=None,
+                memory_config=memory_config,
+                mesh_mapper=mesh_mapper,
+            )
+            assert tensor.storage_type() == ttnn.StorageType.HOST, "tensor should be on host"
             logger.debug(
                 f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
             )
@@ -696,6 +674,8 @@ def as_tensor(
                 ttnn._ttnn.tensor.dump_tensor_flatbuffer(cache_file_name, tensor)
             else:
                 ttnn._ttnn.tensor.dump_tensor(cache_file_name, tensor)
+            if device is not None:
+                tensor = tensor.to(device, memory_config)
             return tensor
 
         if enable_multihost_format:
@@ -708,10 +688,11 @@ def as_tensor(
             storage_type = f"_multi_device_{device.get_num_devices()}"
         else:
             storage_type = ""
-        if enable_multihost_format:
-            cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}_{os.getenv('TT_HOST_RANK')}.bin"
-        else:
-            cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
+
+        base_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}"
+        if ttnn.using_distributed_env():
+            base_file_name = f"{base_file_name}_{os.getenv('TT_MESH_HOST_RANK')}"
+        cache_file_name = f"{base_file_name}.bin"
 
         cache_path = pathlib.Path(cache_file_name)
 

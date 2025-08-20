@@ -158,7 +158,8 @@ class Generator:
 
                 (
                     chunk_prefill_input,
-                    chunk_rot_mats_prefill,
+                    chunk_rot_mats_global_prefill,
+                    chunk_rot_mats_local_prefill,
                     page_table_tt,
                     chunk_page_table_tt,
                 ) = self.model[model_id].prepare_inputs_prefill(
@@ -169,7 +170,8 @@ class Generator:
                 )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
-                    rot_mats=chunk_rot_mats_prefill,
+                    rot_mats_global=chunk_rot_mats_global_prefill,
+                    rot_mats_local=chunk_rot_mats_local_prefill,
                     user_id=CHUNK_USER_ID,
                     page_table=page_table_tt,
                     chunk_page_table=chunk_page_table_tt,
@@ -183,14 +185,21 @@ class Generator:
                 else:
                     del tt_logits
         else:
-            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model[model_id].prepare_inputs_prefill(
+            (
+                prefill_input,
+                rot_mats_global_prefill,
+                rot_mats_local_prefill,
+                page_table_tt,
+                _,
+            ) = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
             )
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
-                rot_mats=rot_mats_prefill,
+                rot_mats_global=rot_mats_global_prefill,
+                rot_mats_local=rot_mats_local_prefill,
                 user_id=user_id,
                 page_table=page_table_tt,
                 get_last_token=(last_token_idx // 32) * 32,
@@ -227,15 +236,15 @@ class Generator:
             "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
-            tt_logits = self._easy_trace_text(**decode_kwargs)
+            tt_decode_output = self._easy_trace_text(**decode_kwargs)
         else:
-            tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
+            tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_logits, B, is_tokens=(sampling_params is not None))
-            return to_host
-        else:
-            return tt_logits
+            to_host = self.read_decode_output(tt_decode_output)
+            return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
+
+        return tt_decode_output
 
     def _decode_forward_no_trace_text(
         self,
@@ -253,17 +262,24 @@ class Generator:
 
         tt_tokens = []
         tt_current_pos = []
-        tt_rot_mat_idxs = []
+        tt_rot_mat_idxs_global = []
+        tt_rot_mat_idxs_local = []
         tt_page_table = []
 
         for i in range(self.data_parallel):
             user_page_table = page_table[i] if page_table is not None else None
-            tt_tokens_i, tt_current_pos_i, tt_rot_mat_idxs_i, tt_page_table_i = self.model[i].prepare_inputs_decode(
-                tokens[i], current_pos[i], user_page_table
-            )
+            model_i = self.model[i]
+            (
+                tt_tokens_i,
+                tt_current_pos_i,
+                tt_rot_mat_idxs_global_i,
+                tt_rot_mat_idxs_local_i,
+                tt_page_table_i,
+            ) = model_i.prepare_inputs_decode(tokens[i], current_pos[i], user_page_table)
             tt_tokens.append(tt_tokens_i)
             tt_current_pos.append(tt_current_pos_i)
-            tt_rot_mat_idxs.append(tt_rot_mat_idxs_i)
+            tt_rot_mat_idxs_global.append(tt_rot_mat_idxs_global_i)
+            tt_rot_mat_idxs_local.append(tt_rot_mat_idxs_local_i)
             tt_page_table.append(tt_page_table_i)
 
         for i in range(self.data_parallel):
@@ -271,7 +287,8 @@ class Generator:
             tt_logits_i = self.model[i].ttnn_decode_forward(
                 tt_tokens[i],
                 tt_current_pos[i],
-                rot_mat_idxs=tt_rot_mat_idxs[i],
+                rot_mat_idxs_global=tt_rot_mat_idxs_global[i],
+                rot_mat_idxs_local=tt_rot_mat_idxs_local[i],
                 page_table=tt_page_table[i],
                 kv_cache=user_kv_cache,
                 argmax_on_device=argmax_on_device,
@@ -619,15 +636,32 @@ class Generator:
             tt_logits = self._decode_forward_no_trace(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_logits, B)
-            return to_host
+            to_host = self.read_decode_output(tt_logits)
+            return self.process_decode_output_host(to_host)
         else:
             return tt_logits
 
     # Note: This function is called by vLLM
-    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
+    def read_decode_output(self, tt_out, async_read=False):
         """
-        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
+        Input tt_out is a list of ttnn device tensors
+        """
+        if not async_read:
+            return [out.cpu() for out in tt_out]
+
+        host_outputs = []
+        read_events = []
+        for i in range(self.data_parallel):
+            host_outputs.append(tt_out[i].cpu(blocking=False))
+            read_events.append(ttnn.record_event(self.model[i].mesh_device, 0))
+
+        return host_outputs, read_events
+
+    # Note: This function is called by vLLM
+    def process_decode_output_host(self, tt_out, is_tokens=False):
+        """
+        Converts the input ttnn host tensors to a torch tensor.
+        The input can be logits (if is_tokens=False) or tokens (if is_tokens=True).
         """
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
@@ -1242,10 +1276,8 @@ def create_submeshes(mesh_device, data_parallel):
     num_devices = num_rows * num_cols
     assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
 
-    # Check if the mesh is 8x4 (expected shape for TG) and perfer row split
-    # Submeshes with 8 devices are expected to be in ring topology hence the row split
-    if num_rows == 8 and num_cols == 4 and num_rows % data_parallel == 0:
-        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows // data_parallel, num_cols))
+    if num_rows == 8 and num_cols == 4 and num_cols % data_parallel == 0:
+        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows, num_cols // data_parallel))
         for submesh in submeshes:
             submesh.reshape(ttnn.MeshShape(1, num_devices // data_parallel))
         return submeshes

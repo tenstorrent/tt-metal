@@ -129,6 +129,10 @@ from ttnn._ttnn.operations.trace import (
     release_trace,
 )
 
+from ttnn._ttnn.operations.debug import (
+    apply_device_delay,
+)
+
 from ttnn._ttnn.global_circular_buffer import (
     create_global_circular_buffer,
 )
@@ -348,6 +352,7 @@ from ttnn.operations.normalization import (
     LayerNormShardedMultiCoreProgramConfig,
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
+    create_group_norm_input_negative_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
 )
 

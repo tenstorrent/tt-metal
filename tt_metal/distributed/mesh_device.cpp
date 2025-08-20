@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/container/vector.hpp>
 #include <initializer_list>
 #include <tt-logger/tt-logger.hpp>
 #include <mesh_command_queue.hpp>
@@ -876,6 +875,7 @@ void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
 }
 
 void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
+    ZoneScoped;
     TracyTTMetalReplayMeshTrace(this->get_device_ids(), *trace_id);
     auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
     const auto& trace_buffer = active_sub_device_manager->get_trace(trace_id);

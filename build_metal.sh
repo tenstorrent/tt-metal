@@ -31,6 +31,7 @@ show_help() {
     echo "  --build-umd-tests                Build umd Testcases."
     echo "  --build-programming-examples     Build programming examples."
     echo "  --build-tt-train                 Build tt-train."
+    echo "  --build-packages                 Build installation packages (.deb)"
     echo "  --build-all                      Build all optional components."
     echo "  --release                        Set the build type as Release."
     echo "  --development                    Set the build type as RelWithDebInfo."
@@ -77,6 +78,7 @@ build_tt_train="OFF"
 build_static_libs="OFF"
 unity_builds="ON"
 light_metal_trace="ON"
+build_packages="OFF"
 build_all="OFF"
 cxx_compiler_path=""
 cpm_source_cache=""
@@ -115,6 +117,7 @@ build-metal-tests
 build-umd-tests
 build-programming-examples
 build-tt-train
+build-packages
 build-static-libs
 disable-unity-builds
 disable-light-metal-trace
@@ -182,6 +185,8 @@ while true; do
             build_programming_examples="ON";;
         --build-tt-train)
             build_tt_train="ON";;
+        --build-packages)
+            build_packages="ON";;
         --build-static-libs)
             build_static_libs="ON";;
         --build-all)
@@ -403,8 +408,14 @@ echo "INFO: Configuring Project"
 echo "INFO: Running: cmake "${cmake_args[@]}""
 cmake "${cmake_args[@]}"
 
+if [ "$build_packages" == "ON" ];  then
+  target="package"
+else
+  target="install"
+fi
+
 # Build libraries and cpp tests
 if [ "$configure_only" = "OFF" ]; then
     echo "INFO: Building Project"
-    cmake --build $build_dir --target install
+    cmake --build $build_dir --target $target
 fi

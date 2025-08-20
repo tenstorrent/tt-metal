@@ -151,7 +151,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     tt_metal::CircularBufferConfig reader_cb_config =
         tt_metal::CircularBufferConfig(reader_cb_size, {{reader_cb_index, tile_format}})
             .set_page_size(reader_cb_index, single_tile_size);
-    auto reader_cb = tt_metal::CreateCircularBuffer(program, all_dram_reader_cores, reader_cb_config);
+    tt_metal::CreateCircularBuffer(program, all_dram_reader_cores, reader_cb_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_buffer_addr,
@@ -287,7 +287,6 @@ bool validation(
     uint32_t core_id = 0;
     uint32_t num_datum_per_block = block_h * block_w * num_cores * datums_per_tile;
     uint32_t last_block_offset = (num_blocks - 1) * num_datum_per_block;
-    uint32_t tiles_per_core = block_h * block_w_per_receiver;  // Num slices=tiles per core to verify
     for (auto core : all_cores | std::views::take(num_cores * 2)) {
         uint32_t dram_bank_id = core_id / 2;  // A pair of two cores share a dram bank
         uint32_t tile_stride_over_dram_banks = dram_bank_id * datums_per_tile;
@@ -541,12 +540,10 @@ int main(int argc, char** argv) {
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-        uint32_t num_cores_x = compute_with_storage_grid_size.x;
-        uint32_t num_cores_y = compute_with_storage_grid_size.y;
+        [[maybe_unused]] uint32_t num_cores_x = compute_with_storage_grid_size.x;
+        [[maybe_unused]] uint32_t num_cores_y = compute_with_storage_grid_size.y;
         log_debug(tt::LogTest, "device x : {}", num_cores_x);
         log_debug(tt::LogTest, "device y : {}", num_cores_y);
-
-        int clock_freq_mhz = get_tt_npu_clock(device);
 
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         uint32_t num_cores = num_banks;  // number of DRAM banks
