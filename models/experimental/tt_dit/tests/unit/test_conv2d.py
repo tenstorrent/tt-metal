@@ -66,6 +66,8 @@ def test_conv2d(
     torch_model = torch.nn.Conv2d(
         in_channels=in_channels, out_channels=out_channels, kernel_size=kernel, padding=padding, stride=stride
     )
+    torch.nn.init.normal_(torch_model.weight)
+    torch.nn.init.normal_(torch_model.bias)
     torch_model.eval()
 
     tt_model = Conv2d.from_torch(

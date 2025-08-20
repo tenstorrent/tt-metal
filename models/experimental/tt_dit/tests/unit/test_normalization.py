@@ -253,8 +253,8 @@ def test_group_norm(
     torch.manual_seed(0)
 
     torch_model = torch.nn.GroupNorm(num_groups=group_count, num_channels=input_shape[1])
-    torch.nn.init.trunc_normal_(torch_model.weight.data)
-    torch.nn.init.trunc_normal_(torch_model.bias.data)
+    torch.nn.init.normal_(torch_model.weight)
+    torch.nn.init.normal_(torch_model.bias)
     torch_model.eval()
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype)
