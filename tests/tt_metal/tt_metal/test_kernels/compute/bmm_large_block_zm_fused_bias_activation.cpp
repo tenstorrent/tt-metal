@@ -119,16 +119,10 @@ void MAIN {
                             }
                         }
                         cb_pop_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
-                        // reconfigure init for matmul
-                        // Hardware startup - common MMIO configurations
-                        compute_kernel_hw_startup(in0_cb_id, in1_cb_id);
-                        // reconfigure unpacker df for src B
-                        reconfig_data_format(in1_cb_id, in0_cb_id);
 
-                        // Initialize matmul operation
                         matmul_init(in0_cb_id, in1_cb_id);
                         // reconfigure unpacker df for src B
-                        reconfig_data_format(in1_cb_id);
+                        reconfig_data_format(in1_cb_id, in0_cb_id);
 #endif
 
                         // sfpu activation

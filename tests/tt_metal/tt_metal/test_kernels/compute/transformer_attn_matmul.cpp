@@ -64,11 +64,7 @@ void MAIN {
                     cb_pop_front(cb_intermed0, 1);
                     untilize_uninit(cb_intermed0);
 
-                    // Hardware startup - common MMIO configurations
-                    compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, transpose_hw);
-
-                    // Initialize matmul operation
-                    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
+                    matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1, transpose_hw);
                 }
                 cb_pop_front(tt::CBIndex::c_0, Kt);
 
@@ -84,11 +80,7 @@ void MAIN {
                 cb_pop_front(cb_intermed2, 1);
                 tilize_uninit(cb_intermed2, out_cb_id);
 
-                // Hardware startup - common MMIO configurations
-                compute_kernel_hw_startup(tt::CBIndex::c_0, tt::CBIndex::c_1, transpose_hw);
-
-                // Initialize matmul operation
-                matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
+                matmul_init(tt::CBIndex::c_0, tt::CBIndex::c_1, transpose_hw);
             }
         }
     }

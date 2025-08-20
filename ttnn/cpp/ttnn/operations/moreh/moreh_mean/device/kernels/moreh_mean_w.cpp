@@ -9,7 +9,6 @@
 #include "compute_kernel_api/mask.h"
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
-#include "compute_kernel_api/compute_kernel_hw_startup.h"
 #include "ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
@@ -54,11 +53,8 @@ void MAIN {
 #if defined FP32_DEST_ACC_EN
                     reconfig_data_format(cb_input, cb_scaler);
 #endif
-                    // Hardware startup - common MMIO configurations
-                    compute_kernel_hw_startup(cb_input, cb_scaler, false);
-
                     // Initialize matmul operation
-                    matmul_init(cb_input, cb_scaler);
+                    matmul_init(cb_input, cb_scaler, false);
                     matmul_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx, false);
                     cb_pop_front(cb_input, onetile);
                 }
@@ -107,11 +103,8 @@ void MAIN {
 #if defined FP32_DEST_ACC_EN
             reconfig_data_format(cb_input, cb_scaler);
 #endif
-            // Hardware startup - common MMIO configurations
-            compute_kernel_hw_startup(cb_input, cb_scaler, false);
-
             // Initialize matmul operation
-            matmul_init(cb_input, cb_scaler);
+            matmul_init(cb_input, cb_scaler, false);
             matmul_tile(cb_input, cb_scaler, 0, 0, reduce_dst_idx, false);
             tile_regs_commit();
 

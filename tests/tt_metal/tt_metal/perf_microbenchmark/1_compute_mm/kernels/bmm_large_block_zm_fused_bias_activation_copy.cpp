@@ -374,8 +374,6 @@ void MAIN {
         }
         if constexpr (batch > 1) {
             // reconfigure init for matmul
-            // Hardware startup - common MMIO configurations
-            compute_kernel_hw_startup(in0_cb_id, in1_cb_id, 0);
 
             // Initialize matmul block operation
             matmul_block_init(in0_cb_id, in1_cb_id, out_subblock_w, out_subblock_h, in0_block_w);

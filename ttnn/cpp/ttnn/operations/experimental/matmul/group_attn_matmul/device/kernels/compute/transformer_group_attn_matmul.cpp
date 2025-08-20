@@ -55,17 +55,15 @@ void MAIN {
     constexpr uint32_t num_rows_in_one_tile = 32;
     constexpr uint32_t in0_num_blocks_w = 1; // TODO: Generalize
 
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_intermed0);
+
     // need switching between ColMajor and RowMajor for at least 32 times, inefficient
     #ifdef ARCH_GRAYSKULL
     matmul_init(cb_in0, cb_in1, transpose_hw);
     #else
     // TODO: switch back to matmul block after didt solved
     matmul_init(cb_in0, cb_in1, transpose_hw);
-    // // Hardware startup - common MMIO configurations
-    compute_kernel_hw_startup(cb_in0, cb_in1, cb_intermed0);
-
-    // Initialize matmul block operation
-    matmul_block_init(cb_in0, cb_in1, transpose_hw, out_subblock_w, out_subblock_h, in0_block_w);
     #endif
 
     for (uint32_t b = 0; b < batch; b++) {

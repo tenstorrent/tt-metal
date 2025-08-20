@@ -40,33 +40,27 @@ void MAIN {
                 copy_tile(partials_cb, i, i);
             }
             cb_pop_front(partials_cb, out_block_num_tiles);
-            // Hardware startup - common MMIO configurations
-            compute_kernel_hw_startup(in0_cb, in1_cb);
+            // Initialize matmul operation
+            matmul_init(in0_cb, in1_cb);
         }
         uint32_t out_tile_index = 0;
         uint32_t in0_index_r_offset = 0;
         cb_wait_front(in0_cb, in0_block_num_tiles);
-
-        // Initialize matmul operation
-        matmul_init(in0_cb, in1_cb);
-    }
-    uint32_t out_tile_index = 0;
-    uint32_t in0_index_r_offset = 0;
-    cb_wait_front(in0_cb);
-    cb_wait_front(in1_cb, in1_block_num_tiles);
-    for (uint32_t r = 0; r < out_r; r++) {
-        for (uint32_t c = 0; c < out_c; c++) {
-            uint32_t in1_index_c_offset = 0;
-            for (uint32_t k = 0; k < in0_k; k++) {
-                int in0_tile_index = in0_index_r_offset + k;
-                int in1_tile_index = in1_index_c_offset + c;
-                matmul_tile(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index, transpose);
-                in1_index_c_offset += k;
+        cb_wait_front(in1_cb, in1_block_num_tiles);
+        for (uint32_t r = 0; r < out_r; r++) {
+            for (uint32_t c = 0; c < out_c; c++) {
+                uint32_t in1_index_c_offset = 0;
+                for (uint32_t k = 0; k < in0_k; k++) {
+                    int in0_tile_index = in0_index_r_offset + k;
+                    int in1_tile_index = in1_index_c_offset + c;
+                    matmul_tile(in0_cb, in1_cb, in0_tile_index, in1_tile_index, out_tile_index, transpose);
+                    in1_index_c_offset += k;
+                }
+                out_tile_index++;
             }
-            out_tile_index++;
+            in0_index_r_offset += in0_k;
         }
-        in0_index_r_offset += in0_k;
-    }
+
         cb_pop_front(in0_cb, in0_block_num_tiles);
         cb_pop_front(in1_cb, in1_block_num_tiles);
 
