@@ -9,6 +9,8 @@
 #include <cstdio>
 #include <string>
 #include <type_traits>
+#include <flatbuffers/reflection.h>
+#include <flatbuffers/verifier.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -458,6 +460,7 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) 
     std::memcpy(&header_size, file_data, sizeof(header_size));
 
     const auto* header_start = reinterpret_cast<const std::uint8_t*>(file_data) + sizeof(header_size);
+    TT_FATAL(header_size < flatbuffers::Verifier::Options().max_size, "Tensor file is too large");
     flatbuffers::Verifier verifier(header_start, header_size);
     TT_FATAL(ttnn::flatbuffer::VerifyTensorBuffer(verifier), "Tensor deserialization failed: invalid buffer");
     auto fb_tensor = ttnn::flatbuffer::GetTensor(header_start);

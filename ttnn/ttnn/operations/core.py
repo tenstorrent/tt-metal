@@ -693,7 +693,11 @@ def as_tensor(
         base_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}"
         if ttnn.using_distributed_env():
             base_file_name = f"{base_file_name}_{os.getenv('TT_MESH_HOST_RANK')}"
-        cache_file_name = f"{base_file_name}.bin"
+
+        if enable_multihost_format:
+            cache_file_name = f"{base_file_name}.tensorbin"
+        else:
+            cache_file_name = f"{base_file_name}.bin"
 
         cache_path = pathlib.Path(cache_file_name)
 

@@ -89,6 +89,7 @@ venv/
 
 # exclude binaries
 *.bin
+*.tensorbin
 
 # releases
 dist
