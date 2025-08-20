@@ -202,7 +202,7 @@ inline void compute_scale(const uint32_t row) {
     // NOTE: Currently, there is a bug in reduce_tile that causes precision issues. To avoid this, we use a
     // workaround of matmul with appropriate scale. Once the bug is fixed, we can switch back to reduce_tile.
     reconfig_data_format(cb_scale_idx, cb_mat_mul_reduce);
-    matmul_init(cb_scale_idx, cb_mat_mul_reduce, cb_scale_idx, 0);
+    matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
     matmul_tile(
         cb_scale_idx,
         cb_mat_mul_reduce,
@@ -281,7 +281,7 @@ inline void compute_scale(const uint32_t row) {
     // NOTE: Currently, there is a bug in reduce_tile that causes precision issues. To avoid this, we use a
     // workaround of matmul with appropriate scale. Once the bug is fixed, we can switch back to reduce_tile.
     reconfig_data_format(cb_scale_idx, cb_mat_mul_reduce);
-    matmul_init(cb_scale_idx, cb_mat_mul_reduce, cb_scale_idx, 0);
+    matmul_init(cb_scale_idx, cb_mat_mul_reduce, 0);
     matmul_tile(
         cb_scale_idx,
         cb_mat_mul_reduce,
