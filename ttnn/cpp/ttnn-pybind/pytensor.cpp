@@ -434,27 +434,19 @@ std::optional<PyTensorPreparedConversion> prepare_torch_tensor_conversion(
             // clang-format on
         };
 
-    DataType expected_dtype = DataType::INVALID;
-    if (dtype.has_value()) {
-        expected_dtype = dtype.value();
-    } else if (auto opt_data = map_torch_data_type_to_ttnn(py_tensor.attr("dtype"), torch); opt_data.has_value()) {
-        expected_dtype = opt_data.value();
+    DataType expected_dtype = dtype.value_or(map_torch_data_type_to_ttnn(py_tensor.attr("dtype"), torch).value());
+    PyFromTorchConversionInput input{
+        .torch_dtype = tensor.attr("dtype").attr("__str__")().cast<std::string>().substr(sizeof("torch.") - 1),
+        .data_type = expected_dtype,
+        .layout = layout.value_or(Layout::ROW_MAJOR),
+    };
+
+    auto it = conversion_map.find(input);
+    if (it == conversion_map.end()) {
+        return std::nullopt;
+    } else {
+        return it->second;
     }
-
-    if (expected_dtype != DataType::INVALID) {
-        PyFromTorchConversionInput input{
-            .torch_dtype = tensor.attr("dtype").attr("__str__")().cast<std::string>().substr(sizeof("torch.") - 1),
-            .data_type = expected_dtype,
-            .layout = layout.value_or(Layout::ROW_MAJOR),
-        };
-
-        auto it = conversion_map.find(input);
-        if (it != conversion_map.end()) {
-            return it->second;
-        }
-    }
-
-    return std::nullopt;
 }
 
 Tensor convert_python_tensor_to_tt_tensor_on_device(
@@ -473,7 +465,7 @@ Tensor convert_python_tensor_to_tt_tensor_on_device(
     py::object torch = py::module_::import("torch");
 
     if (strategy.torch_convert_dtype) {
-        ZoneScopedN("Convert type on device");
+        ZoneScopedN("Convert type on host");
         contiguous_py_tensor =
             contiguous_py_tensor.attr("to")(torch.attr(strategy.torch_convert_dtype.value().c_str()));
     }

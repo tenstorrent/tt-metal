@@ -264,6 +264,10 @@ def test_from_torch_conversion_with_fixed_edge_case_params(
         ((2, 64, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, False, (-100, 100), None),
         ((2, 64, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, True, (-100, 100), ttnn.L1_MEMORY_CONFIG),
         ((2, 64, 64, 64), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, False, (-100, 100), ttnn.L1_MEMORY_CONFIG),
+        ((4, 4, 4, 4), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, True, (-100, 100), None),
+        ((4, 4, 4, 4), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, False, (-100, 100), None),
+        ((4, 4, 4, 4), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, True, (-100, 100), ttnn.L1_MEMORY_CONFIG),
+        ((4, 4, 4, 4), ttnn.bfloat16, torch.int64, ttnn.TILE_LAYOUT, False, (-100, 100), ttnn.L1_MEMORY_CONFIG),
     ],
 )
 def test_from_torch_conversion_close(
