@@ -15,6 +15,7 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
         case HalProgrammableCoreType::TENSIX:
             switch (params.processor_class) {
                 case HalProcessorClassType::DM:
+                    defines.push_back(fmt::format("PROCESSOR_INDEX={}", params.processor_id));
                     switch (params.processor_id) {
                         case 0:
                             defines.push_back("COMPILE_FOR_BRISC");
@@ -37,6 +38,7 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
                     if ((l1_cache_disable_mask & debug_compute_mask) == debug_compute_mask) {
                         defines.push_back("DISABLE_L1_DATA_CACHE");
                     }
+                    defines.push_back(fmt::format("PROCESSOR_INDEX={}", params.processor_id + 2));
                     switch (params.processor_id) {
                         case 0:
                             defines.push_back("UCK_CHLKC_UNPACK");
@@ -61,6 +63,7 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             if ((l1_cache_disable_mask & erisc_mask) == erisc_mask) {
                 defines.push_back("DISABLE_L1_DATA_CACHE");
             }
+            defines.push_back(fmt::format("PROCESSOR_INDEX={}", params.processor_id));
             defines.push_back("COMPILE_FOR_ERISC");
             defines.push_back("ERISC");
             defines.push_back("RISC_B0_HW");
@@ -71,6 +74,7 @@ std::vector<std::string> HalJitBuildQueryBase::defines(const HalJitBuildQueryInt
             if ((l1_cache_disable_mask & erisc_mask) == erisc_mask) {
                 defines.push_back("DISABLE_L1_DATA_CACHE");
             }
+            defines.push_back(fmt::format("PROCESSOR_INDEX={}", params.processor_id));
             defines.push_back(fmt::format("COMPILE_FOR_IDLE_ERISC={}", params.processor_id));
             defines.push_back("ERISC");
             defines.push_back("RISC_B0_HW");

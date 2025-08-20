@@ -11,6 +11,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
@@ -295,7 +296,8 @@ struct debug_stack_usage_t {
         // min free stack, offset by +1 (0 == unset)
         volatile uint16_t min_free;
         volatile uint16_t watcher_kernel_id;
-    } cpu[DebugNumUniqueRiscs];
+    } cpu[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint8_t pad[12];
 };
 
 enum watcher_enable_msg_t {
