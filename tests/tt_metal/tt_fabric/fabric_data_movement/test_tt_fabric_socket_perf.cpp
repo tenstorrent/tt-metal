@@ -44,6 +44,10 @@
 #include "umd/device/types/xy_pair.h"
 #include <tt-metalium/utils.hpp>
 #include "tests/tt_metal/tt_fabric/common/utils.hpp"
+#include <tt-metalium/device_pool.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+using tt::DevicePool;
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -79,7 +83,16 @@ struct PerfParams {
     uint32_t tensor_bytes = 1024 * 1024;
 };
 
-// Helper that maps (mesh, logical chip ids) -> physical ids and runs the unicast test
+static inline tt::tt_metal::IDevice* find_device_by_id(chip_id_t phys_id) {
+    auto devices = DevicePool::instance().get_all_active_devices();
+    for (auto* d : devices) {
+        if (d->id() == phys_id) {
+            return d;
+        }
+    }
+    return nullptr;
+}
+
 static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const PerfParams& p) {
     const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
 
@@ -89,6 +102,32 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
     chip_id_t src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
     chip_id_t dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
 
+    // Get IDevice*
+    auto* src_dev = find_device_by_id(src_phys);
+    auto* dst_dev = find_device_by_id(dst_phys);
+    ASSERT_NE(src_dev, nullptr);
+    ASSERT_NE(dst_dev, nullptr);
+
+    // Allocate simple flat buffers (you control size via p.tensor_bytes)
+    tt::tt_metal::BufferConfig src_cfg{
+        .device = src_dev,
+        .size = p.tensor_bytes,
+        .page_size = p.tensor_bytes,
+        .buffer_type = tt::tt_metal::BufferType::DRAM  // or L1 if it fits
+    };
+    tt::tt_metal::BufferConfig dst_cfg{
+        .device = dst_dev,
+        .size = p.tensor_bytes,
+        .page_size = p.tensor_bytes,
+        .buffer_type = p.use_dram_dst ? tt::tt_metal::BufferType::DRAM : tt::tt_metal::BufferType::L1};
+
+    auto src_buf = tt::tt_metal::CreateBuffer(src_cfg);
+    auto dst_buf = tt::tt_metal::CreateBuffer(dst_cfg);
+
+    std::cout << "[alloc] src_phys=" << src_phys << " dst_phys=" << dst_phys << " bytes=" << p.tensor_bytes
+              << std::endl;
+
+    // Keep using the existing connectivity test for now
     run_unicast_test_bw_chips(fixture, src_phys, dst_phys, p.num_hops, p.use_dram_dst);
 }
 
@@ -98,7 +137,7 @@ TEST_F(Fabric2DFixture, UnicastConn_CodeControlled) {
     p.src_chip = 0;
     p.dst_chip = 1;
     p.num_hops = 1;          // e.g., 1 for neighbor
-    p.use_dram_dst = false;  // set true to land in DRAM on dst
+    p.use_dram_dst = true;   // set true to land in DRAM on dst
     p.tensor_bytes = 4 * 1024 * 1024;
 
     RunUnicastConnWithParams(this, p);
