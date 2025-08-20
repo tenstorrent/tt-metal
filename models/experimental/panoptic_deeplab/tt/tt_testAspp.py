@@ -13,7 +13,7 @@ from models.experimental.panoptic_deeplab.tt.tt_aspp import TtASPP
 @pytest.mark.parametrize(
     "batch_size, in_channels, out_channels, input_height, input_width, dilations, norm, activation, dropout, pool_kernel_size",
     [
-        (1, 2048, 256, 32, 64, [6, 12, 18], "ln", "relu", 0.0, (32, 64)),
+        (1, 2048, 256, 32, 64, [6, 12, 18], "ln", "relu", 0.1, (32, 64)),
     ],
 )
 def test_ttnn_aspp(
@@ -30,6 +30,7 @@ def test_ttnn_aspp(
     pool_kernel_size,
 ):
     torch.manual_seed(0)
+
     shared_weight_tensor_kernel1 = torch.randn(out_channels, in_channels, 1, 1, dtype=torch.bfloat16)
     shared_weight_tensor_kernel3 = torch.randn(out_channels, in_channels, 3, 3, dtype=torch.bfloat16)
     shared_weight_tensor_kernel1_output5 = torch.randn(out_channels, 5 * out_channels, 1, 1, dtype=torch.bfloat16)
@@ -48,8 +49,10 @@ def test_ttnn_aspp(
         shared_weight_tensor_kernel3=shared_weight_tensor_kernel3,
         shared_weight_tensor_kernel1_output5=shared_weight_tensor_kernel1_output5,
     )
+
     torch_model = torch_model.to(dtype=torch.bfloat16)
     torch_model.eval()
+
     torch_output = torch_model(torch_input)
 
     ttnn_input = ttnn.from_torch(
@@ -75,7 +78,7 @@ def test_ttnn_aspp(
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)
 
-    pcc_passed, pcc_message = assert_with_pcc(torch_output, ttnn_output, pcc=0.95)
+    pcc_passed, pcc_message = assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
 
     print(f"PCC: {pcc_message}")
     assert pcc_passed, f"PCC check failed: {pcc_message}"

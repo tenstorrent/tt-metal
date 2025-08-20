@@ -42,6 +42,7 @@ class TtConv2dParameters:
     bias: ttnn.Tensor | None
     device: ttnn.MeshDevice
     dilation: tuple[int, int] = (1, 1)
+    channel_slice_num: int = 1
 
     @classmethod
     def from_torch(
@@ -59,7 +60,8 @@ class TtConv2dParameters:
             if "bias" in state
             else None,
             device=device,
-            dilation=state.get("dilation", (1, 1)),  # Extract dilation from state
+            dilation=state.get("dilation", (1, 1)),  # Extract dilation from state,
+            channel_slice_num=state.get("channel_slice_num", 1),  # Extract channel_slice_num from state
         )
 
     @property
@@ -105,6 +107,7 @@ class TtConv2d:
         self._kernel_size = parameters.kernel_size
 
         self._dilation = parameters.dilation
+        self._channel_slice_num = parameters.channel_slice_num
         self._weight = parameters.weight
         self._bias = parameters.bias
         self._device = parameters.device
@@ -123,26 +126,39 @@ class TtConv2d:
         (batch_size, height, width, _) = x.shape
 
         if self._in_channels >= CHANNEL_SLICE_THRESHOLD:
-            print(f"--- Running Conv2d with Channel Slicing (factor={CHANNEL_SLICE_FACTOR}) ---")
+            print(f"--- Running Conv2d with Channel Slicing (factor={self._channel_slice_num}) ---")
             assert (
-                self._in_channels % CHANNEL_SLICE_FACTOR == 0
-            ), f"Input channels ({self._in_channels}) must be divisible by CHANNEL_SLICE_FACTOR ({CHANNEL_SLICE_FACTOR})"
+                self._in_channels % self._channel_slice_num == 0
+            ), f"Input channels ({self._in_channels}) must be divisible by channel_slice_num ({self._channel_slice_num})"
 
-            split_in_channels = self._in_channels // CHANNEL_SLICE_FACTOR
+            split_in_channels = self._in_channels // self._channel_slice_num
 
             if not ttnn.is_tensor_storage_on_device(self._weight):
                 self._weight = ttnn.to_device(self._weight, self._device)
 
-            input_slices = ttnn.split(x, split_size=split_in_channels, dim=3)
+            input_slices = []
+            for i in range(self._channel_slice_num):
+                start_idx = i * split_in_channels
+                end_idx = (i + 1) * split_in_channels
+                slice_tensor = ttnn.slice(x, [0, 0, 0, start_idx], [batch_size, height, width, end_idx])
+                input_slices.append(slice_tensor)
 
             if self._weightSlices == []:
-                self._weightSlices = ttnn.split(self._weight, split_size=split_in_channels, dim=1)
+                for i in range(self._channel_slice_num):
+                    start_idx = i * split_in_channels
+                    end_idx = (i + 1) * split_in_channels
+                    weight_slice = ttnn.slice(
+                        self._weight,
+                        [0, start_idx, 0, 0],
+                        [self._out_channels, end_idx, self._kernel_size[0], self._kernel_size[1]],
+                    )
+                    self._weightSlices.append(weight_slice)
 
             accumulated_output = None
             output_height, output_width = 0, 0
 
-            for i in range(CHANNEL_SLICE_FACTOR):
-                print(f"  Processing channel slice {i+1}/{CHANNEL_SLICE_FACTOR}...")
+            for i in range(self._channel_slice_num):
+                print(f"  Processing channel slice {i+1}/{self._channel_slice_num}...")
                 input_slice = input_slices[i]
                 output_slice, [output_height, output_width], [self._weightSlices[i], self.biasTmp] = ttnn.conv2d(
                     input_tensor=input_slice,
@@ -164,6 +180,7 @@ class TtConv2d:
                     memory_config=memory_config,
                     dtype=ttnn.bfloat16,
                 )
+                output_slice = ttnn.move(output_slice)
                 if i == 0:
                     accumulated_output = ttnn.to_memory_config(output_slice, ttnn.DRAM_MEMORY_CONFIG)
                 else:
