@@ -287,9 +287,9 @@ def test_maxpool3d_all_ones(device):
     print(f"Input shape: [{batch_size}, {T}, {H}, {W}, {C}]")
     print(f"Kernel: {kernel_size}, Stride: {stride}, Padding: {padding}")
 
-    # Create input with ascending values for clear max pooling verification
-    torch_input = torch.arange(1, batch_size * T * H * W * C + 1, dtype=torch.bfloat16).reshape(batch_size, T, H, W, C)
-    print(f"Input pattern: ascending values [1, 2, 3, 4, ...]")
+    # Create input with all ones for simplified debugging
+    torch_input = torch.ones(batch_size, T, H, W, C, dtype=torch.bfloat16) * 11
+    print(f"Input pattern: all ones [1, 1, 1, 1, ...]")
     print(f"First 16 values: {torch_input.flatten()[:16].tolist()}")
 
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)

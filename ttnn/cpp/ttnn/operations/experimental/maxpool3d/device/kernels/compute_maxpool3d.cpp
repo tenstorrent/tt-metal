@@ -11,7 +11,7 @@ namespace NAMESPACE {
 
 // Helper function to extract channel data from stick
 // Each stick contains all channels for a single spatial position
-inline void extract_channel_data(volatile uint16_t* stick_data, uint32_t channels, float* channel_values) {
+inline void extract_channel_data(volatile tt_l1_ptr uint16_t* stick_data, uint32_t channels, float* channel_values) {
     // For bfloat16 format, each channel is 2 bytes
     // Convert bfloat16 to float for easier processing
     union {
@@ -87,28 +87,42 @@ void MAIN {
         // Reserve space for output
         cb_reserve_back(cb_output, 1);
 
-        // DEBUG: Print window info
-        DPRINT << "Processing window " << window << " of " << num_windows << ENDL();
+        // STEP A6: BACK TO BASIC WORKING COPY - NO CONVERSION
+        // Just copy first stick to output to verify data access works
 
-        // SIMPLIFIED STEP: Just copy first input stick to output (like working PASS 3)
-        // This ensures CB management is correct before adding max computation
+        volatile tt_l1_ptr uint16_t* input_stick;
+        cb_get_tile(cb_input_window, 0, (volatile tt_l1_ptr void*)&input_stick);
 
-        // Get first stick from input window
-        volatile uint16_t* input_stick;
-        cb_get_tile(cb_input_window, 0, (volatile void*)&input_stick);
+        volatile tt_l1_ptr uint16_t* output_tile;
+        cb_get_tile(cb_output, 0, (volatile tt_l1_ptr void*)&output_tile);
 
-        // Get output tile
-        volatile uint16_t* output_tile;
-        cb_get_tile(cb_output, 0, (volatile void*)&output_tile);
+        // Debug: Print input data we're reading
+        DPRINT << "INPUT data - first 8 bfloat16 values:" << ENDL();
+        for (uint32_t i = 0; i < 8; i++) {
+            DPRINT << "  [" << i << "] = 0x" << HEX() << input_stick[i] << ENDL();
+        }
 
-        // Copy first stick to output
-        for (uint32_t i = 0; i < 512; i++) {  // 32x16 tile = 512 elements
+        // Simple copy - this was working before
+        for (uint32_t i = 0; i < 512; i++) {
             output_tile[i] = input_stick[i];
         }
 
-        // DEBUG: Print first few values
-        DPRINT << "Input[0-3]: " << input_stick[0] << " " << input_stick[1] << " " << input_stick[2] << " "
-               << input_stick[3] << ENDL();
+        // Debug: Print output data we're writing
+        DPRINT << "OUTPUT data - first 8 bfloat16 values:" << ENDL();
+        for (uint32_t i = 0; i < 8; i++) {
+            DPRINT << "  [" << i << "] = 0x" << HEX() << output_tile[i] << ENDL();
+        }
+
+        // Debug: Convert first few values to see what they should be in float
+        DPRINT << "CONVERTED values:" << ENDL();
+        for (uint32_t i = 0; i < 4; i++) {
+            union {
+                float f;
+                uint32_t u;
+            } conv;
+            conv.u = ((uint32_t)input_stick[i]) << 16;
+            DPRINT << "  [" << i << "] bfloat16=0x" << HEX() << input_stick[i] << " -> float=" << conv.f << ENDL();
+        }
 
         // Pop all input window elements
         for (uint32_t i = 0; i < window_size; i++) {
@@ -117,9 +131,6 @@ void MAIN {
 
         // Push output back
         cb_push_back(cb_output, 1);
-
-        // DEBUG: Print completion
-        DPRINT << "Window " << window << " completed successfully" << ENDL();
     }
 }
 
