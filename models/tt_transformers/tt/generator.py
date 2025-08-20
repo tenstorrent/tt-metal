@@ -1276,24 +1276,7 @@ def create_submeshes(mesh_device, data_parallel):
     num_devices = num_rows * num_cols
     assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
 
-    if (
-        num_rows == 8
-        and num_cols == 4
-        and num_rows % data_parallel == 0
-        and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
-    ):
-        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows // data_parallel, num_cols))
-        for submesh in submeshes:
-            submesh.reshape(ttnn.MeshShape(1, num_devices // data_parallel))
-        return submeshes
-
-    # Submeshes with 8 devices on 8x4 mesh are expected to be in ring topology on 6U galaxy
-    if (
-        num_rows == 8
-        and num_cols == 4
-        and num_cols % data_parallel == 0
-        and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
-    ):
+    if num_rows == 8 and num_cols == 4 and num_cols % data_parallel == 0:
         submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows, num_cols // data_parallel))
         for submesh in submeshes:
             submesh.reshape(ttnn.MeshShape(1, num_devices // data_parallel))
