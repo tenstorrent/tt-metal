@@ -354,7 +354,6 @@ Tests:
       - type: all_to_all
 
   - name: "FabricMuxSimpleUnicastWriteLinear"
-    sync: true
     fabric_setup:
       topology: Linear
       fabric_tensix_config: Mux
