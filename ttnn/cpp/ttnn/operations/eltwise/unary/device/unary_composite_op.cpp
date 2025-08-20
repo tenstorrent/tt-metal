@@ -541,7 +541,7 @@ Tensor ExecuteRdiv::invoke(
         result = ttnn::floor(result);
     }
     return ttnn::where(
-        ttnn::eqz(queue_id, input_tensor, memory_config), t_inf, result, memory_config, optional_output_tensor);
+        ttnn::eqz(queue_id, input_tensor, memory_config), t_inf * value, result, memory_config, optional_output_tensor);
 }
 
 // logit(input, eps)=log(input / 1 - input)
