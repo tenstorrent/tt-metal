@@ -177,7 +177,12 @@ tt::tt_metal::operation::Hash MatmulReduceScatterAsync::compute_program_hash(
         this->reduce_scatter_minimal_async_struct.output_mem_config,
         this->reduce_scatter_minimal_async_struct.intermediate_mem_config,
         this->reduce_scatter_minimal_async_struct.topology,
-        this->reduce_scatter_minimal_async_struct.sub_device_id,
+        this->reduce_scatter_minimal_async_struct.sub_device_id.has_value(),
+        this->reduce_scatter_minimal_async_struct.sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                  this->reduce_scatter_minimal_async_struct.sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->reduce_scatter_minimal_async_struct.cluster_axis,
         this->reduce_scatter_minimal_async_struct.barrier_semaphore.has_value(),
         this->reduce_scatter_minimal_async_struct.using_persistent_buffers,
