@@ -154,21 +154,18 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     const uint32_t u_count = u_range / granularity;
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)dst_is_dram,
-        (std::uint32_t)src_is_dram,
-        (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src1_cb_index,
-        (std::uint32_t)granularity,
-        (std::uint32_t)u_count};
+        (std::uint32_t)src0_cb_index, (std::uint32_t)src1_cb_index, (std::uint32_t)granularity, (std::uint32_t)u_count};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)dst_is_dram,
         (std::uint32_t)output_cb_index,
         (std::uint32_t)interm0_cb_index,
         (std::uint32_t)interm1_cb_index,
         (std::uint32_t)interm2_cb_index,
         (std::uint32_t)granularity,
         (std::uint32_t)u_count};
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_kernel_defines;
     if (shard_spec.has_value()) {
