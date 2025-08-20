@@ -9,3 +9,6 @@ pytest -q program_cache/experimental/transformer/rotary_embedding/failures/test_
 pytest -q program_cache/moreh/moreh_sgd/failures/test_moreh_sgd_cachehit_optional_momentum_out_deref.py -s --disable-warnings
 # Complains about missing batch_idx_tensor_opt
 pytest -q program_cache/experimental/paged_cache/failures/paged_fill_toggle_batch_idx_mode/test_paged_fill_toggle_batch_idx_mode.py::test_paged_fill_toggle_batch_idx_mode_program_cache -s --disable-warnings
+
+## After fixing tests, looks like program cache is ok
+ pytest program_cache/moreh/moreh_group_norm_backward/failures/test_moreh_group_norm_backward_input_grad_cachehit_optional_gamma_override.py
