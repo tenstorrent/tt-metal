@@ -236,15 +236,15 @@ class Generator:
             "argmax_on_device": argmax_on_device,
         }
         if enable_trace:
-            tt_logits = self._easy_trace_text(**decode_kwargs)
+            tt_decode_output = self._easy_trace_text(**decode_kwargs)
         else:
-            tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
+            tt_decode_output = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_logits, B, is_tokens=(sampling_params is not None))
-            return to_host
-        else:
-            return tt_logits
+            to_host = self.read_decode_output(tt_decode_output)
+            return self.process_decode_output_host(to_host, is_tokens=(sampling_params is not None))
+
+        return tt_decode_output
 
     def _decode_forward_no_trace_text(
         self,
@@ -636,15 +636,32 @@ class Generator:
             tt_logits = self._decode_forward_no_trace(**decode_kwargs)
 
         if read_from_device:
-            to_host = self.read_decode_output(tt_logits, B)
-            return to_host
+            to_host = self.read_decode_output(tt_logits)
+            return self.process_decode_output_host(to_host)
         else:
             return tt_logits
 
     # Note: This function is called by vLLM
-    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
+    def read_decode_output(self, tt_out, async_read=False):
         """
-        Input is ttnn device tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
+        Input tt_out is a list of ttnn device tensors
+        """
+        if not async_read:
+            return [out.cpu() for out in tt_out]
+
+        host_outputs = []
+        read_events = []
+        for i in range(self.data_parallel):
+            host_outputs.append(tt_out[i].cpu(blocking=False))
+            read_events.append(ttnn.record_event(self.model[i].mesh_device, 0))
+
+        return host_outputs, read_events
+
+    # Note: This function is called by vLLM
+    def process_decode_output_host(self, tt_out, is_tokens=False):
+        """
+        Converts the input ttnn host tensors to a torch tensor.
+        The input can be logits (if is_tokens=False) or tokens (if is_tokens=True).
         """
         max_batch_size_per_model = self.model_args[0].max_batch_size
 
