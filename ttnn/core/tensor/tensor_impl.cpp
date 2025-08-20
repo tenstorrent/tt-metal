@@ -279,7 +279,7 @@ Tensor unpad_bfloat4_b(
 namespace detail {
 
 struct DimensionShortener {
-    size_t size;
+    size_t size{};
     std::optional<std::size_t> max;
 
     bool print_parenthesis_and_advance_index_if_reached_half_of_max_and_check_if_loop_is_done(

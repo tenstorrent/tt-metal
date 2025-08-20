@@ -4,6 +4,8 @@
 
 #include "mesh_device.hpp"
 
+#include <core/ttnn_all_includes.hpp>
+
 namespace ttml::core {
 
 MeshDevice::MeshDevice(const tt::tt_metal::distributed::MeshShape& shape, const std::vector<int>& device_ids) :

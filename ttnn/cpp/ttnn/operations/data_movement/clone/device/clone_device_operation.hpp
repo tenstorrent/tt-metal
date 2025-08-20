@@ -25,8 +25,8 @@ struct CloneOperation {
 
     struct ProgramFactory {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle read_kernel_id;
-            tt::tt_metal::KernelHandle write_kernel_id;
+            tt::tt_metal::KernelHandle read_kernel_id{};
+            tt::tt_metal::KernelHandle write_kernel_id{};
             std::vector<CoreCoord> cores;
         };
 
