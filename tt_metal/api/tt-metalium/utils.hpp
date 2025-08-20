@@ -18,23 +18,27 @@ bool run_command(const std::string& cmd, const std::string& log_file, bool verbo
 void create_file(const std::string& file_path_str);
 const std::string& get_reports_dir();
 
-float get_timeout_seconds_for_operations();
+std::chrono::duration<float> get_timeout_duration_for_operations();
 
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
 template <typename FuncBody, typename FuncWait, typename OnTimeout, typename... Args>
 auto wait_with_timeout(
-    FuncBody&& func_body, FuncWait&& wait_condition, OnTimeout&& on_timeout, float timeout_seconds, Args&&... args) {
+    FuncBody&& func_body,
+    FuncWait&& wait_condition,
+    OnTimeout&& on_timeout,
+    std::chrono::duration<float> timeout_duration,
+    Args&&... args) {
     auto start_time = std::chrono::high_resolution_clock::now();
 
     do {
         func_body(std::forward<Args>(args)...);
         asm("pause");  // Busy wait
 
-        if (timeout_seconds > 0.0f) {
+        if (timeout_duration.count() > 0.0f) {
             auto current_time = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration<float>(current_time - start_time).count();
 
-            if (elapsed >= timeout_seconds) {
+            if (elapsed >= timeout_duration.count()) {
                 on_timeout();
                 break;
             }

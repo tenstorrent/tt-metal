@@ -135,14 +135,7 @@ configure-only
 enable-coverage
 without-distributed
 without-python-bindings
-<<<<<<< HEAD
-<<<<<<< HEAD
 enable-fake-kernels-target
-=======
-operation-timeout-seconds:
->>>>>>> d2bcf7f664 (Addressed feedback, unified the flags to just use the timeout)
-=======
->>>>>>> e39e424125 (Improved the way to detect hangs)
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -204,16 +197,8 @@ while true; do
             configure_only="ON";;
         --without-python-bindings)
             with_python_bindings="OFF";;
-<<<<<<< HEAD
-<<<<<<< HEAD
         --enable-fake-kernels-target)
             enable_fake_kernels_target="ON";;
-=======
-        --operation-timeout-seconds)
-            operation_timeout_seconds="$2";shift;;
->>>>>>> d2bcf7f664 (Addressed feedback, unified the flags to just use the timeout)
-=======
->>>>>>> e39e424125 (Improved the way to detect hangs)
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -406,15 +391,12 @@ else
     cmake_args+=("-DENABLE_DISTRIBUTED=OFF")
 fi
 
-<<<<<<< HEAD
 if [ "$enable_fake_kernels_target" = "ON" ]; then
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=ON")
 else
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=OFF")
 fi
 
-=======
->>>>>>> e39e424125 (Improved the way to detect hangs)
 # toolchain and cxx_compiler settings would conflict with eachother
 # only use toolchain if not setting cxx compiler directly
 if [ "$cxx_compiler_path" == "" ]; then
