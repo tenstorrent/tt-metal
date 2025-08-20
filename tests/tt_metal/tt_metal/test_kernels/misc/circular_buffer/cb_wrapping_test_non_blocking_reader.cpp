@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 using namespace tt;
 
@@ -20,5 +21,11 @@ void kernel_main() {
     }
 
     auto result_ptr = get_arg_val<uint32_t*>(0);
-    *result_ptr = cb_pages_available_at_front(CB_ID, CB_STEP_SIZE);
+    auto success_token = get_arg_val<uint32_t>(1);
+
+    if (!cb_pages_available_at_front(CB_ID, CB_STEP_SIZE)) {
+        *result_ptr = success_token;
+    } else {
+        *result_ptr = 0;
+    }
 }
