@@ -13,6 +13,7 @@
 | EfficientNetB0| (224, 224) | 1          | 512     | 75.39%                | 76.76%                 |
 | SwinV2       | (512, 512) | 1          | 512     | 75.59%                 | 81.05%                 |
 | Swin_S       | (512, 512) | 1          | 512     | 81.05%                 | 82.23%                 |
+
 ***Note:*** The accuracy is for the selected random samples from the validation dataset.
 
 Where,
