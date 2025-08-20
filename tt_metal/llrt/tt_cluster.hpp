@@ -8,6 +8,7 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/cluster.hpp>
+#include "llrt/rtoptions.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -55,14 +56,7 @@ using tt_target_dram = std::tuple<int, int, int>;
 
 namespace tt {
 
-/**
- * @brief Specifies the target devices on which the graph can be run.
- */
-enum class TargetDevice : std::uint8_t {
-    Silicon = 0,
-    Simulator = 1,
-    Invalid = 0xFF,
-};
+// TargetDevice now lives in rtoptions.hpp
 
 enum class EthRouterMode : uint32_t {
     IDLE = 0,
@@ -339,6 +333,8 @@ private:
     void generate_virtual_to_umd_coord_mapping();
     void generate_virtual_to_profiler_flat_id_mapping();
 
+    // Unified driver open handles silicon, simulation, and mock types
+
     // Reserves ethernet cores in cluster for tunneling
     void initialize_ethernet_cores_router_mode();
 
@@ -363,9 +359,8 @@ private:
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
     tt_ClusterDescriptor* cluster_desc_ = nullptr;
-    // In case of mock cluster descriptor, the tt_cluster holds the ownership of the created object;
-    // This is obviously a design issue. This should go away once the design is fixed.
-    std::unique_ptr<tt_ClusterDescriptor> mock_cluster_desc_ptr_;
+    // If constructor provided a custom cluster descriptor (Mock), we temporarily keep the pointer to pass into UMD
+    tt_ClusterDescriptor* ctor_cluster_desc_arg_ = nullptr;
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 
