@@ -144,34 +144,13 @@ tt::tt_metal::operation::ProgramWithCallbacks maxpool3d_factory(
     uint32_t input_addr = input_tensor.buffer()->address();
     uint32_t output_addr = output_tensor.buffer()->address();
 
-    // Calculate optimal core usage based on output size
+    // TASK 1.1: Force single-core operation to isolate CB issues
     uint32_t total_output_elements = T_out * H_out * W_out;
-    uint32_t optimal_cores = std::min(static_cast<uint32_t>(num_cores), total_output_elements);
+    uint32_t optimal_cores = 1;  // Force single core
 
-    // Calculate parallelization factors for T, H, W dimensions
+    // Single core parallelization
     uint32_t t_parallel = 1, h_parallel = 1, w_parallel = 1;
-
-    if (optimal_cores > 1) {
-        // Try to distribute cores evenly across spatial dimensions
-        // Priority: W > H > T (similar to Conv3D approach)
-
-        // First, try parallelizing W dimension
-        w_parallel = std::min(optimal_cores, W_out);
-        uint32_t remaining_cores = optimal_cores / w_parallel;
-
-        if (remaining_cores > 1) {
-            // Then H dimension
-            h_parallel = std::min(remaining_cores, H_out);
-            remaining_cores = remaining_cores / h_parallel;
-
-            if (remaining_cores > 1) {
-                // Finally T dimension
-                t_parallel = std::min(remaining_cores, T_out);
-            }
-        }
-    }
-
-    uint32_t actual_cores_used = t_parallel * h_parallel * w_parallel;
+    uint32_t actual_cores_used = 1;
 
     log_info(
         tt::LogOp,

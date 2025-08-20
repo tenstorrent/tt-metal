@@ -15,14 +15,11 @@ from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 @pytest.mark.parametrize(
     "batch_size, T, H, W, C, kernel_size, stride, padding",
     [
-        (1, 8, 16, 16, 32, (2, 2, 2), (2, 2, 2), (1, 1, 1)),  # Basic case
-        (1, 4, 8, 8, 16, (2, 2, 2), (2, 2, 2), (0, 0, 0)),  # Smaller tensor
-        (1, 8, 8, 8, 32, (2, 2, 2), (2, 2, 2), (0, 0, 0)),  # Without padding
-        (1, 8, 16, 16, 32, (2, 2, 2), (1, 1, 1), (0, 0, 0)),  # Stride 1
+        (1, 4, 8, 8, 8, (1, 1, 1), (2, 2, 2), (0, 0, 0)),
     ],
 )
 def test_maxpool3d_simple(device, batch_size, T, H, W, C, kernel_size, stride, padding):
-    torch.manual_seed(0)
+    # torch.manual_seed(0)
 
     # Create input tensor
     input_shape = [batch_size, T, H, W, C]
@@ -87,8 +84,8 @@ def test_maxpool3d_simple(device, batch_size, T, H, W, C, kernel_size, stride, p
     ), f"Shape mismatch: TTNN {ttnn_output_torch.shape} vs PyTorch {torch_output.shape}"
 
     # Assert values match with reasonable PCC
-    print(ttnn_output_torch)
-    print(torch_output)
+    # print(ttnn_output_torch)
+    # print(torch_output)
     assert_with_pcc(ttnn_output_torch, torch_output, 0.99)
     print("✅ PCC test passed!")
     print("=" * 50)

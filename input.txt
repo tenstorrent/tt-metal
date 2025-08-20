@@ -1,0 +1,32 @@
+I want to make MaxPool3d op. These are steps:
+- I want basic solution, so simpliest one.
+- Input and output is DRAM Interleaved
+- Both input and output is in Row major layout
+- You can look at conv3d implementation for the reference
+- Register operation
+- Make some simple test in appropriate file (it would compare result to torch reference)
+- Make whole op infrastructure
+- Make pool3d factory
+- Make reader, compute, and writer kernel
+- Reader kernel should get Tin,Tout,Hin,Hout,Win,Wout (lets say N=1 for the beginning), and it would fetch approriate sticks from DRAM (so for 2x2x2 filter, 8 sticks for one output sticks)
+- Compute would find max for every channel, and output out stick
+- Writer kernel would send it back to DRAM output
+
+Do you need more info?
+
+
+PASS 2
+- In this version, let's have compute kernel that will compute result on RISC, don't use SFPU/FPU.
+- Reader kernel should send window_size_hwt sticks, and compute kernel should just find max for each channel
+
+PASS 3
+- I want to have maxpool3d - you almost did everything
+- Now let's change compute kernel to just handle synchronization with reader and writer kernel
+- So only task is not to hang, we can have PCC issues
+- Reader kernel should get Tin,Tout,Hin,Hout,Win,Wout (lets say N=1 for the beginning), and it would fetch approriate sticks from DRAM (so for 2x2x2 filter, 8 sticks for one output sticks) (YOU DID THIS)
+- Compute would find max for every channel, and output out stick (for now just return first stick)
+- Writer kernel would send it back to DRAM output (YOU DID THIS)
+
+PASS 4
+- I want to have functional compute for maxpool3d
+- Can you give me some plan for it, and put it in some textual file?
