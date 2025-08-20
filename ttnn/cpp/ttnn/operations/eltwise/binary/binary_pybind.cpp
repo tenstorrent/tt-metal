@@ -13,7 +13,11 @@
 #include <sstream>
 #include <fstream>
 #include <functional>
+#include <atomic>
 #include <string>
+
+// External reference to global operation ID counter defined in core.cpp
+extern std::atomic<uint32_t> ttnn_global_operation_id;
 
 namespace ttnn {
 namespace operations {
@@ -31,12 +35,12 @@ std::string get_python_call_stack() {
             std::string frame_str = py::str(frame).cast<std::string>();
 
             // Skip frames that are from pytest, pybind, or other internal stuff
-            if (frame_str.find("/pytest") != std::string::npos || frame_str.find("/pluggy/") != std::string::npos ||
-                frame_str.find("/python3.10/site-packages/") != std::string::npos ||
-                frame_str.find("ttnn/__init__.py") != std::string::npos ||
-                frame_str.find("decorators.py") != std::string::npos) {
-                continue;
-            }
+            // if (frame_str.find("/pytest") != std::string::npos || frame_str.find("/pluggy/") != std::string::npos ||
+            //     frame_str.find("/python3.10/site-packages/") != std::string::npos ||
+            //     frame_str.find("ttnn/__init__.py") != std::string::npos ||
+            //     frame_str.find("decorators.py") != std::string::npos) {
+            //     continue;
+            // }
 
             stack_stream << frame_str;
         }
@@ -46,19 +50,10 @@ std::string get_python_call_stack() {
     return stack_stream.str();
 }
 
-// Function to generate hash from string
-uint32_t generate_hash(const std::string& input) {
-    std::hash<std::string> hasher;
-    size_t hash_value = hasher(input);
-    // Convert to uint32_t (truncate if necessary)
-    return static_cast<uint32_t>(hash_value);
-}
-
 // Function to write operation info to file and return stack_id
 uint32_t write_operation_info_to_file(const std::string& callstack, const std::string& args_info) {
-    // Create combined string for hashing
-    std::string combined = callstack + args_info;
-    uint32_t stack_id = generate_hash(combined);
+    // Get next operation ID
+    uint32_t stack_id = ttnn_global_operation_id.fetch_add(1);
 
     // Create filename
     std::string filename = "op_" + std::to_string(stack_id) + ".json";

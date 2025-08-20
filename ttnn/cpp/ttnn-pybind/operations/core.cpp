@@ -13,11 +13,15 @@
 #include <fstream>
 #include <sstream>
 #include <functional>
+#include <atomic>
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include <tt-metalium/work_split.hpp>
+
+// Global counter for operation IDs shared across all operations
+std::atomic<uint32_t> ttnn_global_operation_id(0);
 
 namespace ttnn::operations::core {
 
@@ -47,19 +51,10 @@ std::string get_python_call_stack() {
     return stack_stream.str();
 }
 
-// Function to generate hash from string
-uint32_t generate_hash(const std::string& input) {
-    std::hash<std::string> hasher;
-    size_t hash_value = hasher(input);
-    // Convert to uint32_t (truncate if necessary)
-    return static_cast<uint32_t>(hash_value);
-}
-
 // Function to write operation info to JSON file and return stack_id
 uint32_t write_operation_info_to_file(const std::string& callstack, const std::string& args_info) {
-    // Create combined string for hashing
-    std::string combined = callstack + args_info;
-    uint32_t stack_id = generate_hash(combined);
+    // Get next operation ID
+    uint32_t stack_id = ttnn_global_operation_id.fetch_add(1);
     // Create filename
     std::string filename = "op_" + std::to_string(stack_id) + ".json";
     // Write to JSON file
