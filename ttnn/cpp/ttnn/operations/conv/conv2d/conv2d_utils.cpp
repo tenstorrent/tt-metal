@@ -966,11 +966,6 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     log_debug(
         LogOp, "Selected shard layout: {}, size: {}", winning_config.conv_config.shard_layout, winning_config.size);
 
-    // std::cout << "winning_config.conv_config.shard_layout: " << (int)winning_config.conv_config.shard_layout.value()
-    // << std::endl; std::cout << "winning_config.conv_config.act_block_h_override: " <<
-    // winning_config.conv_config.act_block_h_override << std::endl; std::cout <<
-    // "winning_config.conv_config.act_block_w_div: " << winning_config.conv_config.act_block_w_div << std::endl;
-
     return winning_config.conv_config;
 }
 
