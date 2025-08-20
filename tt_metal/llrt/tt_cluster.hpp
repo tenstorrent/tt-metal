@@ -286,6 +286,8 @@ public:
 
     tt::tt_metal::ClusterType get_cluster_type() const;
 
+    tt::TargetDevice get_target_device_type() const { return this->target_type_; }
+
     bool is_base_routing_fw_enabled() const;
 
     // Get all fabric ethernet cores

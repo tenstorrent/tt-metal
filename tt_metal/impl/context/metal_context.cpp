@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <filesystem>
+#include <new>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
@@ -59,6 +60,16 @@ void MetalContext::initialize(
     const BankMapping& l1_bank_remap,
     size_t worker_l1_size,
     bool minimal) {
+
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+        TT_FATAL(
+            tt::LogAlways,
+            "Mock cluster cannot be initialized because there is no device. "
+            "Mock clusters are only supported for testing control plane initialization without a device."
+            "Please unset the TT_METAL_MOCK_CLUSTER_DESC_PATH environment variable.");
+        return;
+    }
+
     // Workaround for galaxy and BH, need to always re-init
     if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
         force_reinit_ = true;
@@ -230,6 +241,18 @@ MetalContext& MetalContext::instance() {
 }
 
 MetalContext::MetalContext() {
+    this->construct_cluster();
+    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+
+    // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
+    // how MetalContext lifetime will work through the API.
+    std::atexit([]() { MetalContext::instance().~MetalContext(); });
+}
+
+void MetalContext::construct_cluster() {
+    rtoptions_.~RunTimeOptions();
+    new (&rtoptions_) llrt::RunTimeOptions();
+
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
@@ -240,11 +263,6 @@ MetalContext::MetalContext() {
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
-    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
-
-    // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
-    // how MetalContext lifetime will work through the API.
-    std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
 distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {

@@ -77,12 +77,16 @@ protected:
         setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH",
               "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/tg_cluster_desc.yaml",
               1);
+        // Need to reinitialize to absorb the mock cluster descriptor path
+        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
         ControlPlaneFixture::SetUp();
     }
 
     void TearDown() override {
         ControlPlaneFixture::TearDown();
         unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+        // Need to reinitialize to reset the cluster and hal after mocking the test
+        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
     }
 };
 
@@ -161,11 +165,15 @@ protected:
         setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH",
               "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml",
               1);
+        // Need to reinitialize to absorb the mock cluster descriptor path
+        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
         ControlPlaneFixture::SetUp();
     }
     void TearDown() override {
         ControlPlaneFixture::TearDown();
         unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+        // Need to reinitialize to reset the cluster and hal after mocking the test
+        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
     }
 };
 
