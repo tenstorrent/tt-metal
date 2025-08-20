@@ -545,7 +545,7 @@ Tensor convert_python_tensor_to_tt_tensor_on_host(
             TT_FATAL(
                 !optional_layout.has_value() or *optional_layout == Layout::TILE,
                 "Tile layout is required for tensor of type bfloat8_b or bfloat4_b; got {}.",
-                (optional_layout.has_value() ? fmt::format("{}", *optional_layout) : "std::nullopt"));
+                *optional_layout);
             return Layout::TILE;
         } else {
             return optional_layout.value_or(Layout::ROW_MAJOR);
