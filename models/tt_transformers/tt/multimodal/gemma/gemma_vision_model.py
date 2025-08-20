@@ -18,6 +18,7 @@ class TtGemmaTransformerVision(LightweightModule):
         self,
         mesh_device,
         state_dict,
+        tt_ccl,
         state_dict_prefix,
         dtype,
         configuration,
@@ -38,8 +39,9 @@ class TtGemmaTransformerVision(LightweightModule):
 
         self.vision_encoder = TtSiglipGemmaVisionModel(
             mesh_device,
-            state_dict,
-            f"{state_dict_prefix}",
+            state_dict=state_dict,
+            tt_ccl=tt_ccl,
+            state_dict_prefix=f"{state_dict_prefix}",
             weight_cache_path=configuration.weight_cache_path(dtype),
             dtype=dtype,
             configuration=configuration,
