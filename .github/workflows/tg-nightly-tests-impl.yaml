@@ -32,14 +32,14 @@ jobs:
           {
             name: "Llama Galaxy Accuracy Test",
             arch: wormhole_b0,
-            cmd: "HF_MODEL=meta-llama/Llama-3.3-70B-Instruct FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/tests/test_llama_accuracy.py",
+            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/tests/test_llama_accuracy.py",
             timeout: 30,
             owner_id: U053W15B6JF
           }, # Djordje Ivanovic
           {
             name: "Llama Galaxy Long Stress Test",
             arch: wormhole_b0,
-            cmd: "HF_MODEL=meta-llama/Llama-3.3-70B-Instruct FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py  -k 'stress-test and not mini-stress-test'",
+            cmd: "LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k 'stress-test and not mini-stress-test'",
             timeout: 240,
             owner_id: U053W15B6JF
           }, # Djordje Ivanovic
@@ -58,7 +58,6 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
         ARCH_NAME: ${{ matrix.test-group.arch }}
-        HF_HOME: /mnt/MLPerf/huggingface
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G

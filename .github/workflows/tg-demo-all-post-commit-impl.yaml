@@ -30,7 +30,7 @@ jobs:
           {
             name: "Galaxy Llama3 demo tests",
             arch: wormhole_b0,
-            cmd: 'HF_MODEL=meta-llama/Llama-3.3-70B-Instruct pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k apc',
+            cmd: 'LLAMA_DIR=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/ pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k apc',
             model: llama3,
             timeout: 10,
             owner_id: U053W15B6JF
@@ -50,7 +50,6 @@ jobs:
           LD_LIBRARY_PATH: /work/build/lib
           LOGURU_LEVEL: INFO
           ARCH_NAME: ${{ matrix.test-group.arch }}
-          HF_HOME: /mnt/MLPerf/huggingface
         volumes:
           - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
           - /dev/hugepages-1G:/dev/hugepages-1G

@@ -8,14 +8,14 @@ run_tg_llama3_tests() {
   echo "LOG_METAL: Running run_tg_llama3_tests"
 
   # Llama3.3-70B
-  llama70b=meta-llama/Llama-3.3-70B-Instruct
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
-  for hf_model in "$llama70b"; do
-    HF_MODEL=$hf_model FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full" --timeout 1000; fail+=$?;
-    HF_MODEL=$hf_model FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000; fail+=$?;
-    HF_MODEL=$hf_model FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000; fail+=$?;
+  for llama_dir in "$llama70b"; do
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "pcc-80L" --timeout 1000; fail+=$?;
 
-    echo "LOG_METAL: Llama3 tests for $hf_model completed"
+    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
   # Record the end time
@@ -36,16 +36,16 @@ run_tg_llama3_long_context_tests() {
   echo "LOG_METAL: Running run_tg_llama3_long_context_tests"
 
   # Llama3.3-70B
-  llama70b=meta-llama/Llama-3.3-70B-Instruct
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
-  for hf_model in "$llama70b"; do
-    HF_MODEL=$hf_model FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-4k-b1" --timeout 1000; fail+=$?;
-    HF_MODEL=$hf_model FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-8k-b1" --timeout 1000; fail+=$?;
-    HF_MODEL=$hf_model FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-16k-b32" --timeout 1000; fail+=$?;
-    HF_MODEL=$hf_model FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-32k-b1" --timeout 1000; fail+=$?;
-    HF_MODEL=$hf_model FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-64k-b1" --timeout 1000; fail+=$?;
-    HF_MODEL=$hf_model FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-128k-b1" --timeout 1000; fail+=$?;
-    echo "LOG_METAL: Llama3 tests for $hf_model completed"
+  for llama_dir in "$llama70b"; do
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-4k-b1" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-8k-b1" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-16k-b32" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-32k-b1" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-64k-b1" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "long-128k-b1" --timeout 1000; fail+=$?;
+    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
   # Record the end time
@@ -65,13 +65,13 @@ run_tg_llama3_evals_tests() {
   echo "LOG_METAL: Running run_tg_llama3_evals_tests"
 
   # Llama3.3-70B
-  llama70b=meta-llama/Llama-3.3-70B-Instruct
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
 
-  for hf_model in "$llama70b"; do
-    HF_MODEL=$hf_model FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-1" --timeout 1000; fail+=$?;
-    HF_MODEL=$hf_model FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32" --timeout 1000; fail+=$?;
-    HF_MODEL=$hf_model FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-long-prompts" --timeout 1000; fail+=$?;
-    echo "LOG_METAL: Llama3 tests for $hf_model completed"
+  for llama_dir in "$llama70b"; do
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-1" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-32" --timeout 1000; fail+=$?;
+    LLAMA_DIR=$llama_dir FAKE_DEVICE=TG pytest -n auto models/demos/llama3_70b_galaxy/demo/text_demo.py -k "evals-long-prompts" --timeout 1000; fail+=$?;
+    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
   done
 
   # Record the end time
@@ -88,8 +88,8 @@ run_tg_llama3_8b_dp_tests() {
 
   echo "LOG_METAL: Running run_tg_llama3_8b_dp_tests"
 
-  llama8b=meta-llama/Llama-3.1-8B-Instruct
-  HF_MODEL=$llama8b MESH_DEVICE=TG pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
+  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  LLAMA_DIR=$llama8b MESH_DEVICE=TG pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
   echo "LOG_METAL: Llama3 8B tests for $llama8b completed"
 
   if [[ $fail -ne 0 ]]; then
@@ -102,8 +102,8 @@ run_tg_llama3_70b_dp_tests() {
 
   echo "LOG_METAL: Running run_tg_llama3_70b_dp_tests"
 
-  llama70b=meta-llama/Llama-3.3-70B-Instruct
-  HF_MODEL=$llama70b MESH_DEVICE=TG pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
+  llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
+  LLAMA_DIR=$llama70b MESH_DEVICE=TG pytest models/tt_transformers/demo/simple_text_demo.py --timeout 1000; fail+=$?
   echo "LOG_METAL: Llama3 70B tests for $llama70b completed"
 
   if [[ $fail -ne 0 ]]; then
