@@ -72,7 +72,7 @@ class TtASPP(nn.Module):
         self.shared_weight_tensor_kernel1_output5 = shared_weight_tensor_kernel1_output5
 
         def create_ttconv2d(
-            in_channels, out_channels, kernel_size, stride, padding, dilation=1, bias=False, isProjectConv=False
+            out_channels, kernel_size, stride, padding, channel_slice_num, dilation=1, bias=False, isProjectConv=False
         ):
             if kernel_size == 1 and isProjectConv:
                 weight = self.shared_weight_tensor_kernel1_output5
@@ -83,6 +83,7 @@ class TtASPP(nn.Module):
             param_dict = {
                 "weight": weight,
                 "dilation": (dilation, dilation),
+                "channel_slice_num": channel_slice_num,
             }
             if bias:
                 param_dict["bias"] = torch.empty(1, 1, 1, out_channels, dtype=torch.bfloat16)
@@ -92,26 +93,30 @@ class TtASPP(nn.Module):
 
         # 1x1 conv
         conv = create_ttconv2d(
-            in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=1,
             stride=(1, 1),
             padding=(0, 0),
             dilation=1,
+            channel_slice_num=1,
             bias=use_bias,
         )
         norm_func = get_ttnn_norm(norm, out_channels, device=self.device)
         self.conv_branches.append((conv, norm_func))
 
+        channel_slices = [2, 4, 8]
+        i = 0
         # Dilations convs
         for dilation in dilations:
+            channel_slice_num = channel_slices[i]
+            i += 1
             conv = create_ttconv2d(
-                in_channels=in_channels,
                 out_channels=out_channels,
                 kernel_size=3,
                 stride=(1, 1),
                 padding=(dilation, dilation),
                 dilation=dilation,
+                channel_slice_num=channel_slice_num,
                 bias=use_bias,
             )
             norm_func = get_ttnn_norm(norm, out_channels, device=self.device)
@@ -119,23 +124,23 @@ class TtASPP(nn.Module):
 
         # Global pooling conv
         self.pool_conv = create_ttconv2d(
-            in_channels=in_channels,
             out_channels=out_channels,
             kernel_size=1,
             stride=(1, 1),
             padding=(0, 0),
             dilation=1,
+            channel_slice_num=1,
             bias=False,
         )
 
         # Project conv to concatenate all branches
         self.project_conv = create_ttconv2d(
-            in_channels=5 * out_channels,  # Concatenation results in 5 branches
             out_channels=out_channels,
             kernel_size=1,
             stride=(1, 1),
             padding=(0, 0),
             dilation=1,
+            channel_slice_num=1,
             bias=use_bias,
             isProjectConv=True,
         )
@@ -148,7 +153,6 @@ class TtASPP(nn.Module):
         H = x.shape[1]  # Height
         W = x.shape[2]  # Width
         C = x.shape[3]  # Channels
-        print("N", N, "H", H, "W", W, "C", C)
 
         if H % self.pool_kernel_size[0] or W % self.pool_kernel_size[1]:
             raise ValueError(
@@ -180,13 +184,6 @@ class TtASPP(nn.Module):
         output_w = floor(W + 0 - self.pool_kernel_size[1]) + 1
 
         pooled = ttnn.reshape(pooled, (N, output_h, output_w, C))
-        # height_sharded_config = ttnn.create_sharded_memory_config(
-        #     pooled.shape,  # Use the tensor's current shape
-        #     core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),  # Same grid as current
-        #     strategy=ttnn.ShardStrategy.HEIGHT,
-        #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #     use_height_and_width_as_shard_shape=True,
-        # )
 
         for i in range(len(res)):
             res[i] = ttnn.to_memory_config(res[i], ttnn.DRAM_MEMORY_CONFIG)
@@ -204,21 +201,13 @@ class TtASPP(nn.Module):
 
         res.append(pooled)
 
-        # output_height_sharded_config = ttnn.create_sharded_memory_config(
-        #     (res[0].shape[1] * res[0].shape[2], total_channels),  # (H*W, total_channels)
-        #     core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
-        #     strategy=ttnn.ShardStrategy.HEIGHT,
-        #     orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        #     use_height_and_width_as_shard_shape=True,
-        # )
-
-        # res = ttnn.concat(res, dim=3, memory_config=output_height_sharded_config) #Maybe dim = 3 for NHWC layout in TTNN, it was dim = 1, getting OOM for now for HEIGHT_SHARDING
         res = ttnn.concat(res, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         res = self.project_conv(res)
         res = self.project_norm(res)
         res = self.activation(res)
 
-        if self.dropout > 0:
-            res = ttnn.experimental.dropout(res, probability=self.dropout, scale=1.0 / (1.0 - self.dropout), seed=42)
+        # if self.training and self.dropout > 0:
+        #    res = ttnn.experimental.dropout(res, probability=self.dropout, scale=1.0 / (1.0 - self.dropout), seed=42)
+        # This is commented out because training is false for torch trace so it means no dropout will be applied
         return res
