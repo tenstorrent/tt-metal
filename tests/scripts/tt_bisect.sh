@@ -86,7 +86,7 @@ git bisect start $bad_commit $good_commit --
 
 
 echo "Environment variables:"
-env
+printenv
 
 found=false
 while [[ "$found" = "false" ]]; do
