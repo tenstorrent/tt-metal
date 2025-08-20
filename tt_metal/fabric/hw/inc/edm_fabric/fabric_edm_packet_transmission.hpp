@@ -226,30 +226,34 @@ FORCE_INLINE
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::PacketHeader* packet_header, tt::tt_fabric::RoutingFields cached_routing_fields) {
+    tt_l1_ptr tt::tt_fabric::PacketHeader* packet_header, tt::tt_fabric::RoutingFields cached_routing_fields) {
     // if the distance field is one, it means the range field decrements, else the start distance field decrements
     // TODO [optimization]: If we can make the terminal value 0, then we can save an instruction on the eq insn
     bool decrement_range = (cached_routing_fields.value & tt::tt_fabric::RoutingFields::HOP_DISTANCE_MASK) ==
                            tt::tt_fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
     uint8_t decrement_val = static_cast<uint8_t>(1)
                             << (decrement_range * tt::tt_fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH);
-    packet_header->routing_fields.value = cached_routing_fields.value - decrement_val;
+    reinterpret_cast<std::atomic<uint32_t>*>(&packet_header->routing_fields.value)
+        ->store(cached_routing_fields.value - decrement_val, std::memory_order_release);
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
+    tt_l1_ptr tt::tt_fabric::LowLatencyPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyRoutingFields cached_routing_fields) {
-    packet_header->routing_fields.value =
-        cached_routing_fields.value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH;
+    reinterpret_cast<std::atomic<uint32_t>*>(&packet_header->routing_fields.value)
+        ->store(
+            cached_routing_fields.value >> tt::tt_fabric::LowLatencyRoutingFields::FIELD_WIDTH,
+            std::memory_order_release);
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::LowLatencyMeshPacketHeader* packet_header,
+    tt_l1_ptr tt::tt_fabric::LowLatencyMeshPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {
     // This is the hop index. At every ethernet hop, we increment by 1
     // so that the next receiver indexes into its respecive hop command
     // in packet_header.route_buffer[]
-    packet_header->routing_fields.value = cached_routing_fields.value + 1;
+    reinterpret_cast<std::atomic<uint32_t>*>(&packet_header->routing_fields.value)
+        ->store(cached_routing_fields.value + 1, std::memory_order_release);
 }
 
 template <uint8_t NUM_SENDER_BUFFERS>
@@ -269,10 +273,11 @@ void update_packet_header_for_next_hop(
     std::uintptr_t offset = reinterpret_cast<std::uintptr_t>(&(packet_base->routing_fields));
 #endif
     downstream_edm_interface.template update_edm_buffer_slot_word(offset, value, tt::tt_fabric::edm_to_downstream_noc);
+    std::atomic_thread_fence(std::memory_order_release);
 }
 
 FORCE_INLINE void update_packet_header_for_next_hop(
-    volatile tt_l1_ptr tt::tt_fabric::MeshPacketHeader* packet_header,
+    tt_l1_ptr tt::tt_fabric::MeshPacketHeader* packet_header,
     tt::tt_fabric::LowLatencyMeshRoutingFields cached_routing_fields) {}
 
 // This function forwards a packet to the downstream EDM channel for eventual sending
@@ -291,7 +296,7 @@ FORCE_INLINE
 #endif
     void
     forward_payload_to_downstream_edm(
-        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+        tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
         uint16_t payload_size_bytes,
         ROUTING_FIELDS_TYPE cached_routing_fields,
         tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
@@ -304,6 +309,7 @@ FORCE_INLINE
     if constexpr (increment_pointers) {
         update_packet_header_for_next_hop(packet_header, cached_routing_fields);
     }
+    std::atomic_thread_fence(std::memory_order_release);  // Ensure updates visible before send
     downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
         enable_deadlock_avoidance,
         tt::tt_fabric::edm_to_downstream_noc,

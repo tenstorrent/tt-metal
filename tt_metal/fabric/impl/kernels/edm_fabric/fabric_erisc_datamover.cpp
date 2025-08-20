@@ -1331,8 +1331,10 @@ void run_receiver_channel_step_impl(
     if (unwritten_packets) {
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
-        tt_l1_ptr PACKET_HEADER_TYPE* packet_header = const_cast<PACKET_HEADER_TYPE*>(
-            local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index));
+        std::atomic<PACKET_HEADER_TYPE*> atomic_pkt_header =
+            local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index);
+
+        PACKET_HEADER_TYPE* packet_header = atomic_pkt_header.load(std::memory_order_relaxed);
 
         ROUTING_FIELDS_TYPE cached_routing_fields;
 #if !defined(FABRIC_2D) || !defined(DYNAMIC_ROUTING_ENABLED)
@@ -1351,7 +1353,7 @@ void run_receiver_channel_step_impl(
             // [3]->Forward South
             // The hop command (4-bits) gets decoded as a local write and/or forward to the "other" 3 directions.
             // Other 3 directions depend on the direction of fabric router.
-            // For example, a router that is connected West can write locally or forard East, North or South.
+            // For example, a router that is connected West can write local ly or forard East, North or South.
             // A local write is encoded by setting the bit corresponding to fabric router's own direction to 1.
             // For a West facing fabric router:
             //  - Hop command of [0010] instructs fabric router to write the packet locally.
@@ -1396,6 +1398,8 @@ void run_receiver_channel_step_impl(
             increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-1);
         }
     }
+
+    receiver_channel_trid_tracker.update_is_next_completion_transaction_available();
 
     if constexpr (!fuse_receiver_flush_and_completion_ptr) {
         auto& wr_flush_counter = receiver_channel_pointers.wr_flush_counter;

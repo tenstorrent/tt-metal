@@ -66,12 +66,17 @@ public:
     }
 
     template <typename T>
-    [[nodiscard]] FORCE_INLINE volatile T* get_packet_header(const BufferIndex& buffer_index) const {
-        return reinterpret_cast<volatile T*>(this->buffer_addresses[buffer_index]);
+    [[nodiscard]] FORCE_INLINE T* get_packet_header(const BufferIndex& buffer_index) const {
+        return reinterpret_cast<T*>(this->buffer_addresses[buffer_index]);
     }
 
     template <typename T>
     [[nodiscard]] FORCE_INLINE size_t get_payload_size(const BufferIndex& buffer_index) const {
+        auto pkt_header = get_packet_header<T>(buffer_index);
+        // asm volatile("" : "+r"(pkt_header) : : "memory");
+        std::atomic<PACKET_HEADER_TYPE*> atomic_pkt_header = pkt_header;  // Load into atomic
+        pkt_header = atomic_pkt_header.load(std::memory_order_relaxed);   // Force reload (compiler treats as modified)
+        std::atomic_signal_fence(std::memory_order_seq_cst);              // Compiler barrier equiv to memory clobber
         return get_packet_header<T>(buffer_index)->get_payload_size_including_header();
     }
     [[nodiscard]] FORCE_INLINE size_t get_channel_buffer_max_size_in_bytes(const BufferIndex& buffer_index) const {
