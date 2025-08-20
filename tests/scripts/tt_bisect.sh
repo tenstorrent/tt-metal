@@ -73,6 +73,7 @@ if ([ ! -z "$patch" ]); then
     echo "Cherry-pick commit:" $patch
 fi
 
+
 ./create_venv.sh
 source $PYTHON_ENV_DIR/bin/activate
 pip install -r models/tt_transformers/requirements.txt
@@ -95,6 +96,9 @@ while [[ "$found" = "false" ]]; do
       git cherry-pick $patch
    fi
    git submodule update --recursive
+
+   rm -rf .cpmcache  build_Release build_Debug build
+
    build_rc=0
    ./build_metal.sh --build-all || build_rc=$?
    echo "::endgroup::"
