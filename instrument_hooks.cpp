@@ -94,8 +94,8 @@ static void get_source_info(
         return;
     }
 
-    char func_name_output[1024];
-    char file_line_output[1024];
+    char func_name_output[4096];
+    char file_line_output[4096];
 
     // The output of `addr2line -f` is two lines:
     // 1. Mangled function name
@@ -132,6 +132,7 @@ static void* processing_thread_func(void* arg) {
     if (g_log_fd < 0) {
         return nullptr;
     }
+    uint64_t counter = 0;
 
     while (!g_done.load(std::memory_order_acquire) || g_buffer_head.load() != g_buffer_tail.load()) {
         size_t tail = g_buffer_tail.load(std::memory_order_relaxed);
@@ -141,7 +142,7 @@ static void* processing_thread_func(void* arg) {
             if (dladdr(caller_addr, &caller_info) && caller_info.dli_fname) {
                 const char* caller_so_path = caller_info.dli_fname;
 
-                if (strstr(caller_so_path, "libtt_metal.so") || strstr(caller_so_path, "_ttnn.so") ||
+                if (true || strstr(caller_so_path, "libtt_metal.so") || strstr(caller_so_path, "_ttnn.so") ||
                     strstr(caller_so_path, "_ttnncpp.so")) {
                     char func_name_buf[1024];
                     char file_path_buf[1024];
@@ -157,7 +158,7 @@ static void* processing_thread_func(void* arg) {
                         line_num_buf,
                         sizeof(line_num_buf));
 
-                    if (strstr(file_path_buf, "/home/ubuntu/tt-metal/tt_metal") ||
+                    if (true || strstr(file_path_buf, "/home/ubuntu/tt-metal/tt_metal") ||
                         strstr(file_path_buf, "/home/ubuntu/tt-metal/ttnn")) {
                         dprintf(
                             g_log_fd,
@@ -171,7 +172,11 @@ static void* processing_thread_func(void* arg) {
             }
             g_buffer_tail.store((tail + 1) % BUFFER_SIZE, std::memory_order_release);
         } else {
-            usleep(10);
+            counter++;
+            if (counter > 10000) {
+                usleep(10);
+                counter = 0;
+            }
         }
     }
 

@@ -27,6 +27,7 @@ target_compile_options(
     PRIVATE
         -g
         -fsanitize-coverage=func,trace-pc-guard
+        -fsanitize-coverage-allowlist=${PROJECT_SOURCE_DIR}/sancov_allowlist.txt
         -fno-omit-frame-pointer
         -fno-inline
         -fno-inline-functions
@@ -420,6 +421,28 @@ add_library(ttnncpp SHARED)
 add_library(TTNN::CPP ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
 
+target_compile_options(
+    ttnncpp
+    PRIVATE
+        -g
+        -fsanitize-coverage=func,trace-pc-guard
+        -fsanitize-coverage-allowlist=${PROJECT_SOURCE_DIR}/sancov_allowlist.txt
+        -fno-omit-frame-pointer
+        -fno-inline
+        -fno-inline-functions
+        -fno-optimize-sibling-calls
+        -fno-lto
+)
+target_link_options(ttnncpp PRIVATE -rdynamic)
+
+target_link_options(ttnncpp PRIVATE -fsanitize-coverage=func,trace-pc-guard)
+target_link_libraries(
+    ttnn_core
+    PRIVATE
+        dl
+        tt_cov_hooks
+)
+
 target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_precompile_headers(ttnncpp REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnncpp)
@@ -564,6 +587,29 @@ if(WITH_PYTHON_BINDINGS)
     add_library(ttnn SHARED)
     add_library(TTNN::PYTHON ALIAS ttnn)
     add_library(Metalium::TTNN ALIAS ttnn) # backwards compatibility. FIXME: remove
+
+    target_compile_options(
+        ttnn
+        PRIVATE
+            -g
+            -fsanitize-coverage=func,trace-pc-guard
+            -fsanitize-coverage-allowlist=${PROJECT_SOURCE_DIR}/sancov_allowlist.txt
+            -fno-omit-frame-pointer
+            -fno-inline
+            -fno-inline-functions
+            -fno-optimize-sibling-calls
+            -fno-lto
+    )
+    target_link_options(ttnn PRIVATE -rdynamic)
+
+    target_link_options(ttnn PRIVATE -fsanitize-coverage=func,trace-pc-guard)
+    target_link_libraries(
+        ttnn
+        PRIVATE
+            dl
+            tt_cov_hooks
+    )
+
     target_compile_definitions(ttnn PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
     TT_ENABLE_UNITY_BUILD(ttnn)
 

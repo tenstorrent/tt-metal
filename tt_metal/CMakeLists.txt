@@ -13,6 +13,7 @@ target_compile_options(
     PRIVATE
         -g
         -fsanitize-coverage=func,trace-pc-guard
+        -fsanitize-coverage-allowlist=${PROJECT_SOURCE_DIR}/sancov_allowlist.txt
         -fno-omit-frame-pointer
         -fno-inline
         -fno-inline-functions

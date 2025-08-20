@@ -417,5 +417,5 @@ fi
 # Build libraries and cpp tests
 if [ "$configure_only" = "OFF" ]; then
     echo "INFO: Building Project"
-    cmake --build $build_dir --target $target
+    cmake --build $build_dir --target $target -- -v
 fi
