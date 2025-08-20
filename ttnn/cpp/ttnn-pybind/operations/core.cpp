@@ -36,12 +36,12 @@ std::string get_python_call_stack() {
             std::string frame_str = py::str(frame).cast<std::string>();
 
             // Skip frames that are from pytest, pybind, or other internal stuff
-            if (frame_str.find("/pytest") != std::string::npos || frame_str.find("/pluggy/") != std::string::npos ||
-                frame_str.find("/python3.10/site-packages/") != std::string::npos ||
-                frame_str.find("ttnn/__init__.py") != std::string::npos ||
-                frame_str.find("decorators.py") != std::string::npos) {
-                continue;
-            }
+            // if (frame_str.find("/pytest") != std::string::npos || frame_str.find("/pluggy/") != std::string::npos ||
+            //     frame_str.find("/python3.10/site-packages/") != std::string::npos ||
+            //     frame_str.find("ttnn/__init__.py") != std::string::npos ||
+            //     frame_str.find("decorators.py") != std::string::npos) {
+            //     continue;
+            // }
 
             stack_stream << frame_str;
         }
