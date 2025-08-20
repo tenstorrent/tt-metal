@@ -81,7 +81,6 @@ public:
     T* operator->() const { return value_; }
     T& operator*() const { return *value_; }
     T& value() const { return *value_; }
-    T& value_or(const T& default_value) const { return value_ ? *value_ : default_value; }
 
     friend bool operator==(const optional_reference& lhs, const optional_reference& rhs) {
         return lhs.value_ == rhs.value_;

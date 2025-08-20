@@ -137,15 +137,6 @@ TEST(OptionalReferenceTest, ValueMethod) {
     EXPECT_EQ(val, 100);
 }
 
-TEST(OptionalReferenceTest, ValueOr) {
-    int val = 42;
-    optional_reference<int> ref(val);
-    EXPECT_EQ(ref.value_or(100), 42);
-
-    optional_reference<int> empty_ref;
-    EXPECT_EQ(empty_ref.value_or(100), 100);
-}
-
 TEST(OptionalReferenceTest, EqualityOperators) {
     int value1 = 42;
     int value2 = 42;
