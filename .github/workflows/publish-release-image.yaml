@@ -115,7 +115,7 @@ jobs:
       - name: Run frequent regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-            pip install 'torch==2.2.1+cpu' 'numpy>=1.24.4,<2' pytest
+            pip install 'torch>=2.7.1+cpu' 'numpy>=1.24.4,<2' pytest
             ${{ matrix.test_group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
