@@ -178,7 +178,7 @@ void LayerNorm::validate(
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormDefaultProgramConfig>) {
                 if (this->norm_type == LayerNormType::RMSNORM) {
-                    TT_FATAL(program_config.use_welford, "Welford's algorithm is not supported for RMSNorm");
+                    TT_FATAL(!program_config.use_welford, "Welford's algorithm is not supported for RMSNorm");
                 }
             } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
                 if (program_config.inplace) {
