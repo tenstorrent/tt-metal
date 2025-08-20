@@ -191,18 +191,14 @@ class TransformerBlock(LightweightModule):
         )
 
         # Norms take fractured inputs and output replicated across devices
-        print("TTNN Attention Norm Input ", x)
         attn_in = self.attention_norm(x, mode)
-        print("TTNN Attention Norm Output ", attn_in)
         # return attn_in
         # Attention takes replicated inputs and produces fractured outputs
-        if self.attention.is_sliding:
-            position_embeddings = rot_mats[1]
-        else:
-            position_embeddings = rot_mats[0]
-        print("TTNN Attention Input attn_in ", attn_in)
-        print("TTNN Attention Input current_pos ", current_pos)
-        print("TTNN Attention Input position_embeddings ", position_embeddings)
+        # if self.attention.is_sliding:
+        #     position_embeddings = rot_mats[1]
+        # else:
+        #     position_embeddings = rot_mats[0]
+        position_embeddings = rot_mats
         attn_out = self.attention.forward(
             attn_in,
             current_pos,
@@ -214,7 +210,6 @@ class TransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-        print("TTNN Attention Output  ", attn_out)
         # return
         # D = attn_out.shape[-1]*8
         # torch_attn_out = ttnn.to_torch(
@@ -234,18 +229,14 @@ class TransformerBlock(LightweightModule):
 
             residual = attn_out
 
-        print("TTNN ff_norm Input  ", attn_out)
-
         hidden_states = self.ff_norm(attn_out, mode)
-        print("TTNN ff_norm Output  ", hidden_states)
 
         if self.pre_ff_norm is not None:
             if self.num_devices > 1:
-                print("TTNN All reduce Input  ", hidden_states)
-
                 hidden_states = tt_all_reduce(
                     hidden_states,
                     self.mesh_device,
+                    tt_ccl=self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
                     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
@@ -254,25 +245,15 @@ class TransformerBlock(LightweightModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.args.ccl_dtype,
                 )
-                print("TTNN all reduce output  ", hidden_states)
-                print("TTNN div Input  ", hidden_states)
 
                 if mode == "prefill":
                     hidden_states = ttnn.div(hidden_states, self.num_devices)
 
-                print("TTNN div output  ", hidden_states)
-
-            print("TTNN add Input  ", hidden_states)
-            print("TTNN add input residual  ", residual)
-
             hidden_states = ttnn.add(residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16)
-            print("TTNN add output  ", hidden_states)
 
             residual = hidden_states
-            print("TTNN pre ff norm Input  ", hidden_states)
 
             hidden_states = self.pre_ff_norm(hidden_states, mode)
-            print("TTNN pre ff norm output  ", hidden_states)
 
         if mode == "prefill":
             x.deallocate(True)
@@ -282,28 +263,21 @@ class TransformerBlock(LightweightModule):
         if TG and mode == "decode":
             hidden_states = ttnn.to_memory_config(hidden_states, memory_config=self.model_config["MLP_ACT_MEMCFG"])
         # MLP takes replicated inputs and produces fractured outputs
-        print("TTNN  ff  Input  ", hidden_states)
 
         hidden_states = self.feed_forward.forward(hidden_states, mode)
-        print("TTNN  ff  output  ", hidden_states)
 
         activation_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=self.layer_num, tensor=TensorGroup.ACTIVATION
         )
 
         if self.post_ff_norm is not None:
-            print("TTNN post ff norm Input  ", hidden_states)
-
             hidden_states = self.post_ff_norm(hidden_states, mode)  # Gathered
-            #    print("Before all reduce 2", hidden_states)
-            print("TTNN post ff norm output  ", hidden_states)
 
             if self.num_devices > 1:
-                print("TTNN all reduce input  ", hidden_states)
-
                 hidden_states = tt_all_reduce(
                     hidden_states,
                     self.mesh_device,
+                    tt_ccl=self.tt_ccl,
                     cluster_axis=0,
                     dim=3,
                     num_reduce_scatter_links=self.args.num_reduce_scatter_links,
@@ -312,16 +286,10 @@ class TransformerBlock(LightweightModule):
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     dtype=self.args.ccl_dtype,
                 )
-                print("TTNN all reduce output  ", hidden_states)
-                print("TTNN div input  ", hidden_states)
 
                 if mode == "prefill":
                     hidden_states = ttnn.div(hidden_states, self.num_devices)
 
-                print("TTNN  div output  ", hidden_states)
-        #    print("After all reduce 2 ", hidden_states)
-        print("TTNN add input  hidden state", hidden_states)
-        print("TTNN add input residual  ", residual)
         out = ttnn.add(
             residual,
             hidden_states,
@@ -331,5 +299,4 @@ class TransformerBlock(LightweightModule):
             else activation_dtype or ttnn.bfloat16,
         )
 
-        print("TTNN add output  ", out)
         return out  # fractured across devices
