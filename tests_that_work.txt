@@ -1,0 +1,5 @@
+# Segfaults
+pytest -q program_cache/moreh/moreh_group_norm/failures/test_moreh_group_norm_cachehit_optional_outputs_override.py::test_moreh_group_norm_program_cache_optional_outputs_override -s --disable-warnings
+
+# Hits TT_FATAL
+pytest -q program_cache/moreh/moreh_sgd/failures/test_moreh_sgd_cachehit_optional_momentum_out_deref.py -s --disable-warnings
