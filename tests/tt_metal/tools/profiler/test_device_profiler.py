@@ -23,10 +23,34 @@ from tt_metal.tools.profiler.common import (
     clear_profiler_runtime_artifacts,
 )
 
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
 
 PROG_EXMP_DIR = "programming_examples/profiler"
 TRACY_TESTS_DIR = "./tests/ttnn/tracy"
+
+
+# Had to invoke the check in a subprocess because we need the process to die before
+# we start the actual profiler integration tests. The singletons created in metal so
+# would linger around if the process didn't die
+def profiler_check_arch(arch_to_check):
+    logger.info(f"Checking if running on {arch_to_check}")
+    check_flag = "PROFILER_CHECK_ARCH"
+    check_string = '"from models.utility_functions import is_{}; print(f\\"{}={{is_{}()}}\\")"'.format(
+        arch_to_check, check_flag, arch_to_check
+    )
+    result = subprocess.check_output([f"python -c {check_string}"], stderr=subprocess.STDOUT, shell=True).decode(
+        "UTF-8"
+    )
+    # Using print to dump subproc stdout
+    print(result)
+    return re.search(f"{check_flag}=True", result) is not None
+
+
+def skip_for_wormhole_b0():
+    return pytest.mark.skipif(profiler_check_arch("wormhole_b0"), reason="not working for wormhole_b0")
+
+
+def skip_for_blackhole():
+    return pytest.mark.skipif(profiler_check_arch("blackhole"), reason="not working for blackhole")
 
 
 def get_device_data(setupStr=""):
@@ -112,12 +136,10 @@ def get_function_name():
     return frame.f_code.co_name
 
 
-@skip_for_grayskull()
 def test_multi_op():
     OP_COUNT = 1000
     RUN_COUNT = 2
     REF_COUNT_DICT = {
-        "grayskull": [108 * OP_COUNT * RUN_COUNT, 88 * OP_COUNT * RUN_COUNT],
         "wormhole_b0": [72 * OP_COUNT * RUN_COUNT, 64 * OP_COUNT * RUN_COUNT, 56 * OP_COUNT * RUN_COUNT],
         "blackhole": [130 * OP_COUNT * RUN_COUNT, 120 * OP_COUNT * RUN_COUNT, 110 * OP_COUNT * RUN_COUNT],
     }
@@ -184,7 +206,6 @@ def test_full_buffer():
     RISC_COUNT = 5
     ZONE_COUNT = 125
     REF_COUNT_DICT = {
-        "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
         "wormhole_b0": [
             72 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
             64 * OP_COUNT * RISC_COUNT * ZONE_COUNT,
@@ -326,7 +347,6 @@ def test_dispatch_cores():
 
 # Eth dispatch will be deprecated
 @skip_for_blackhole()
-@skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {"Ethernet CQ Dispatch": [590, 840, 1430, 1660, 2320], "Ethernet CQ Prefetch": [572, 4030]}
     devicesData = run_device_profiler_test(
@@ -368,7 +388,6 @@ def test_ethernet_dispatch_cores():
                 ), f"Wrong ethernet dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
 
 
-@skip_for_grayskull()
 def test_profiler_host_device_sync():
     TOLERANCE = 0.1
 
@@ -435,7 +454,6 @@ def test_timestamped_events():
             BH_COMBO_COUNTS.append((T, E))
 
     REF_COUNT_DICT = {
-        "grayskull": [108 * OP_COUNT * RISC_COUNT * ZONE_COUNT, 88 * OP_COUNT * RISC_COUNT * ZONE_COUNT],
         "wormhole_b0": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in WH_COMBO_COUNTS],
         "blackhole": [(T * RISC_COUNT + E) * OP_COUNT * ZONE_COUNT for T, E in BH_COMBO_COUNTS],
     }
@@ -466,7 +484,7 @@ def test_noc_event_profiler_linked_multicast_hang():
     # test that we can avoid hangs with linked multicast
     # see tt-metal issue #22578
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
-    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
 
     testCommand = "build/test/tt_metal/perf_microbenchmark/dispatch/test_bw_and_latency"
     # note: this runs a long series repeated multicasts from worker {1,1} to grid {2,2},{3,3}
@@ -486,7 +504,7 @@ def test_noc_event_profiler_linked_multicast_hang():
 
 def test_noc_event_profiler():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
-    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
+    assert ENV_VAR_ARCH_NAME in ["wormhole_b0", "blackhole"]
 
     testCommand = f"build/{PROG_EXMP_DIR}/test_noc_event_profiler"
     clear_profiler_runtime_artifacts()
