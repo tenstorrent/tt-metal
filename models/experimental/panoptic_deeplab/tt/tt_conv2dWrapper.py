@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import ttnn
 
@@ -95,6 +95,7 @@ class TtConv2d:
         *,
         stride: tuple[int, int] = (1, 1),
         padding: tuple[int, int] = (0, 0),
+        slice_count: Optional[int] = None,
     ) -> None:
         self._stride = stride
         self._padding = padding
@@ -109,6 +110,8 @@ class TtConv2d:
         self._device = parameters.device
         self._weightSlices = []
         self._biasSlices = []
+
+        self._slice_count = slice_count
 
     def call_without_reshape(
         self,
@@ -176,6 +179,10 @@ class TtConv2d:
         else:
             k = SLICE_COUNT_FACTOR.get((self._in_channels, self._out_channels, height * width), 1)
             slice_count = -(-k * batch_size // 1024)
+
+            # Override with manual slice_count if provided
+            if self._slice_count is not None:
+                slice_count = self._slice_count
             if slice_count > 1:
                 x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -186,7 +193,7 @@ class TtConv2d:
                     bias_tensor=b,
                     in_channels=self._in_channels,
                     out_channels=self._out_channels,
-                    device=t.device(),
+                    device=self._device,
                     kernel_size=list(self._kernel_size),
                     stride=list(self._stride),
                     padding=list(self._padding),
