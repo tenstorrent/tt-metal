@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
             } break;
             case 1: {
                 src_mem = "FROM_DRAM";
-                vector<tt::umd::CoreCoord> dram_cores = soc_d.get_cores(CoreType::DRAM, tt::umd::CoordSystem::NOC0);
+                vector<tt::umd::CoreCoord> dram_cores = soc_d.get_cores(CoreType::DRAM, tt::umd::CoordSystem::VIRTUAL);
                 TT_ASSERT(dram_cores.size() > dram_channel_g);
                 noc_addr_x = dram_cores[dram_channel_g].x;
                 noc_addr_y = dram_cores[dram_channel_g].y;

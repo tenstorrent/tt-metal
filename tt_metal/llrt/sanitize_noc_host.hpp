@@ -84,7 +84,7 @@ static void watcher_sanitize_host_noc(
         coord_found_p(virtual_pcie_cores, core)) {
         TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
     } else if (
-        coord_found_p(soc_d.get_cores(CoreType::DRAM, tt::umd::CoordSystem::NOC0), core) ||
+        coord_found_p(soc_d.get_cores(CoreType::DRAM, tt::umd::CoordSystem::VIRTUAL), core) ||
         coord_found_p(virtual_dram_cores, core)) {
         uint64_t dram_addr_base = 0;
         uint64_t dram_addr_size = soc_d.dram_core_size;
