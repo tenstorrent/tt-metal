@@ -46,6 +46,8 @@ def run_max_pool(
     ceil_mode=False,
     in_place=False,
     nightly_skips=True,
+    output_data_format=None,
+    output_layout=None,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -187,6 +189,8 @@ def run_max_pool(
         applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
         in_place_halo=in_place,
+        output_data_format=output_data_format,
+        output_layout=output_layout,
     )
 
     print(ttnn_output.layout)
@@ -579,3 +583,51 @@ def test_run_max_pool_squeeze_net_model(
         dtype,
         ceil_mode=ceil_mode,
     )
+
+
+# Simplified test for new API parameters: output_data_format and output_layout
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("output_data_format", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_max_pool2d_output_formats_and_layouts(device, tensor_map, output_data_format, output_layout):
+    """
+    Simplified test that iterates through different output_data_format and output_layout combinations.
+    Currently all combinations fallback to default behavior (BF16, ROW_MAJOR) for backward compatibility.
+    """
+    input_shape = [1, 64, 64, 64]
+    kernel_size = (2, 2)
+    padding = (0, 0)
+    stride = (2, 2)
+    dilation = (1, 1)
+
+    print(f"Testing output_data_format={output_data_format}, output_layout={output_layout}")
+
+    # Run maxpool with the specified output format and layout
+    run_max_pool(
+        input_shape,
+        kernel_size,
+        padding,
+        stride,
+        dilation,
+        device,
+        tensor_map,
+        ttnn.bfloat16,  # input dtype
+        output_data_format=output_data_format,
+        output_layout=output_layout,
+        nightly_skips=False,  # Don't skip for our API tests
+    )
+    print(f"✓ Completed successfully with {output_data_format} and {output_layout}")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_max_pool2d_api_documentation(device, tensor_map):
+    """Test that the API documentation includes new parameters"""
+    # Check that help text contains new parameters
+    help_text = ttnn.max_pool2d.__doc__
+
+    assert "output_data_format" in help_text, "output_data_format should be documented"
+    assert "output_layout" in help_text, "output_layout should be documented"
+    assert "ttnn.bfloat16" in help_text, "Default data format should be documented"
+    assert "ttnn.ROW_MAJOR_LAYOUT" in help_text, "Default layout should be documented"
+
+    print("✓ API documentation includes new parameters")
