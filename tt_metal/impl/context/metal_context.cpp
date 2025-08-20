@@ -889,6 +889,7 @@ void MetalContext::initialize_logical_to_translated_tables(
     // Generate logical to translated map for DRAM and L1 banks
     const auto& soc_desc = cluster_->get_soc_desc(device_id);
     const uint32_t logical_col_to_translated_col_sz_in_bytes = sizeof(logical_col_to_translated_col_[device_id]);
+    const uint32_t firmware_grid_size_x = soc_desc.grid_size.x + soc_desc.grid_size.x % 2;  // Ensure even size
     const uint32_t logical_row_to_translated_row_sz_in_bytes = sizeof(logical_row_to_translated_row_[device_id]);
     const uint64_t logical_to_translated_map_addr =
         hal_->get_dev_addr(core_type, HalL1MemAddrType::LOGICAL_TO_TRANSLATED_SCRATCH);
@@ -896,8 +897,7 @@ void MetalContext::initialize_logical_to_translated_tables(
         hal_->get_dev_size(core_type, HalL1MemAddrType::LOGICAL_TO_TRANSLATED_SCRATCH);
 
     TT_ASSERT(
-        (logical_col_to_translated_col_sz_in_bytes + logical_row_to_translated_row_sz_in_bytes) <=
-            logical_to_translated_map_size,
+        (firmware_grid_size_x + logical_row_to_translated_row_sz_in_bytes) <= logical_to_translated_map_size,
         "Size of logical to translated map is greater than available space");
 
     uint64_t logical_col_to_translated_col_addr = logical_to_translated_map_addr;
@@ -910,7 +910,7 @@ void MetalContext::initialize_logical_to_translated_tables(
     // Size of the data in the firmware is the full size of the grid, not the harvested size.
     // Therefore, we must adjust the address to account for the full grid size.
     uint64_t logical_row_to_translated_row_addr =
-        logical_to_translated_map_addr + soc_desc.grid_size.x * sizeof(uint16_t);
+        logical_to_translated_map_addr + firmware_grid_size_x * sizeof(uint16_t);
     cluster_->write_core(
         &logical_row_to_translated_row_[device_id][0],
         logical_row_to_translated_row_sz_in_bytes,

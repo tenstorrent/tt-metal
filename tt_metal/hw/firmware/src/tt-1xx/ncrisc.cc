@@ -52,8 +52,8 @@ uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 // These arrays are used to store the logical to translated coordinate mapping
-uint16_t logical_col_to_translated_col[noc_size_x] __attribute__((used));
-uint16_t logical_row_to_translated_row[noc_size_y] __attribute__((used));
+uint16_t logical_col_to_translated_col[noc_size_x + (noc_size_x % 2)] __attribute__((used));
+uint16_t logical_row_to_translated_row[noc_size_y + (noc_size_y % 2)] __attribute__((used));
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {

@@ -170,7 +170,7 @@
 
 // Scratch area for logical to translated coordinate mapping. Size is largest chip size * sizeof uint16_t.
 #define MEM_LOGICAL_TO_TRANSLATED_SCRATCH (MEM_BANK_TO_NOC_SCRATCH + MEM_BANK_TO_NOC_SIZE)
-#define MEM_LOGICAL_TO_TRANSLATED_SIZE (10 * 12 * sizeof(uint16_t))
+#define MEM_LOGICAL_TO_TRANSLATED_SIZE (17 * 12 * sizeof(uint16_t))
 
 /////////////
 // Stack info
