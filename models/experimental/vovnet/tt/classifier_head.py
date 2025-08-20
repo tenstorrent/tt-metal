@@ -21,7 +21,19 @@ class TtClassifierHead:
 
     def forward(self, x):
         x = ttnn.permute(x, (0, 2, 3, 1))
-        x = ttnn.global_avg_pool2d(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        # Replace global_avg_pool2d hack with proper TTNN adaptive average pooling
+        batch, h, w, c = x.shape
+        x = ttnn.adaptive_avg_pool2d(
+            input_tensor=x,
+            batch_size=batch,
+            input_h=h,
+            input_w=w,
+            channels=c,
+            output_size=(1, 1),
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
         x = ttnn.permute(x, (0, 3, 1, 2))
         x = ttnn.reshape(x, [x.shape[0], 1, 1, x.shape[1] * x.shape[2] * x.shape[3]])
         x = ttnn.linear(

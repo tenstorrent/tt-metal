@@ -27,7 +27,8 @@ class TtSqueezeExcitation(torch.nn.Module):
         super().__init__()
         self.device = device
 
-        self.avgpool = fallback_ops.AdaptiveAvgPool2d(1)
+        # Using TTNN adaptive average pooling instead of fallback operation
+        self.output_size = (1, 1)
 
         weight_fc1 = torch_to_tt_tensor_rm(state_dict[f"{base_address}.fc1.weight"], device, put_on_device=False)
         bias_fc1 = torch_to_tt_tensor_rm(state_dict[f"{base_address}.fc1.bias"], device, put_on_device=False)
@@ -59,7 +60,19 @@ class TtSqueezeExcitation(torch.nn.Module):
         self.scale_activation = ttnn.hardsigmoid
 
     def forward(self, input: ttnn.Tensor) -> ttnn.Tensor:
-        scale = self.avgpool(input)
+        # Get input dimensions for TTNN adaptive pooling
+        batch, c, h, w = input.padded_shape
+
+        # Convert tensor format for TTNN adaptive pooling (expects NHWC format)
+        scale = ttnn.to_layout(input, ttnn.ROW_MAJOR_LAYOUT)
+        scale = ttnn.adaptive_avg_pool2d(
+            input_tensor=scale,
+            batch_size=batch,
+            input_h=h,
+            input_w=w,
+            channels=c,
+            output_size=self.output_size,
+        )
         scale = self.fc1(scale)
         scale = self.activation(scale)
         scale = self.fc2(scale)
