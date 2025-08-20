@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package cabling;
+
+// The overall topology configuration
+message CablingDescriptor {
+    message Connection {
+        // Represents a connection between two endpoints
+        message Endpoint {
+            // Represents a single endpoint in a connection
+            int32 host = 1;
+            int32 tray = 2;
+            int32 port = 3;
+        }
+        Endpoint ep_a = 1;
+        Endpoint ep_b = 2;
+    }
+    int32 num_hosts = 1;
+    repeated Connection connections = 2;
+}
