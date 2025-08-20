@@ -64,6 +64,37 @@ set_target_properties(
 )
 target_link_libraries(test_system_health PRIVATE TT::SystemHealth::Smoke)
 
+add_library(test_fabric_smoke OBJECT)
+add_library(TT::Metalium::Test::Fabric::Smoke ALIAS test_fabric_smoke)
+
+target_sources(test_fabric_smoke PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_smoke.cpp)
+
+target_include_directories(
+    test_fabric_smoke
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+        ${PROJECT_SOURCE_DIR}/tests/tt_metal/perf_microbenchmark/routing
+)
+
+target_link_libraries(
+    test_fabric_smoke
+    PRIVATE
+        tt_metal
+        test_common_libs
+)
+
+add_executable(fabric_smoke_tests)
+target_link_libraries(fabric_smoke_tests PRIVATE TT::Metalium::Test::Fabric::Smoke)
+set_target_properties(
+    fabric_smoke_tests
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
 # unit_tests_1d_fabric_latency
 
 add_executable(unit_tests_1d_fabric_latency)
