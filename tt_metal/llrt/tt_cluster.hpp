@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/cluster.hpp>
@@ -132,6 +132,10 @@ public:
 
     uint16_t get_bus_id(chip_id_t chip) const {
         return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
+    }
+
+    std::optional<int> get_physical_slot(chip_id_t chip) const {
+        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;
     }
 
     //! device driver and misc apis

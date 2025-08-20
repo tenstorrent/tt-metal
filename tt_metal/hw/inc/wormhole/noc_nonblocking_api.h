@@ -568,7 +568,12 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len_loopbac
         noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve);
 }
 
-template <uint8_t noc_mode = DM_DEDICATED_NOC>
+// `dst_type` is "Don't care" on Wormhole, it's required on Blackhole to workaround bug that manifests with noc
+// transactions using all 4 memory ports. Issuing inline writes and atomics requires all 4 memory ports to accept the
+// transaction at the same time. If one port on the receipient has no back-pressure then the transaction will hang
+// because there is no mechanism to allow one memory port to move ahead of another. To workaround this hang, we emulate
+// inline writes on Blackhole by writing the value to be written to local L1 first and then issue a noc async write.
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT>
 inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -682,7 +687,19 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
     }
 }
 
-// set transaction id for a noc read
+// clang-format off
+/**
+ * Sets the transaction id for a noc transaction.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | noc      | Which NOC to use for the transaction               | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf  | Which command buffer to use for the transaction    | uint32_t  | 0 - 3       | True     |
+ * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | True     |
+ */
+// clang-format on
 inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
     while (!noc_cmd_buf_ready(noc, cmd_buf));

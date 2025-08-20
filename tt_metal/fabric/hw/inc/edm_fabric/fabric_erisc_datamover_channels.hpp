@@ -21,13 +21,6 @@
 #include "edm_fabric_worker_adapters.hpp"
 #include "edm_fabric_flow_control_helpers.hpp"
 
-// !!! TODO: delete this once push/pull 2D tests/code is deprecated !!!
-#if (ROUTING_MODE & ROUTING_MODE_PULL) || (ROUTING_MODE & ROUTING_MODE_PUSH)
-namespace tt::tt_fabric {
-static constexpr uint8_t worker_handshake_noc = 0;
-}  // namespace tt::tt_fabric
-#endif
-
 namespace tt::tt_fabric {
 
 template <typename T>
@@ -202,7 +195,7 @@ struct EdmChannelWorkerInterface {
     // Only used for persistent connections (i.e. upstream is EDM)
     template <bool enable_ring_support>
     FORCE_INLINE void update_persistent_connection_copy_of_free_slots(int32_t inc_val) {
-        noc_inline_dw_write<true, true>(
+        noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
             this->cached_worker_semaphore_address,
             inc_val << REMOTE_DEST_BUF_WORDS_FREE_INC,
             0xf,
@@ -210,7 +203,7 @@ struct EdmChannelWorkerInterface {
     }
 
     FORCE_INLINE void notify_worker_of_read_counter_update() {
-        noc_inline_dw_write<true, true>(
+        noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
             this->cached_worker_semaphore_address,
             local_read_counter.counter,
             0xf,

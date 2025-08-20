@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 #include <stdint.h>
 #include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 #include <algorithm>
 #include <map>
 #include <memory>
@@ -38,7 +38,6 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "impl/context/metal_context.hpp"
-#include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "umd/device/types/xy_pair.h"

@@ -227,7 +227,6 @@ def run_conv(
         enable_act_double_buffer=enable_act_double_buffer,
         enable_weights_double_buffer=enable_weights_double_buffer,
         enable_split_reader=enable_split_reader,
-        enable_subblock_padding=False,
         output_layout=output_layout,
         activation=activation,
         transpose_shards=transpose_shards,
@@ -698,34 +697,34 @@ SliceWidth = ttnn.Conv2dSliceWidth
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "input_channels, output_channels, input_height, input_width, slice_type, num_slices, weights_dtype, output_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
+    "input_channels, output_channels, input_height, input_width, slice_type, weights_dtype, output_dtype, kernel, stride, padding, dilation, act_block_h_override,  math_fidelity",
     # fmt: off
     (
-        (10,    64,  4096,   512,  SliceHeight,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  32 * 8, ttnn.MathFidelity.LoFi  ),
-        (64,    64,  2048,   256,  SliceHeight,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  32 * 16, ttnn.MathFidelity.LoFi  ),
-        (64,    64,  1024,   128,  SliceHeight,   2,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (64,    64,   512,    64,  SliceHeight,   2,  ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        ( 4,    32,  1024,  1024,   SliceWidth,   4,  ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1),  32,      ttnn.MathFidelity.LoFi  ),
-        (32,    48,  1020,  1020,   SliceWidth,   7,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (2, 2),  32 * 2,  ttnn.MathFidelity.LoFi  ),
-        (48,    56,  1016,  1016,   SliceWidth,   7,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (4, 4),  32 * 3,  ttnn.MathFidelity.LoFi  ),
-        (56,    64,  1008,   256,   SliceWidth,   2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
-        (64,   128,   992,   992,   SliceWidth,   50,  ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
-        (128,  128,  1024,  1024,  SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (128,  3,   1024,  1024,  SliceWidth,     8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
-        (16,   512,  128,    128,   SliceWidth,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
-        (256,  128,  1024,  1024,  SliceWidth,   32,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi  ),
-        (256,  256,  1024,  1024,  SliceWidth,   37,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 8,  ttnn.MathFidelity.LoFi  ),
-        (256,  256,  512,   512,   SliceWidth,    4,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (512,  512,  256,   256,   SliceWidth,    2,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (512,  256,  512,   512,   SliceWidth,    8,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (512,  512,  512,   512,   SliceWidth,    10,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
-        (56,    64,  1008,  1008,  SliceWidth,    6,  ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
+        (10,    64,  4096,   512,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  32 * 8, ttnn.MathFidelity.LoFi  ),
+        (64,    64,  2048,   256,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  32 * 16, ttnn.MathFidelity.LoFi  ),
+        (64,    64,  1024,   128,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        (64,    64,   512,    64,  SliceHeight,   ttnn.bfloat8_b, ttnn.bfloat16, (4, 4), (2, 2), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        ( 4,    32,  1024,  1024,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), (1, 1),  32,      ttnn.MathFidelity.LoFi  ),
+        (32,    48,  1020,  1020,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (2, 2),  32 * 2,  ttnn.MathFidelity.LoFi  ),
+        (48,    56,  1016,  1016,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (4, 4),  32 * 3,  ttnn.MathFidelity.LoFi  ),
+        (56,    64,  1008,   256,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
+        (64,   128,   992,   992,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (2, 2), (1, 1), (0, 0), (1, 1), 32 * 4,  ttnn.MathFidelity.LoFi  ),
+        (128,  128,  1024,  1024,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        (128,  3,   1024,  1024,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
+        (16,   512,  128,    128,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1), 0,       ttnn.MathFidelity.LoFi  ),
+        (256,  128,  1024,  1024,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 4,  ttnn.MathFidelity.LoFi  ),
+        (256,  256,  1024,  1024,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  32 * 8,  ttnn.MathFidelity.LoFi  ),
+        (256,  256,  512,   512,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        (512,  512,  256,   256,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        (512,  256,  512,   512,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        (512,  512,  512,   512,    SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (1, 1), (1, 1),  0,       ttnn.MathFidelity.LoFi  ),
+        (56,    64,  1008,  1008,   SliceWidth,   ttnn.bfloat8_b, ttnn.bfloat16, (3, 3), (1, 1), (0, 0), (8, 8),  0,       ttnn.MathFidelity.LoFi  ),
      )
     # fmt: on
 )
 @pytest.mark.parametrize(
-    "has_bias, fp32_accum, packer_l1_acc",
-    [[True, False, False]],
+    "fp32_accum, packer_l1_acc",
+    [[False, False]],
 )
 def test_conv_dram(
     device,
@@ -734,11 +733,9 @@ def test_conv_dram(
     input_channels,
     input_height,
     input_width,
-    has_bias,
     weights_dtype,
     output_dtype,
     slice_type,
-    num_slices,
     kernel,
     stride,
     padding,
@@ -784,10 +781,7 @@ def test_conv_dram(
         packer_l1_acc=packer_l1_acc,
         run_twice=False,
         fast_compare=True,
-        slice_config=ttnn.Conv2dSliceConfig(
-            slice_type=slice_type,
-            num_slices=num_slices,
-        ),
+        slice_config=ttnn.Conv2dSliceConfig(slice_type=slice_type),
     )
 
 
@@ -799,10 +793,10 @@ def test_conv_dram(
         (2, 128, 256, 9, 9, 3, 3, 1, 1, 1),
         (2, 576, 576, 9, 9, 3, 3, 0, 0, 1),
         (2, 960, 960, 5, 5, 3, 3, 0, 0, 1),
-        (2, 256, 2048, 9, 9, 3, 3, 1, 1, 1),
         (2, 512, 2048, 17, 17, 3, 3, 1, 1, 1),
         (2, 768, 768, 17, 17, 3, 3, 0, 0, 1),
-        (2, 1280, 2560, 15, 15, 3, 3, 1, 1, 1),
+        (2, 1280, 4096, 15, 15, 2, 2, 1, 1, 2),
+        (2, 1280, 5120, 15, 15, 2, 2, 1, 1, 2),
         (2, 1280, 1280, 17, 17, 3, 3, 1, 1, 1),
         [1, 3024, 1232, 14, 14, 1, 1, 0, 0, 1],
         (2, 768, 32, 9, 9, 3, 3, 1, 1, 1),
@@ -854,11 +848,14 @@ def test_conv_ws(
     enable_act_double_buffer,
     enable_weights_double_buffer,
 ):
+    print("Device Core Grid:", device.core_grid)
     if device.core_grid.y != 8 and is_wormhole_b0():
         pytest.skip("Needs 8x8 grid for wormhole_b0")
 
-    if input_channels == 2560 and auto_shard:
-        pytest.skip("Skipping 2560 input channels with auto_shard due to #23712")
+    if input_channels == 5120 and is_wormhole_b0():
+        act_block_w_div = 1
+    if input_channels == 4096 and is_blackhole():
+        act_block_w_div = 1
 
     stride_h = stride
     stride_w = stride
@@ -904,10 +901,6 @@ def test_conv_ws(
         tt_input_tensor = ttnn.to_device(tt_input_tensor, device)
         tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
 
-    if auto_shard and (device.compute_with_storage_grid_size().x, device.compute_with_storage_grid_size().y) == (8, 7):
-        if input_channels == 2048:
-            pytest.skip("Test is not supported on n300 (8,7) grid due to #13541")
-
     conv_config = ttnn.Conv2dConfig(
         weights_dtype=weights_dtype,
         shard_layout=ttnn.TensorMemoryLayout.WIDTH_SHARDED if not auto_shard else None,
@@ -915,7 +908,6 @@ def test_conv_ws(
         enable_act_double_buffer=enable_act_double_buffer,
         enable_weights_double_buffer=enable_weights_double_buffer,
         enable_split_reader=False,
-        enable_subblock_padding=False,
         reshard_if_not_optimal=True,
         act_block_w_div=act_block_w_div if not auto_shard else 1,
         act_block_h_override=32,

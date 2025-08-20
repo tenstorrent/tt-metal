@@ -142,7 +142,15 @@ if(NOT EXISTS "${GPP_CMD}")
     message(FATAL_ERROR "GPP_CMD path '${GPP_CMD}' does not exist. Please check your configuration.")
 endif()
 
-message(STATUS "Using SFPI compiler: ${GPP_CMD}")
+execute_process(
+    COMMAND
+        ${GPP_CMD} --version
+    COMMAND
+        head -1
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    OUTPUT_VARIABLE GPP_VERSION
+)
+message(STATUS "Using SFPI compiler: ${GPP_CMD}, ${GPP_VERSION}")
 
 set(GPP_DEFINES -DTENSIX_FIRMWARE)
 

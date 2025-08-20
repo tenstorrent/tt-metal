@@ -150,18 +150,10 @@ public:
     virtual SystemMemoryManager& sysmem_manager() = 0;
     virtual CommandQueue& command_queue(size_t cq_id = 0) = 0;
 
-    // Metal trace device capture mode
-    virtual void begin_trace(uint8_t cq_id, uint32_t tid) = 0;
-    virtual void end_trace(uint8_t cq_id, uint32_t tid) = 0;
-    virtual void replay_trace(uint8_t cq_id, uint32_t tid, bool block_on_device, bool block_on_worker_thread) = 0;
-    virtual void release_trace(uint32_t tid) = 0;
-
-    virtual std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) = 0;
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;
 
     // Light Metal
-    virtual void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) = 0;
     virtual bool using_slow_dispatch() const = 0;
     virtual bool using_fast_dispatch() const = 0;
 
@@ -200,10 +192,9 @@ public:
     uint64_t get_dev_addr(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
     uint64_t get_dev_size(CoreCoord virtual_core, HalL1MemAddrType addr_type) const;
 
-    virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
+    virtual bool has_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
     virtual uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const = 0;
-    virtual uint8_t noc_data_start_index(
-        SubDeviceId sub_device_id, bool mcast_data = true, bool unicast_data = true) const = 0;
+    virtual uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool unicast_data = true) const = 0;
 
     virtual SubDeviceManagerId get_active_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId get_default_sub_device_manager_id() const = 0;

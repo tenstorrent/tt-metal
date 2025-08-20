@@ -10,6 +10,14 @@ name: PR Gate
 #   This includes the cost of checking out the code, preparing a runner, etc.
 # - Individual test cases must be less than 1s.
 
+run-name: >-
+  ${{ github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'merged' && format('[Merge Queue] 🎯 Merged {0}', github.sha) ||
+      github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'dequeued' && format('[Merge Queue] ↩️ Dequeued {0}', github.sha) ||
+      github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'invalidated' && format('[Merge Queue] 💔 Invalidated {0}', github.sha) ||
+      github.event_name == 'merge_group' && github.event.action == 'destroyed' && format('[Merge Queue] {0} {1}', github.event.reason, github.sha) ||
+      github.event_name == 'merge_group' && format('[Merge Queue] 💫 Processing {0}: {1}', github.actor, github.sha) ||
+      '' }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -30,19 +38,26 @@ on:
       - synchronize
       - ready_for_review
   merge_group:
+    types:
+      - checks_requested
+      - destroyed
   push:
     branches:
       - main # Builds on main will populate the shared ccache to speed up builds on branches
 
 concurrency:
-  # Use github.run_id on main branch (or any protected branch)
-  # This ensure that no runs get cancelled on main
-  # Use github.event.pull_request.number on pull requests, so it's unique per pull request
-  # and will cancel obsolete runs
-  # Use github.ref on other branches, so it's unique per branch
-  # Possibly PRs can also just use `github.ref`, but for now just copy/pasting from
-  # https://www.meziantou.net/how-to-cancel-github-workflows-when-pushing-new-commits-on-a-branch.htm
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id || github.event.pull_request.number || github.ref }}-${{ inputs.build-type || 'default' }}
+  # Groups to control cancelling of obsolete runs.
+  # main (or any protected branch): run_id (ie: never cancel other jobs)
+  # PRs: PR #
+  # Merge Queue: branch name; will be paired with the 'destroyed' trigger to cause a cancel when it leaves or moves in the queue.
+  #              See https://github.com/orgs/community/discussions/137976#discussioncomment-14004793
+  # All others: branch name (ie: one run per branch)
+  group: >-
+    ${{ github.workflow }}-
+    ${{ (github.ref_protected && github.run_id)
+        || github.event.pull_request.number
+        || github.ref }}-
+    ${{ inputs.build-type || 'default' }}
   cancel-in-progress: true
 
 permissions:
@@ -53,7 +68,7 @@ permissions:
 
 jobs:
   asan-build:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -66,7 +81,7 @@ jobs:
       skip-tt-train: true
 
   find-changed-files:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     outputs:
       cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
@@ -104,6 +119,7 @@ jobs:
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
         needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
@@ -122,7 +138,7 @@ jobs:
       product: tt-nn
 
   build:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write

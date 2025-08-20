@@ -11,7 +11,7 @@
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 #include "cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -221,7 +221,6 @@ void kernel_main() {
 
             // Will have more cases once scatter-write supports more than 2 distinct addresses
             switch (tiles_to_put_in_current_packet) {
-#ifdef ARCH_WORMHOLE
                 case 2: {
                     uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
                     pages_read_in_row++;
@@ -237,21 +236,15 @@ void kernel_main() {
                         pages_read_in_row = 0;
                     }
 
-                    uint64_t remote_noc0_dest_noc_addr_tile_one =
-                        get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
-                    uint64_t remote_noc0_dest_noc_addr_tile_two =
-                        get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
-
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
-                            scatter_write_for_fabric_write(
-                                remote_noc0_dest_noc_addr_tile_one,
-                                remote_noc0_dest_noc_addr_tile_two,
+                            scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_one_id,
+                                tile_two_id,
                                 pkt_hdr,
                                 *mux_connection_handle,
-                                l1_read_addr,
-                                output_page_size,
-                                output_page_size);
+                                l1_read_addr);
                         }
                         uint64_t local_noc0_dest_noc_addr_tile_one = get_noc_addr(tile_one_id, output_addrgen);
                         uint64_t local_noc0_dest_noc_addr_tile_two = get_noc_addr(tile_two_id, output_addrgen);
@@ -262,20 +255,18 @@ void kernel_main() {
                         noc_async_write_barrier();
                     } else {
                         if (num_targets_forward_direction) {
-                            scatter_write_for_fabric_write(
-                                remote_noc0_dest_noc_addr_tile_one,
-                                remote_noc0_dest_noc_addr_tile_two,
+                            scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_one_id,
+                                tile_two_id,
                                 pkt_hdr,
                                 *mux_connection_handle,
-                                l1_read_addr,
-                                output_page_size,
-                                output_page_size);
+                                l1_read_addr);
                         }
                     }
                     tiles_read += 2;
                     break;
                 }
-#endif
                 case 1:
                 default: {
                     uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
@@ -285,12 +276,11 @@ void kernel_main() {
                         pages_read_in_row = 0;
                     }
 
-                    uint64_t remote_noc0_dest_noc_addr =
-                        get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
-                            write_for_fabric_write(
-                                remote_noc0_dest_noc_addr,
+                            write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_id,
                                 pkt_hdr,
                                 *mux_connection_handle,
                                 l1_read_addr,
@@ -301,8 +291,9 @@ void kernel_main() {
                         noc_async_write_barrier();
                     } else {
                         if (num_targets_forward_direction) {
-                            write_for_fabric_write(
-                                remote_noc0_dest_noc_addr,
+                            write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                                output_addrgen,
+                                tile_id,
                                 pkt_hdr,
                                 *mux_connection_handle,
                                 l1_read_addr,
@@ -408,7 +399,6 @@ void kernel_main() {
 
                 // Will have more cases once scatter-write supports more than 2 distinct addresses
                 switch (tiles_to_put_in_current_packet) {
-#ifdef ARCH_WORMHOLE
                     case 2: {
                         uint32_t tile_one_id = tile_id_start + row_offset + pages_read_in_row;
                         pages_read_in_row++;
@@ -424,23 +414,11 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        uint64_t remote_noc0_dest_noc_addr_tile_one =
-                            get_noc_addr(tile_one_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
-                        uint64_t remote_noc0_dest_noc_addr_tile_two =
-                            get_noc_addr(tile_two_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
-
-                        scatter_write_for_fabric_write(
-                            remote_noc0_dest_noc_addr_tile_one,
-                            remote_noc0_dest_noc_addr_tile_two,
-                            pkt_hdr,
-                            *mux_connection_handle,
-                            l1_read_addr,
-                            output_page_size,
-                            output_page_size);
+                        scatter_write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                            output_addrgen, tile_one_id, tile_two_id, pkt_hdr, *mux_connection_handle, l1_read_addr);
                         tiles_read += 2;
                         break;
                     }
-#endif
                     case 1:
                     default: {
                         uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
@@ -450,10 +428,8 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        uint64_t remote_noc0_dest_noc_addr =
-                            get_noc_addr(tile_id, output_addrgen, 0 /*offset*/, tt::tt_fabric::edm_fabric_write_noc_index /*noc_id*/);
-                        write_for_fabric_write(
-                            remote_noc0_dest_noc_addr, pkt_hdr, *mux_connection_handle, l1_read_addr, output_page_size);
+                        write_for_fabric_write<false, fabric_mux_num_buffers_per_channel>(
+                            output_addrgen, tile_id, pkt_hdr, *mux_connection_handle, l1_read_addr, output_page_size);
                         tiles_read++;
                         break;
                     }
@@ -481,6 +457,9 @@ void kernel_main() {
         }
         slice_writes++;
     }
+
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);

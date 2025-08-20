@@ -22,11 +22,12 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_tmp_utils.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_flow_control.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 
 #include "noc_overlay_parameters.h"
 #include "tt_metal/hw/inc/utils/utils.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
-#include <fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 
 #include <array>
 #include <cstddef>
@@ -254,6 +255,14 @@ write to the same receiver channel.
 // Data structures, types, enums, and constants
 ////////////////////////////////////////////////
 
+static constexpr bool PERF_TELEMETRY_DISABLED = perf_telemetry_mode == PerfTelemetryRecorderType::NONE;
+static constexpr bool PERF_TELEMETRY_LOW_RESOLUTION_BANDWIDTH =
+    perf_telemetry_mode == PerfTelemetryRecorderType::LOW_RESOLUTION_BANDWIDTH;
+using PerfTelemetryRecorder = std::conditional_t<
+    PERF_TELEMETRY_LOW_RESOLUTION_BANDWIDTH,
+    LowResolutionBandwidthTelemetry,
+    std::conditional_t<PERF_TELEMETRY_DISABLED, bool, std::nullptr_t>>;
+
 // Defined here because sender_channel_0_free_slots_stream_id does not come from
 // 1d_fabric_constants.hpp
 static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
@@ -385,7 +394,8 @@ FORCE_INLINE void send_next_data(
     tt::tt_fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>& sender_buffer_channel,
     tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& sender_worker_interface,
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& outbound_to_receiver_channel_pointers,
-    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& receiver_buffer_channel) {
+    tt::tt_fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>& receiver_buffer_channel,
+    PerfTelemetryRecorder& perf_telemetry_recorder) {
     auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
     auto& local_sender_write_counter = sender_worker_interface.local_write_counter;
@@ -431,6 +441,9 @@ FORCE_INLINE void send_next_data(
     remote_receiver_num_free_slots--;
     // update the remote reg
     static constexpr uint32_t packets_to_forward = 1;
+
+    record_packet_send(perf_telemetry_recorder, sender_channel_index, payload_size_bytes);
+
     while (internal_::eth_txq_is_busy(sender_txq_id)) {
     };
     remote_update_ptr_val<to_receiver_pkts_sent_id, sender_txq_id>(packets_to_forward);
@@ -1178,7 +1191,8 @@ void run_sender_channel_step_impl(
     PacketHeaderRecorder& packet_header_recorder,
     bool& channel_connection_established,
     uint32_t sender_channel_free_slots_stream_id,
-    SenderChannelFromReceiverCredits& sender_channel_from_receiver_credits) {
+    SenderChannelFromReceiverCredits& sender_channel_from_receiver_credits,
+    PerfTelemetryRecorder& perf_telemetry_recorder) {
     // If the receiver has space, and we have one or more packets unsent from producer, then send one
     // TODO: convert to loop to send multiple packets back to back (or support sending multiple packets in one shot)
     //       when moving to stream regs to manage rd/wr ptrs
@@ -1206,7 +1220,8 @@ void run_sender_channel_step_impl(
             local_sender_channel,
             local_sender_channel_worker_interface,
             outbound_to_receiver_channel_pointers,
-            remote_receiver_channel);
+            remote_receiver_channel,
+            perf_telemetry_recorder);
         increment_local_update_ptr_val(sender_channel_free_slots_stream_id, 1);
     }
 
@@ -1295,7 +1310,8 @@ FORCE_INLINE void run_sender_channel_step(
     std::array<PacketHeaderRecorder, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
     std::array<bool, NUM_SENDER_CHANNELS>& channel_connection_established,
     std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered,
-    std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>& sender_channel_from_receiver_credits) {
+    std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>& sender_channel_from_receiver_credits,
+    PerfTelemetryRecorder& perf_telemetry_recorder) {
     if constexpr (is_sender_channel_serviced[sender_channel_index]) {
         run_sender_channel_step_impl<
             enable_packet_header_recording,
@@ -1310,7 +1326,8 @@ FORCE_INLINE void run_sender_channel_step(
             sender_channel_packet_recorders[sender_channel_index],
             channel_connection_established[sender_channel_index],
             local_sender_channel_free_slots_stream_ids_ordered[sender_channel_index],
-            sender_channel_from_receiver_credits[sender_channel_index]);
+            sender_channel_from_receiver_credits[sender_channel_index],
+            perf_telemetry_recorder);
     }
 }
 
@@ -1487,6 +1504,17 @@ FORCE_INLINE void run_receiver_channel_step(
     }
 }
 
+bool any_sender_channels_active(
+    const std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
+    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        if (get_ptr_val(local_sender_channel_free_slots_stream_ids[i]) !=
+            static_cast<int32_t>(SENDER_NUM_BUFFERS_ARRAY[i])) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /*
  * Main control loop for fabric EDM. Run indefinitely until a termination signal is received
  *
@@ -1544,6 +1572,10 @@ void run_fabric_edm_main_loop(
     std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established =
         initialize_array<NUM_SENDER_CHANNELS, bool, false>();
 
+    PerfTelemetryRecorder inner_loop_perf_telemetry_collector = build_perf_telemetry_recorder<perf_telemetry_mode>();
+    auto local_perf_telemetry_buffer =
+        build_perf_telemetry_buffer(reinterpret_cast<uint32_t*>(perf_telemetry_buffer_addr));
+
     auto receiver_channel_response_credit_senders =
         init_receiver_channel_response_credit_senders<NUM_RECEIVER_CHANNELS>();
     auto sender_channel_from_receiver_credits =
@@ -1554,6 +1586,9 @@ void run_fabric_edm_main_loop(
 
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         did_something = false;
+
+        open_perf_recording_window(inner_loop_perf_telemetry_collector);
+
         for (size_t i = 0; i < iterations_between_ctx_switch_and_teardown_checks; i++) {
             invalidate_l1_cache();
             // Capture these to see if we made progress
@@ -1568,7 +1603,8 @@ void run_fabric_edm_main_loop(
                 sender_channel_packet_recorders,
                 channel_connection_established,
                 local_sender_channel_free_slots_stream_ids_ordered,
-                sender_channel_from_receiver_credits);
+                sender_channel_from_receiver_credits,
+                inner_loop_perf_telemetry_collector);
             if constexpr (!dateline_connection) {
                 run_receiver_channel_step<0>(
                     local_receiver_channels,
@@ -1597,7 +1633,8 @@ void run_fabric_edm_main_loop(
                     sender_channel_packet_recorders,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids_ordered,
-                    sender_channel_from_receiver_credits);
+                    sender_channel_from_receiver_credits,
+                    inner_loop_perf_telemetry_collector);
             }
             if constexpr (is_2d_fabric) {
                 run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 2>(
@@ -1608,7 +1645,8 @@ void run_fabric_edm_main_loop(
                     sender_channel_packet_recorders,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids_ordered,
-                    sender_channel_from_receiver_credits);
+                    sender_channel_from_receiver_credits,
+                    inner_loop_perf_telemetry_collector);
                 run_sender_channel_step<enable_packet_header_recording, VC0_RECEIVER_CHANNEL, 3>(
                     local_sender_channels,
                     local_sender_channel_worker_interfaces,
@@ -1617,7 +1655,8 @@ void run_fabric_edm_main_loop(
                     sender_channel_packet_recorders,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids_ordered,
-                    sender_channel_from_receiver_credits);
+                    sender_channel_from_receiver_credits,
+                    inner_loop_perf_telemetry_collector);
             }
             if constexpr (enable_ring_support && !dateline_connection && !skip_sender_vc1_channel_connection) {
                 run_sender_channel_step<enable_packet_header_recording, VC1_RECEIVER_CHANNEL, NUM_SENDER_CHANNELS - 1>(
@@ -1628,7 +1667,8 @@ void run_fabric_edm_main_loop(
                     sender_channel_packet_recorders,
                     channel_connection_established,
                     local_sender_channel_free_slots_stream_ids_ordered,
-                    sender_channel_from_receiver_credits);
+                    sender_channel_from_receiver_credits,
+                    inner_loop_perf_telemetry_collector);
             }
         }
 
@@ -1648,6 +1688,14 @@ void run_fabric_edm_main_loop(
                     did_nothing_count = 0;
                     run_routing_without_noc_sync();
                 }
+            }
+        }
+
+        close_perf_recording_window(inner_loop_perf_telemetry_collector);
+        if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
+            if (captured_an_event(inner_loop_perf_telemetry_collector) ||
+                any_sender_channels_active(local_sender_channel_free_slots_stream_ids_ordered)) {
+                write_perf_recording_window_results(inner_loop_perf_telemetry_collector, local_perf_telemetry_buffer);
             }
         }
     }
@@ -2567,6 +2615,7 @@ void kernel_main() {
         receiver_channel_1_trid_tracker,
         port_direction_table,
         local_sender_channel_free_slots_stream_ids_ordered);
+    WAYPOINT("LPDN");
 
     // we force these values to a non-zero value so that if we run the fabric back to back,
     // and we can reliably probe from host that this kernel has initialized properly.

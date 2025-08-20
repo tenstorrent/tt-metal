@@ -8,6 +8,7 @@
 #include "dataflow_api.h"
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/fabric_bandwidth_telemetry.hpp"
 
 #include <array>
 #include <utility>
@@ -307,7 +308,12 @@ constexpr bool ETH_TXQ_SPIN_WAIT_RECEIVER_SEND_COMPLETION_ACK = get_compile_time
 constexpr size_t DEFAULT_NUM_ETH_TXQ_DATA_PACKET_ACCEPT_AHEAD = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 11);
 
 // Context switch timeouts
-constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 12);
+constexpr size_t DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT =
+#ifndef DEBUG_PRINT_ENABLED
+    get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 12);
+#else
+    128;
+#endif
 constexpr bool IDLE_CONTEXT_SWITCHING = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 13) != 0;
 
 constexpr size_t MY_ETH_CHANNEL = get_compile_time_arg_val(MAIN_CT_ARGS_IDX_5 + 14);
@@ -360,7 +366,23 @@ static_assert(
     "Special marker 1 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+///////////////////////////////////////////////
+// Telemetry
+constexpr size_t PERF_TELEMETRY_MODE_IDX = SPECIAL_MARKER_1_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr PerfTelemetryRecorderType perf_telemetry_mode =
+    static_cast<PerfTelemetryRecorderType>(get_compile_time_arg_val(PERF_TELEMETRY_MODE_IDX));
+
+constexpr size_t PERF_TELEMETRY_BUFFER_ADDR_IDX = PERF_TELEMETRY_MODE_IDX + 1;
+constexpr size_t perf_telemetry_buffer_addr = get_compile_time_arg_val(PERF_TELEMETRY_BUFFER_ADDR_IDX);
+
+constexpr size_t SPECIAL_MARKER_2_IDX = PERF_TELEMETRY_BUFFER_ADDR_IDX + 1;
+constexpr size_t SPECIAL_MARKER_2 = 0x20c0ffee;
+static_assert(
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_2_IDX) == SPECIAL_MARKER_2,
+    "Special marker 2 not found. This implies some arguments were misaligned between host and device. Double check the "
+    "CT args.");
+
+constexpr size_t TO_SENDER_CREDIT_COUNTERS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> to_sender_remote_ack_counter_addrs =
     conditional_get_next_n_args<multi_txq_enabled, size_t, TO_SENDER_CREDIT_COUNTERS_START_IDX, NUM_SENDER_CHANNELS>();
@@ -407,15 +429,15 @@ static_assert(
     !multi_txq_enabled || counter_credit_addresses_are_valid(local_receiver_completion_counter_ptrs),
     "local_receiver_completion_counter_ptrs must be valid");
 
-constexpr size_t SPECIAL_MARKER_2_IDX =
+constexpr size_t SPECIAL_MARKER_3_IDX =
     TO_SENDER_CREDIT_COUNTERS_START_IDX + (multi_txq_enabled ? 2 * (NUM_SENDER_CHANNELS + NUM_RECEIVER_CHANNELS) : 0);
-constexpr size_t SPECIAL_MARKER_2 = 0x20c0ffee;
+constexpr size_t SPECIAL_MARKER_3 = 0x30c0ffee;
 static_assert(
-    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_2_IDX) == SPECIAL_MARKER_2,
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(SPECIAL_MARKER_3_IDX) == SPECIAL_MARKER_3,
     "Special marker 2 not found. This implies some arguments were misaligned between host and device. Double check the "
     "CT args.");
 
-constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_2_IDX + SPECIAL_MARKER_CHECK_ENABLED;
+constexpr size_t HOST_SIGNAL_ARGS_START_IDX = SPECIAL_MARKER_3_IDX + SPECIAL_MARKER_CHECK_ENABLED;
 // static_assert(HOST_SIGNAL_ARGS_START_IDX == 56, "HOST_SIGNAL_ARGS_START_IDX must be 56");
 // TODO: Add type safe getter
 constexpr bool is_local_handshake_master =

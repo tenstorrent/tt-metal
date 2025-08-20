@@ -891,7 +891,7 @@ void bind_tanh(py::module& module, const unary_operation_t& operation) {
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - BFLOAT16, BFLOAT8_B
+               * - BFLOAT16, BFLOAT8_B, FLOAT32
                  - TILE
                  - 2, 3, 4
 
@@ -1380,85 +1380,7 @@ void bind_unary_composite_floats_with_default(
             py::arg("memory_config") = std::nullopt});
 }
 
-template <typename unary_operation_t>
-void bind_hardtanh(
-    py::module& module,
-    const unary_operation_t& operation,
-    const std::string& parameter_name_a,
-    const std::string& parameter_a_doc,
-    float parameter_a_value,
-    const std::string& parameter_name_b,
-    const std::string& parameter_b_doc,
-    float parameter_b_value,
-    const std::string& supported_dtype = "BFLOAT16, BFLOAT8_B",
-    const std::string& info_doc = "") {
-    auto doc = fmt::format(
-        R"doc(
-        Performs {0} function on :attr:`input_tensor`, :attr:`{2}`, :attr:`{5}`.
-
-        Args:
-            input_tensor (ttnn.Tensor): the input tensor.
-            {2} (float): {3}. Defaults to `{4}`.
-            {5} (float): {6}. Defaults to `{7}`.
-
-        Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes, layouts, and ranks:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - {8}
-                 - TILE
-                 - 2, 3, 4
-
-            {9}
-
-        Example:
-            >>> tensor = ttnn.from_torch(input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-            >>> min = 2
-            >>> max = 8
-            >>> output = {1}(tensor, min, max)
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        parameter_name_a,
-        parameter_a_doc,
-        parameter_a_value,
-        parameter_name_b,
-        parameter_b_doc,
-        parameter_b_value,
-        supported_dtype,
-        info_doc);
-
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const unary_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               float parameter_a,
-               float parameter_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor, parameter_a, parameter_b, memory_config);
-            },
-            py::arg("input_tensor"),
-            py::arg(parameter_name_a.c_str()) = parameter_a_value,
-            py::arg(parameter_name_b.c_str()) = parameter_b_value,
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt});
-}
-
-// OpHandler_two_float_with_default
+// OpHandler_one_int
 template <typename unary_operation_t>
 void bind_unary_composite_int(
     py::module& module,
@@ -1520,7 +1442,7 @@ void bind_unary_composite_int(
             py::arg("memory_config") = std::nullopt});
 }
 
-// OpHandler_two_float_with_default
+// OpHandler_threshold
 template <typename unary_operation_t>
 void bind_unary_composite_threshold(
     py::module& module,
@@ -1966,7 +1888,11 @@ void py_module(py::module& module) {
         "",
         R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation(
-        module, ttnn::signbit, R"doc(\mathrm{{output\_tensor}}_i = \verb|signbit|(\mathrm{{input\_tensor}}_i))doc");
+        module,
+        ttnn::signbit,
+        R"doc(\mathrm{{output\_tensor}}_i = \verb|signbit|(\mathrm{{input\_tensor}}_i))doc",
+        "",
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, FLOAT32)doc");
     bind_unary_operation(
         module,
         ttnn::silu,
@@ -1990,7 +1916,7 @@ void py_module(py::module& module) {
         ttnn::square,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|square|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
     bind_unary_operation(
         module,
         ttnn::tan,
@@ -2258,8 +2184,6 @@ void py_module(py::module& module) {
         "",
         R"doc(torch.rand([1, 1, 32, 32], dtype=torch.bfloat16))doc");
 
-    bind_hardtanh(module, ttnn::hardtanh, "min_val", "min value", -1.0f, "max_val", "max value", 1.0f);
-
     bind_unary_composite_optional_floats_with_default(
         module,
         ttnn::clip,
@@ -2282,6 +2206,16 @@ void py_module(py::module& module) {
         R"doc(Performs clamp function on :attr:`input_tensor`, :attr:`min`, :attr:`max`. Only one of 'min' or 'max' value can be None.)doc");
     bind_unary_composite_floats_with_default(
         module, ttnn::selu, "scale", "Scale value", 1.0507, "alpha", "Alpha value", 1.67326);
+    bind_unary_composite_floats_with_default(
+        module,
+        ttnn::hardtanh,
+        "min_val",
+        "min value",
+        -1.0f,
+        "max_val",
+        "max value",
+        1.0f,
+        R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
     bind_unary_composite_threshold(
         module,
         ttnn::threshold,
@@ -2322,10 +2256,10 @@ void py_module(py::module& module) {
 
     // unary composite with float imported into ttnn
     bind_unary_composite_float_with_default(
-        module, ttnn::hardshrink, "lambd", "lambd value", 0.5f, R"doc(BFLOAT16, BFLOAT8_B)doc");
+        module, ttnn::hardshrink, "lambd", "lambd value", 0.5f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
 
     bind_unary_composite_float_with_default(
-        module, ttnn::softshrink, "lambd", "lambd value", 0.5f, R"doc(BFLOAT16, BFLOAT8_B)doc");
+        module, ttnn::softshrink, "lambd", "lambd value", 0.5f, R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
 
     bind_unary_composite_float_with_default(module, ttnn::logit, "eps", "eps", 0.0f, R"doc(BFLOAT16)doc");
 

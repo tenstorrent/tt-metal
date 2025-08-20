@@ -111,8 +111,8 @@ operation::ProgramWithCallbacks bcast_multi_core_hw(
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_device_cores, output_cb_config);
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::vector<uint32_t> reader_compile_time_args;

@@ -60,7 +60,7 @@ def mesh_device(request, device_params):
 
 @pytest.fixture(scope="session")
 def model_path():
-    return Path(os.getenv("HF_MODEL", "models/demos/deepseek_v3/reference"))
+    return Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "models/demos/deepseek_v3/reference"))
 
 
 @pytest.fixture(scope="session")
