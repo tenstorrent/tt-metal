@@ -461,7 +461,10 @@ template uint8_t Tensor::item<uint8_t>(ttnn::QueueId cq_id) const;
 template uint16_t Tensor::item<uint16_t>(ttnn::QueueId cq_id) const;
 template uint32_t Tensor::item<uint32_t>(ttnn::QueueId cq_id) const;
 
-Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) const {
+Tensor Tensor::to_device(
+    distributed::MeshDevice* mesh_device,
+    ttsl::optional_reference<const MemoryConfig> mem_config,
+    QueueId cq_id) const {
     return tensor_ops::tensor_to_device(*this, mesh_device, mem_config, cq_id);
 }
 

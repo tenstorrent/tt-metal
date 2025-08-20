@@ -18,7 +18,10 @@ class MeshDevice;
 namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to_device(
-    const Tensor& input_tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id);
+    const Tensor& input_tensor,
+    distributed::MeshDevice* mesh_device,
+    ttsl::optional_reference<const MemoryConfig> mem_config,
+    QueueId cq_id);
 
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout);
 
