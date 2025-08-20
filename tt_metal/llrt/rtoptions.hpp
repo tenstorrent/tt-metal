@@ -36,6 +36,7 @@ enum class TargetDevice : std::uint8_t {
 };
 
 namespace llrt {
+
 // TODO: This should come from the HAL
 enum DebugHartFlags : unsigned int {
     RISCV_NC = 1,
@@ -220,7 +221,7 @@ class RunTimeOptions {
     std::string mock_cluster_desc_path;
 
     // Consolidated target device selection
-    tt::TargetDevice runtime_target_device_ = tt::TargetDevice::Silicon;
+    TargetDevice runtime_target_device_ = TargetDevice::Silicon;
 
 public:
     RunTimeOptions();
@@ -508,7 +509,7 @@ public:
     inline const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
 
     // Target device accessor
-    inline tt::TargetDevice get_target_device() const { return runtime_target_device_; }
+    inline TargetDevice get_target_device() const { return runtime_target_device_; }
 
 private:
     // Helper functions to parse feature-specific environment vaiables.

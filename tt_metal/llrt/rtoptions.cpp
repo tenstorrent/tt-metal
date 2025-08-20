@@ -14,7 +14,6 @@
 
 #include "assert.hpp"
 #include <umd/device/tt_core_coordinates.h>
-#include "tt_metal/llrt/tt_cluster.hpp"
 
 using std::vector;
 
@@ -42,7 +41,6 @@ static const char* TT_METAL_VISIBLE_DEVICES_ENV_VAR = "TT_METAL_VISIBLE_DEVICES"
 static const char* TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
 
 RunTimeOptions::RunTimeOptions() {
-    
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
     if (root_dir_str != nullptr) {
         this->is_root_dir_env_var_set = true;
@@ -228,7 +226,7 @@ RunTimeOptions::RunTimeOptions() {
 
     // Enable mock cluster if TT_METAL_MOCK is set to a descriptor path
     // This is used for initializing UMD without any hardware using a mock cluster descriptor
-    if (const char* mock_path = std::getenv("TT_METAL_MOCK")) {
+    if (const char* mock_path = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH")) {
         this->mock_enabled = true;
         this->mock_cluster_desc_path = std::string(mock_path);
         this->runtime_target_device_ = tt::TargetDevice::Mock;

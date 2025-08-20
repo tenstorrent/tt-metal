@@ -11,8 +11,6 @@
 #include <umd/device/pci_device.hpp>
 #include <umd/device/tt_soc_descriptor.h>
 #include <umd/device/tt_simulation_device.h>
-#include "tt_metal/llrt/tt_cluster.hpp"
-#include <umd/device/tt_cluster_descriptor.h>
 
 namespace tt::tt_metal {
 

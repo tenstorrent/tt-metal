@@ -333,8 +333,6 @@ private:
     void generate_virtual_to_umd_coord_mapping();
     void generate_virtual_to_profiler_flat_id_mapping();
 
-    // Unified driver open handles silicon, simulation, and mock types
-
     // Reserves ethernet cores in cluster for tunneling
     void initialize_ethernet_cores_router_mode();
 
@@ -350,7 +348,7 @@ private:
     bool supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) const;
 
     ARCH arch_;
-    TargetDevice target_type_;
+    tt::TargetDevice target_type_;
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
     std::unique_ptr<tt::umd::Cluster> driver_;
@@ -359,8 +357,7 @@ private:
     // UMD static APIs `detect_available_device_ids` and `detect_number_of_chips` only returns number of MMIO mapped
     // devices
     tt_ClusterDescriptor* cluster_desc_ = nullptr;
-    // If constructor provided a custom cluster descriptor (Mock), we temporarily keep the pointer to pass into UMD
-    tt_ClusterDescriptor* ctor_cluster_desc_arg_ = nullptr;
+
     // There is an entry for every device that can be targeted (MMIO and remote)
     std::unordered_map<chip_id_t, metal_SocDescriptor> sdesc_per_chip_;
 

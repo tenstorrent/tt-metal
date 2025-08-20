@@ -30,12 +30,12 @@ protected:
 
 
 TEST_F(ClusterFixture, TestCustomCluster) {
-    std::unique_ptr<tt_ClusterDescriptor> cluster_desc =
-        tt_ClusterDescriptor::create_from_yaml("./t3k_cluster_desc.yaml");
-
     uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
     tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
         tt::tt_fabric::FabricConfig::FABRIC_2D, num_routing_planes);
+
+    auto cluster_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc();
+    cluster_desc->serialize_to_file("t3k_cluster_desc.yaml");
 
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /

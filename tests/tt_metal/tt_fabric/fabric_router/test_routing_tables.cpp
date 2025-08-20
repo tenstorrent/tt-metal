@@ -71,14 +71,29 @@ TEST(MeshGraphValidation, TestTGMeshGraphInit) {
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(3, 7)));
 }
 
-TEST_F(ControlPlaneFixture, TestTGControlPlaneInit) {
+class TGMockControlPlaneFixture : public ControlPlaneFixture {
+protected:
+    void SetUp() override {
+        setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH",
+              "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/tg_cluster_desc.yaml",
+              1);
+        ControlPlaneFixture::SetUp();
+    }
+
+    void TearDown() override {
+        ControlPlaneFixture::TearDown();
+        unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    }
+};
+
+TEST_F(TGMockControlPlaneFixture, TestTGControlPlaneInit) {
     const std::filesystem::path tg_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
     [[maybe_unused]] auto control_plane = make_control_plane(tg_mesh_graph_desc_path);
 }
 
-TEST_F(ControlPlaneFixture, TestTGMeshAPIs) {
+TEST_F(TGMockControlPlaneFixture, TestTGMeshAPIs) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
@@ -90,7 +105,7 @@ TEST_F(ControlPlaneFixture, TestTGMeshAPIs) {
     EXPECT_EQ(control_plane.get_physical_mesh_shape(MeshId{4}), tt::tt_metal::distributed::MeshShape(4, 8));
 }
 
-TEST_F(ControlPlaneFixture, TestTGFabricRoutes) {
+TEST_F(TGMockControlPlaneFixture, TestTGFabricRoutes) {
     const std::filesystem::path tg_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
@@ -140,8 +155,22 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
     }
 }
 
+class T3kMockControlPlaneFixture : public ControlPlaneFixture {
+protected:
+    void SetUp() override {
+        setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH",
+              "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml",
+              1);
+        ControlPlaneFixture::SetUp();
+    }
+    void TearDown() override {
+        ControlPlaneFixture::TearDown();
+        unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+    }
+};
+
 class T3kCustomMeshGraphControlPlaneFixture
-    : public ControlPlaneFixture,
+    : public T3kMockControlPlaneFixture,
       public testing::WithParamInterface<std::tuple<std::string, std::vector<std::vector<eth_coord_t>>>> {};
 
 TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kMeshGraphInit) {
@@ -185,7 +214,7 @@ TEST_P(T3kCustomMeshGraphControlPlaneFixture, TestT3kFabricRoutes) {
     }
 }
 
-TEST_F(ControlPlaneFixture, TestT3kDisjointFabricRoutes) {
+TEST_F(T3kMockControlPlaneFixture, TestT3kDisjointFabricRoutes) {
     auto [mesh_graph_desc_path, mesh_graph_eth_coords] = t3k_disjoint_mesh_descriptor_chip_mappings[0];
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) / mesh_graph_desc_path;
@@ -219,6 +248,7 @@ INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphControlPlaneFixture,
     ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
 
+// TODO: Add tests for 6U
 TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     const std::filesystem::path single_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
