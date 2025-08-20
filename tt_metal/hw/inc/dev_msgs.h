@@ -137,7 +137,8 @@ enum dispatch_enable_flags : uint8_t {
 };
 
 struct kernel_config_msg_t {
-    volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
+    volatile uint8_t pad0[4];
+    volatile uint16_t watcher_kernel_ids[NUM_PROCESSORS_PER_CORE_TYPE];
     volatile uint16_t ncrisc_kernel_size16;  // size in 16 byte units
 
     // Ring buffer of kernel configuration data
@@ -145,7 +146,7 @@ struct kernel_config_msg_t {
     volatile uint16_t sem_offset[NUM_PROGRAMMABLE_CORE_TYPES];
     volatile uint16_t local_cb_offset;
     volatile uint16_t remote_cb_offset;
-    rta_offset_t rta_offset[DISPATCH_CLASS_MAX];
+    rta_offset_t rta_offset[NUM_PROCESSORS_PER_CORE_TYPE];
     volatile uint8_t mode;  // dispatch mode host/dev
     volatile uint8_t pad1[1];
     volatile uint32_t kernel_text_offset[NUM_PROCESSORS_PER_CORE_TYPE];
