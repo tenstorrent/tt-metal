@@ -131,6 +131,7 @@ class TtYOLOv5xConv2D:
             compute_config=self.compute_config,
             return_output_dim=True,
             return_weights_and_bias=True,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
         return x
 
