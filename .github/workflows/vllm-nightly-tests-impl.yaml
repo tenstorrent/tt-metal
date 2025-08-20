@@ -56,19 +56,19 @@ jobs:
             mesh-device: P150x4,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 4}",
-            owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
-          },
-          {
-            name: "[RB] Llama-3.1-8B-Instruct",
-            model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 35,
-            benchmark-timeout: 10,
-            runner-label: bh-rackbox,
-            mesh-device: P150x8,
-            tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 8}",
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
+          # { Removing this until #26734 is resolved
+          #   name: "[RB] Llama-3.1-8B-Instruct",
+          #   model: "meta-llama/Llama-3.1-8B-Instruct",
+          #   server-timeout: 35,
+          #   benchmark-timeout: 10,
+          #   runner-label: bh-rackbox,
+          #   mesh-device: P150x8,
+          #   tt-llama-text-ver: tt_transformers,
+          #   override-tt-config: "{\"data_parallel\": 8}",
+          #   owner_id: U08GELBB1AP, # Ambrose Ling
+          # },
           {
             name: "[TG] Llama-3.3-70B-Instruct",
             model: "meta-llama/Llama-3.3-70B-Instruct",
