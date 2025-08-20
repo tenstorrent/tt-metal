@@ -107,6 +107,33 @@ ResultWithOptions conv2d(
             return_output_dim,
             return_weights_and_bias);
     } else {
+        bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor);
+        if (input_is_on_device && input_tensor.memory_config().is_dram()) {
+            return result_to_result_with_options(
+                conv2d_DRAM(
+                    queue_id,
+                    input_tensor,
+                    weight_tensor,
+                    device,
+                    in_channels,
+                    out_channels,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    kernel_size,
+                    stride,
+                    padding,
+                    dilation,
+                    groups,
+                    dtype,
+                    bias_tensor,
+                    conv_config_,
+                    compute_config_,
+                    memory_config_,
+                    std::nullopt),
+                return_output_dim,
+                return_weights_and_bias);
+        }
         return result_to_result_with_options(
             conv2d_L1(
                 queue_id,
@@ -162,13 +189,16 @@ Result conv2d_DRAM(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config_,
-    Conv2dSliceConfig dram_slice_config) {
+    const std::optional<const Conv2dSliceConfig>& dram_slice_config_) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
     const DataType output_dtype = dtype.value_or(input_tensor.dtype());
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding_n4, dilation, groups, conv_config);
     DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
     const auto compute_grid_size = device->compute_with_storage_grid_size();
+
+    Conv2dSliceConfig dram_slice_config = dram_slice_config_.value_or(
+        Conv2dSliceConfig{.slice_type = determine_conv_slice_type(input_height, input_width), .num_slices = 0});
 
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
     TT_FATAL(
