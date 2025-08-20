@@ -1537,6 +1537,8 @@ uint32_t process_relay_linear_h_cmd(uint32_t cmd_ptr) {
         (volatile tt_l1_ptr CQPrefetchHToPrefetchDHeader*)scratch_db_top[0];
     dptr->header.length = total_length;
     dptr->header.raw_copy = true;
+    // Set 1 extra page to flush, because we assume this command follows a CQ_PREFETCH_CMD_RELAY_INLINE_NOFLUSH which
+    // sends a command header.
     dptr->header.extra_pages = 1;
 
     uint32_t payload_ptr = data_ptr + sizeof(CQPrefetchHToPrefetchDHeader);
@@ -1671,7 +1673,9 @@ inline void relay_raw_data_to_downstream(
 // Note the prefetch_h uses the HostQ and grabs whole commands
 // Shared command processor assumes whole commands are present, really
 // just matters for the inline command which could be re-implemented
-// This grabs whole (possibly sets of if multiple in a page) commands
+// This grabs whole (possibly sets of if multiple in a page) commands.
+// In the case raw_copy is set in the header, that data will be copied to the downstream, and this function will loop
+// until commands are received.
 inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr, uint32_t& downstream_data_ptr) {
     while (true) {
         // DPRINT << "get_commands: " << data_ptr << " " << fence << " " << cmddat_q_base << " " << cmddat_q_end <<
