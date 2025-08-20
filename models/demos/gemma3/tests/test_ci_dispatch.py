@@ -29,7 +29,7 @@ def test_ci_dispatch(model_weights):
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(
         [
-            "models/demos/siglip/tests/test_attention.py",
+            "models/tt-transformers/tests/test_attention.py",
         ]
         + ["-x"]  # Fail if one of the tests fails
     )
