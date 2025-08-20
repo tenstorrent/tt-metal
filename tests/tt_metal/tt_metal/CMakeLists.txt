@@ -115,7 +115,10 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
-        FILES ${kernels}
+        FILES
+            ${kernels}
+            perf_microbenchmark/common/kernel_utils.hpp
+            perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp
 )
 
 install(
