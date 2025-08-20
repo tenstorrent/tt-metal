@@ -6,8 +6,10 @@
 # add_link_options($<$<CXX_COMPILER_ID:Clang>:-Wl,--compress-debug-sections=zstd>)
 
 # Use mold by default if it is available and new enough to work with LTO.
-if(NOT DEFINED CMAKE_LINKER_TYPE)
-    find_program(MOLD ld.mold)
+find_program(MOLD ld.mold)
+
+# Mold can be set by the toolchain files, so we have to be a little redundant
+if((NOT DEFINED CMAKE_LINKER_TYPE) OR (CMAKE_LINKER_TYPE STREQUAL MOLD))
     if(MOLD)
         message(STATUS "Found mold linker. Checking if version >= 1.6")
 
@@ -17,12 +19,11 @@ if(NOT DEFINED CMAKE_LINKER_TYPE)
             OUTPUT_VARIABLE MOLD_VERSION_RAW
         )
 
-        string(REGEX MATCH "^mold ([0-9])\.([0-9]+)\.?([0-9]*)? .*$" MATCH_RESULT "${MOLD_VERSION_RAW}")
+        string(REGEX MATCH "^mold ([0-9.]+) .*$" MATCH_RESULT "${MOLD_VERSION_RAW}")
 
         if(MATCH_RESULT)
-            math(EXPR MOLD_VER_NUM "${CMAKE_MATCH_1}*100 + ${CMAKE_MATCH_2}" OUTPUT_FORMAT DECIMAL)
-
-            if(MOLD_VER_NUM GREATER_EQUAL 160)
+            set(MOLD_VER_NUM "${CMAKE_MATCH_1}")
+            if(MOLD_VER_NUM VERSION_GREATER_EQUAL "1.6")
                 message(STATUS "Mold version ${MOLD_VER_NUM} is new enough. Using mold linker: ${MOLD}")
                 set(CMAKE_LINKER_TYPE MOLD)
             else()
@@ -46,11 +47,13 @@ if(TT_ENABLE_LTO)
     if(result)
         message(STATUS "LTO/IPO is supported. Enabling for Release builds.")
 
-        # Do it this way to play nicer with ninja multi-config builds
+        # Doing it this way plays nicer with ninja multi-config builds
         # This enables clang's thinLTO and gcc's full LTO by default.
+        # LTOing tests adds significant build time, so for now we'll
+        # disable this globally and make strategic use of
+        # set_target_properties
         set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
 
-        # Just enable LTO for pure release builds for now.
         # Investigate turning this option on later.
         #set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO ON)
 
@@ -69,15 +72,19 @@ if(TT_ENABLE_LTO)
         # Mold won't properly parallelize thinLTO without it.
         add_link_options($<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-jobs=all>)
 
-        # Set up lto cache for faster incremental builds and a nominal limits to keep the size
+        # use fat lto objects so everything plays nice regardless of build options
+        add_compile_options($<$<CXX_COMPILER_ID:Clang>:-ffat-lto-objects>)
+        add_link_options($<$<CXX_COMPILER_ID:Clang>:-ffat-lto-objects>)
+
+        ## Set up lto cache for faster incremental builds and a nominal limits to keep the size
         # from getting too large over time. A single everthing-enabled Release build results
         # in an lto-cache of ~250M. ~1.7G using RelWithDebInfo.
         add_link_options($<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-cache-dir=${CMAKE_BINARY_DIR}/lto-cache>)
 
-        # Limit size of lto cache to the least of 2GB, 10% disk space, or 10000 files.
+        # Limit size of lto cache to the least of 1GB, 10% disk space, or 10000 files.
         # By default pruning happens in 20 minute intervals. Add prune_interval to change.
         add_link_options(
-            $<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-cache-policy=cache_size_bytes=2g:cache_size=10%:cache_size_files=10000>
+            $<$<CXX_COMPILER_ID:Clang>:-Wl,--thinlto-cache-policy=cache_size_bytes=1g:cache_size=10%:cache_size_files=10000>
         )
 
         # Mozilla rec for non-pgo builds. Default is 100. pgo builds can get away with 5-10.
@@ -86,9 +93,10 @@ if(TT_ENABLE_LTO)
 
         # Enable virtual constant propagation and more aggressive vtable optimizations.
         # Adds some link time but still faster than flto=full
+        add_link_options($<$<CXX_COMPILER_ID:Clang>:-fwhole-program-vtables>)
+
         # FIXME: -fforce-emit-vtables doesn't play nice with AnyIterator for some reason.
         #add_compile_options($<$<CXX_COMPILER_ID:Clang>:-fforce-emit-vtables>)
-        add_link_options($<$<CXX_COMPILER_ID:Clang>:-fwhole-program-vtables>)
     else()
         message(WARNING "LTO/IPO is not supported: ${output}")
     endif()
