@@ -53,6 +53,7 @@ void MAIN {
         tile_regs_release();
 
         cb_pop_front(cb_post_lhs, num_tiles_per_cycle);
+        // comment to hang
         cb_push_back(cb_out, num_tiles_per_cycle);
     }
 }
