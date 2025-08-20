@@ -60,7 +60,7 @@ struct SocketSenderInterface {
     uint32_t downstream_fifo_addr;
     uint32_t downstream_fifo_total_size;
     uint32_t downstream_fifo_curr_size;
-    uint32_t downstream_enc_addr;
+    uint32_t downstream_enc_base_addr;
 };
 
 struct SocketReceiverInterface {
