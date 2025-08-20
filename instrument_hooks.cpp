@@ -9,6 +9,7 @@
 #include <stdint.h>
 #include <atomic>
 #include <string>
+#include <inttypes.h>
 
 // A simple, lock-free single-producer, single-consumer ring buffer.
 // This is safe for our use case where the hooks are the producers and one thread is the consumer.
@@ -25,6 +26,11 @@ static std::atomic<bool> g_done(false);
 
 // The processing thread
 static pthread_t g_processing_thread;
+
+// For debugging
+static std::atomic<uint64_t> g_total_hook_calls{0};
+static std::atomic<uint64_t> g_total_enqueued{0};
+static std::atomic<uint64_t> g_dropped_full{0};
 
 /**
  * @brief Demangles a C++ symbol name.
@@ -150,19 +156,38 @@ static void* processing_thread_func(void* arg) {
                         line_num_buf,
                         sizeof(line_num_buf));
 
-                    dprintf(
-                        g_log_fd,
-                        "{\"event\":\"enter\",\"func\":\"%s\",\"file\":\"%s:%s\",\"so_path\":\"%s\"}\n",
-                        func_name_buf,
-                        file_path_buf,
-                        line_num_buf,
-                        caller_so_path);
+                    if (strstr(file_path_buf, "/home/ubuntu/tt-metal/tt_metal") ||
+                        strstr(file_path_buf, "/home/ubuntu/tt-metal/ttnn")) {
+                        dprintf(
+                            g_log_fd,
+                            "{\"event\":\"enter\",\"func\":\"%s\",\"file\":\"%s:%s\",\"so_path\":\"%s\"}\n",
+                            func_name_buf,
+                            file_path_buf,
+                            line_num_buf,
+                            caller_so_path);
+                    }
                 }
             }
             g_buffer_tail.store((tail + 1) % BUFFER_SIZE, std::memory_order_release);
         } else {
-            usleep(100);
+            usleep(10);
         }
+    }
+
+    // Emit a single final summary entry before closing the log.
+    {
+        uint64_t total_calls = g_total_hook_calls.load(std::memory_order_relaxed);
+        uint64_t total_enqueued = g_total_enqueued.load(std::memory_order_relaxed);
+        uint64_t dropped_full = g_dropped_full.load(std::memory_order_relaxed);
+        const char* lost = (dropped_full > 0) ? "true" : "false";
+        dprintf(
+            g_log_fd,
+            "{\"event\":\"summary\",\"hook_calls\":%" PRIu64 ",\"enqueued\":%" PRIu64 ",\"dropped_ring_full\":%" PRIu64
+            ",\"lost\":%s}\n",
+            total_calls,
+            total_enqueued,
+            dropped_full,
+            lost);
     }
 
     close(g_log_fd);
@@ -208,6 +233,9 @@ void __attribute__((used, no_instrument_function)) __sanitizer_cov_trace_pc_guar
         return;
     }
 
+    // Count every hook invocation
+    g_total_hook_calls.fetch_add(1, std::memory_order_relaxed);
+
     void* caller = __builtin_return_address(0);
 
     size_t head = g_buffer_head.load(std::memory_order_relaxed);
@@ -216,9 +244,11 @@ void __attribute__((used, no_instrument_function)) __sanitizer_cov_trace_pc_guar
     if (next_head != g_buffer_tail.load(std::memory_order_acquire)) {
         g_call_buffer[head] = caller;
         g_buffer_head.store(next_head, std::memory_order_release);
+        g_total_enqueued.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        // Ring is full; record the drop
+        g_dropped_full.fetch_add(1, std::memory_order_relaxed);
     }
-
-    *guard = 0;
 }
 
 }  // extern "C"

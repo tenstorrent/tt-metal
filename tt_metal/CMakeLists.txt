@@ -14,6 +14,11 @@ target_compile_options(
     PRIVATE
         -g
         -fsanitize-coverage=func,trace-pc-guard
+        -fno-omit-frame-pointer
+        -fno-inline
+        -fno-inline-functions
+        -fno-optimize-sibling-calls
+        -fno-lto
 )
 target_link_options(tt_metal PRIVATE -rdynamic)
 

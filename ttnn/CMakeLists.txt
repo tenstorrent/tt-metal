@@ -22,9 +22,27 @@ endif()
 add_library(ttnn_core ${LIB_TYPE})
 add_library(TTNN::Core ALIAS ttnn_core)
 
-# target_sources(ttnn_core PRIVATE ${CMAKE_SOURCE_DIR}/instrument_hooks.cpp)
-# target_compile_options(ttnn_core PRIVATE -g -O2 -finstrument-functions)
-# target_link_libraries(ttnn_core PRIVATE c++ dl)
+target_sources(ttnn_core PRIVATE ${CMAKE_SOURCE_DIR}/instrument_hooks.cpp)
+target_compile_options(
+    ttnn_core
+    PRIVATE
+        -g
+        -fsanitize-coverage=func,trace-pc-guard
+        -fno-omit-frame-pointer
+        -fno-inline
+        -fno-inline-functions
+        -fno-optimize-sibling-calls
+        -fno-lto
+)
+target_link_options(ttnn_core PRIVATE -rdynamic)
+
+target_link_options(ttnn_core PRIVATE -fsanitize-coverage=func,trace-pc-guard)
+target_link_libraries(
+    ttnn_core
+    PRIVATE
+        dl
+        stdc++
+)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
 target_precompile_headers(ttnn_core REUSE_FROM TT::CommonPCH)
