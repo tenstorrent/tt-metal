@@ -10,6 +10,9 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/cast.h>
+#include <fstream>
+#include <sstream>
+#include <functional>
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -17,6 +20,64 @@
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::core {
+
+std::string get_python_call_stack() {
+    std::stringstream stack_stream;
+    try {
+        py::module traceback = py::module::import("traceback");
+        py::object stack = traceback.attr("format_stack")();
+
+        // Filter out pytest and environment frames, only show user code
+        for (py::handle frame : stack) {
+            std::string frame_str = py::str(frame).cast<std::string>();
+
+            // Skip frames that are from pytest, pybind, or other internal stuff
+            if (frame_str.find("/pytest") != std::string::npos || frame_str.find("/pluggy/") != std::string::npos ||
+                frame_str.find("/python3.10/site-packages/") != std::string::npos ||
+                frame_str.find("ttnn/__init__.py") != std::string::npos ||
+                frame_str.find("decorators.py") != std::string::npos) {
+                continue;
+            }
+
+            stack_stream << frame_str;
+        }
+    } catch (const std::exception& e) {
+        stack_stream << "Failed to get Python call stack: " << e.what() << std::endl;
+    }
+    return stack_stream.str();
+}
+
+// Function to generate hash from string
+uint32_t generate_hash(const std::string& input) {
+    std::hash<std::string> hasher;
+    size_t hash_value = hasher(input);
+    // Convert to uint32_t (truncate if necessary)
+    return static_cast<uint32_t>(hash_value);
+}
+
+// Function to write operation info to file and return stack_id
+uint32_t write_operation_info_to_file(const std::string& callstack, const std::string& args_info) {
+    // Create combined string for hashing
+    std::string combined = callstack + args_info;
+    uint32_t stack_id = generate_hash(combined);
+    // Create filename
+    std::string filename = "op_" + std::to_string(stack_id) + ".txt";
+    // Write to file
+    std::ofstream file(filename);
+    if (file.is_open()) {
+        file << "****CALLSTACK****\n";
+        file << callstack;
+        file << "**** END CALLSTACK ****\n";
+        file << "****ARGS****\n";
+        file << args_info;
+        file << "**** END ARGS ***\n";
+        file.close();
+        std::cout << "Operation dispatched with stack_id: " << stack_id << " -> " << filename << std::endl;
+    } else {
+        std::cout << "Failed to write operation info to file: " << filename << std::endl;
+    }
+    return stack_id;
+}
 
 void py_module_types(py::module& module) {
     py::enum_<ttnn::operations::compute_throttle_utils::ThrottleLevel>(module, "ThrottleLevel", R"doc(
@@ -205,7 +266,28 @@ void py_module(py::module& module) {
             >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
             >>> tensor = ttnn.to_memory_config(tensor, memory_config)
         )doc",
-        ttnn::pybind_arguments_t{py::arg("tensor"), py::arg("memory_config"), py::arg("dtype") = std::nullopt});
+        ttnn::pybind_overload_t{
+            [](const std::decay_t<decltype(ttnn::to_memory_config)>& self,
+               const ttnn::Tensor& tensor,
+               const ttnn::MemoryConfig& memory_config,
+               const std::optional<ttnn::DataType>& dtype) -> ttnn::Tensor {
+                std::string callstack = get_python_call_stack();
+
+                std::stringstream args_stream;
+                args_stream << "input_tensor : shape = " << tensor.logical_shape() << " data_type = " << tensor.dtype()
+                            << " memory_config = " << tensor.memory_config() << std::endl;
+                args_stream << "target_memory_config = " << memory_config << std::endl;
+                if (dtype.has_value()) {
+                    args_stream << "dtype = " << *dtype << std::endl;
+                }
+
+                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
+
+                return self(tensor, memory_config, dtype, stack_id);
+            },
+            py::arg("tensor"),
+            py::arg("memory_config"),
+            py::arg("dtype") = std::nullopt});
 
     bind_registered_operation(
         module,
