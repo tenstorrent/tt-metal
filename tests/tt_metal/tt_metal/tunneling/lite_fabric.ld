@@ -116,14 +116,14 @@ SECTIONS
     . = ALIGN(ABSOLUTE(.), 16);
     __fw_export_ldm_end = ABSOLUTE(.);
 
-    /* Stack grows downward from data start + data size */
-    __stack_top = MEM_LOCAL_BASE + LITE_FABRIC_DATA_SIZE;
+    /* Stack grows downward */
+    __stack_top = LITE_FABRIC_STACK_START + LITE_FABRIC_STACK_SIZE;
 
     /* Loader information for size checks */
     .phdrs 0 (INFO) :
     {
         LONG(LITE_FABRIC_TEXT_SIZE)
-        LONG(LITE_FABRIC_DATA_SIZE - LITE_FABRIC_STACK_MIN_SIZE)
+        LONG(LITE_FABRIC_DATA_SIZE)
     }
 
     /* RISC-V attributes */

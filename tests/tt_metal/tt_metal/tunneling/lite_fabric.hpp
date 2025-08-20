@@ -189,12 +189,11 @@ struct HostToLiteFabricInterface {
 
     void wait_for_empty_write_slot(tt_cxy_pair virtual_core_sender) {
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-        uint32_t offset =
-            offsetof(HostToLiteFabricInterface, d2h) + offsetof(DeviceToHost, fabric_sender_channel_index);
+        uint32_t offset = offsetof(HostToLiteFabricInterface, d2h);
         do {
             tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                 (void*)(reinterpret_cast<uintptr_t>(this) + offset),
-                sizeof(uint32_t),
+                sizeof(DeviceToHost),
                 virtual_core_sender,
                 host_interface_on_device_addr + offset);
         } while ((h2d.sender_host_write_index + 1) % NUM_BUFFERS == d2h.fabric_sender_channel_index);
@@ -342,6 +341,10 @@ struct HostToLiteFabricInterface {
         send_payload_flush_non_blocking_from_address(header, sender_core, sender_channel_base);
     }
 
+    void write(uint32_t value, tt_cxy_pair sender_core, uint64_t dst_noc_addr, uint8_t noc_index) {
+        write(&value, sizeof(uint32_t), sender_core, dst_noc_addr, noc_index);
+    }
+
     void write_any_len(void* mem_ptr, size_t size, tt_cxy_pair sender_core, uint64_t dst_noc_addr, uint8_t noc_index = lite_fabric::edm_to_local_chip_noc) {
         size_t num_pages = size / get_max_payload_data_size_bytes();
         for (size_t i = 0; i < num_pages; i++) {
@@ -422,6 +425,29 @@ struct HostToLiteFabricInterface {
         }
     }
 
+    // Write the register of the connected ethernet core directly from the sender using the Ethernet Dataflow API.
+    // If you need to write registers to cores on the receiver chip, use write() instead
+    void write_reg_direct(uint32_t reg_address, uint32_t reg_value, tt_cxy_pair sender_core) {
+        LiteFabricHeader header;
+        header.to_write_reg(lite_fabric::WriteRegCommandHeader{reg_address, reg_value});
+
+        wait_for_empty_write_slot(sender_core);
+        send_payload_flush_non_blocking_from_address(header, sender_core, sender_channel_base);
+    }
+
+    // Wait for device to send requests. Does not guarantee that the requests have been processed by the destination
+    // core.
+    void finish(tt_cxy_pair virtual_core_sender) {
+        uint32_t offset = offsetof(HostToLiteFabricInterface, d2h);
+        do {
+            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                (void*)(reinterpret_cast<uintptr_t>(this) + offset),
+                sizeof(DeviceToHost),
+                virtual_core_sender,
+                host_interface_on_device_addr + offset);
+        } while (h2d.sender_host_write_index != d2h.fabric_sender_channel_index);
+    }
+
 #endif
 } __attribute__((packed));
 
@@ -495,9 +521,10 @@ static_assert(offsetof(LiteFabricMemoryMap, host_interface) % 16 == 0);
 #if (defined(KERNEL_BUILD) || defined(FW_BUILD))
 
 void service_lite_fabric_channels() {
-#if defined(LITE_FABRIC_CONFIG_START) && LITE_FABRIC_CONFIG_START != 0
+#if defined(LITE_FABRIC_CONFIG_START) && LITE_FABRIC_CONFIG_START != 0 && defined(COMPILE_FOR_ERISC)
     auto config = reinterpret_cast<volatile lite_fabric::LiteFabricMemoryMap*>(LITE_FABRIC_CONFIG_START);
-    reinterpret_cast<uint32_t (*)()>(config->service_lite_fabric_addr)();
+    void (*service_routing)() = (void (*)())((uint32_t*)config->service_lite_fabric_addr);
+    service_routing();
 #endif
 }
 

@@ -148,7 +148,7 @@ constexpr bool enable_trid_flush_check_on_noc_txn = false;
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 constexpr uint8_t local_chip_data_cmd_buf = BRISC_WR_CMD_BUF;  // Used
-constexpr uint8_t worker_handshake_noc = NOC_INDEX;
+constexpr uint8_t worker_handshake_noc = 0;
 #endif
 
 // Default NoC to use for Reads/Writes

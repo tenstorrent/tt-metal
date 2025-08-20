@@ -10,6 +10,7 @@
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
 
+#include <enchantum/enchantum.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
@@ -17,9 +18,14 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/fabric.hpp>
 
+#include "allocator.hpp"
 #include "context/metal_context.hpp"
 #include "core_coord.hpp"
+#include "distributed.hpp"
+#include "fabric_types.hpp"
+#include "kernel_types.hpp"
 #include "lite_fabric.hpp"
+#include "mesh_workload.hpp"
 #include "rtoptions.hpp"
 #include "llrt/hal.hpp"
 #include "tt_cluster.hpp"
@@ -29,68 +35,39 @@
 #include "build.hpp"
 
 #define CHECK_TEST_REQS()                                                                       \
-    if (!std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {                                          \
-        GTEST_SKIP() << "Slow dispatch is required for this test";                              \
-    }                                                                                           \
     if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) { \
         GTEST_SKIP() << "Blackhole only";                                                       \
     }                                                                                           \
-    if (tt::tt_metal::GetNumAvailableDevices() != 2) {                                          \
-        GTEST_SKIP() << "2 Devices are required";                                               \
+    if (tt::tt_metal::GetNumAvailableDevices() < 2) {                                           \
+        GTEST_SKIP() << "At least 2 Devices are required";                                      \
     }
 
-TEST(LiteFabric, BuildOnly) {
-    auto home_directory = std::filesystem::path(std::getenv("TT_METAL_HOME"));
-    auto output_directory = home_directory / "lite_fabric";
+namespace {
+
+// Performs write and read-back verification test across all worker cores
+// Returns the test data map for further verification if needed
+template <typename HOST_INTERFACE>
+std::unordered_map<CoreCoord, std::vector<uint32_t>> perform_write_read_test(
+    const lite_fabric::SystemDescriptor& desc,
+    HOST_INTERFACE& host_interface,
+    uint32_t payload_size_bytes = 4096,
+    uint32_t l1_base = 0x10000,
+    uint32_t device_id = 1) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (lite_fabric::CompileLiteFabric(cluster, home_directory, output_directory)) {
-        throw std::runtime_error("Failed to compile lite fabric");
-    }
-    if (lite_fabric::LinkLiteFabric(home_directory, output_directory, output_directory / "lite_fabric.elf")) {
-        throw std::runtime_error("Failed to link lite fabric");
-    }
-}
-
-TEST(LiteFabric, Init) {
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
-
-    auto home_directory = std::filesystem::path(std::getenv("TT_METAL_HOME"));
-    auto output_directory = home_directory / "lite_fabric";
-    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
-    lite_fabric::TerminateLiteFabricWithMetal(cluster, desc);
-    lite_fabric::SetResetState(cluster, desc, true);
-}
-
-TEST(LiteFabric, Writes) {
-    CHECK_TEST_REQS();
-
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
-
-    auto grid_size = cluster.get_soc_desc(1).get_grid_size(CoreType::TENSIX);
-
-    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
     const auto& tunnel = desc.tunnels_from_mmio[0];
-    log_info(tt::LogTest, "Tunnel: {} -> {}", tunnel.mmio_cxy_virtual().str(), tunnel.connected_cxy_virtual().str());
+    auto grid_size = cluster.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
 
-    uint32_t sender_channel_base = lite_fabric::LiteFabricMemoryMap::get_send_channel_addr();
-    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
-
-    // This will wrap the sender channel multiple times and write to all worker cores
-    uint32_t payload_size_bytes = 4096;  // (128 * 1024) + 512;
-    uint32_t l1_base = 0x10000;
-    log_info(tt::LogMetal, "Device 1 Grid {}", grid_size.str());
+    log_info(tt::LogMetal, "Device {} Grid {}", device_id, grid_size.str());
 
     std::unordered_map<CoreCoord, std::vector<uint32_t>> test_data_per_worker;
+
+    // Write test data to all worker cores
     for (int worker_x = 0; worker_x < grid_size.x; ++worker_x) {
         for (int worker_y = 0; worker_y < grid_size.y; ++worker_y) {
             CoreCoord logical_worker{worker_x, worker_y};
             log_debug(tt::LogMetal, "Writing to worker {}", logical_worker.str());
             CoreCoord virtual_worker =
-                cluster.get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
+                cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_worker, CoreType::WORKER);
             const uint64_t dest_noc_upper =
                 (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
             uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
@@ -108,50 +85,48 @@ TEST(LiteFabric, Writes) {
 
     host_interface.barrier(tunnel.mmio_cxy_virtual());
 
+    // Read back and verify data
     for (int worker_x = 0; worker_x < grid_size.x; ++worker_x) {
         for (int worker_y = 0; worker_y < grid_size.y; ++worker_y) {
             CoreCoord logical_worker{worker_x, worker_y};
             CoreCoord virtual_worker =
-                cluster.get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
+                cluster.get_virtual_coordinate_from_logical_coordinates(device_id, logical_worker, CoreType::WORKER);
             std::vector<uint32_t> read_data(payload_size_bytes / sizeof(uint32_t));
 
-            tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                read_data.data(), payload_size_bytes, tt_cxy_pair{1, virtual_worker}, l1_base);
-            ASSERT_EQ(read_data, test_data_per_worker[logical_worker])
+            cluster.read_core(read_data.data(), payload_size_bytes, tt_cxy_pair{device_id, virtual_worker}, l1_base);
+            EXPECT_EQ(read_data, test_data_per_worker[logical_worker])
                 << fmt::format("Data mismatch for worker {}", logical_worker.str());
         }
     }
 
-    lite_fabric::TerminateLiteFabric(cluster, desc);
+    return test_data_per_worker;
 }
 
-TEST(LiteFabric, Reads) {
-    CHECK_TEST_REQS();
-
+// Performs write and read-back verification test on a single worker core with two different data sets
+// Tests the read functionality by writing known data and reading it back
+template <typename HOST_INTERFACE>
+void perform_read_test(
+    const lite_fabric::SystemDescriptor& desc,
+    HOST_INTERFACE& host_interface,
+    uint32_t payload_size_bytes = 4 * 1024,
+    uint32_t l1_base = 0x10000,
+    uint32_t device_id = 1,
+    CoreCoord target_worker = CoreCoord{0, 0}) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
-
-    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
     const auto& tunnel = desc.tunnels_from_mmio[0];
-    log_info(tt::LogTest, "Tunnel: {} -> {}", tunnel.mmio_cxy_virtual().str(), tunnel.connected_cxy_virtual().str());
 
-    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
+    log_info(
+        tt::LogMetal,
+        "Device {} Grid {}",
+        device_id,
+        cluster.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX).str());
 
-    uint32_t payload_size_bytes = 4 * 1024;
-    uint32_t max_payload_size = host_interface.get_max_payload_data_size_bytes();
-    uint32_t num_pages = payload_size_bytes / max_payload_size;
-
-    uint32_t l1_base = 0x10000;
-    log_info(tt::LogMetal, "Device 1 Grid {}", cluster.get_soc_desc(1).get_grid_size(CoreType::TENSIX).str());
-
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> test_data_per_worker;
-    CoreCoord logical_worker{0, 0};
     CoreCoord virtual_worker =
-        cluster.get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
+        cluster.get_virtual_coordinate_from_logical_coordinates(device_id, target_worker, CoreType::WORKER);
     const uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
     uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
 
+    // Create two different test data sets
     auto allOnes = create_random_vector_of_bfloat16(
         payload_size_bytes, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
     auto allTwos = create_random_vector_of_bfloat16(
@@ -160,15 +135,17 @@ TEST(LiteFabric, Reads) {
     uint64_t onesNocAddr = dest_noc_addr;
     uint64_t twosNocAddr = dest_noc_addr + payload_size_bytes;
 
+    // Write both data sets to different addresses
     host_interface.write_any_len(allOnes.data(), payload_size_bytes, tunnel.mmio_cxy_virtual(), onesNocAddr);
     host_interface.write_any_len(allTwos.data(), payload_size_bytes, tunnel.mmio_cxy_virtual(), twosNocAddr);
 
-    // Try reading back the data we just wrote
+    // Barrier to ensure writes complete
     host_interface.barrier(tunnel.mmio_cxy_virtual());
 
-    log_info(tt::LogMetal, "Reading back data from Device 1 worker core {}", logical_worker.str());
+    log_info(tt::LogMetal, "Reading back data from Device {} worker core {}", device_id, target_worker.str());
+
+    // Read back first data set and verify
     {
-        // Read out
         std::vector<uint32_t> read_data(payload_size_bytes / sizeof(uint32_t));
         host_interface.read_any_len(read_data.data(), payload_size_bytes, tunnel.mmio_cxy_virtual(), onesNocAddr);
         log_info(
@@ -178,12 +155,11 @@ TEST(LiteFabric, Reads) {
             onesNocAddr,
             read_data.size());
 
-        ASSERT_EQ(read_data, allOnes);
+        EXPECT_EQ(read_data, allOnes) << "First data set read verification failed";
     }
 
-    log_info(tt::LogMetal, "Reading back data from Device 1 worker core {}", logical_worker.str());
+    // Read back second data set and verify
     {
-        // Read out
         std::vector<uint32_t> read_data(payload_size_bytes / sizeof(uint32_t));
         host_interface.read_any_len(read_data.data(), payload_size_bytes, tunnel.mmio_cxy_virtual(), twosNocAddr);
         log_info(
@@ -193,140 +169,89 @@ TEST(LiteFabric, Reads) {
             twosNocAddr,
             read_data.size());
 
-        ASSERT_EQ(read_data, allTwos);
+        EXPECT_EQ(read_data, allTwos) << "Second data set read verification failed";
     }
-
-    lite_fabric::TerminateLiteFabric(cluster, desc);
 }
 
-TEST(LiteFabric, Barrier) {
-    CHECK_TEST_REQS();
-
+// Performs write and read-back verification test with unaligned addresses
+// Tests writing to addresses with various alignment offsets to verify unaligned access handling
+template <typename HOST_INTERFACE>
+void perform_unaligned_write_test(
+    const lite_fabric::SystemDescriptor& desc,
+    HOST_INTERFACE& host_interface,
+    uint32_t payload_size_bytes,
+    uint32_t l1_base = 0x10000,
+    uint32_t device_id = 1,
+    CoreCoord target_worker = CoreCoord{0, 0},
+    int max_alignment_offset = 16) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
-
-    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
     const auto& tunnel = desc.tunnels_from_mmio[0];
 
-    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
-
-    host_interface.barrier(tunnel.mmio_cxy_virtual());
-    lite_fabric::TerminateLiteFabric(cluster, desc);
-}
-
-TEST(LiteFabric, WritesSmall) {
-    CHECK_TEST_REQS();
-
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
-
-    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
-    const auto& tunnel = desc.tunnels_from_mmio[0];
-
-    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
-
-    CoreCoord logical_worker{0, 0};
     CoreCoord virtual_worker =
-        cluster.get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
-    uint32_t l1_base = 0x10000;
-    uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
-    uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
+        cluster.get_virtual_coordinate_from_logical_coordinates(device_id, target_worker, CoreType::WORKER);
 
-    // due to unaligned, the read will be only 1B of the original data. mask off the irrelevant bits
-    // ensure they did not overwrite each other
-    constexpr uint32_t num_writes = 64;
-    std::vector<uint32_t> write_data = create_random_vector_of_bfloat16(
-        num_writes * sizeof(uint32_t), 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
-    for (int i = 1; i < num_writes; ++i) {
-        host_interface.write_any_len(&write_data[i], 1, tunnel.mmio_cxy_virtual(), dest_noc_addr + i);
-        write_data[i] = write_data[i] & 0xff;
-    }
-    host_interface.barrier(tunnel.mmio_cxy_virtual());
+    std::vector<uint32_t> test_data = create_random_vector_of_bfloat16(
+        payload_size_bytes, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
 
-    for (int i = 1; i < num_writes; ++i) {
-        std::vector<uint32_t> read_data(1);
-        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            read_data.data(), 1, tt_cxy_pair{1, virtual_worker}, l1_base + i);
-        log_info(
-            tt::LogMetal, "Read data {} from {:#x} {:#x} expecting {:#x}", i, l1_base + i, read_data[0], write_data[i]);
-        ASSERT_EQ(read_data[0], write_data[i]);
-    }
-
-    lite_fabric::TerminateLiteFabric(cluster, desc);
-}
-
-TEST(LiteFabric, WritesUnaligned) {
-    CHECK_TEST_REQS();
-
-    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
-
-    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
-    const auto& tunnel = desc.tunnels_from_mmio[0];
-
-    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
-
-    CoreCoord logical_worker{0, 0};
-    CoreCoord virtual_worker =
-        cluster.get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
-    uint32_t l1_base = 0x10000;
-
-    // Make destination not aligned by various amounts
-    for (int aligned_offset = 0; aligned_offset < 16; ++aligned_offset) {
+    // Test various alignment offsets
+    for (int aligned_offset = 0; aligned_offset < max_alignment_offset; ++aligned_offset) {
         uint32_t addr = l1_base + aligned_offset;
         uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
         uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)addr;
-        log_info(tt::LogMetal, "Testing unaligned write to {:#x}", addr);
-        std::vector<uint32_t> test_data = create_random_vector_of_bfloat16(
-            4096, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
 
+        log_info(tt::LogMetal, "Testing unaligned write to {:#x} (offset {})", addr, aligned_offset);
+
+        // Write data to unaligned address
         host_interface.write_any_len(
             test_data.data(), test_data.size() * sizeof(uint32_t), tunnel.mmio_cxy_virtual(), dest_noc_addr);
         host_interface.barrier(tunnel.mmio_cxy_virtual());
 
+        // Read back and verify
         std::vector<uint32_t> read_data(test_data.size());
-        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            read_data.data(), test_data.size() * sizeof(uint32_t), tt_cxy_pair{1, virtual_worker}, addr);
-        ASSERT_EQ(read_data, test_data);
-    }
+        cluster.read_core(
+            read_data.data(), test_data.size() * sizeof(uint32_t), tt_cxy_pair{device_id, virtual_worker}, addr);
 
-    lite_fabric::TerminateLiteFabric(cluster, desc);
+        EXPECT_EQ(read_data, test_data) << fmt::format(
+            "Unaligned write/read failed at offset {} (addr {:#x})", aligned_offset, addr);
+    }
 }
 
-TEST(LiteFabric, ReadsUnaligned) {
-    CHECK_TEST_REQS();
-
+// Performs unaligned read test by writing data with standard API and reading with unaligned offset
+// Tests reading from unaligned addresses using byte-level comparison
+template <typename HOST_INTERFACE>
+void perform_unaligned_read_test(
+    const lite_fabric::SystemDescriptor& desc,
+    HOST_INTERFACE& host_interface,
+    uint32_t write_data_size_bytes,
+    uint32_t l1_base = 0x10000,
+    uint32_t device_id = 1,
+    CoreCoord target_worker = CoreCoord{0, 0},
+    size_t read_size_bytes = 64 * sizeof(uint32_t),
+    size_t unaligned_offset_bytes = 7) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
-
-    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
     const auto& tunnel = desc.tunnels_from_mmio[0];
 
-    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
-
-    CoreCoord logical_worker{0, 0};
     CoreCoord virtual_worker =
-        cluster.get_virtual_coordinate_from_logical_coordinates(1, logical_worker, CoreType::WORKER);
-    uint32_t l1_base = 0x10000;
+        cluster.get_virtual_coordinate_from_logical_coordinates(device_id, target_worker, CoreType::WORKER);
     uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
     uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
 
-    // Using a known good API for this
-    std::vector<uint32_t> write_data =
-        create_random_vector_of_bfloat16(4096, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        write_data.data(), write_data.size() * sizeof(uint32_t), tt_cxy_pair{1, virtual_worker}, l1_base);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(1);
+    // Write data using known good API (standard cluster write_core)
+    std::vector<uint32_t> write_data = create_random_vector_of_bfloat16(
+        write_data_size_bytes, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
 
-    // Read a 256-byte slice (64 elements) from an unaligned address (l1_base + 7)
-    constexpr size_t kNumBytesToRead = 64 * sizeof(uint32_t);
-    const size_t unaligned_offset_bytes = 7;
+    cluster.write_core(
+        write_data.data(), write_data.size() * sizeof(uint32_t), tt_cxy_pair{device_id, virtual_worker}, l1_base);
+    cluster.l1_barrier(device_id);
 
-    std::vector<uint8_t> read_bytes(kNumBytesToRead);
+    log_info(
+        tt::LogMetal,
+        "Testing unaligned read from offset {} bytes (addr {:#x})",
+        unaligned_offset_bytes,
+        l1_base + unaligned_offset_bytes);
+
+    // Read a slice from an unaligned address using host interface
+    std::vector<uint8_t> read_bytes(read_size_bytes);
     host_interface.read(
         read_bytes.data(), read_bytes.size(), tunnel.mmio_cxy_virtual(), dest_noc_addr + unaligned_offset_bytes);
 
@@ -335,49 +260,351 @@ TEST(LiteFabric, ReadsUnaligned) {
     std::vector<uint8_t> expected_bytes(read_bytes.size());
     std::memcpy(expected_bytes.data(), write_bytes + unaligned_offset_bytes, read_bytes.size());
 
-    ASSERT_EQ(read_bytes, expected_bytes);
-
-    lite_fabric::TerminateLiteFabric(cluster, desc);
+    EXPECT_EQ(read_bytes, expected_bytes) << fmt::format(
+        "Unaligned read failed at offset {} bytes (addr {:#x})",
+        unaligned_offset_bytes,
+        l1_base + unaligned_offset_bytes);
 }
 
-TEST(LiteFabric, FunctionPointerTable) {
-    CHECK_TEST_REQS();
+// Performs small write test by writing 1 byte at a time to consecutive addresses
+// Tests small write operations and byte-level read-back verification with masking
+template <typename HOST_INTERFACE>
+void perform_small_write_test(
+    const lite_fabric::SystemDescriptor& desc,
+    HOST_INTERFACE& host_interface,
+    uint32_t l1_base = 0x10000,
+    uint32_t device_id = 1,
+    CoreCoord target_worker = CoreCoord{0, 0},
+    uint32_t num_writes = 64,
+    uint32_t start_index = 1) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
     const auto& tunnel = desc.tunnels_from_mmio[0];
 
-    lite_fabric::LaunchLiteFabric(cluster, hal, desc);
+    CoreCoord virtual_worker =
+        cluster.get_virtual_coordinate_from_logical_coordinates(device_id, target_worker, CoreType::WORKER);
+    uint64_t dest_noc_upper = (uint64_t(virtual_worker.y) << (36 + 6)) | (uint64_t(virtual_worker.x) << 36);
+    uint64_t dest_noc_addr = dest_noc_upper | (uint64_t)l1_base;
 
-    auto host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
-    auto service_func_offset = lite_fabric::LiteFabricMemoryMap::get_service_channel_func_addr();
-    // This value can be read from the MMIO device. It's the same across all devices
-    {
-        uint32_t service_func = 0;
-        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-            (void*)&service_func, sizeof(uint32_t), tunnel.mmio_cxy_virtual(), service_func_offset);
-        // Service function is expected to be somewhere in L1 but Local
-        ASSERT_TRUE(service_func > 0x60000 && service_func < 0x70000) << "Expected service function to be in L1 range";
-        // First instruction should be a stack allocation
-        // fd010113          	addi	sp,sp,-48
+    log_info(tt::LogMetal, "Testing {} small (1-byte) writes starting from index {}", num_writes, start_index);
+
+    // Create test data vector
+    std::vector<uint32_t> write_data = create_random_vector_of_bfloat16(
+        num_writes * sizeof(uint32_t), 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
+
+    // Write 1 byte at a time to consecutive addresses
+    for (int i = start_index; i < num_writes; ++i) {
+        host_interface.write_any_len(&write_data[i], 1, tunnel.mmio_cxy_virtual(), dest_noc_addr + i);
+        // Due to unaligned 1-byte write, mask off the irrelevant bits for comparison
+        write_data[i] = write_data[i] & 0xff;
+    }
+    host_interface.barrier(tunnel.mmio_cxy_virtual());
+
+    // Read back and verify each 1-byte write
+    for (int i = start_index; i < num_writes; ++i) {
+        std::vector<uint32_t> read_data(1);
+        cluster.read_core(read_data.data(), 1, tt_cxy_pair{device_id, virtual_worker}, l1_base + i);
+
+        log_debug(
+            tt::LogMetal,
+            "Read data {} from {:#x} got {:#x} expecting {:#x}",
+            i,
+            l1_base + i,
+            read_data[0],
+            write_data[i]);
+
+        EXPECT_EQ(read_data[0], write_data[i]) << fmt::format(
+            "Small write verification failed at index {} (addr {:#x}): got {:#x}, expected {:#x}",
+            i,
+            l1_base + i,
+            read_data[0],
+            write_data[i]);
     }
 
-    lite_fabric::TerminateLiteFabric(cluster, desc);
+    log_info(tt::LogMetal, "Successfully verified {} small writes", num_writes - start_index);
 }
 
-TEST(LiteFabric, FullFabric) {
-    // put lite fabric binaries on the device
-    auto desc = []() {
+void perform_basic_combo_test(
+    const lite_fabric::SystemDescriptor& desc,
+    lite_fabric::HostToLiteFabricInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>&
+        host_interface) {
+    const auto& tunnel = desc.tunnels_from_mmio[0];
+    log_info(tt::LogTest, "Tunnel: {} -> {}", tunnel.mmio_cxy_virtual().str(), tunnel.connected_cxy_virtual().str());
+
+    // This will wrap the sender channel multiple times and write to all worker cores
+    uint32_t payload_size_bytes = 4096;
+    uint32_t l1_base = 0x10000;
+    uint32_t num_writes = 64;
+    uint32_t start_index = 1;
+    CoreCoord target_worker{0, 0};
+    size_t read_size_bytes = 64 * sizeof(uint32_t);  // 256-byte slice
+    size_t unaligned_offset_bytes = 7;
+    int max_alignment_offset = 16;
+
+    perform_write_read_test(desc, host_interface, payload_size_bytes, l1_base, 1);
+
+    perform_unaligned_read_test(
+        desc, host_interface, payload_size_bytes, l1_base, 1, target_worker, read_size_bytes, unaligned_offset_bytes);
+
+    host_interface.barrier(tunnel.mmio_cxy_virtual());
+
+    perform_read_test(desc, host_interface, payload_size_bytes, l1_base, 1, target_worker);
+
+    perform_small_write_test(desc, host_interface, l1_base, 1, target_worker, num_writes, start_index);
+
+    perform_unaligned_write_test(
+        desc, host_interface, payload_size_bytes, l1_base, 1, target_worker, max_alignment_offset);
+}
+
+}  // anonymous namespace
+
+struct LiteFabricTestConfig {
+    bool standalone{false};
+    tt::tt_fabric::FabricConfig fabric_config{tt::tt_fabric::FabricConfig::DISABLED};
+};
+
+// Lite Fabric Test Fixture
+class LiteFabric : public testing::TestWithParam<LiteFabricTestConfig> {
+protected:
+    inline static lite_fabric::SystemDescriptor desc;
+    inline static lite_fabric::
+        HostToLiteFabricInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>
+            host_interface;
+
+    // Instance variables instead of static ones for parameter-dependent resources
+    std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
+    bool fabric_configured_{false};
+
+    static void SetUpTestSuite() {
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         auto& hal = tt::tt_metal::MetalContext::instance().hal();
-        auto desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
-        lite_fabric::LaunchLiteFabric(cluster, hal, desc);
-        lite_fabric::TerminateLiteFabric(cluster, desc);
-        return desc;
-    }();
+        desc = lite_fabric::GetSystemDescriptor2Devices(cluster, 0, 1);
 
-    // Now launch full fabric
-    tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
-    auto mesh_device = tt::tt_metal::distributed::MeshDevice::create(
-        tt::tt_metal::distributed::MeshDeviceConfig(tt::tt_metal::distributed::MeshShape{2, 1}));
+        lite_fabric::LaunchLiteFabric(cluster, hal, desc);
+
+        host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
+    }
+
+    static void TearDownTestSuite() {
+        auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        auto& hal = tt::tt_metal::MetalContext::instance().hal();
+
+        lite_fabric::TerminateLiteFabric(cluster, desc);
+    }
+
+    void SetUp() override {
+        CHECK_TEST_REQS();
+
+        // Configure fabric if needed
+        if (GetParam().fabric_config != tt::tt_fabric::FabricConfig::DISABLED) {
+            tt::tt_fabric::SetFabricConfig(GetParam().fabric_config);
+            fabric_configured_ = true;
+        }
+
+        // Create mesh device if not standalone
+        if (!GetParam().standalone) {
+            if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+                GTEST_SKIP() << "Fast dispatch is required for this test (remove TT_METAL_SLOW_DISPATCH_MODE)";
+            }
+
+            auto number_of_devices = tt::tt_metal::GetNumAvailableDevices();
+            mesh_device_ = tt::tt_metal::distributed::MeshDevice::create(tt::tt_metal::distributed::MeshDeviceConfig(
+                tt::tt_metal::distributed::MeshShape{number_of_devices, 1}));
+        }
+    }
+
+    void TearDown() override {
+        // Clean up mesh device
+        if (mesh_device_) {
+            mesh_device_.reset();
+        }
+
+        // Reset fabric configuration
+        if (fabric_configured_) {
+            tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
+            fabric_configured_ = false;
+        }
+    }
+};
+
+INSTANTIATE_TEST_SUITE_P(
+    LiteFabricFixture,
+    LiteFabric,
+    ::testing::Values(
+        // Standalone tests (no mesh device, no fabric)
+        LiteFabricTestConfig{.standalone = true},
+        // Standard tests with mesh device but no fabric
+        LiteFabricTestConfig{.standalone = false}
+        // Full fabric parallel test with 2D dynamic routing
+        // LiteFabricTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}
+        ),
+    [](const testing::TestParamInfo<LiteFabricTestConfig>& info) {
+        std::string name;
+        if (info.param.standalone) {
+            name = "Standalone";
+        } else if (info.param.fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
+            name = "MeshDevice";
+        } else if (info.param.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D) {
+            name = "FullFabric";
+        } else {
+            name = "MeshDevice_";
+            name += enchantum::to_string(info.param.fabric_config);
+        }
+        return name;
+    });
+
+TEST(LiteFabricBuild, BuildOnly) {
+    auto home_directory = std::filesystem::path(std::getenv("TT_METAL_HOME"));
+    auto output_directory = home_directory / "lite_fabric";
+    auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    if (lite_fabric::CompileLiteFabric(cluster, home_directory, output_directory)) {
+        throw std::runtime_error("Failed to compile lite fabric");
+    }
+    if (lite_fabric::LinkLiteFabric(home_directory, output_directory, output_directory / "lite_fabric.elf")) {
+        throw std::runtime_error("Failed to link lite fabric");
+    }
+}
+
+TEST_P(LiteFabric, Init) { EXPECT_GT(desc.tunnels_from_mmio.size(), 0) << "No tunnels found"; }
+
+TEST_P(LiteFabric, Writes) {
+    const auto& tunnel = desc.tunnels_from_mmio[0];
+    log_info(tt::LogTest, "Tunnel: {} -> {}", tunnel.mmio_cxy_virtual().str(), tunnel.connected_cxy_virtual().str());
+
+    // This will wrap the sender channel multiple times and write to all worker cores
+    uint32_t payload_size_bytes = 4096;  // (128 * 1024) + 512;
+    uint32_t l1_base = 0x10000;
+
+    // Use the extracted function to perform the write/read test
+    perform_write_read_test(desc, host_interface, payload_size_bytes, l1_base, 1);
+}
+
+TEST_P(LiteFabric, Reads) {
+    const auto& tunnel = desc.tunnels_from_mmio[0];
+    log_info(tt::LogTest, "Tunnel: {} -> {}", tunnel.mmio_cxy_virtual().str(), tunnel.connected_cxy_virtual().str());
+
+    uint32_t payload_size_bytes = 4 * 1024;
+    uint32_t l1_base = 0x10000;
+    CoreCoord target_worker{0, 0};
+
+    // Use the extracted function to perform the read test
+    perform_read_test(desc, host_interface, payload_size_bytes, l1_base, 1, target_worker);
+}
+
+TEST_P(LiteFabric, Barrier) {
+    const auto& tunnel = desc.tunnels_from_mmio[0];
+
+    host_interface.barrier(tunnel.mmio_cxy_virtual());
+}
+
+TEST_P(LiteFabric, WritesSmall) {
+    uint32_t l1_base = 0x10000;
+    CoreCoord target_worker{0, 0};
+    uint32_t num_writes = 64;
+    uint32_t start_index = 1;  // Skip index 0 to avoid overwriting each other
+
+    perform_small_write_test(desc, host_interface, l1_base, 1, target_worker, num_writes, start_index);
+}
+
+TEST_P(LiteFabric, WritesUnaligned) {
+    uint32_t payload_size_bytes = 512;
+    uint32_t l1_base = 0x10000;
+    CoreCoord target_worker{0, 0};
+    int max_alignment_offset = 16;
+
+    perform_unaligned_write_test(
+        desc, host_interface, payload_size_bytes, l1_base, 1, target_worker, max_alignment_offset);
+}
+
+TEST_P(LiteFabric, ReadsUnaligned) {
+    uint32_t write_data_size_bytes = 4096;
+    uint32_t l1_base = 0x10000;
+    CoreCoord target_worker{0, 0};
+    size_t read_size_bytes = 64 * sizeof(uint32_t);  // 256-byte slice
+    size_t unaligned_offset_bytes = 7;
+
+    perform_unaligned_read_test(
+        desc,
+        host_interface,
+        write_data_size_bytes,
+        l1_base,
+        1,
+        target_worker,
+        read_size_bytes,
+        unaligned_offset_bytes);
+}
+
+TEST_P(LiteFabric, FunctionPointerTable) {
+    const auto& tunnel = desc.tunnels_from_mmio[0];
+
+    auto service_func_offset = lite_fabric::LiteFabricMemoryMap::get_service_channel_func_addr();
+    // This value can be read from the MMIO device. It's the same across all devices
+    uint32_t service_func = 0;
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        (void*)&service_func, sizeof(uint32_t), tunnel.mmio_cxy_virtual(), service_func_offset);
+    // Service function is expected to be somewhere in L1 but Local
+    ASSERT_TRUE(service_func > 0x60000 && service_func < 0x70000) << "Expected service function to be in L1 range";
+    // First instruction should be a stack allocation
+}
+
+TEST_P(LiteFabric, BasicFunctions) {
+    if (GetParam().standalone) {
+        GTEST_SKIP() << "BasicFunctions test requires mesh device (not standalone)";
+    }
+    perform_basic_combo_test(desc, host_interface);
+}
+
+TEST_P(LiteFabric, ActiveEthKernelDevice0) {
+    if (!mesh_device_) {
+        GTEST_SKIP() << "Mesh device required for this test";
+    }
+    // Launch an active eth kernel on device 0 which calls the servicing routine and ensure we can still send/recv
+    // through lite fabric
+    const std::string kernel_path = "tests/tt_metal/tt_metal/tunneling/test_kernels/service_channels.cpp";
+    auto program = tt::tt_metal::CreateProgram();
+
+    uint32_t run_signal_addr = mesh_device_->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    uint32_t run_signal = 1;
+
+    const auto mmio_eth_core = desc.tunnels_from_mmio[0].mmio_core_logical;
+    const auto mmio_eth_core_virtual = desc.tunnels_from_mmio[0].mmio_cxy_virtual();
+
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        &run_signal, sizeof(uint32_t), mmio_eth_core_virtual, run_signal_addr);
+
+    tt::tt_metal::CreateKernel(
+        program,
+        kernel_path,
+        mmio_eth_core,
+        tt::tt_metal::EthernetConfig{
+            .eth_mode = tt::tt_metal::SENDER,
+            .processor = static_cast<tt::tt_metal::DataMovementProcessor>(0),
+            .compile_args = {run_signal_addr},
+        });
+
+    tt::tt_metal::distributed::MeshWorkload workload;
+    auto zero_coord = tt::tt_metal::distributed::MeshCoordinate::zero_coordinate(mesh_device_->shape().dims());
+    auto device_range = tt::tt_metal::distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    tt::tt_metal::distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+
+    log_info(
+        tt::LogTest,
+        "========== Enqueue Active Eth kernel on device 0 {} (virtual={}) ==========",
+        mmio_eth_core.str(),
+        mmio_eth_core_virtual.str());
+
+    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, false);
+
+    // Do lite fabric actions while the kernel is running
+    // This will hang if the kernel doesn't call service_lite_fabric_channels()
+    log_info(tt::LogTest, "========== Kernel running. Performing basic combo test while kernel is running ==========");
+    perform_basic_combo_test(desc, host_interface);
+
+    run_signal = 0;
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        &run_signal, sizeof(uint32_t), mmio_eth_core_virtual, run_signal_addr);
+    Finish(mesh_device_->mesh_command_queue());
+
+    // Try again now we are in metal firmware
+    log_info(tt::LogTest, "========== Kernel done. Performing basic combo test while in metal firmware ==========");
+    perform_basic_combo_test(desc, host_interface);
 }

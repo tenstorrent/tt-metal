@@ -83,9 +83,17 @@ void LaunchLiteFabric(
 
 void LaunchLiteFabric(tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const SystemDescriptor& desc);
 
+// Resume the execution of Lite Fabric which is already on the device
+// Resets the PC to execute from the start of the Lite Fabric firmware and updates the host interface pointers
+// WARNING: This function is only valid if all work as already been completed.
+// WARNING: This function is only valid if the lite fabric binary and config on the device are still intact. If they are
+// corrupted, a full
+//          reinit with LaunchLiteFabric() is required.
+template <typename HOST_INTERFACE>
+void ResumeLiteFabric(
+    tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const SystemDescriptor& desc, HOST_INTERFACE& host_interface);
+
 void TerminateLiteFabricWithMetal(tt::Cluster& cluster, const SystemDescriptor& desc);
 void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc);
-
-void DrainLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc);
 
 }  // namespace lite_fabric
