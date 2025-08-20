@@ -72,12 +72,12 @@ void kernel_main() {
     constexpr uint32_t row = linearized_mesh_coord / mesh_cols;
     constexpr uint32_t col = linearized_mesh_coord % mesh_cols;
 
-    constexpr uint32_t device_begin_idx = REPLICATE_GROUP_AXIS == 0 ? col : row * mesh_cols;
+    constexpr uint32_t device_begin_idx = replicate_axis == ReplicateGroup::COLS ? col : row * mesh_cols;
     constexpr uint32_t device_end_idx =
-        (REPLICATE_GROUP_AXIS == 0)
+        (replicate_axis == ReplicateGroup::COLS)
             ? (col + mesh_rows * mesh_cols)   // last is col+(mesh_rows-1)*mesh_cols; add one stride
             : (row * mesh_cols + mesh_cols);  // last is row*mesh_cols+(mesh_cols-1); add one
-    constexpr uint32_t device_stride = REPLICATE_GROUP_AXIS == 0 ? mesh_cols : 1;
+    constexpr uint32_t device_stride = replicate_axis == ReplicateGroup::COLS ? mesh_cols : 1;
 #else
     constexpr ReplicateGroup replicate_axis = ReplicateGroup::NONE;
     constexpr uint8_t replicate_group_devices = num_devices;

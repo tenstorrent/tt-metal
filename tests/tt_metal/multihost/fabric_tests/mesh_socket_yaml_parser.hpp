@@ -55,7 +55,7 @@ struct MemoryConfig {
     std::vector<uint32_t> fifo_size;
     std::vector<uint32_t> page_size;
     std::vector<uint32_t> data_size;
-    uint32_t num_transactions;
+    uint32_t num_transactions{};
 };
 
 struct ParsedMemoryConfig {
@@ -85,7 +85,7 @@ struct TestSocketConfig {
 };
 
 struct PatternExpansionConfig {
-    PatternType type;      // "all_to_all_devices" or "all_hosts_random_sockets"
+    PatternType type{};    // "all_to_all_devices" or "all_hosts_random_sockets"
     CoreCoord core_coord;  // Core coordinate to use for connections
     std::optional<uint32_t> num_sockets;  // Optional number of random sockets to generate
 };
@@ -108,7 +108,7 @@ struct ParsedTestConfig {
 
 struct MeshSocketTestConfiguration {
     std::optional<PhysicalMeshConfig> physical_mesh_config;
-    FabricConfig fabric_config;
+    FabricConfig fabric_config{};
     std::vector<TestConfig> tests;
 };
 

@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from models.utility_functions import skip_for_grayskull
 
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather_TG_post_commit import (
@@ -761,3 +762,69 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
         cluster_axis=1,
         use_all_gather_async=True,
     )
+
+
+# Related to issue #26672
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x4_grid")], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_all_gather_async_segfault(mesh_device):
+    if mesh_device.get_num_devices() < 8:
+        pytest.skip("Not enough devices for this test!")
+
+    num_devices = 4
+    input_tensor = torch.arange(32 * 32).reshape(1, 1, 32, 32)
+    output_tensor = input_tensor.repeat([1, 1, 1, num_devices])
+    tensor = ttnn.from_torch(
+        input_tensor,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    memory_config = ttnn.create_sharded_memory_config(
+        shape=(
+            32,
+            32,
+        ),
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_devices - 1, 0))}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(mesh_device.core_grid.x - 1, mesh_device.core_grid.y - 1))}
+    )
+    semaphores = [ttnn.create_global_semaphore(mesh_device, cores, 0) for _ in range(2)]
+    tensor_ag = ttnn.experimental.all_gather_async(
+        tensor,
+        mesh_device=mesh_device,
+        cluster_axis=1,
+        dim=-1,
+        topology=ttnn.Topology.Linear,
+        memory_config=memory_config,
+        barrier_semaphore=ttnn.create_global_semaphore(mesh_device, cores, 0),
+        # when using 2 multi_device_global_semaphores, the minimal AG is getting executed
+        # when using one multi_device_global_semaphore (multi_device_global_semaphore=semaphores[0]), the composite AG is getting executed
+        multi_device_global_semaphore=semaphores[0],
+    )
+
+    tt_output_tensor = ttnn.to_torch(
+        tensor_ag, mesh_composer=ConcatMesh2dToTensor(mesh_device, mesh_shape=(1, num_devices), dims=(0, 3))
+    )
+    output_golden = torch.zeros(tt_output_tensor.shape)
+    repeat_factor = [1, 1, 1, num_devices]
+    output_golden[:, :, :, :] = output_tensor.repeat(repeat_factor)
+
+    eq, output = comp_pcc(tt_output_tensor, output_golden)
+    if not eq:
+        logger.error(f"output mismatch for tensor: {output}")
+
+    assert eq, f"FAILED: {output}"
