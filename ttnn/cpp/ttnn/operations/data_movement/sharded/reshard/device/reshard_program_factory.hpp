@@ -28,6 +28,12 @@ struct PageStride {
     bool skip{};
 };
 
+struct CompressedStrideBlock {
+    std::vector<PageStride> base_pattern;
+    Stride meta_stride;
+    uint32_t num_repeats;
+};
+
 struct CorePageRange {
     CoreCoord core;
     PageRange range{};

@@ -767,3 +767,58 @@ def test_reshard_diff_width(
     else:
         passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
     assert passing, output
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_layout, input_shard_grid,  input_shard_shape, input_shard_orientation, input_sharding_scheme, output_shard_grid, output_shard_shape, output_shard_orientation, output_sharding_scheme",
+    [
+        (
+            [1, 1, 64, 320],
+            ttnn.ROW_MAJOR_LAYOUT,
+            [[(0, 0), (7, 1)]],
+            (32, 40),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            [[(0, 0), (4, 1)]],
+            (32, 64),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ),
+    ],
+)
+@pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
+def test_nd_reshard_diff_width(
+    device,
+    input_shape,
+    input_layout,
+    input_shard_grid,
+    input_shard_shape,
+    input_shard_orientation,
+    input_sharding_scheme,
+    output_shard_grid,
+    output_shard_shape,
+    output_shard_orientation,
+    output_sharding_scheme,
+    tt_dtype,
+):
+    torch_tensor, torch_tensor_after_round_trip = run_reshard_test(
+        device,
+        input_shape,
+        input_layout,
+        input_shard_grid,
+        input_shard_shape,
+        input_shard_orientation,
+        input_sharding_scheme,
+        output_shard_grid,
+        output_shard_shape,
+        output_shard_orientation,
+        output_sharding_scheme,
+        tt_dtype,
+    )
+
+    assert torch_tensor.shape == torch_tensor_after_round_trip.shape
+    if tt_dtype != ttnn.bfloat8_b:
+        passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
+    else:
+        passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
+    assert passing, output
