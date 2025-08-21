@@ -97,8 +97,9 @@ class CLIPEncoder:
             parallel_config=self.parallel_config,
         )
 
+        # TODO: move final layer norm (up until pooled output) to clipstack __call__
         # breakpoint()
-        # final layer norm
+        # === final layer norm ===
         final_hidden_layer = encoder_output[-1]  # final hidden layer
         normalized_final_state = ttnn.layer_norm(
             final_hidden_layer,
@@ -115,7 +116,7 @@ class CLIPEncoder:
 
         pooled_output = _gather_eos(normalized_final_state, prompt_tokenized, self.eos_token_id, mesh_device)
 
-        # apply text projection based on with_projection param
+        # === apply text projection ===
         if with_projection:
             if self.text_projection is None:
                 raise ValueError("projection weights are not loaded")
