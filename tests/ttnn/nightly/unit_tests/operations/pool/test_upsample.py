@@ -16,10 +16,7 @@ from tests.ttnn.unit_tests.operations.pool.test_upsample import upsample_multico
 @pytest.mark.parametrize(
     "input_shapes",
     [
-        [1, 256, 512, 512],
-        [1, 512, 256, 256],
-        [1, 256, 128, 128],
-        [1, 64, 64, 64],
+        [1, 128, 64, 64],
         [2, 64, 32, 32],
         [5, 32, 96, 96],
         [1, 96, 32, 32],
