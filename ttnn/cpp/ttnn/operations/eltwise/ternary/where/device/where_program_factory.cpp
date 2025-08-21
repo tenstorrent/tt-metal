@@ -45,7 +45,7 @@ void set_or_update_runtime_arguments(
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
     constexpr size_t num_reader_args = 27;
     constexpr size_t num_writer_args = 3;
-    constexpr size_t num_kernel_args = 1;
+    constexpr size_t num_kernel_args = 3;
 
     // Reader args: 5 for simple variants, 27 for column broadcast
 
