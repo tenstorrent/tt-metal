@@ -26,8 +26,8 @@ int main() {
     Program program = CreateProgram();
 
     // initialize source data
-    constexpr uint32_t src_M = 8;
-    constexpr uint32_t src_N = 4;
+    constexpr uint32_t src_M = 64;
+    constexpr uint32_t src_N = 32;
     constexpr uint32_t packed_data_size = sizeof(uint32_t);
     constexpr uint32_t unpacked_data_size = sizeof(bfloat16);
     constexpr uint32_t packing_ratio = packed_data_size / unpacked_data_size;
@@ -47,8 +47,8 @@ int main() {
         1, pack_two_bfloat16_into_uint32(std::pair<bfloat16, bfloat16>(pad_value, pad_value)));
 
     // create destination vector
-    constexpr uint32_t dst_M = 8;
-    constexpr uint32_t dst_N = 8;
+    constexpr uint32_t dst_M = 64;
+    constexpr uint32_t dst_N = 64;
     uint32_t dst_num_values_unpacked = dst_M * dst_N;
     uint32_t dst_num_values_packed = dst_num_values_unpacked / packing_ratio;
     std::vector<uint32_t> dst_vec(dst_num_values_packed, 0);
@@ -93,9 +93,9 @@ int main() {
     constexpr uint32_t cb2 = CBIndex::c_2;
     tt::DataFormat cb_df = tt::DataFormat::UInt32;
     const uint32_t stick_size_bytes = packed_data_size;              // 4 bytes per stick (one packed uint32)
-    // Use TTNN v2 row-major minimum of 32B per stick in L1 for padding pattern
-    const uint32_t stick_size_padded = 32;
-    const uint32_t stick_size_padded_aligned = 32;
+    // Use TTNN v2 row-major minimum of 64B per stick in L1 for padding pattern
+    const uint32_t stick_size_padded = 64;
+    const uint32_t stick_size_padded_aligned = 64;
     const uint32_t num_packed_row_src = src_N / packing_ratio;
     const uint32_t num_packed_row_dst = dst_N / packing_ratio;
     const uint32_t num_sticks_per_barrier = num_packed_row_dst;      // process one row per barrier
