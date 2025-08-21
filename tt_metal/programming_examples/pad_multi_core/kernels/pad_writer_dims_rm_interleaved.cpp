@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// v2 writer: writes sticks from c_0 with padded alignment stepping
+// writes sticks from c_0 with padded alignment stepping
 #include "dataflow_api.h"
 
 void kernel_main() {
