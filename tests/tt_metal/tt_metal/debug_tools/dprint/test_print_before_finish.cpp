@@ -29,19 +29,23 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 static void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    std::cout << "entering RunTest" << std::endl;
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    std::cout << "error here -1" << std::endl;
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
-    auto device = mesh_device->get_devices().at(0);
+    std::cout << "error here -0.5" << std::endl;
+    auto device = mesh_device->get_devices()[0];
 
     // This tests prints only on a single core
     CoreCoord xy_start = {0, 0};
     CoreCoord xy_end = {0, 0};
 
+    std::cout << "error here 0" << std::endl;
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/print_with_wait.cpp",
@@ -88,8 +92,11 @@ static void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::Mes
 }
 
 TEST_F(DPrintMeshFixture, TensixTestPrintFinish) {
+    std::cout << "entering TensixTestPrintFinish" << std::endl;
     auto mesh_devices = this->devices_;
     // Run only on the first device, as this tests disconnects devices and this can cause
     // issues on multi-device setups.
-    this->RunTestOnDevice(RunTest, mesh_devices[0]);
+    std::cout << "entering RunTestOnDevice" << std::endl;
+    this->RunTestOnDevice(RunTest, mesh_devices.at(0));
+    std::cout << "exiting TensixTestPrintFinish" << std::endl;
 }
