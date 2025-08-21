@@ -41,7 +41,8 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
         for (const auto& buffer_addr : print_buffer_addrs) {
             std::vector<std::uint32_t> profile_buffer;
             uint32_t end_index;
-            profile_buffer = tt::llrt::read_hex_vec_from_core(device_id, worker_core, buffer_addr, DPRINT_BUFFER_SIZE);
+            profile_buffer = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                device_id, worker_core, buffer_addr, DPRINT_BUFFER_SIZE);
 
             end_index = profile_buffer[BUFFER_END_INDEX];
 
