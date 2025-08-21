@@ -18,13 +18,15 @@ class ARCUintMetric : public UIntMetric {
 public:
     // Common integral metrics that exist on both architectures
     enum class CommonTelemetryTag {
-        AICLK,      // AI clock frequency (MHz)
-        AXICLK,     // AXI clock frequency (MHz)
-        ARCCLK,     // ARC clock frequency (MHz)
-        FAN_SPEED,  // Fan speed (RPM)
-        TDP,        // Thermal Design Power
-        TDC,        // Thermal Design Current
-        VCORE       // Core voltage
+        AICLK,             // AI clock frequency (MHz)
+        AXICLK,            // AXI clock frequency (MHz)
+        ARCCLK,            // ARC clock frequency (MHz)
+        FAN_SPEED,         // Fan speed (RPM)
+        TDP,               // Thermal Design Power
+        TDC,               // Thermal Design Current
+        VCORE,             // Core voltage
+        ASIC_TEMPERATURE,  // ASIC temperature (raw uint32)
+        BOARD_TEMPERATURE  // Board temperature (raw uint32)
     };
 
     // Constructor for Wormhole telemetry tags

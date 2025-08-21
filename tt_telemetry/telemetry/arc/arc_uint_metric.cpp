@@ -87,6 +87,18 @@ ARCUintMetric::ARCUintMetric(
             wormhole_tag_ = tt::umd::wormhole::TelemetryTag::VCORE;
             blackhole_tag_ = tt::umd::blackhole::TelemetryTag::VCORE;
             break;
+        case CommonTelemetryTag::ASIC_TEMPERATURE:
+            metric_name_ = "ASICTemperature";
+            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::ASIC_TEMPERATURE;
+            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::ASIC_TEMPERATURE;
+            mask_ = (reader_->get_arch() == tt::ARCH::WORMHOLE_B0) ? 0xffff : 0xffffffff;
+            break;
+        case CommonTelemetryTag::BOARD_TEMPERATURE:
+            metric_name_ = "BoardTemperature";
+            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::BOARD_TEMPERATURE;
+            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::BOARD_TEMPERATURE;
+            mask_ = (reader_->get_arch() == tt::ARCH::WORMHOLE_B0) ? 0xffff : 0xffffffff;
+            break;
         default: TT_ASSERT(false, "Unknown CommonTelemetryTag type for chip {}", reader_->id);
     }
 
