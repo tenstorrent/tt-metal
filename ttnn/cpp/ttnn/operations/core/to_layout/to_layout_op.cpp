@@ -142,7 +142,7 @@ Tensor to_layout_impl(
             if (tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
                 // ttnn::tilize_with_val_padding doesn't support height sharded tensors
                 // workaround by applying padding and then tilizing
-                SmallVector<std::pair<uint32_t, uint32_t>> padding = {
+                SmallVector<std::array<uint32_t, 2>> padding = {
                     {0, 0},
                     {0, 0},
                     {0, padded_output_shape[2] - output_shape[2]},

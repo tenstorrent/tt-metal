@@ -14,6 +14,7 @@
 #include <tt-metalium/device_pool.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
+#include "dispatch/kernel_config/relay_mux.hpp"
 #include "tt_align.hpp"
 #include <bit>
 #include <algorithm>
@@ -22,16 +23,62 @@ namespace tt::tt_fabric {
 
 // Helper function to find the maximum number of ethernet channels across all devices
 static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_active_devices) {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     size_t max_eth_channels = 0;
+    auto device_id = all_active_devices.front()->id();
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+
+    const auto device_has_dispatch_tunnel = [&]() -> bool {
+        auto mmio_device_id =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device_id);
+        auto tunnels_from_mmio =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_devices_controlled_by_mmio_device(mmio_device_id);
+        // results are inclusive of the mmio_device_id so they will never be zero
+        TT_FATAL(tunnels_from_mmio.size() > 0, "must have at least one mmio device");
+        return (tunnels_from_mmio.size() - 1) > 0;
+    }();
 
     for (const auto& device : all_active_devices) {
-        auto dev_id = device->id();
-        auto dev_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
+        std::unordered_map<RoutingDirection, std::vector<chan_id_t>> active_fabric_eth_channels;
+        std::unordered_map<RoutingDirection, FabricNodeId> chip_neighbors;
 
-        // Get all active ethernet channels for this device
-        auto active_channels = control_plane.get_active_fabric_eth_channels(dev_fabric_node_id);
-        max_eth_channels = std::max(max_eth_channels, active_channels.size());
+        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+
+        for (const auto& direction : tt::tt_fabric::FabricContext::routing_directions) {
+            auto active_eth_chans =
+                control_plane.get_active_fabric_eth_routing_planes_in_direction(fabric_node_id, direction);
+            if (active_eth_chans.empty()) {
+                continue;
+            }
+            auto neighbors = control_plane.get_chip_neighbors(fabric_node_id, direction);
+
+            // assume same neighbor per direction
+            TT_FATAL(neighbors.size() == 1, "Multiple neighbor meshes per direction is unsupported");
+            TT_FATAL(
+                std::set<chip_id_t>(neighbors.begin()->second.begin(), neighbors.begin()->second.end()).size() == 1,
+                "Multiple neighbors per direction is currently unsupported");
+
+            FabricNodeId neighbor_fabric_node_id = FabricNodeId(neighbors.begin()->first, neighbors.begin()->second[0]);
+            chip_neighbors.emplace(direction, neighbor_fabric_node_id);
+
+            active_fabric_eth_channels.insert({direction, active_eth_chans});
+        }
+
+        std::vector<chan_id_t> non_dispatch_active_channels;
+        for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
+            uint32_t dispatch_link_idx =
+                tt_metal::RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
+
+            for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
+                auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
+
+                if (!(device_has_dispatch_tunnel && link_idx == dispatch_link_idx)) {
+                    non_dispatch_active_channels.push_back(eth_chan);
+                }
+            }
+        }
+
+        max_eth_channels = std::max(max_eth_channels, non_dispatch_active_channels.size());
     }
 
     return max_eth_channels;
@@ -95,10 +142,10 @@ void FabricTensixDatamoverConfig::initialize_channel_mappings() {
     // Second pass: create per-device channel mappings using real ethernet channel IDs
     for (const auto& device : all_active_devices) {
         auto dev_id = device->id();
-        auto dev_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
+        auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev_id);
 
         // Get all active ethernet channels for this device
-        auto active_channels = control_plane.get_active_fabric_eth_channels(dev_fabric_node_id);
+        auto active_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
 
         // Initialize per-device mappings
         eth_chan_to_core_index_[dev_id] = std::unordered_map<size_t, size_t>();
