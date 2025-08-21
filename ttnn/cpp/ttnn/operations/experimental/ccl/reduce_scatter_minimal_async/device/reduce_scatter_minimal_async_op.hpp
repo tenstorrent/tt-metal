@@ -101,7 +101,9 @@ struct ReduceScatterMinimalAsync {
     tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
         const ttnn::MeshCoordinate& coord,
         const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+        std::vector<Tensor>& output_tensors,
+        const std::vector<GlobalSemaphore>& op_semaphores,
+        const std::optional<GlobalSemaphore>& barrier_semaphore) const;
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
