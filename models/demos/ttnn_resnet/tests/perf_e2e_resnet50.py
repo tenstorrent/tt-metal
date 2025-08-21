@@ -61,6 +61,13 @@ def _run_model_pipeline(
 
     host_inputs = [tt_inputs_host] * num_measurement_iterations
 
+    pipeline.preallocate_output_tensors_on_host(
+        num_measurement_iterations,
+        [test_infra.batch_size * test_infra.num_devices, 1, 1, 1000],
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+    )
+
     if use_signpost:
         signpost(header="start")
     profiler.start(f"run")
