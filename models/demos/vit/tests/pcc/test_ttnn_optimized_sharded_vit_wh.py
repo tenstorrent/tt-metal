@@ -3,6 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+
+#
 import torch
 import transformers
 from datasets import load_dataset
@@ -227,6 +229,9 @@ def test_vit_intermediate(device, model_name, batch_size, sequence_size):
         config,
         hidden_states,
         parameters=parameters,
+        use_ttnn_gelu_accurate=False,
+        # use_torch_gelu=False,
+        # torch_gelu_approximate="none",
     )
     output = ttnn.to_torch(output)
 
@@ -321,6 +326,9 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
         config,
         encoder_input,
         parameters=parameters,
+        use_ttnn_gelu_accurate=False,
+        # use_torch_gelu=False,
+        # torch_gelu_approximate="none",
     )
     output = ttnn.to_torch(output)
 
@@ -359,6 +367,9 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size, model_locati
         config,
         hidden_states,
         parameters=parameters,
+        use_ttnn_gelu_accurate=False,
+        # use_torch_gelu=False,
+        # torch_gelu_approximate="none",
     )
     output = ttnn.to_torch(output)
 
@@ -443,13 +454,19 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
         ),
     )
 
+    # Test ttnn.gelu with approximate mode
+    print(f"\n=== Testing ttnn.gelu Approximate Mode ===")
     output = ttnn_optimized_sharded_vit.vit(
         config,
         pixel_values,
         cls_token,
         position_embeddings,
         parameters=parameters,
+        use_ttnn_gelu_accurate=False,
+        # use_torch_gelu=True,
+        # torch_gelu_approximate="tanh",
     )
     output = ttnn.to_torch(output)
+
     # 1000 classes slicing
     assert_with_pcc(torch_output, output[0, 0, :1000], 0.88)

@@ -8,6 +8,7 @@ import transformers
 from ttnn.dot_access import DotAccessDict
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
+#
 import ttnn
 
 
@@ -123,7 +124,7 @@ def update_model_config(config, batch_size):
             per_core_M=seqL_t,  # 7,
             per_core_N=dim_t__x_full_grid * 4,  # 12,
             transpose_mcast=False,
-            fused_activation=(ttnn.UnaryOpType.GELU, True),
+            fused_activation=None,  # Removed GELU fusion to use torch.gelu separately
         ),
         "ff2_matmul_program_config": ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(core_grid_8x8.x, core_grid_8x8.y),
@@ -339,6 +340,9 @@ def vit_intermediate(
     hidden_states,
     *,
     parameters,
+    use_ttnn_gelu_accurate=False,
+    # use_torch_gelu=False,
+    # torch_gelu_approximate="none",
 ):
     output = ttnn.linear(
         hidden_states,
@@ -349,6 +353,31 @@ def vit_intermediate(
         program_config=config.program_configs["ff1_matmul_program_config"],
     )
     ttnn.deallocate(hidden_states)
+
+    # Always apply ttnn.gelu, but choose approximation mode based on use_ttnn_gelu_accurate
+    if use_ttnn_gelu_accurate:
+        # Use ttnn.gelu with accurate approximation (fast_and_approximate_mode=False)
+        output = ttnn.gelu(output, fast_and_approximate_mode=False)
+    else:
+        # Use ttnn.gelu with fast approximation (fast_and_approximate_mode=True)
+        output = ttnn.gelu(output, fast_and_approximate_mode=True)
+
+    # if use_torch_gelu:
+    #     # Convert to torch, apply GELU, and convert back to ttnn
+    #     original_memory_config = output.memory_config()
+    #     torch_output = ttnn.to_torch(output)
+    #     torch_output = torch.nn.functional.gelu(torch_output, approximate=torch_gelu_approximate)
+    #
+    #     # Convert back using interleaved memory first, then to sharded
+    #     output = ttnn.from_torch(
+    #         torch_output,
+    #         dtype=ttnn.bfloat8_b,
+    #         layout=ttnn.TILE_LAYOUT,
+    #         device=output.device(),
+    #         memory_config=ttnn.DRAM_MEMORY_CONFIG
+    #     )
+    #     # Now convert to the original sharded memory config
+    #     output = ttnn.to_memory_config(output, original_memory_config)
 
     return output
 
@@ -382,8 +411,18 @@ def vit_feedforward(
     attention_output,
     *,
     parameters,
+    use_ttnn_gelu_accurate=False,
+    # use_torch_gelu=False,
+    # torch_gelu_approximate="none",
 ):
-    intermediate = vit_intermediate(config, hidden_states, parameters=parameters.intermediate)
+    intermediate = vit_intermediate(
+        config,
+        hidden_states,
+        parameters=parameters.intermediate,
+        use_ttnn_gelu_accurate=use_ttnn_gelu_accurate,
+        # use_torch_gelu=use_torch_gelu,
+        # torch_gelu_approximate=torch_gelu_approximate
+    )
     hidden_states = vit_output(config, intermediate, attention_output, parameters=parameters.output)
     return hidden_states
 
@@ -392,6 +431,9 @@ def vit_layer(
     config,
     hidden_states,
     parameters,
+    use_ttnn_gelu_accurate=False,
+    # use_torch_gelu=False,
+    # torch_gelu_approximate="none",
 ):
     layernorm_before_output = ttnn.layer_norm(
         hidden_states,
@@ -429,6 +471,9 @@ def vit_layer(
         layernorm_after_output,
         multi_head_attention_output,
         parameters=parameters,
+        use_ttnn_gelu_accurate=use_ttnn_gelu_accurate,
+        # use_torch_gelu=use_torch_gelu,
+        # torch_gelu_approximate=torch_gelu_approximate,
     )
 
     return feedforward_output
@@ -438,6 +483,9 @@ def vit_encoder(
     config,
     embeddings,
     parameters,
+    use_ttnn_gelu_accurate=False,
+    # use_torch_gelu=False,
+    # torch_gelu_approximate="none",
 ):
     TILE_HEIGHT = 32
     emb_N, emb_S, emb_D = embeddings.shape
@@ -459,6 +507,9 @@ def vit_encoder(
             config,
             encoder_input,
             encoder_parameters,
+            use_ttnn_gelu_accurate=use_ttnn_gelu_accurate,
+            # use_torch_gelu=use_torch_gelu,
+            # torch_gelu_approximate=torch_gelu_approximate,
         )
         encoder_input = encoder_output
 
@@ -471,6 +522,9 @@ def vit(
     cls_token,
     position_embeddings,
     parameters,
+    use_ttnn_gelu_accurate=False,
+    # use_torch_gelu=False,
+    # torch_gelu_approximate="none",
 ):
     embeddings_output = vit_embeddings(config, pixel_values, cls_token, position_embeddings, parameters=parameters)
 
@@ -478,6 +532,9 @@ def vit(
         config,
         embeddings_output,
         parameters=parameters.vit.encoder,
+        use_ttnn_gelu_accurate=use_ttnn_gelu_accurate,
+        # use_torch_gelu=use_torch_gelu,
+        # torch_gelu_approximate=torch_gelu_approximate,
     )
 
     # Final LayerNorm
