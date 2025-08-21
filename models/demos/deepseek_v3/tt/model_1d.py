@@ -19,14 +19,16 @@ from models.demos.deepseek_v3.utils.config_helpers import get_mesh_coords, sub_s
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
+    ModelState,
     RunDecodeConfig,
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 
-class Model1D(AbstractModule):
+class Model1D(SharedStateAddOn, AbstractModule):
     NUM_MLP_META_LAYERS = 1
     NUM_MLP_ROWS = 3
     NUM_MOE_META_LAYERS = 15
@@ -60,7 +62,7 @@ class Model1D(AbstractModule):
 
         return {
             "embedding": Embedding1D.convert_weights(
-                hf_config, sub_state_dict(state_dict, "embed_tokens."), output_path / "embedding", mesh_device
+                hf_config, [sub_state_dict(state_dict, "embed_tokens.")], output_path / "embedding", mesh_device
             ),
             "mlp_decoder_block": [
                 DecoderBlock.convert_weights(
@@ -161,8 +163,21 @@ class Model1D(AbstractModule):
             "transfer_row": PointToPointConfig(
                 topology=ttnn.Topology.Linear,
             ),
-            "norm_reshard": ReshardConfig(memory_config=norm_config["input_memory_config_decode"]),
+            "norm_reshard": ReshardConfig(memory_config=norm_config["input_memory_config"]),
             "norm": norm_config,
+        }
+
+    @classmethod
+    def create_shared_state(
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.MeshDevice,
+    ) -> ModelState:
+        return {
+            "mlp_decoder_block": [
+                DecoderBlock.create_shared_state(hf_config, mesh_device, is_padding_layer=None)
+                for _ in range(cls.NUM_MLP_META_LAYERS)
+            ],
         }
 
     @classmethod
@@ -176,7 +191,7 @@ class Model1D(AbstractModule):
         """Create the state for the 1D model."""
 
         return {
-            "embedding": Embedding1D.create_state(hf_config, mesh_device),
+            "embedding": Embedding1D.create_state(hf_config, mesh_device, ccl),
             "mlp_decoder_block": [
                 DecoderBlock.create_state(hf_config, mesh_device, paged_config, is_padding_layer=None, ccl=ccl)
                 for _ in range(cls.NUM_MLP_META_LAYERS)
