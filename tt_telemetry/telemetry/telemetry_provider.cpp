@@ -13,6 +13,8 @@
 
 #include <telemetry/telemetry_provider.hpp>
 #include <telemetry/ethernet/ethernet_metrics.hpp>
+#include <telemetry/arc/arc_uint_metric.hpp>
+#include <telemetry/arc/arc_telemetry_reader.hpp>
 
 static constexpr auto MONITOR_INTERVAL_SECONDS = std::chrono::seconds(5);
 
@@ -171,6 +173,8 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
     size_t id = 1;
     std::vector<std::unique_ptr<BoolMetric>> bool_metrics;
     std::vector<std::unique_ptr<UIntMetric>> uint_metrics;
+
+    // Create Ethernet metrics
     for (const auto &[chip_id, endpoints]: get_ethernet_endpoints_by_chip(cluster)) {
         for (const auto &endpoint: endpoints) {
             bool_metrics.push_back(std::make_unique<EthernetEndpointUpMetric>(id++, endpoint));
@@ -179,6 +183,14 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
             uint_metrics.push_back(std::make_unique<EthernetCorrectedCodewordCountMetric>(id++, endpoint, cluster));
             uint_metrics.push_back(std::make_unique<EthernetUncorrectedCodewordCountMetric>(id++, endpoint, cluster));
         }
+    }
+
+    // Create ARC telemetry metrics for MMIO-capable chips
+    for (const auto& [chip_identifier, reader] : create_arc_telemetry_readers_for_mmio_chips(cluster)) {
+        uint_metrics.push_back(
+            reader->get_arch() == tt::ARCH::WORMHOLE_B0
+                ? std::make_unique<ARCUintMetric>(id++, reader, tt::umd::wormhole::TelemetryTag::AICLK, "AIClock")
+                : std::make_unique<ARCUintMetric>(id++, reader, tt::umd::blackhole::TelemetryTag::AICLK, "AIClock"));
     }
 
     // Continuously monitor on a loop
