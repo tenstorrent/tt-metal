@@ -72,11 +72,11 @@ sender_downstream_encoding get_downstream_encoding(const SocketSenderInterface& 
         socket.downstream_enc_base_addr + downstream_id * downstream_encoding_size_bytes);
     // Write to risc from L1
     sender_downstream_encoding downstream_enc_interface;
-    downstream_enc.downstream_mesh_id = downstream_enc->downstream_mesh_id;
-    downstream_enc.downstream_chip_id = downstream_enc->downstream_chip_id;
-    downstream_enc.downstream_noc_y = downstream_enc->downstream_noc_y;
-    downstream_enc.downstream_noc_x = downstream_enc->downstream_noc_x;
-    return downstream_enc;
+    downstream_enc_interface.downstream_mesh_id = downstream_enc->downstream_mesh_id;
+    downstream_enc_interface.downstream_chip_id = downstream_enc->downstream_chip_id;
+    downstream_enc_interface.downstream_noc_y = downstream_enc->downstream_noc_y;
+    downstream_enc_interface.downstream_noc_x = downstream_enc->downstream_noc_x;
+    return downstream_enc_interface;
 }
 
 void set_sender_socket_page_size(SocketSenderInterface& socket, uint32_t page_size) {
