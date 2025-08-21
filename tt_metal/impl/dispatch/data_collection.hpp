@@ -6,8 +6,8 @@
 #include <host_api.hpp>
 #include <stdint.h>
 #include <optional>
-#include <vector>
 
+#include "hal_types.hpp"
 #include "program/program_impl.hpp"
 
 enum class CoreType;
@@ -42,8 +42,10 @@ void RecordDispatchData(
 
 // Record the KernelGroups present in this program (per core type). Should only be called per program created, not
 // program enqueued.
-void RecordKernelGroups(
-    tt_metal::detail::ProgramImpl& program, CoreType core_type, std::vector<tt_metal::KernelGroup>& kernel_groups);
+void RecordKernelGroup(
+    tt_metal::detail::ProgramImpl& program,
+    tt_metal::HalProgrammableCoreType core_type,
+    const tt_metal::KernelGroup& kernel_group);
 
 // Update stats with an enqueue of given program.
 void RecordProgramRun(uint64_t program_id);
