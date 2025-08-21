@@ -667,6 +667,99 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config) {
                     filter_value);
                 return false;
             }
+        } else if (filter_type.value() == "num_links" || filter_type.value() == "Num_Links") {
+            return test_config.fabric_setup.num_links == stoi(filter_value.value());
+        } else if (filter_type.value() == "ntype") {
+            // soft filter
+            std::optional<tt::tt_fabric::NocSendType> ntype;
+            ntype = detail::noc_send_type_mapper.from_string(filter_value.value(), "ntype");
+            bool checker = false;
+            for (const auto& sender : test_config.senders) {
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.ntype.has_value()) {
+                        if (pattern.ntype.value() == ntype.value()) {
+                            checker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ntype.has_value()) {
+                checker = test_config.defaults.value().ntype.value() == ntype.value();
+            }
+            return checker;
+        } else if (filter_type.value() == "ftype") {
+            // soft filter
+            std::optional<tt::tt_fabric::ChipSendType> ftype;
+            ftype = detail::chip_send_type_mapper.from_string(filter_value.value(), "ftype");
+            bool checker = false;
+            for (const auto& sender : test_config.senders) {
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.ftype.has_value()) {
+                        if (pattern.ftype.value() == ftype.value()) {
+                            checker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ftype.has_value()) {
+                checker = test_config.defaults.value().ftype.value() == ftype.value();
+            }
+            return checker;
+        } else if (filter_type.value() == "num_packets") {
+            // soft filter
+            uint32_t num_packets = stoi(filter_value.value());
+            bool checker = false;
+            for (const auto& sender : test_config.senders) {
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.num_packets.has_value()) {
+                        if (pattern.num_packets.value() == num_packets) {
+                            checker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().num_packets.has_value()) {
+                checker = test_config.defaults.value().num_packets.value() == num_packets;
+            }
+            return checker;
+        } else if (filter_type.value() == "size") {
+            uint32_t size = stoi(filter_value.value());
+            bool checker = false;
+            for (const auto& sender : test_config.senders) {
+                for (const auto& pattern : sender.patterns) {
+                    if (pattern.size.has_value()) {
+                        if (pattern.size.value() == size) {
+                            checker = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!checker && test_config.defaults.has_value() && test_config.defaults.value().size.has_value()) {
+                checker = test_config.defaults.value().size.value() == size;
+            }
+            return checker;
+        } else if (filter_type.value() == "pattern") {
+            bool checker = false;
+            if (test_config.patterns.has_value()) {
+                for (auto& high_level_pattern : test_config.patterns.value()) {
+                    if (high_level_pattern.type == filter_value.value()) {
+                        checker = true;
+                        break;
+                    }
+                }
+            }
+            return checker;
+        } else {
+            log_info(
+                tt::LogTest,
+                "Unsupported filter type: '{}'. Supported types are: name, topology, routing_type, benchmark_mode, "
+                "sync, num_links, ntype, ftype, num_packets, size, pattern",
+                filter_type.value());
+            return false;
         }
     }
     return true;
