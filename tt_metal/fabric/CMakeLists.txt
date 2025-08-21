@@ -33,6 +33,7 @@ target_sources(
             hw/inc/fabric_routing_table_interface.h
     PRIVATE
         control_plane.cpp
+        mesh_graph_descriptor.cpp
         routing_table_generator.cpp
         mesh_graph.cpp
         erisc_datamover_builder.cpp
@@ -85,6 +86,17 @@ target_link_libraries(
 target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)
 
 target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast)
+
+find_package(Protobuf QUIET REQUIRED)
+protobuf_generate(
+    LANGUAGE cpp
+    OUT_VAR FABRIC_PROTO_SRCS
+    PROTOC_OPTIONS --experimental_allow_proto3_optional
+    PROTOS ${CMAKE_CURRENT_SOURCE_DIR}/mesh_graph_descriptor_schema/mesh_graph_descriptor.proto
+)
+target_sources(fabric PRIVATE ${FABRIC_PROTO_SRCS})
+target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(fabric PUBLIC protobuf::libprotobuf)
 
 install(
     TARGETS
