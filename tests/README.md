@@ -7,9 +7,9 @@ This README applies to:
 
 ## Sweep Test Framework
 
-The sweep test framework runs parameterized tests across large parameter spaces for performance and correctness validation. The sweep test framework separates where vectors are loaded from (vector source) and where results are written to (result destination):
+The sweep test framework runs parameterized tests across large parameter spaces to evaluate test coverage and performance along that coverage. The sweep test framework separates where vectors are loaded from (vector source) and where results are written to (result destination):
 
-### Steps
+### Steps to run sweep tests
 
 #### 1. First Generate Test Vectors
 
@@ -55,12 +55,8 @@ python tests/sweep_framework/sweeps_parameter_generator.py --module-name eltwise
 
 - **If result destination is results_export**: no database credentials are required (results are written to JSON files under `tests/sweep_framework/results_export/`).
 
-Also note:
-- **Tag filter**: Vectors fetched from Elasticsearch are filtered by `--tag` (defaults to your `$USER`). Ensure your tag matches the one used during vector generation.
-
-**To run sweeps you must specify the vector source and result destination**
+**To run sweeps you must specify the source of the vectors source and destination of the results**
 ```bash
-
 # Run all available sweep tests
 python tests/sweep_framework/sweeps_runner.py --vector-source {elastic,file,vectors_export} --result-dest {elastic,postgres,results_export}
 
@@ -75,6 +71,7 @@ python tests/sweep_framework/sweeps_runner.py --module-name "eltwise.unary.relu.
 ```
 
 ### Sweep Runner CLI Reference (key options)
+- **Tag filter**: Vectors fetched from Elasticsearch are filtered by `--tag` (defaults to your `$USER`). Ensure your tag matches the one used during vector generation.
 ```bash
 - `--module-name`: Module name or comma-separated list (comma-separated supported for `elastic` and `vectors_export` sources)
 - `--suite-name`: Suite to run within a module
