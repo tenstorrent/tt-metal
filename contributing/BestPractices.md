@@ -18,13 +18,13 @@ void write_buffer(queue_id cq_id, Tensor& dst, std::vector<std::shared_ptr<void>
 void write_buffer(queue_id cq_id, Tensor& dst, const std::vector<std::shared_ptr<void>>& src, const std::optional<std::size_t>& transfer_size = std::nullopt); // Right!
 ```
 
-## 2. Use `tt::stl::Span` for Input Parameters
+## 2. Use `std::span` for Input Parameters
 
 ### Practice
-Consider using `tt::stl::Span` as input instead of `std::vector`. This allows `std::array` to be used as an argument as well.
+Consider using `std::span` as input instead of `std::vector`. This allows `std::array` to be used as an argument as well.
 
 ### Explanation
-`tt::stl::Span` is a lightweight view over a contiguous sequence of objects, such as arrays and vectors. It provides a safe and flexible way to handle array-like data structures without copying them.
+`std::span` is a lightweight view over a contiguous sequence of objects, such as arrays and vectors. It provides a safe and flexible way to handle array-like data structures without copying them.
 
 ### Motivation
 - **Flexibility**: Enables functions to accept both `std::vector` and `std::array`.
@@ -33,7 +33,7 @@ Consider using `tt::stl::Span` as input instead of `std::vector`. This allows `s
 ### Example
 ```
 template <typename T>
-void print_elements(tt::stl::Span<const T> data) {
+void print_elements(std::span<const T> data) {
     for (const auto& element : data) {
         std::cout << element << " ";
     }
@@ -405,3 +405,40 @@ const auto& get_device_configs() {
     return configs.get();
 }
 ```
+## 18. Use `std::optional<T>` Only When *Absence* Is Semantically Distinct
+
+### Practice
+Reserve `std::optional<T>` for cases where “value not supplied” must be **distinct** from “value supplied but empty/zero.”
+If an *in‑band* representation already conveys “nothing” pass the type directly and default‑construct it instead of wrapping it in `optional`.
+
+### Explanation
+`std::optional<T>` adds one byte (the engaged flag), an extra branch, and additional cognitive load.
+For many types—`std::vector`, `std::string_view`, numeric IDs with sentinel values—an empty or default‑constructed instance **already** means “no data.”
+Wrapping such types in `optional` duplicates meaning without benefit and can even inhibit compiler optimisations (e.g., `vector::emplace_back` fast paths).
+
+### Motivation
+- **Clarity & Simplicity** – avoids a redundant *engaged/empty* state when the type itself carries that information.
+- **Performance** – removes an extra boolean check and keeps ABI size smaller, especially in hot data paths.
+- **Ease of Use** – callers need not unwrap two layers of “might be empty.”
+
+### Examples
+
+#### ✅ Legitimate use
+```cpp
+// Absence (nullopt) vs. explicit zero timeout are different behaviours.
+void wait_for_event(std::optional<std::chrono::milliseconds> timeout = std::nullopt);
+```
+
+#### ❌ Over‑engineered uses
+
+| Anti‑pattern | Why it’s unnecessary | Cleaner alternative |
+|--------------|---------------------|---------------------|
+| **Optional container**<br><br>`void load_weights(std::optional<std::vector<float>> w = std::nullopt);` | An empty vector already means “no weights.” | `void load_weights(std::vector<float> w = {});` |
+| **Optional string‑like type**<br><br>`std::optional<std::string_view> cfg_path = std::nullopt;` | `string_view{}` is a perfectly valid “not provided” sentinel. | `std::string_view cfg_path = {};` |
+| **Optional bool flag**<br><br>`std::optional<bool> use_cache;` | *Three‑state logic* sounds compelling but is often a code smell; an explicit enum is clearer. | `enum class CacheMode{FollowGlobal, AlwaysOn, AlwaysOff};` |
+| **Optional global static as init flag**<br><br>`static std::optional<MySingleton> instance = std::nullopt;` | Adds indirection and still suffers from static‑order destruction problems. | Use `static Indestructible<MySingleton> instance;` *or* `std::once_flag` + function‑local static. |
+
+### Quick Checklist
+1. Can an empty/default `T{}` *already* mean “nothing”? → **Don’t** use `optional`.
+2. Do you need to know whether the caller *omitted* the argument entirely? → `optional` is appropriate.
+3. Are you modelling tri‑state logic? → Consider an **enum class** instead.
