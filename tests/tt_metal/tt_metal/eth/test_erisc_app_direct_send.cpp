@@ -93,7 +93,7 @@ bool eth_direct_sender_receiver_kernels(
         dst_eth_l1_byte_address);
     // Generate inputs
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    llrt::write_hex_vec_to_core(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         sender_device->id(),
         sender_device->ethernet_core_from_logical_core(eth_sender_core),
         inputs,
@@ -101,7 +101,7 @@ bool eth_direct_sender_receiver_kernels(
 
     // Clear expected value at ethernet L1 address
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
-    llrt::write_hex_vec_to_core(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         receiver_device->id(),
         receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
         all_zeros,
@@ -170,7 +170,7 @@ bool eth_direct_sender_receiver_kernels(
         t2.join();
     }
 
-    auto readback_vec = llrt::read_hex_vec_from_core(
+    auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         receiver_device->id(),
         receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
         dst_eth_l1_byte_address,
@@ -231,25 +231,33 @@ bool send_over_eth(
     uint32_t app_sync_info_base_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_SYNC_INFO);
     for (const auto& eth_core : eth_cores) {
-        llrt::write_hex_vec_to_core(sender_device->id(), eth_core, run_test_app_flag, fw_launch_addr);
-        llrt::write_hex_vec_to_core(receiver_device->id(), eth_core, run_test_app_flag, fw_launch_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            sender_device->id(), eth_core, run_test_app_flag, fw_launch_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            receiver_device->id(), eth_core, run_test_app_flag, fw_launch_addr);
         std::vector<uint32_t> zero = {0, 0, 0, 0, 0, 0, 0, 0};
-        llrt::write_hex_vec_to_core(sender_device->id(), eth_core, zero, app_sync_info_base_addr);
-        llrt::write_hex_vec_to_core(receiver_device->id(), eth_core, zero, app_sync_info_base_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            sender_device->id(), eth_core, zero, app_sync_info_base_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            receiver_device->id(), eth_core, zero, app_sync_info_base_addr);
     }
 
     // TODO: is it possible that receiver core app is stil running when we push inputs here???
     auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, byte_size / sizeof(uint32_t));
-    llrt::write_hex_vec_to_core(sender_device->id(), sender_core, inputs, erisc_unreserved_base_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        sender_device->id(), sender_core, inputs, erisc_unreserved_base_addr);
 
     // Zero out receiving address to ensure no stale data is causing tests to pass
     std::vector<uint32_t> all_zeros(inputs.size(), 0);
-    llrt::write_hex_vec_to_core(receiver_device->id(), receiver_core, all_zeros, erisc_unreserved_base_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        receiver_device->id(), receiver_core, all_zeros, erisc_unreserved_base_addr);
 
     std::vector<uint32_t> args_0 = {uint32_t(byte_size), 0};
-    llrt::write_hex_vec_to_core(sender_device->id(), sender_core, args_0, app_sync_info_base_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        sender_device->id(), sender_core, args_0, app_sync_info_base_addr);
     std::vector<uint32_t> args_1 = {uint32_t(byte_size), 1};
-    llrt::write_hex_vec_to_core(receiver_device->id(), receiver_core, args_1, app_sync_info_base_addr);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+        receiver_device->id(), receiver_core, args_1, app_sync_info_base_addr);
 
     // TODO: this should be updated to use kernel api
     uint32_t active_eth_index = tt_metal::MetalContext::instance().hal().get_programmable_core_type_index(
@@ -264,27 +272,33 @@ bool send_over_eth(
     const ll_api::memory& binary_mem_receive = llrt::get_risc_binary(receiver_firmware_path);
 
     for (const auto& eth_core : eth_cores) {
-        llrt::write_hex_vec_to_core(sender_device->id(), eth_core, binary_mem_send.data(), fw_base_addr);
-        llrt::write_hex_vec_to_core(receiver_device->id(), eth_core, binary_mem_receive.data(), fw_base_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            sender_device->id(), eth_core, binary_mem_send.data(), fw_base_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            receiver_device->id(), eth_core, binary_mem_receive.data(), fw_base_addr);
     }
 
     // Activate sender core runtime app
     run_test_app_flag = {0x1};
     // send remote first, otherwise eth core may be blocked, very ugly for now...
     if (receiver_device->id() == 1) {
-        llrt::write_hex_vec_to_core(1, receiver_core, run_test_app_flag, fw_launch_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            1, receiver_core, run_test_app_flag, fw_launch_addr);
     } else {
-        llrt::write_hex_vec_to_core(1, sender_core, run_test_app_flag, fw_launch_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            1, sender_core, run_test_app_flag, fw_launch_addr);
     }
     if (sender_device->id() == 0) {
-        llrt::write_hex_vec_to_core(0, sender_core, run_test_app_flag, fw_launch_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            0, sender_core, run_test_app_flag, fw_launch_addr);
     } else {
-        llrt::write_hex_vec_to_core(0, receiver_core, run_test_app_flag, fw_launch_addr);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            0, receiver_core, run_test_app_flag, fw_launch_addr);
     }
 
     bool pass = true;
-    auto readback_vec =
-        llrt::read_hex_vec_from_core(receiver_device->id(), receiver_core, erisc_unreserved_base_addr, byte_size);
+    auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        receiver_device->id(), receiver_core, erisc_unreserved_base_addr, byte_size);
     pass &= (readback_vec == inputs);
 
     return pass;

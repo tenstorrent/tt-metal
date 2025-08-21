@@ -230,7 +230,8 @@ TEST_F(DeviceFixture, TestUnorderedHeightShardReadWrite) {
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
         auto input_it = input.begin();
         for (const auto& physical_core : physical_cores) {
-            auto readback = tt::llrt::read_hex_vec_from_core(device->id(), physical_core, buffer->address(), page_size);
+            auto readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                device->id(), physical_core, buffer->address(), page_size);
             EXPECT_TRUE(std::equal(input_it, input_it + tt::constants::TILE_HW, readback.begin()));
             input_it += tt::constants::TILE_HW;
         }

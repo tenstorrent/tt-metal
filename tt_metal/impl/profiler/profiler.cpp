@@ -898,7 +898,7 @@ void writeToCoreControlBuffer(IDevice* device, const CoreCoord& virtual_core, co
                     true);
         }
     } else {
-        tt::llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device->id(), virtual_core, data, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
     }
 }
@@ -992,7 +992,7 @@ void DeviceProfiler::issueSlowDispatchReadFromL1DataBuffer(
     const Hal& hal = MetalContext::instance().hal();
     const HalProgrammableCoreType core_type = tt::llrt::get_core_type(device_id, worker_core);
     profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
-    core_l1_data_buffer = tt::llrt::read_hex_vec_from_core(
+    core_l1_data_buffer = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device_id,
         worker_core,
         reinterpret_cast<uint64_t>(profiler_msg->buffer),
@@ -1047,7 +1047,7 @@ void DeviceProfiler::readControlBufferForCore(IDevice* device, const CoreCoord& 
                     true);
         }
     } else {
-        core_control_buffers[virtual_core] = tt::llrt::read_hex_vec_from_core(
+        core_control_buffers[virtual_core] = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device_id,
             virtual_core,
             reinterpret_cast<uint64_t>(profiler_msg->control_vector),
