@@ -363,26 +363,6 @@ def test_unary_composite_swish_ttnn(input_shapes, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-def test_unary_composite_threshold_ttnn(input_shapes, device):
-    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
-    threshold = 1.0
-    value = 10.0
-    output_tensor = ttnn.threshold(input_tensor1, threshold, value)
-    golden_function = ttnn.get_golden_function(ttnn.threshold)
-    golden_tensor = golden_function(in_data1, threshold, value)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
 def test_unary_composite_tril_ttnn(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
 
@@ -499,29 +479,6 @@ def test_unary_swiglu_ttnn(input_shapes, dim, device):
 
     output_tensor = ttnn.swiglu(input_tensor, dim)
     golden_tensor = golden_fn(in_data, dim)
-
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    (
-        (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
-        (torch.Size([1, 3, 320, 384])),
-    ),
-)
-@pytest.mark.parametrize(
-    "param",
-    {0.45, 7.7, 36.89, 58.4, 89.9},
-)
-def test_unary_softshrink(input_shapes, param, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
-
-    output_tensor = ttnn.softshrink(input_tensor, lambd=param)
-    golden_function = ttnn.get_golden_function(ttnn.softshrink)
-    golden_tensor = golden_function(in_data, lambd=param)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

@@ -17,6 +17,7 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <vector>
@@ -269,7 +270,8 @@ static operation::ProgramWithCallbacks padded_slice_rm_multi_core(
 
     std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
 
-    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram, misalignment};
+    std::vector<uint32_t> reader_compile_time_args_vec = {misalignment};
+    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"
@@ -455,7 +457,8 @@ get_padded_slice_runtime_args_tile_sharded_output(
 
     const auto num_sticks_per_core = output_shard_spec.shape[0];
     const auto num_tiles_per_full_row = num_output_tiles_per_dim[1] * num_output_tiles_per_dim[0];
-    uint32_t start_offset = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, output_tensor_start);
+    [[maybe_unused]] uint32_t start_offset =
+        ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, output_tensor_start);
     log_debug(tt::LogOp, "Start Offset: {}", start_offset);
     uint32_t core_index = 0;
     for (const auto& core : cores) {
@@ -513,7 +516,7 @@ get_padded_slice_runtime_args_tile_sharded_output(
         std::ranges::reverse(start_index_per_dim);
         uint32_t input_start_id = ttnn::operations::data_movement::get_tiled_start_offset(
             input_tensor, ttnn::Shape(start_index_in_input_per_dim));
-        uint32_t input_end_id = ttnn::operations::data_movement::get_tiled_start_offset(
+        [[maybe_unused]] uint32_t input_end_id = ttnn::operations::data_movement::get_tiled_start_offset(
             input_tensor, ttnn::Shape(end_index_in_input_per_dim), true);
         ttnn::operations::data_movement::get_tiled_start_offset(actual_output_shape, ttnn::Shape(start_index_per_dim));
         ttnn::operations::data_movement::get_tiled_start_offset(
@@ -647,7 +650,8 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
         num_cores_channels);
     num_tiles_per_channel = num_tiles_per_channel / num_cores_channels;
 
-    uint32_t num_tiles_height_per_core = tt::div_up(output_shard_spec.shape[0], tt::constants::TILE_HEIGHT);
+    [[maybe_unused]] uint32_t num_tiles_height_per_core =
+        tt::div_up(output_shard_spec.shape[0], tt::constants::TILE_HEIGHT);
     uint32_t num_output_sticks_per_core = output_shard_spec.shape[0];
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
@@ -727,7 +731,8 @@ static operation::ProgramWithCallbacks padded_slice_tile_multi_core(
     std::vector<uint32_t> writer_compile_time_args_vec = {
         cb_untilized_index, cb_output_index, input_padded_shape.rank() /* == 4*/};
 
-    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_is_dram, misalignment};
+    std::vector<uint32_t> reader_compile_time_args_vec = {};
+    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/padded_slice/device/kernels/dataflow/"

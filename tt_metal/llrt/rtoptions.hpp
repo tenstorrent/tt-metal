@@ -67,13 +67,13 @@ extern const char* RunTimeDebugClassNames[RunTimeDebugClassCount];
 struct TargetSelection {
     std::map<CoreType, std::vector<CoreCoord>> cores;
     std::map<CoreType, int> all_cores;
-    bool enabled;
+    bool enabled{};
     std::vector<int> chip_ids;
     bool all_chips = false;
     uint32_t riscv_mask = 0;
     std::string file_name;  // File name to write output to.
     bool one_file_per_risc = false;
-    bool prepend_device_core_risc;
+    bool prepend_device_core_risc{};
 };
 
 struct WatcherSettings {
@@ -107,6 +107,9 @@ class RunTimeOptions {
     std::string kernel_dir;
     std::string system_kernel_dir;
 
+    bool is_core_grid_override_todeprecate_env_var_set = false;
+    std::string core_grid_override_todeprecate;
+
     bool is_visible_devices_env_var_set = false;
     std::vector<uint32_t> visible_devices;
 
@@ -128,6 +131,7 @@ class RunTimeOptions {
     bool profile_dispatch_cores = false;
     bool profiler_sync_enabled = false;
     bool profiler_mid_run_tracy_push = false;
+    bool profiler_trace_profiler = false;
     bool profiler_buffer_usage_enabled = false;
     bool profiler_noc_events_enabled = false;
     std::string profiler_noc_events_report_path;
@@ -217,6 +221,11 @@ public:
     const std::string& get_kernel_dir() const;
     // Location where kernels are installed via package manager.
     const std::string& get_system_kernel_dir() const;
+
+    inline bool is_core_grid_override_todeprecate() const {
+        return this->is_core_grid_override_todeprecate_env_var_set;
+    }
+    const std::string& get_core_grid_override_todeprecate() const;
 
     inline bool is_visible_devices_specified() const { return this->is_visible_devices_env_var_set; }
     inline const std::vector<uint32_t>& get_visible_devices() const { return this->visible_devices; }
@@ -385,6 +394,7 @@ public:
     inline bool get_profiler_enabled() const { return profiler_enabled; }
     inline bool get_profiler_do_dispatch_cores() const { return profile_dispatch_cores; }
     inline bool get_profiler_sync_enabled() const { return profiler_sync_enabled; }
+    inline bool get_profiler_trace_only() const { return profiler_trace_profiler; }
     inline bool get_profiler_tracy_mid_run_push() const { return profiler_mid_run_tracy_push; }
     inline bool get_profiler_buffer_usage_enabled() const { return profiler_buffer_usage_enabled; }
     inline bool get_profiler_noc_events_enabled() const { return profiler_noc_events_enabled; }

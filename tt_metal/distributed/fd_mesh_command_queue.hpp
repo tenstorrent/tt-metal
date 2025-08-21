@@ -29,7 +29,7 @@ using MeshCompletionReaderVariant =
 struct DeviceMemoryAddress {
     MeshCoordinate device_coord;
     CoreCoord virtual_core_coord;
-    DeviceAddr address;
+    DeviceAddr address{};
 };
 
 class FDMeshCommandQueue final : public MeshCommandQueueBase {
@@ -89,7 +89,7 @@ private:
     // When the device profiler is not enabled, launch messages are identical across all physical devices running the
     // same program, to reduce state managed on host. When the profiler is enabled, the host_assigned_id field in the
     // launch message must be unique across physical devices to accurately capture program execution time on host and
-    // device. This API is repsonsible for updating the launch message before writing it to each device (see
+    // device. This API is responsible for updating the launch message before writing it to each device (see
     // tt_metal/api/tt-metalium/dev_msgs.h for a description of how the host_assigned_id field is generated).
     void update_launch_messages_for_device_profiler(
         ProgramCommandSequence& program_cmd_seq, uint32_t program_runtime_id, IDevice* device);
@@ -99,7 +99,7 @@ private:
     // specific MeshCommandQueue attributes.
     // TODO: All Mesh level host state managed by this class should be moved out, since its not
     // tied to system memory anyway. Move out:
-    // 1. Event ID managment.
+    // 1. Event ID management.
     // 2. Bypass mode tracker.
     SystemMemoryManager& reference_sysmem_manager();
     MultiProducerSingleConsumerQueue<CompletionReaderVariant>& get_read_descriptor_queue(IDevice* device);
@@ -113,11 +113,11 @@ private:
     // Shared across all MeshCommandQueue instances for a MeshDevice.
     std::shared_ptr<CQSharedState> cq_shared_state_;
 
-    DispatchArray<uint32_t> expected_num_workers_completed_;
+    DispatchArray<uint32_t> expected_num_workers_completed_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_;
 
     DispatchArray<LaunchMessageRingBufferState> worker_launch_message_buffer_state_reset_;
-    DispatchArray<uint32_t> expected_num_workers_completed_reset_;
+    DispatchArray<uint32_t> expected_num_workers_completed_reset_{};
     DispatchArray<tt::tt_metal::WorkerConfigBufferMgr> config_buffer_mgr_reset_;
 
     // The following data structures are only popiulated when the MeshCQ is being used to trace workloads
@@ -232,7 +232,8 @@ public:
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
-        const vector_aligned<uint32_t>& go_signal_noc_data) override;
+        const vector_aligned<uint32_t>& go_signal_noc_data,
+        const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) override;
     void record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) override;
     void record_end() override;
     void enqueue_trace(const MeshTraceId& trace_id, bool blocking) override;

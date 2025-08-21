@@ -101,8 +101,7 @@ class Generator:
             prefill_seq_len = get_padded_prefill_len(seq_len)
             if prefill_seq_len not in self.model.tt_ccl.support_seqlens:
                 enable_trace = False
-            else:
-                enable_trace = True
+
             prefill_ids = torch.cat(
                 [tokens[id : id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
@@ -487,9 +486,15 @@ class Generator:
         )
         return trace_tok_rm
 
-    def read_decode_output(self, tt_logits, unpadded_batch, is_tokens=True):
-        logits, read_event = self.model.process_output_decode(tt_logits)
-        return logits, read_event
+    def read_decode_output(self, tt_out, async_read=True):
+        if not async_read:
+            return tt_out.cpu()
+
+        logits, read_event = self.model.process_output_decode(tt_out)
+        return logits, [read_event]
+
+    def process_decode_output_host(self, tt_out, is_tokens=True):
+        return ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])[0, 0, 0, :]
 
     def chat_completion(
         self,

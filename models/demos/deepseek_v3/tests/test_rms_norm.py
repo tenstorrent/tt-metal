@@ -56,6 +56,7 @@ def test_forward_pass(
     tmp_path,
     mesh_device,
     ccl,
+    set_deterministic_env,
 ):
     num_module_layers, _ = mesh_device.shape
 
@@ -88,10 +89,10 @@ def test_forward_pass(
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Convert the input to TTNN tensor
-    if not (mode == "decode" and RMSNormClass is DistributedRMSNorm):
+    if RMSNormClass is not DistributedRMSNorm:
         memory_config = ttnn.DRAM_MEMORY_CONFIG
     else:
-        memory_config = run_config["input_memory_config_decode"]
+        memory_config = run_config["input_memory_config"]
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,

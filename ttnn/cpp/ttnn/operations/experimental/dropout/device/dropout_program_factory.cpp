@@ -13,6 +13,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::dropout::program {
 namespace {
@@ -209,17 +210,14 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
     auto src_buffer = input.buffer();
-    bool src_is_dram = (src_buffer->buffer_type() == BufferType::DRAM);
-
-    std::vector<uint32_t> reader_compile_args = {static_cast<uint32_t>(src_is_dram)};
+    std::vector<uint32_t> reader_compile_args = {static_cast<uint32_t>(kSrc0CbIndex)};
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_args);
 
     auto dst_buffer = output.buffer();
-    bool dst_is_dram = (dst_buffer->buffer_type() == BufferType::DRAM);
+    std::vector<uint32_t> writer_compile_args = {static_cast<uint32_t>(kOutputCbIndex)};
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_args);
 
-    std::vector<uint32_t> writer_compile_args = {
-        static_cast<uint32_t>(kOutputCbIndex), static_cast<uint32_t>(dst_is_dram)};
-
-    DropoutKernels kernels;
+    DropoutKernels kernels{};
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, kReaderKernelPath);
 
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, kWriterKernelPath);

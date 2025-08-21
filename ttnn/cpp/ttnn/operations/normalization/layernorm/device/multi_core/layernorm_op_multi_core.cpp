@@ -455,7 +455,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     union {
         float f;
         uint32_t u;
-    } e;
+    } e{};
     e.f = eps;  // epsilon
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
@@ -1061,7 +1061,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     std::string sender_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
         "reader_mcast_sender_unary_sharded_ln.cpp";
-    std::string reciever_reader_kernel_file =
+    std::string receiver_reader_kernel_file =
         "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
         "reader_mcast_receiver_unary_sharded_ln.cpp";
 
@@ -1069,14 +1069,14 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         sender_reader_kernel_file =
             "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp";
-        reciever_reader_kernel_file =
+        receiver_reader_kernel_file =
             "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp";
     } else if (is_post_all_gather) {
         sender_reader_kernel_file =
             "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "reader_mcast_sender_unary_sharded_ln_post_allgather.cpp";
-        reciever_reader_kernel_file =
+        receiver_reader_kernel_file =
             "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
             "reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp";
     }
@@ -1095,7 +1095,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (use_mcast) {
         reader_mcast_receiver_kernels_id_all_to_all = CreateKernel(
             program,
-            reciever_reader_kernel_file,
+            receiver_reader_kernel_file,
             all_to_all_workers_except_sender,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1106,7 +1106,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     if (num_none_all_to_all_workers > 0) {
         reader_mcast_receiver_kernels_id = CreateKernel(
             program,
-            reciever_reader_kernel_file,
+            receiver_reader_kernel_file,
             not_all_to_all_workers,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -1494,7 +1494,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     union {
         float f;
         uint32_t u;
-    } e;
+    } e{};
     e.f = eps;
 
     std::vector<uint32_t> in0_mcast_noc_x;

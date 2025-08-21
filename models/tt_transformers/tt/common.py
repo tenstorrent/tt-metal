@@ -9,7 +9,7 @@ from typing import Optional
 
 import torch
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 import ttnn
 
@@ -23,6 +23,15 @@ class HostEmbedding(torch.nn.Module):
         return self.emb(x)
 
 
+class HostScaledEmbedding(HostEmbedding):
+    def __init__(self, model_args):
+        super().__init__(model_args)
+        self.embed_scale = model_args.embed_scale
+
+    def forward(self, x):
+        return self.emb(x) * self.embed_scale
+
+
 # Default configuration for Paged Attention
 class PagedAttentionConfig:
     def __init__(self, block_size=32, max_num_blocks=1024):
@@ -33,7 +42,7 @@ class PagedAttentionConfig:
 class RopeScalingType(str, Enum):
     """Types of RoPE scaling."""
 
-    # LINEAR = "linear"
+    LINEAR = "linear"
     # DYNAMIC = "dynamic"
     YARN = "yarn"
     LLAMA3 = "llama3"
@@ -43,9 +52,15 @@ class RopeScalingType(str, Enum):
 class RopeScaling(BaseModel):
     """RoPE scaling configuration."""
 
-    rope_type: RopeScalingType = Field(exclude=True, description="RoPE scaling type")
-    factor: Optional[float]
-    original_max_position_embeddings: int
+    rope_type: RopeScalingType = Field(
+        validation_alias=AliasChoices("rope_type", "type"), exclude=True, description="RoPE scaling type"
+    )
+    factor: float
+    original_max_position_embeddings: Optional[int] = None
+
+
+class RopeScalingLinear(RopeScaling):
+    """RoPE scaling configuration for linear."""
 
 
 class RopeScalingLlama3(RopeScaling):
@@ -68,7 +83,9 @@ class RopeScalingYarn(RopeScaling):
 
 def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
     rope_scaling_type = rope_scaling_params.get("rope_type") or rope_scaling_params.get("type")
-    if rope_scaling_type == RopeScalingType.LLAMA3:
+    if rope_scaling_type == RopeScalingType.LINEAR:
+        return RopeScalingLinear(**rope_scaling_params)
+    elif rope_scaling_type == RopeScalingType.LLAMA3:
         return RopeScalingLlama3(**rope_scaling_params)
     elif rope_scaling_type == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)

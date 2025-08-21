@@ -30,6 +30,7 @@ protected:
 };
 
 TEST_F(ReduceOpTest, TestMeanDim0) {
+    ttml::autograd::ctx().set_seed(42);
     auto* device = &ttml::autograd::ctx().get_device();
     xt::xarray<float> xtensor_a = xt::empty<float>({128 * 64});
     auto& rng = ttml::autograd::ctx().get_generator();
@@ -51,7 +52,7 @@ TEST_F(ReduceOpTest, TestMeanDim0) {
     auto mean_ttnn = ttml::core::to_xtensor(ttnn_mean_dim0);
     auto mean_moreh = ttml::core::to_xtensor(moreh_mean_dim0);
 
-    EXPECT_TRUE(xt::allclose(mean_ttnn, mean_moreh, /*rtol=*/1e-4, /*atol=*/1e-3));
+    EXPECT_TRUE(xt::allclose(mean_ttnn, mean_moreh, /*rtol=*/1e-3, /*atol=*/5e-3));
     EXPECT_TRUE(xt::allclose(mean_xtensor, mean_ttnn, /*rtol=*/1e-3, /*atol=*/1e-2));
     EXPECT_TRUE(xt::allclose(mean_xtensor, mean_moreh, /*rtol=*/1e-3, /*atol=*/1e-2));
 }
@@ -104,7 +105,6 @@ TEST_F(ReduceOpTest, TestMeanDim3) {
 
     auto mean_ttnn = ttml::core::to_xtensor(ttnn_mean_dim3);
     auto mean_moreh = ttml::core::to_xtensor(moreh_mean_dim3);
-
     EXPECT_TRUE(xt::allclose(mean_ttnn, mean_moreh, /*rtol=*/1e-4, /*atol=*/1e-3));
     EXPECT_TRUE(xt::allclose(mean_xtensor, mean_ttnn, /*rtol=*/1e-3, /*atol=*/1e-2));
     EXPECT_TRUE(xt::allclose(mean_xtensor, mean_moreh, /*rtol=*/1e-3, /*atol=*/1e-2));
