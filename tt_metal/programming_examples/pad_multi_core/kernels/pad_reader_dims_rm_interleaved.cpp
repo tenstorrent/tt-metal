@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// v2-like reader embedded for the example
 #include <stdint.h>
 #include <cstring>
 #include "dataflow_api.h"
