@@ -18,7 +18,7 @@ namespace fabric_router_tests {
 
 class ControlPlaneFixture : public ::testing::Test {
    protected:
-       tt::ARCH arch_;
+       tt::ARCH arch_{tt::ARCH::Invalid};
        void SetUp() override {
            auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
            if (not slow_dispatch) {
@@ -122,12 +122,31 @@ protected:
 };
 
 class Fabric1DTensixFixture : public BaseFabricFixture {
+private:
+    inline static bool should_skip_ = false;
+
 protected:
     static void SetUpTestSuite() {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
+                tt::tt_metal::ClusterType::GALAXY ||
+            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
+            should_skip_ = true;
+            return;
+        }
         BaseFabricFixture::DoSetUpTestSuite(
             tt::tt_fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_fabric::FabricTensixConfig::MUX);
     }
-    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+    static void TearDownTestSuite() {
+        if (!should_skip_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+        }
+    }
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "Fabric1DTensixFixture tests are not supported on Galaxy systems";
+        }
+        BaseFabricFixture::SetUp();
+    }
 };
 
 class NightlyFabric1DFixture : public BaseFabricFixture {
@@ -241,12 +260,14 @@ enum NocSendType : uint8_t {
 void FabricUnicastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
-    const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs);
+    const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs,
+    bool with_state = false);
 
 void FabricMulticastCommon(
     BaseFabricFixture* fixture,
     NocSendType noc_send_type,
-    const std::vector<std::tuple<RoutingDirection, uint32_t /*start_distance*/, uint32_t /*range*/>>& dir_configs);
+    const std::vector<std::tuple<RoutingDirection, uint32_t /*start_distance*/, uint32_t /*range*/>>& dir_configs,
+    bool with_state = false);
 
 void RunEDMConnectionStressTest(
     BaseFabricFixture* fixture,
@@ -257,6 +278,8 @@ void RunEDMConnectionStressTest(
     size_t num_times_to_connect,
     const std::vector<size_t>& workers_count,
     const std::vector<size_t>& test_rows);
+
+void RunTestUnicastSmoke(BaseFabricFixture* fixture);
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric
