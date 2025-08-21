@@ -29,6 +29,10 @@ OUT_ROOT, RESULTS_FILE_NAME = "test_reports", "sdxl_test_results.json"
     ((20),),
 )
 @pytest.mark.parametrize(
+    "guidance_scale",
+    ((8.0),),
+)
+@pytest.mark.parametrize(
     "vae_on_device",
     [
         (True),
@@ -64,6 +68,7 @@ def test_accuracy_sdxl(
     captions_path,
     coco_statistics_path,
     evaluation_range,
+    guidance_scale,
 ):
     start_from, num_prompts = evaluation_range
 
@@ -84,6 +89,7 @@ def test_accuracy_sdxl(
         encoders_on_device,
         capture_trace,
         evaluation_range,
+        guidance_scale,
     )
 
     clip = CLIPEncoder()

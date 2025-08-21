@@ -40,6 +40,7 @@ def run_demo_inference(
     encoders_on_device,
     evaluation_range,
     capture_trace,
+    guidance_scale,
 ):
     batch_size = ttnn_device.get_num_devices()
 
@@ -51,8 +52,6 @@ def run_demo_inference(
 
     needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
     prompts = prompts + [""] * needed_padding
-
-    guidance_scale = 8.0
 
     # 0. Set up default height and width for unet
     height = 1024
@@ -436,6 +435,10 @@ def run_demo_inference(
     ((50),),
 )
 @pytest.mark.parametrize(
+    "guidance_scale",
+    ((5.0),),
+)
+@pytest.mark.parametrize(
     "vae_on_device",
     [
         (True),
@@ -468,6 +471,7 @@ def test_demo(
     encoders_on_device,
     capture_trace,
     evaluation_range,
+    guidance_scale,
 ):
     return run_demo_inference(
         mesh_device,
@@ -478,4 +482,5 @@ def test_demo(
         encoders_on_device,
         evaluation_range,
         capture_trace,
+        guidance_scale,
     )
