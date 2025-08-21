@@ -94,7 +94,8 @@ tt_metal/tt_metal.cpp @abhullar-tt @jbaumanTT @tt-asaigal @tt-aho @pgkeller @ali
 tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @tenstorrent/metalium-developers-infra
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
-tt_metal/third_party/tt_llk @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT #does this actually do anything?
+tt_metal/third_party/tt_llk @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
+tt_metal/third_party/umd @broskoTT @pjanevskiTT
 
 # metal tests
 tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
