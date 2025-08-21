@@ -31,7 +31,7 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
 
-        self.image_size = configuration.vision_chunk_size
+        self.image_size = configuration.image_size
         self.patch_size = configuration.vision_patch_size
 
         self.width = configuration.vision_dim

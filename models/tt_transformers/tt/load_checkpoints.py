@@ -87,7 +87,6 @@ def convert_hf_to_meta(state_dict, head_dim):
 
 def convert_vision_hf_to_meta(state_dict, head_dim):
     state_dict = split_hf_keys(state_dict)
-    # state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
     state_dict = map_vision_hf_to_meta_keys(state_dict, head_dim)
     return state_dict
 
@@ -265,27 +264,27 @@ def map_vision_meta_to_hf_keys(loaded_weights):
         "_linear.weight": "weight",  # patch_embedding
         "_linear.bias": "bias",  # patch_embedding
         "positional_embedding": "weight",  # pos_emb
-        "model.vision_tower.vision_model.embeddings.patch_embedding._linear.weight": "vision_tower.vision_model.embeddings.patch_embedding.weight",
-        "model.vision_tower.vision_model.embeddings.patch_embedding._linear.bias": "vision_tower.vision_model.embeddings.patch_embedding._linear.bias",
-        "model.vision_tower.vision_model.embeddings.position_embedding.positional_embedding": "vision_tower.vision_model.embeddings.position_embedding.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wq.weight": "vision_tower.vision_model.encoder.layers.{layer}.self_attn.q_proj.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wk.weight": "vision_tower.vision_model.encoder.layers.{layer}.self_attn.k_proj.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wv.weight": "vision_tower.vision_model.encoder.layers.{layer}.self_attn.v_proj.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wo.weight": "vision_tower.vision_model.encoder.layers.{layer}.self_attn.out_proj.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wq.bias": "vision_tower.vision_model.encoder.layers.{layer}.self_attn.q_proj.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wk.bias": "vision_tower.vision_model.encoder.layers.{layer}.self_attn.k_proj.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wv.bias": "vision_tower.vision_model.encoder.layers.{layer}.self_attn.v_proj.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wo.bias": "vision_tower.vision_model.encoder.layers.{layer}.self_attn.out_proj.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.ln_1.weight": "vision_tower.vision_model.encoder.layers.{layer}.layer_norm1.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.ln_1.bias": "vision_tower.vision_model.encoder.layers.{layer}.layer_norm1.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.ln_2.weight": "vision_tower.vision_model.encoder.layers.{layer}.layer_norm2.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.ln_2.bias": "vision_tower.vision_model.encoder.layers.{layer}.layer_norm2.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.mlp.c_fc.weight": "vision_tower.vision_model.encoder.layers.{layer}.mlp.fc1.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.mlp.c_fc.bias": "vision_tower.vision_model.encoder.layers.{layer}.mlp.fc1.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.mlp.c_proj.weight": "vision_tower.vision_model.encoder.layers.{layer}.mlp.fc2.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.mlp.c_proj.bias": "vision_tower.vision_model.encoder.layers.{layer}.mlp.fc2.bias",
-        "model.vision_tower.vision_model.ln_post.weight": "vision_tower.vision_model.post_layernorm.weight",
-        "model.vision_tower.vision_model.ln_post.bias": "vision_tower.vision_model.post_layernorm.bias",
+        "visual.embeddings.patch_embedding._linear.weight": "visual.embeddings.patch_embedding.weight",
+        "visual.embeddings.patch_embedding._linear.bias": "visual.embeddings.patch_embedding._linear.bias",
+        "visual.embeddings.position_embedding.positional_embedding": "visual.embeddings.position_embedding.weight",
+        "visual.encoder.layers.{layer}.attn.wq.weight": "visual.encoder.layers.{layer}.self_attn.q_proj.weight",
+        "visual.encoder.layers.{layer}.attn.wk.weight": "visual.encoder.layers.{layer}.self_attn.k_proj.weight",
+        "visual.encoder.layers.{layer}.attn.wv.weight": "visual.encoder.layers.{layer}.self_attn.v_proj.weight",
+        "visual.encoder.layers.{layer}.attn.wo.weight": "visual.encoder.layers.{layer}.self_attn.out_proj.weight",
+        "visual.encoder.layers.{layer}.attn.wq.bias": "visual.encoder.layers.{layer}.self_attn.q_proj.bias",
+        "visual.encoder.layers.{layer}.attn.wk.bias": "visual.encoder.layers.{layer}.self_attn.k_proj.bias",
+        "visual.encoder.layers.{layer}.attn.wv.bias": "visual.encoder.layers.{layer}.self_attn.v_proj.bias",
+        "visual.encoder.layers.{layer}.attn.wo.bias": "visual.encoder.layers.{layer}.self_attn.out_proj.bias",
+        "visual.encoder.layers.{layer}.ln_1.weight": "visual.encoder.layers.{layer}.layer_norm1.weight",
+        "visual.encoder.layers.{layer}.ln_1.bias": "visual.encoder.layers.{layer}.layer_norm1.bias",
+        "visual.encoder.layers.{layer}.ln_2.weight": "visual.encoder.layers.{layer}.layer_norm2.weight",
+        "visual.encoder.layers.{layer}.ln_2.bias": "visual.encoder.layers.{layer}.layer_norm2.bias",
+        "visual.encoder.layers.{layer}.mlp.c_fc.weight": "visual.encoder.layers.{layer}.mlp.fc1.weight",
+        "visual.encoder.layers.{layer}.mlp.c_fc.bias": "visual.encoder.layers.{layer}.mlp.fc1.bias",
+        "visual.encoder.layers.{layer}.mlp.c_proj.weight": "visual.encoder.layers.{layer}.mlp.fc2.weight",
+        "visual.encoder.layers.{layer}.mlp.c_proj.bias": "visual.encoder.layers.{layer}.mlp.fc2.bias",
+        "visual.ln_post.weight": "visual.post_layernorm.weight",
+        "visual.ln_post.bias": "visual.post_layernorm.bias",
     }
 
     for key, tensor in loaded_weights.items():
@@ -339,14 +338,14 @@ def map_vision_hf_to_meta_keys(loaded_weights, head_dim):
         "fc2.weight": "c_proj.weight",
         "fc2.bias": "c_proj.bias",
         # vision attention
-        # "q_proj.weight": "wq.weight",
-        # "k_proj.weight": "wk.weight",
-        # "v_proj.weight": "wv.weight",
-        # "out_proj.weight": "wo.weight",
-        # "q_proj.bias": "wq.bias",
-        # "k_proj.bias": "wk.bias",
-        # "v_proj.bias": "wv.bias",
-        # "out_proj.bias": "wo.bias",
+        "q_proj.weight": "wq.weight",
+        "k_proj.weight": "wk.weight",
+        "v_proj.weight": "wv.weight",
+        "out_proj.weight": "wo.weight",
+        "q_proj.bias": "wq.bias",
+        "k_proj.bias": "wk.bias",
+        "v_proj.bias": "wv.bias",
+        "out_proj.bias": "wo.bias",
         # vision encoder
         "self_attn.q_proj.weight": "attn.wq.weight",
         "self_attn.k_proj.weight": "attn.wk.weight",
@@ -379,49 +378,46 @@ def map_vision_hf_to_meta_keys(loaded_weights, head_dim):
         "weight": "_linear.weight",
         "bias": "_linear.bias",
         "weight": "positional_embedding",  # pos_emb
-        "model.vision_tower.vision_model.embeddings.patch_embedding.weight": "model.vision_tower.vision_model.embeddings.patch_embedding._linear.weight",
-        "model.vision_tower.vision_model.embeddings.patch_embedding.bias": "model.vision_tower.vision_model.embeddings.patch_embedding._linear.bias",
-        "model.vision_tower.vision_model.embeddings.position_embedding.weight": "model.vision_tower.vision_model.embeddings.position_embedding.positional_embedding",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.self_attn.q_proj.weight": "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wq.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.self_attn.k_proj.weight": "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wk.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.self_attn.v_proj.weight": "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wv.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.self_attn.out_proj.weight": "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wo.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.self_attn.q_proj.bias": "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wq.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.self_attn.k_proj.bias": "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wk.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.self_attn.v_proj.bias": "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wv.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.self_attn.out_proj.bias": "model.vision_tower.vision_model.encoder.layers.{layer}.attn.wo.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.layer_norm1.weight": "model.vision_tower.vision_model.encoder.layers.{layer}.ln_1.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.layer_norm1.bias": "model.vision_tower.vision_model.encoder.layers.{layer}.ln_1.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.layer_norm2.weight": "model.vision_tower.vision_model.encoder.layers.{layer}.ln_2.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.layer_norm2.bias": "model.vision_tower.vision_model.encoder.layers.{layer}.ln_2.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.mlp.fc1.weight": "model.vision_tower.vision_model.encoder.layers.{layer}.mlp.c_fc.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.mlp.fc1.bias": "model.vision_tower.vision_model.encoder.layers.{layer}.mlp.c_fc.bias",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.mlp.fc2.weight": "model.vision_tower.vision_model.encoder.layers.{layer}.mlp.c_proj.weight",
-        "model.vision_tower.vision_model.encoder.layers.{layer}.mlp.fc2.bias": "model.vision_tower.vision_model.encoder.layers.{layer}.mlp.c_proj.bias",
-        "model.vision_tower.vision_model.post_layernorm.weight": "model.vision_tower.vision_model.ln_post.weight",
-        "model.vision_tower.vision_model.post_layernorm.bias": "model.vision_tower.vision_model.ln_post.bias",
+        "visual.embeddings.patch_embedding.weight": "visual.embeddings.patch_embedding._linear.weight",
+        "visual.embeddings.patch_embedding.bias": "visual.embeddings.patch_embedding._linear.bias",
+        "visual.embeddings.position_embedding.weight": "visual.embeddings.position_embedding.positional_embedding",
+        "visual.encoder.layers.{layer}.self_attn.q_proj.weight": "visual.encoder.layers.{layer}.attn.wq.weight",
+        "visual.encoder.layers.{layer}.self_attn.k_proj.weight": "visual.encoder.layers.{layer}.attn.wk.weight",
+        "visual.encoder.layers.{layer}.self_attn.v_proj.weight": "visual.encoder.layers.{layer}.attn.wv.weight",
+        "visual.encoder.layers.{layer}.self_attn.out_proj.weight": "visual.encoder.layers.{layer}.attn.wo.weight",
+        "visual.encoder.layers.{layer}.self_attn.q_proj.bias": "visual.encoder.layers.{layer}.attn.wq.bias",
+        "visual.encoder.layers.{layer}.self_attn.k_proj.bias": "visual.encoder.layers.{layer}.attn.wk.bias",
+        "visual.encoder.layers.{layer}.self_attn.v_proj.bias": "visual.encoder.layers.{layer}.attn.wv.bias",
+        "visual.encoder.layers.{layer}.self_attn.out_proj.bias": "visual.encoder.layers.{layer}.attn.wo.bias",
+        "visual.encoder.layers.{layer}.layer_norm1.weight": "visual.encoder.layers.{layer}.ln_1.weight",
+        "visual.encoder.layers.{layer}.layer_norm1.bias": "visual.encoder.layers.{layer}.ln_1.bias",
+        "visual.encoder.layers.{layer}.layer_norm2.weight": "visual.encoder.layers.{layer}.ln_2.weight",
+        "visual.encoder.layers.{layer}.layer_norm2.bias": "visual.encoder.layers.{layer}.ln_2.bias",
+        "visual.encoder.layers.{layer}.mlp.fc1.weight": "visual.encoder.layers.{layer}.mlp.c_fc.weight",
+        "visual.encoder.layers.{layer}.mlp.fc1.bias": "visual.encoder.layers.{layer}.mlp.c_fc.bias",
+        "visual.encoder.layers.{layer}.mlp.fc2.weight": "visual.encoder.layers.{layer}.mlp.c_proj.weight",
+        "visual.encoder.layers.{layer}.mlp.fc2.bias": "visual.encoder.layers.{layer}.mlp.c_proj.bias",
+        "visual.post_layernorm.weight": "visual.ln_post.weight",
+        "visual.post_layernorm.bias": "visual.ln_post.bias",
     }
 
     remapped = {}
     for key, tensor in loaded_weights.items():
         if key in hf_to_meta:
             remapped[hf_to_meta[key]] = tensor
-        elif "model.vision_tower.vision_model.encoder.layers." in key:
+        elif "visual.encoder.layers." in key:
             parts = key.split(".")
-            layer_num = parts[5]  # e.g. "0" in "model.layers.0.input_layernorm.weight"
-            template_key = "model.vision_tower.vision_model.encoder.layers.{layer}." + ".".join(parts[6:])
+            layer_num = parts[3]  # e.g. "0" in "visual.encoder.layers.0.layer_norm1.weight"
+            template_key = "visual.encoder.layers.{layer}." + ".".join(parts[4:])
             if template_key in hf_to_meta:
                 remapped[hf_to_meta[template_key].format(layer=layer_num)] = tensor
         else:
             remapped[key] = tensor
 
     # Remove language_model keys
-    non_text_weights = {k: v for k, v in remapped.items() if not k.startswith("model.language_model.")}
-    text_weights = {
-        k: v for k, v in loaded_weights.items() if k.startswith("model.language_model.") or k.startswith("lm_head.")
-    }
+    non_text_weights = {k: v for k, v in remapped.items() if not k.startswith("model.")}
+    text_weights = {k: v for k, v in loaded_weights.items() if k.startswith("model.") or k.startswith("lm_head.")}
     text_weights = convert_hf_qkv_to_meta_format(text_weights, head_dim)
-    # remapped_text = map_hf_to_meta_keys(text_weights, prefix="model.language_model.")
     remapped_text = map_hf_to_meta_keys(text_weights)
     return {**non_text_weights, **remapped_text}
 

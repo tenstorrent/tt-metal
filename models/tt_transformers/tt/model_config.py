@@ -1399,6 +1399,9 @@ class ModelArgs:
         else:
             return ""
 
+    def _get_vision_prefix(self):
+        return "visual."
+
     def _get_hidden_activation_type(self, config):
         activation_map = {
             "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
@@ -1525,27 +1528,11 @@ class ModelArgs:
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
-        # Vision params (Meta-specific)
-        self.vision_chunk_size = config.get("vision_chunk_size", -1)
-        self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
-
-        # Vision constants
-        # self.vision_dim = 1280
-        # self.vision_mlp_ratio = 4
-        # self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
-        # self.vision_act_layer = ttnn.UnaryOpType.GELU
-        # self.vision_dropout = 0.0
-        # self.vision_attn_n_heads = 16
-        # self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
-        # self.vision_n_layers = 32
-        # self.vision_n_global_layers = 8
-        # self.vision_max_num_tiles = 4
-        # self.vision_patch_size = 14
-        # self.vision_in_channels = 3
+        self._set_vision_params(config)
+        self.is_multimodal = "vision_config" in config or self.is_vision()
 
         self.state_dict_text_prefix = self._get_text_prefix()
-        self.is_multimodal = "vision_config" in config or self.is_vision()
+        self.state_dict_vision_prefix = self._get_vision_prefix()
 
         self._set_model_specific_params()
 
@@ -1618,25 +1605,14 @@ class ModelArgs:
             else None
         )
 
-    # def _set_vision_params(self, vision_config):
-    #     self.vision_dim = vision_config.get("hidden_size", 1280)
-    #     self.vision_mlp_ratio = vision_config.get("intermediate_size", self.vision_dim * 4) // self.vision_dim
-    #     self.vision_hidden_dim = vision_config.get("intermediate_size", self.vision_dim * self.vision_mlp_ratio)
-    #     self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
-    #     self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
-    #     self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
-    #     self.vision_patch_size = vision_config.get("patch_size", 14)
-    #     self.vision_in_channels = vision_config.get("num_channels", 3)
-    #     self.vision_act_layer = ttnn.UnaryOpType.GELU  # or read from config if variable
-    #     self.vision_dropout = vision_config.get("attention_dropout", 0.0)
-    #     self.vision_max_num_tiles = 4
-    #     self.vision_n_global_layers = 8
+    def _set_vision_params(self, config):
+        vision_config = config.get("vision_config", config)
 
-    def _set_vision_params(self, vision_config):
-        self.vision_chunk_size = vision_config.get("vision_chunk_size", 896)
+        self.vision_chunk_size = vision_config.get("vision_chunk_size", -1)
+        self.image_size = vision_config.get("image_size", 896)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", 8)
-        self.vision_dim = vision_config.get("hidden_size", 1152)
+        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", -1)
+        self.vision_dim = vision_config.get("hidden_size", 1280)
 
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
@@ -1644,7 +1620,7 @@ class ModelArgs:
         self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
         self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
 
-        self.vision_n_layers = vision_config.get("num_hidden_layers", 27)
+        self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
         self.vision_patch_size = vision_config.get("patch_size", 14)
         self.vision_in_channels = vision_config.get("num_channels", 3)
 
@@ -1660,26 +1636,10 @@ class ModelArgs:
         }.get(act_layer, ttnn.UnaryOpType.GELU)
 
         # Optional tuning knobs
-        # self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
+        self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
         self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
 
-        # # Optional Meta-specific knobs
-        # self.vision_max_num_chunks = vision_config.get("max_num_chunks", 4)
-        # self.vision_num_cross_attention_layers = vision_config.get("num_cross_attention_layers", -1)
-
     def _set_hf_params(self, checkpoint_dir):
-        def merge_text_config(base_config):
-            text_config = base_config.get("text_config", {})
-            # Merge non-nested keys into text_config
-            text_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
-            return text_config
-
-        def merge_vision_config(base_config):
-            vision_config = base_config.get("vision_config", {})
-            # Merge non-nested keys into vision_config
-            vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
-            return vision_config
-
         if self.from_hf_url:
             # Special case Qwen2.5-VL models until they are fully integrated into a HF release
             if "Qwen/Qwen2.5-VL" in self.model_name:
@@ -1691,31 +1651,16 @@ class ModelArgs:
                 logger.info(
                     f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
                 )
-                self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name]).to_dict()
+                self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
             else:
-                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
-
-            if "text_config" in self.hf_config or "vision_config" in self.hf_config:
-                if "gemma-3-4b" in self.base_model_name:
-                    self._set_params_from_dict(self.hf_config, is_hf=True)
-                    if "vision_config" in self.hf_config:
-                        merged_vision_config = merge_vision_config(self.hf_config)
-                        self._set_vision_params(merged_vision_config)
-                else:
-                    merged_text_config = merge_text_config(self.hf_config)
-                    self._set_params_from_dict(merged_text_config, is_hf=True)
-                    if "vision_config" in self.hf_config:
-                        merged_vision_config = merge_vision_config(self.hf_config)
-                        self._set_vision_params(merged_vision_config)
-            else:
-                self._set_params_from_dict(self.hf_config, is_hf=True)
-
+                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR)
+            config = self.hf_config.to_dict()
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
-            self._set_params_from_dict(config, is_hf=True)
+        self._set_params_from_dict(config, is_hf=True)
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -1736,25 +1681,17 @@ class ModelArgs:
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
 
+    # TODO: Rename to is_llama_vision
     def is_vision(self):
         return self.vision_chunk_size > 0
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        if "gemma-3-4b" in self.model_name:
-            if is_vision:
-                text_prefix = "model.vision_tower.vision_model.encoder."
-
-            else:
-                # text_prefix = "model.language_model."
-
-                text_prefix = ""
-
-        else:
-            text_prefix = self.state_dict_text_prefix
+        text_prefix = self.state_dict_text_prefix
+        vision_prefix = self.state_dict_vision_prefix
 
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
 
-        module_map = {
+        text_module_map = {
             "MLP": "feed_forward",
             "Attention": "attention",
             "TransformerBlock": "",
@@ -1768,9 +1705,10 @@ class ModelArgs:
             "": "",
         }
 
-        module_map = vision_module_map if is_vision else module_map
+        module_map = vision_module_map if is_vision else text_module_map
+        prefix = vision_prefix if is_vision else text_prefix
 
-        return text_prefix + layer_prefix + module_map[module_name]
+        return prefix + layer_prefix + module_map[module_name]
 
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
@@ -1833,10 +1771,8 @@ class ModelArgs:
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
             if self.is_multimodal:
-                if "gemma-3-4b" in self.model_name:
-                    state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
-                else:
-                    state_dict = standardize_hf_keys_multimodal(state_dict)
+                state_dict = standardize_hf_keys_multimodal(state_dict)
+                state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
             else:
                 state_dict = standardize_hf_keys(state_dict)
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim)
@@ -2528,7 +2464,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ in (
+            use_position_embeddings = self.from_hf_url or layer.__class__.__name__ in (
                 "Qwen3Attention",
                 "MistralAttention",
                 "Gemma3Attention",

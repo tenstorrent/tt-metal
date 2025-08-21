@@ -232,7 +232,7 @@ def process_real_vision_inputs(messages, model_args):
 def load_separate_models_like_test_end2end(model_args, mesh_device, dtype, paged_attention, page_params):
     """Load separate vision and text models following test_end2end.py pattern."""
     state_dict = model_args.load_state_dict()
-    vision_prefix = "vision_tower.vision_model."
+    vision_prefix = model_args.state_dict_vision_prefix
 
     # Setup paged attention config (exactly like test_end2end.py)
     paged_attention_config = None
