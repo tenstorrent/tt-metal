@@ -49,13 +49,13 @@ ALWI void process_tile(
         tile_regs_acquire();
 
         // Copy all 3 inputs to destination registers
-        copy_tile_to_dst_init_short(predicate_cb);
+        copy_tile_init(predicate_cb);
         copy_tile(predicate_cb, 0, 0);  // predicate to reg 0, 3, 6, ...
 
-        copy_tile_to_dst_init_short(true_cb);
+        copy_tile_init(true_cb);
         copy_tile(true_cb, 0, 1);  // true to reg 1, 4, 7, ...
 
-        copy_tile_to_dst_init_short(false_cb);
+        copy_tile_init(false_cb);
         copy_tile(false_cb, 0, 2);  // false to reg 2, 5, 8, ...
 
         // Perform the where operation

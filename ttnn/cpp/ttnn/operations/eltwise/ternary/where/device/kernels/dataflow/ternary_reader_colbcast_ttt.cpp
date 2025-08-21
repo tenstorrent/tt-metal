@@ -46,14 +46,6 @@ void kernel_main() {
     const uint32_t start_tile_id = start_id;   // start tile id
     const uint32_t dst_num_tiles = num_tiles;  // num tiles per core
 
-    // DEBUG: Print kernel entry
-    DPRINT << "=== WHERE COL_BCAST READER KERNEL START ===" << ENDL();
-    DPRINT << "src0_addr (predicate) = " << src0_addr << ENDL();
-    DPRINT << "src1_addr (true) = " << src1_addr << ENDL();
-    DPRINT << "src2_addr (false) = " << src2_addr << ENDL();
-    DPRINT << "num_tiles = " << num_tiles << ENDL();
-    DPRINT << "start_id = " << start_id << ENDL();
-
     constexpr auto predicate_cb = tt::CBIndex::c_0;
     constexpr auto true_cb = tt::CBIndex::c_1;
     constexpr auto false_cb = tt::CBIndex::c_2;

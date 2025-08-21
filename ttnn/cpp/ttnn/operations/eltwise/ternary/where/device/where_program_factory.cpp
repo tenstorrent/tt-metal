@@ -425,28 +425,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             value_false_data_format);
         value_false_tensor_cb = cb;
         value_false_tensor_cb_handle = cb_handle;
-    } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
-        // TTT with column broadcast: create CBs for both value_true and value_false
-        auto [cb1, cb1_handle] = create_cb(
-            tt::CBIndex::c_1,
-            program,
-            all_device_cores,
-            value_true_single_tile_size,
-            num_tiles_per_cb,
-            value_true_data_format);
-        value_true_tensor_cb = cb1;
-        value_true_tensor_cb_handle = cb1_handle;
-
-        // Create CB for value_false (using actual false tensor)
-        auto [cb2, cb2_handle] = create_cb(
-            tt::CBIndex::c_2,
-            program,
-            all_device_cores,
-            value_false_single_tile_size,  // Using actual false tensor size
-            num_tiles_per_cb,
-            value_false_data_format);  // Using actual false tensor format
-        value_false_tensor_cb = cb2;
-        value_false_tensor_cb_handle = cb2_handle;
     } else {
         // TTT: c_1 = value_true tensor, c_2 = value_false tensor
         auto [cb1, cb1_handle] = create_cb(
@@ -560,17 +538,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
-
-    } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
-        // TTT with column broadcast: use TensorAccessor-style compile-time args like no-bcast reader
-        std::vector<uint32_t> reader_compile_time_args = {
-            (std::uint32_t)predicate_tensor_cb,
-            (std::uint32_t)value_true_tensor_cb,
-            (std::uint32_t)value_false_tensor_cb};
-        TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
-        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     } else {
         // TTT: c_0 = predicate, c_1 = value_true, c_2 = value_false
         std::vector<uint32_t> reader_compile_time_args = {
@@ -580,7 +547,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
-        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
+        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     }
 
     auto reader_kernel_id = tt_metal::CreateKernel(
@@ -668,15 +635,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         kernel_defines["FILL_WITH_VALUE_INT"] = "1";
     } else {
         kernel_defines["FILL_WITH_VALUE_FLOAT"] = "1";
-    }
-
-    // DEBUG: Print WHERE compute kernel defines
-    if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
-        std::cout << "\n=== WHERE COMPUTE KERNEL DEFINES (TTT COL_BCAST) ===" << std::endl;
-        for (const auto& [key, value] : kernel_defines) {
-            std::cout << "  " << key << " = \"" << value << "\"" << std::endl;
-        }
-        std::cout << "====================================================" << std::endl;
     }
 
     auto compute_kernel_id = tt_metal::CreateKernel(
