@@ -55,7 +55,7 @@ class T5Encoder:
 
         self.token_embeddings = RelativeTextEmbeddings(config, self.mesh_device, self.ccl_manager, self.parallel_config)
         self.encoder = T5Stack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
-        self.layer_norm = RMSNorm(
+        self.final_layer_norm = RMSNorm(  # final layer norm
             embedding_dim=self.config.embed_dim,
             norm_eps=self.config.layer_norm_eps,
             bias=False,
@@ -65,22 +65,17 @@ class T5Encoder:
     def load_state_dict(self, state_dict):
         self.token_embeddings.load_state_dict(state_dict)
         self.encoder.load_state_dict(substate(state_dict, "encoder"))
-
-        self.final_layer_norm = bf16_tensor(
-            state_dict["encoder.final_layer_norm.weight"], device=self.mesh_device, layout=ttnn.TILE_LAYOUT
-        )
-        self.attention_bias = bf16_tensor(
-            state_dict["encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight"],
-            device=self.mesh_device,
-            layout=ttnn.TILE_LAYOUT,
-        )
+        self.final_layer_norm.load_state_dict(substate(state_dict, "encoder.final_layer_norm"))
 
     def __call__(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
         embeddings, position_bias = self.token_embeddings(prompt, device)
-
         hidden_states = self.encoder(embeddings, position_bias)
+        # Apply final layer norm to last hidden state
 
-        return self.layer_norm(hidden_states[-1])  # final layer norm
+        output = self.final_layer_norm(hidden_states[-1])  # Shape [batch, seq_len, embed_dim]
+        hidden_states.append(output)
+        return hidden_states  # Return normalized final hidden state
+        # TODO: return the list of all hidden states with normalized final hidden state as last element
 
 
 class T5Stack:
@@ -125,7 +120,7 @@ class T5Stack:
         for layer in self.layers:
             hidden_states = layer(hidden_states, position_bias=position_bias)
             all_hidden_states.append(hidden_states)
-        return all_hidden_states  # list of hidden states from each layer before final layer norm
+        return all_hidden_states
 
 
 class T5FF:
@@ -267,13 +262,6 @@ class T5EncoderLayer:
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
-
-        self.layer_norm = RMSNorm(
-            embedding_dim=self.config.embed_dim,
-            norm_eps=self.config.layer_norm_eps,
-            bias=False,
-            mesh_device=self.mesh_device,
-        )
 
         self.self_attn = T5Attention(config, mesh_device, ccl_manager, parallel_config)
         self.ff = T5FF(config, mesh_device, ccl_manager, parallel_config)

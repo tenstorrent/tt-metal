@@ -16,9 +16,8 @@ from transformers.models.t5.modeling_t5 import T5EncoderModel
 from models.experimental.tt_dit.parallel.manager import CCLManager
 from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 
-from models.experimental.tt_dit.encoders.t5.model_t5 import RelativeTextEmbeddings, T5Config, T5EncoderLayer
+from models.experimental.tt_dit.encoders.t5.model_t5 import T5Config, T5Encoder
 from models.experimental.tt_dit.utils.check import assert_quality
-from models.experimental.tt_dit.utils.substate import substate
 
 
 @pytest.mark.parametrize(
@@ -34,7 +33,7 @@ from models.experimental.tt_dit.utils.substate import substate
     [[{"l1_small_size": 8192, "fabric_config": ttnn.FabricConfig.FABRIC_1D}, ttnn.Topology.Linear]],
     indirect=["device_params"],
 )
-def test_t5_single_layer(
+def test_t5_encoder(
     *,
     mesh_device: ttnn.Device,
     submesh_shape: ttnn.MeshShape,
@@ -102,71 +101,34 @@ def test_t5_single_layer(
         relative_attention_max_distance=hf_model.config.relative_attention_max_distance,
     )
 
-    tt_embedding = RelativeTextEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
-    # load only the embeddings part of the state dict
-    embeddings_state_dict = {}
-    for key, value in hf_model.state_dict().items():
-        # logger.info(f"key: {key}")
-        # logger.info(f"value: {value}")
-        if key.startswith("encoder.embed_tokens.") or key.startswith(
-            "encoder.block.0.layer.0.SelfAttention.relative_attention_bias."
-        ):
-            # logger.info(f"loading key: {key}")
-            embeddings_state_dict[key] = value
-
-    tt_embedding.load_state_dict(embeddings_state_dict)
-
-    layer = 23
-
-    tt_encoder_layer = T5EncoderLayer(config, encoder_submesh, ccl_manager, parallel_config)
-
-    tt_encoder_layer.load_state_dict(substate(hf_model.state_dict(), f"encoder.block.{layer}"))  # first layer weights
+    tt_encoder = T5Encoder(config, encoder_submesh, ccl_manager, parallel_config)
+    tt_encoder.load_state_dict(hf_model.state_dict())
 
     # time TT model inference only
     tt_start_time = time.time()
-    tt_embeddings_output, tt_position_bias = tt_embedding(tt_prompt, encoder_submesh)
-    tt_layer_output = tt_encoder_layer(tt_embeddings_output, tt_position_bias)
+    tt_output = tt_encoder(tt_prompt, encoder_submesh)
 
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 
+    # === get HF outputs for comparison ===
     with torch.no_grad():
         # time HF model execution
         hf_start_time = time.time()
-
-        # get HF embeddings and first layer output
-        hf_token_embeddings = hf_model.encoder.embed_tokens(tokens)
-
-        # get position bias from first layer's attention (block 0 always has the bias)
-        hf_position_bias = (
-            hf_model.encoder.block[0]  # Always use block[0] for position bias
-            .layer[0]
-            .SelfAttention.compute_bias(
-                hf_token_embeddings.size(1), hf_token_embeddings.size(1), device=hf_token_embeddings.device
-            )
-        )
-
-        # run through encoder layer
-        hf_layer_output = hf_model.encoder.block[layer](
-            hf_token_embeddings, attention_mask=None, position_bias=hf_position_bias
-        )[0]
-
+        hf_outputs = hf_model(tokens)
         hf_end_time = time.time()
         hf_execution_time = hf_end_time - hf_start_time
 
     # convert mesh tensor to torch tensor for pcc
     # since weights are replicated, can get the tensor from any single device
-    tt_layer_output = ttnn.to_torch(ttnn.get_device_tensors(tt_layer_output)[0])
+    tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_output[-1])[0])
 
-    logger.info(f"tt_layer_output shape: {tt_layer_output.shape}")
-    logger.info(f"hf_layer_output shape: {hf_layer_output.shape}")
+    logger.info(f"TT encoder execution time: {tt_execution_time:.4f} seconds")
+    logger.info(f"HF encoder execution time: {hf_execution_time:.4f} seconds")
 
-    logger.info(f"TT layer execution time: {tt_execution_time:.4f} seconds")
-    logger.info(f"HF layer execution time: {hf_execution_time:.4f} seconds")
+    assert hf_outputs.last_hidden_state.shape == tt_output_torch.shape
 
-    assert hf_layer_output.shape == tt_layer_output.shape
-
-    assert_quality(hf_layer_output, tt_layer_output, pcc=0.947)
+    assert_quality(hf_outputs.last_hidden_state, tt_output_torch, pcc=0.95)
 
 
 if __name__ == "__main__":
