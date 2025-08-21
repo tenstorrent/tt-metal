@@ -513,11 +513,15 @@ def test_unary_logit(input_shapes, param, device):
 
 @pytest.mark.parametrize(
     "param",
-    {-1.5, 1.7},
+    {-1.5, 1.7, 0.0},
 )
 @pytest.mark.parametrize("round_mode", [None, "trunc", "floor"])
-def test_unary_rdiv_inf_check(param, round_mode, device):
-    in_data = torch.zeros(torch.Size([1, 1, 32, 32]), dtype=torch.bfloat16)
+def test_unary_rdiv_inf_nan_check(param, round_mode, device):
+    dtype = torch.bfloat16
+    if dtype == torch.bfloat16 and param == 0.0:
+        pytest.xfail("NaN is packed as inf for ttnn.bfloat16")
+
+    in_data = torch.zeros(torch.Size([1, 1, 32, 32]), dtype=dtype)
     input_tensor = ttnn.from_torch(
         in_data,
         dtype=ttnn.bfloat16,
@@ -530,7 +534,6 @@ def test_unary_rdiv_inf_check(param, round_mode, device):
     golden_function = ttnn.get_golden_function(ttnn.rdiv)
     golden_tensor = golden_function(in_data, param, round_mode=round_mode)
 
-    print(output_tensor, golden_tensor)
     comp_pass = compare_equal([output_tensor], [golden_tensor])
     assert comp_pass
 
