@@ -515,6 +515,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     num_tiles_to_write_per_packet,    // num_tiles_to_write_per_packet
                     dir,                              // direction
                     chunks_per_sync_val,
+                    do_sync,                     // use synchronize barrier semaphore
+                    barrier_semaphore.address()  // synchronize barrier semaphore
                 };
                 append_fabric_mux_connection_ct_args(
                     worker == 0,
@@ -570,11 +572,9 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     (worker_id * batch_slice_num_pages / num_workers) %
                         (input_tensor_Wt / ring_size),  // pages_read_in_row
                     (worker_id * batch_slice_num_pages / num_workers) / (input_tensor_Wt / ring_size) *
-                        input_tensor_Wt,                                    // row_offset
-                    (worker_id * batch_slice_num_pages / num_workers),      // tiles_read
-                    (worker_id + 1) * batch_slice_num_pages / num_workers,  // tiles_to_read
-                    do_sync,                                                // use synchronize barrier semaphore
-                    barrier_semaphore.address()};                           // synchronize barrier semaphore
+                        input_tensor_Wt,                                     // row_offset
+                    (worker_id * batch_slice_num_pages / num_workers),       // tiles_read
+                    (worker_id + 1) * batch_slice_num_pages / num_workers};  // tiles_to_read
                 append_fabric_mux_connection_rt_args(
                     true, core, program, termination_master_virtual_core, num_workers_per_direction, writer_rt_args);
                 if (intermediate_is_sharded) {
@@ -1154,6 +1154,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     num_total_reduction_steps,
                     sync_with_other_direction,
                     chunks_per_sync_val,
+                    do_sync,                     // use_barrier_sem
+                    barrier_semaphore.address()  // synchronize barrier semaphore
                 };
                 append_fabric_mux_connection_ct_args(
                     worker == 0,
@@ -1207,9 +1209,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     num_links * num_workers_per_direction,
                     fwd_bwd_semaphore_address,
                     opposite_core_coord.x,
-                    opposite_core_coord.y,
-                    do_sync,                       // use_barrier_sem
-                    barrier_semaphore.address()};  // synchronize barrier semaphore
+                    opposite_core_coord.y};
                 append_fabric_mux_connection_rt_args(
                     mux_connection_valid,
                     core,
