@@ -67,7 +67,9 @@ void kernel_main() {
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(sender_socket, socket_block_size);
 
-    fabric_set_unicast_route(data_packet_header_addr, sender_socket);
+    // Only one downstream in this test
+    sender_downstream_encoding* downstream_enc = get_downstream_encoding(sender_socket, 0);
+    fabric_set_unicast_route(data_packet_header_addr, *downstream_enc);
 
     uint64_t receiver_noc_coord_addr = get_noc_addr_from_bank_id<is_dram>(bank_id, 0, edm_fabric_write_noc_index);
 
