@@ -154,61 +154,20 @@ def test_qwen3_tg_qk_norm(
 
     logger.info(f"Starting qk_norm")
 
-    q_norm_weights = torch.randn([128])
-    k_norm_weights = torch.randn([128])
+    q_norm_weights = torch.randn([1, 128])  # [1, 128] ==> [1 (32), 32 x 4]
+    k_norm_weights = torch.randn([1, 128])
     state_dict = {"q_norm.weight": q_norm_weights, "k_norm.weight": k_norm_weights}
 
-    norm_mem_cfg = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 3), ttnn.CoreCoord(2, 6))
-                ]  # This captures the fact that we are using 1 core (height sharded)
-            ),
-            [32, 32],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-    norm_program_cfg = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(2, 3), ttnn.CoreCoord(2, 6))
-                ]  # This captures the fact that we are using 1 core (height sharded)
-            ),
-            [32, 32],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
+    norm_weight_mem_cfg = ttnn.create_sharded_memory_config(
+        shape=(32, 32),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 5))]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
     )
 
-    q_norm = RMSNorm(
-        device=mesh_device,
-        dim=128,
-        state_dict=state_dict,
-        state_dict_prefix=None,
-        weight_dtype=ttnn.bfloat16,
-        weight_key="q_norm",
-        weight_memory_config=norm_mem_cfg,
-        sharded_program_config=norm_program_cfg,
-    )
-    k_norm = RMSNorm(
-        device=mesh_device,
-        dim=128,
-        state_dict=state_dict,
-        state_dict_prefix=None,
-        weight_dtype=ttnn.bfloat16,
-        weight_key="k_norm",
-        weight_memory_config=norm_mem_cfg,
-        sharded_program_config=norm_program_cfg,
-    )
-
-    rm_mem_cfg_qkv = q_heads_pre_rot_1BQD.memory_config()
     reshape_intermediate_mem_cfg = ttnn.create_sharded_memory_config(
-        shape=(64, 128),  # [1, 8, 8, 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
+        shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
         core_grid=ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 2))
@@ -222,13 +181,55 @@ def test_qwen3_tg_qk_norm(
         shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
         core_grid=ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(3, 2), ttnn.CoreCoord(3, 5))
-            ]  # This captures the fact that we ar eusing 4 cores (width sharded)
+                ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 5))
+            ]  # This captures the fact that we are using 4 cores (width sharded)
         ),  # resharding tensor to 1 core
         strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+
+    block_w = 128 // 4 // 32
+    # Find largest value <= 4 that evenly divides block_w
+    subblock_w = 1
+    while subblock_w > 0:
+        if block_w % subblock_w == 0:
+            break
+        subblock_w -= 1
+    norm_program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=[1, 4],
+        subblock_w=subblock_w,
+        block_h=2,  # 64 // 32
+        block_w=block_w,
+        inplace=False,
+    )
+
+    q_norm = RMSNorm(
+        device=mesh_device,
+        dim=128,
+        state_dict=state_dict,
+        state_dict_prefix=None,
+        weight_dtype=ttnn.bfloat16,
+        weight_key="q_norm",
+        # weight_memory_config=norm_weight_mem_cfg,
+        sharded_program_config=norm_program_cfg,
+        sharded_output_config=reshape_output_mem_cfg,
+    )
+    k_norm = RMSNorm(
+        device=mesh_device,
+        dim=128,
+        state_dict=state_dict,
+        state_dict_prefix=None,
+        weight_dtype=ttnn.bfloat16,
+        weight_key="k_norm",
+        # weight_memory_config=norm_weight_mem_cfg,
+        sharded_program_config=norm_program_cfg,
+        sharded_output_config=reshape_output_mem_cfg,
+    )
+
+    # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> [1, 1, 64, 32 x 4]
+
+    rm_mem_cfg_qkv = q_heads_pre_rot_1BQD.memory_config()
 
     q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=reshape_intermediate_mem_cfg)
     k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=reshape_intermediate_mem_cfg)
@@ -242,12 +243,10 @@ def test_qwen3_tg_qk_norm(
     q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=reshape_output_mem_cfg)
     k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=reshape_output_mem_cfg)
 
-    breakpoint()
+    # [1, 1, 64, 32 x 4]
 
-    # breakpoint()
-
-    q_head_post_norm = q_norm(q_heads_pre_rot_1BQD, mode="decode")
-    k_head_post_norm = k_norm(k_heads_pre_rot_1BKD, mode="decode")
+    q_head_post_norm = q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
+    k_head_post_norm = k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
 
     logger.info(f"Finished qk_norm")
 

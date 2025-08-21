@@ -137,7 +137,7 @@ class RMSNorm(LightweightModule):
             epsilon=self.eps,
             weight=weight,
             program_config=program_config,
-            memory_config=memory_config,
+            # memory_config=memory_config,
             compute_kernel_config=self.compute_kernel_config_hifi2,
         )
 

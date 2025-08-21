@@ -13,7 +13,6 @@ from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
 from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
 from models.demos.llama3_70b_galaxy.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
-from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
@@ -47,13 +46,13 @@ class TtTransformer(LightweightModule):
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
 
-        self.embd = TtLlamaEmbedding(
-            mesh_device=mesh_device,
-            args=args,
-            weight_cache_path=args.weight_cache_path(dtype),
-            state_dict=state_dict,
-            dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
-        )
+        # self.embd = TtLlamaEmbedding(
+        #     mesh_device=mesh_device,
+        #     args=args,
+        #     weight_cache_path=args.weight_cache_path(dtype),
+        #     state_dict=state_dict,
+        #     dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
+        # )
 
         self.rope_setup = TtLlamaRotarySetup(
             mesh_device,
@@ -147,6 +146,7 @@ class TtTransformer(LightweightModule):
                 self.prefetcher_setup.worker_sub_device_id,
                 mode="prefill",
                 allocate_prefill_buffers=self.allocate_prefill_buffers,
+                use_qwen_mlp=True,
             )
         else:
             self.tt_ccl = self.tt_ccl_prefill
@@ -164,7 +164,12 @@ class TtTransformer(LightweightModule):
             [self.prefetcher_setup.prefetcher_sub_device_id, self.prefetcher_setup.worker_sub_device_id]
         )
         if mesh_sub_device_manager_id_decode is None:
-            self.tt_ccl = TT_CCL(self.mesh_device, self.args, self.prefetcher_setup.worker_sub_device_id)
+            self.tt_ccl = TT_CCL(
+                self.mesh_device,
+                self.args,
+                self.prefetcher_setup.worker_sub_device_id,
+                use_qwen_mlp=True,
+            )
             self.tt_sampling = TTSampling(
                 args=self.args,
                 mesh_device=self.mesh_device,
@@ -250,7 +255,8 @@ class TtTransformer(LightweightModule):
         page_table=None,
         chunk_page_table=None,
     ):
-        tt_tokens = self.embd(tokens)
+        # tt_tokens = self.embd(tokens)
+        tt_tokens = tokens
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, user_id, page_table, chunk_page_table
 
@@ -387,7 +393,8 @@ class TtTransformer(LightweightModule):
         """
         # print("tokens", tokens.shape, tokens.memory_config)
         tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
-        tt_tokens = self.embd(tokens)
+        # tt_tokens = self.embd(tokens)
+        tt_tokens = tokens
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
     def process_output_prefill(self, tt_out, last_token_idx, tt_out_logits_saved=None):
@@ -483,7 +490,8 @@ class TtTransformer(LightweightModule):
         It returns ttnn device tensors.
         """
         rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
-        x_embd = self.embd(x)
+        # x_embd = self.embd(x)
+        x_embd = x
         tt_logits = self.forward(
             x_embd,
             current_pos,
@@ -567,9 +575,10 @@ class TtTransformer(LightweightModule):
             self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
-                num_layers=self.n_layers,
+                # num_layers=self.n_layers,
+                num_layers=1,
                 global_cb=self.prefetcher_setup.global_circular_buffer,
-                enable_performance_mode=self.enable_prefetcher_performance_mode,
+                # enable_performance_mode=self.enable_prefetcher_performance_mode,
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 
