@@ -14,7 +14,7 @@
 
 struct GalaxyUbbIdentifier {
     uint32_t tray_id;
-    uint32_t asic_id;
+    uint32_t chip_number;
 
     bool operator<(const GalaxyUbbIdentifier &other) const;
     bool operator==(const GalaxyUbbIdentifier &other) const;
