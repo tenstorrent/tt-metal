@@ -68,6 +68,7 @@
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
@@ -718,6 +719,9 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 min_remote_cb_start_index,
                 kg_to_cores.second));
             index++;
+        }
+        for (const auto& kg : kernel_groups_[programmable_core_type_index]) {
+            RecordKernelGroup(*this, hal.get_programmable_core_type(programmable_core_type_index), *kg);
         }
     }
 }
