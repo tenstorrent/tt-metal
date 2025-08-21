@@ -521,13 +521,8 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const
     if (dtype == DataType::UINT32) {
         return std::bit_cast<uint32_t>(scalar);
     }
-    // +-inf and nan, value must be truncated to make sure it's still special value in device code
-    if (scalar == tt::tt_metal::hal::get_inf() || scalar == -tt::tt_metal::hal::get_inf() ||
-        scalar == tt::tt_metal::hal::get_nan()) {
-        uint16_t bf16_bits = (*reinterpret_cast<const uint32_t*>(&scalar)) >> 16;
-        return pack_two_bfloat16_into_uint32({bf16_bits, bf16_bits});
-    }
-    return pack_two_bfloat16_into_uint32({scalar, scalar});
+    uint16_t bf16_bits = (*reinterpret_cast<const uint32_t*>(&scalar)) >> 16;
+    return pack_two_bfloat16_into_uint32({bf16_bits, bf16_bits});
 }
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);
