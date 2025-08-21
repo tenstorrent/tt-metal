@@ -881,6 +881,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     }
 
     // Kernel Runtime Args
+    bool do_sync = barrier_semaphore.has_value();
     uint32_t fwd_bwd_semaphore_address = tt::tt_metal::CreateSemaphore(program, sender_worker_core_range_set, 0);
     const uint32_t l1_unreserved_base_address =
         sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
@@ -1119,8 +1120,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     fwd_bwd_semaphore_address,
                     opposite_core_coord.x,
                     opposite_core_coord.y,
-                    barrier_semaphore.has_value(),  // use_barrier_sem
-                    barrier_semaphore.has_value()   // synchronize barrier semaphore
+                    do_sync,                       // use_barrier_sem
+                    barrier_semaphore.has_value()  // synchronize barrier semaphore
                         ? barrier_semaphore.value().address()
                         : 0};
                 append_fabric_mux_connection_rt_args(
@@ -1172,8 +1173,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
          num_workers_per_direction,
          num_mux_cores_per_direction_per_link,
          num_cores_per_link,
-         semaphore,
-         barrier_semaphore](
+         semaphore_capture = (do_sync ? std::optional{semaphore} : std::nullopt),
+         barrier_semaphore_capture = (do_sync ? barrier_semaphore : std::nullopt)](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -1182,6 +1183,10 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[1];
             const auto& intermed = output_tensors[0];
+
+            bool do_sync = static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->do_sync;
+            auto op_semaphores =
+                do_sync ? std::nullopt : static_cast<const ttnn::ReduceScatterMinimalAsync*>(operation)->semaphore;
 
             // update senders
             uint32_t core_idx = 0;
@@ -1202,17 +1207,18 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                         worker_reader_sender_runtime_args[0] = input.buffer()->address();
                         worker_reader_sender_runtime_args[1] = intermed.buffer()->address();
                         worker_reader_sender_runtime_args[2] = output.buffer()->address();
-                        worker_reader_sender_runtime_args[3] = semaphore.at(0).address();
+                        if (!do_sync) {
+                            worker_reader_sender_runtime_args[3] = op_semaphores.value().at(0).address();
+                        }
+
                         // sender writer
                         auto& worker_writer_sender_runtime_args = writer_runtime_args[core.x][core.y];
                         worker_writer_sender_runtime_args[0] = intermed.buffer()->address();
                         worker_writer_sender_runtime_args[1] = output.buffer()->address();
-                        worker_writer_sender_runtime_args[4] = semaphore.at(0).address();
-                        worker_writer_sender_runtime_args[5] = semaphore.at(1).address();
-                        worker_writer_sender_runtime_args[6] = semaphore.at(2).address();
-
-                        if (barrier_semaphore.has_value()) {
-                            worker_writer_sender_runtime_args[13] = barrier_semaphore.value().address();
+                        if (!do_sync) {
+                            worker_writer_sender_runtime_args[4] = op_semaphores.value().at(0).address();
+                            worker_writer_sender_runtime_args[5] = op_semaphores.value().at(1).address();
+                            worker_writer_sender_runtime_args[6] = op_semaphores.value().at(2).address();
                         }
 
                         core_idx++;
