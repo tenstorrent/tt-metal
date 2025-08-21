@@ -72,7 +72,7 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
     tt_model = TtGemma3MultiModalProjector(
         mesh_device=device,
         state_dict=state_dict,
-        state_dict_prefix="model.multi_modal_projector",
+        state_dict_prefix="multi_modal_projector",
         image_size=tt_model_args.vision_chunk_size,
         patch_size=tt_model_args.vision_patch_size,
         hidden_size=tt_model_args.vision_hidden_dim,

@@ -68,7 +68,7 @@ def test_rmsnorm_inference(seq_len, batch_size, reset_seeds, device):
         dim=1152,
         state_dict=state_dict,
         state_dict_prefix="",
-        weight_key="model.multi_modal_projector.mm_soft_emb_norm",
+        weight_key="multi_modal_projector.mm_soft_emb_norm",
         weight_dtype=dtype,
         is_distributed=False,
         sharded_program_config=tt_model_args.get_model_config()["SHARDED_NORM_ATTN_PRGM_CFG"],

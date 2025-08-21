@@ -46,7 +46,7 @@ def test_mlp_inference(batch, num_chunks, mesh_device, reset_seeds):
     model_args.WEIGHTS_DTYPE = dtype
 
     dim = model_args.vision_dim
-    seq_len = nearest_32(model_args.vision_chunk_ntok) * num_chunks
+    seq_len = nearest_32(model_args.image_size) * num_chunks
     reference_model = model_args.reference_vision_mlp()
     # reference_model.load_state_dict(partial_state_dict)
 

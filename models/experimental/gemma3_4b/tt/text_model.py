@@ -135,7 +135,7 @@ class Gemma3_4BTransformer(LightweightModule):
         self.cache_is_setup = True
 
         # Prepare xattn_caches
-        chunk_length = nearest_32(self.args.vision_chunk_ntok)
+        chunk_length = nearest_32(self.args.image_size)
         vision_seq_len = self.args.vision_max_num_chunks * chunk_length
         xattn_cache = [
             [

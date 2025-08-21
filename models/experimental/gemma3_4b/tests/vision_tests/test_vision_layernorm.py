@@ -34,16 +34,16 @@ def test_layernorm_inference(mesh_device, reset_seeds, layer_name):
     model_args = ModelArgs(mesh_device)
     width = model_args.vision_dim
     num_chunks = 4
-    seq_len = nearest_32(model_args.vision_chunk_ntok) * num_chunks
+    seq_len = nearest_32(model_args.image_size) * num_chunks
 
     # Load full state dict
     state_dict = model_args.load_state_dict()
 
     # Prefix for vision MLP weights — consistent with HF checkpoint
     if layer_name == "layer_norm1":
-        first_layer_prefix = "model.vision_tower.vision_model.encoder.layers.0.ln_1."
+        first_layer_prefix = "visual.encoder.layers.0.ln_1."
     else:
-        first_layer_prefix = "model.vision_tower.vision_model.encoder.layers.0.ln_2."
+        first_layer_prefix = "visual.encoder.layers.0.ln_2."
 
     model_args.WEIGHTS_DTYPE = dtype
     # Reference HF MLP (from Gemma3 vision tower)
