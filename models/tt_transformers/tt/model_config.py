@@ -2262,7 +2262,6 @@ class ModelArgs:
 
                     model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, device_map="auto")
                     model = model
-                    # model.layers = model.layers[: self.n_layers]  revisit it
                 else:
                     if self.cache_hf_flag and self.cached_hf_model is None:
                         model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
@@ -2434,8 +2433,7 @@ class ModelArgs:
                 model = self.reference_transformer(wrap=False)
                 layer = model.model.embed_tokens
             else:
-                # layer = reference_model.model.model.embed_tokens revisit it
-                layer = reference_model.model.embed_tokens
+                layer = reference_model.model.model.embed_tokens
 
             layer._load_state_dict = layer.load_state_dict
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
@@ -2450,10 +2448,11 @@ class ModelArgs:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
             model_name_env = os.getenv("HF_MODEL")
-            if "gemma-3-4b" in model_name_env.lower():
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb, model.model.rotary_emb_local)
+            if hasattr(model.model, "rotary_emb_local"):
+                rotary_emb_local = model.model.rotary_emb_local
             else:
-                wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+                rotary_emb_local = None
+            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb, rotary_emb_local)
             return wrapper
 
     def reference_attention(self):
@@ -2633,17 +2632,14 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        model_name_env = os.getenv("HF_MODEL")
-        if "gemma-3-4b" in model_name_env.lower():
-            position_embeddings = self.rotary_emb(x, position_ids)
-            position_embeddings_local = self.rotary_emb_local(x, position_ids)
-        else:
-            position_embeddings = self.rotary_emb(x, position_ids)
+        position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
+
         if self.rotary_emb_local is not None:
+            position_embeddings_local = self.rotary_emb_local(x, position_ids)
             result = self.decoder.forward(
                 x,
                 position_embeddings_global=position_embeddings,
@@ -2662,6 +2658,7 @@ class HfDecoderWrapper:
                 position_ids=position_ids,
                 attention_mask=mask,
             )
+
         output = result[0]
         return output
 
