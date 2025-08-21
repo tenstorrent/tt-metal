@@ -234,7 +234,7 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
             chat.append({"role": "user", "content": prompt_text})
         return tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
     else:
-        return tokenizer.apply_chat_template([prompt_text], add_generation_prompt=True, tokenize=True)
+        return tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
 
 
 def freqs_to_rotation_matrix(cos_freqs, sin_freqs):

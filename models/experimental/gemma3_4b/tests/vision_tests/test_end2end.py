@@ -303,7 +303,7 @@ def run_generation_exactly_like_test_end2end(
         decoding_pos,
         prefill_lens,
     ) = preprocess_inputs_prefill(
-        input_prompts,
+        [input_prompts],
         model_args.tokenizer,
         [model_args],
         instruct=True,
