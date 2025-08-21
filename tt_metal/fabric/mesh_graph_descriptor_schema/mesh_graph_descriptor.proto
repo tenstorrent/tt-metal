@@ -1,0 +1,106 @@
+syntax = "proto3";
+
+package tt.tt_fabric.mesh_graph_descriptor_proto;
+
+message MeshGraphDescriptor {
+    repeated MeshDescriptor mesh_descriptors = 1;
+    repeated GraphDescriptor graph_descriptors = 2;
+    NodeRef top_level_instance = 3;
+}
+
+message MeshDescriptor {
+  optional int32 id = 1;
+  string arch = 2;
+  TorusTopology device_topology = 3;
+  Channels channels = 4;
+  MeshTopology host_topology = 5;
+  repeated bool dim_is_ring = 6;
+  message ExpressConnection {
+    int32 src = 1;
+    int32 dst = 2;
+  }
+  repeated ExpressConnection express_connections = 7;
+}
+
+
+message GraphDescriptor {
+  string type = 1;
+  repeated NodeRef instances = 2;
+  optional Channels channels = 3;
+  optional GraphTopology graph_topology = 4;
+  repeated Connection connections = 5;
+  optional string id = 6;
+}
+
+message NodeRef {
+  oneof node_ref {
+    MeshRef mesh = 1;
+    GraphRef graph = 2;
+  }
+}
+
+message GraphRef {
+  string graph_descriptor = 1;
+  int32 id = 2;
+
+  oneof sub_ref {
+    MeshRef mesh = 3;
+    GraphRef graph = 4;
+  }
+ 
+}
+
+message MeshRef {
+  string mesh_descriptor = 1;
+  int32 id = 2;
+  optional DeviceRef device = 3;
+}
+
+message DeviceRef {
+  int32 id = 2;
+}
+
+message MeshTopology {
+  repeated int32 dims = 1;  // required
+}
+
+message TorusTopology {
+  enum Type {
+    LINE = 0;
+    RING = 1;
+  }
+  message Dimension {
+    int32 dim = 1;
+    optional Type type = 2; // optional, default to LINE
+  }
+  repeated Dimension dims = 3;  // required
+}
+
+
+enum GraphTopology {
+  INVALID_TOPOLOGY = 0;
+  ALL_TO_ALL = 1;
+  RING = 2;
+}
+
+enum Policy {
+  INVALID_POLICY = 0;
+  STRICT = 1;
+  RELAXED = 2;
+}
+
+enum Architecture {
+  WORMHOLE_B0 = 0;
+  BLACKHOLE = 1;
+}
+
+message Channels {
+  int32 count = 1;
+  optional Policy policy = 2;
+}
+
+message Connection {
+  repeated NodeRef nodes = 1;
+  Channels chan = 2;
+  optional bool directional = 3;
+}
