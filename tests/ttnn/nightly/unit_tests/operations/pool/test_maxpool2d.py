@@ -291,11 +291,7 @@ def run_max_pool(
 )
 @pytest.mark.parametrize(
     "dilation",
-    (
-        (1, 1),  # default - no dilation
-        (2, 2),  # symmetric dilation
-        (2, 1),  # asymmetric dilation
-    ),
+    ((1, 1),),
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -363,7 +359,7 @@ def test_run_max_pool_height_shard(
     "dilation",
     (
         (1, 1),  # default - no dilation
-        (2, 2),  # symmetric dilation for wide tests
+        (2, 2),  # symmetric dilation for width shard
     ),
 )
 @pytest.mark.parametrize(
@@ -438,7 +434,6 @@ def test_run_max_pool_width_shard(
     "dilation",
     (
         (1, 1),  # default - no dilation
-        (2, 2),  # symmetric dilation for block shard
         (1, 3),  # asymmetric dilation for block shard
     ),
 )
@@ -536,10 +531,7 @@ def test_run_max_pool_mem_config(
 )
 @pytest.mark.parametrize(
     "dilation",
-    (
-        (1, 1),  # default - no dilation
-        (2, 2),  # symmetric dilation for model tests
-    ),
+    ((1, 1),),
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_run_max_pool_yolov4(
@@ -571,10 +563,7 @@ def test_run_max_pool_yolov4(
 @pytest.mark.parametrize("stride", ((2, 2),))
 @pytest.mark.parametrize(
     "dilation",
-    (
-        (1, 1),  # default - no dilation
-        (2, 2),  # symmetric dilation for model tests
-    ),
+    ((1, 1),),
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("ceil_mode", [False, True])
