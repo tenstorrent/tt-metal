@@ -110,7 +110,11 @@ private:
         device_tracy_contexts;
 
     // Iterator on the previous marker that was processed
-    std::unordered_set<tracy::TTDeviceMarker>::iterator prev_marker_it;
+    // std::unordered_set<tracy::TTDeviceMarker>::iterator prev_marker_it;
+
+    // std::stack<std::tuple<CoreCoord, std::unordered_set<tracy::TTDeviceMarker>::iterator, int>> start_marker_stack;
+    // std::map<std::pair<CoreCoord, int>, std::stack<std::set<tracy::TTDeviceMarker>::iterator>>
+    //     start_marker_stack_map;
 
     // Holding current data collected for dispatch command queue zones
     DispatchMetaData current_dispatch_meta_data;
@@ -181,7 +185,7 @@ private:
         const std::optional<ProfilerOptionalMetadata>& metadata);
 
     // Read packet data to be displayed
-    void readPacketData(
+    void readMarkerData(
         uint32_t run_host_id,
         const std::string& op_name,
         chip_id_t device_id,
@@ -217,7 +221,9 @@ public:
     uint32_t profile_buffer_bank_size_bytes{};
 
     // Device markers
-    std::unordered_set<tracy::TTDeviceMarker> device_markers;
+    // std::set<tracy::TTDeviceMarker> device_markers;
+
+    std::map<CoreCoord, std::map<uint32_t, std::set<tracy::TTDeviceMarker>>> device_markers_per_core_risc_map;
 
     std::set<tracy::TTDeviceMarker> device_sync_markers;
 
@@ -270,10 +276,12 @@ public:
     void setLastFDReadAsNotDone();
 
     bool isLastFDReadDone() const;
+
+    void processDeviceMarkers(std::set<tracy::TTDeviceMarker>& device_markers);
 };
 
 std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getDeviceMarkersVector(
-    const std::unordered_set<tracy::TTDeviceMarker>& device_markers);
+    const std::map<CoreCoord, std::map<uint32_t, std::set<tracy::TTDeviceMarker>>>& device_markers_per_core_risc_map);
 
 void sortDeviceMarkers(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers);
 

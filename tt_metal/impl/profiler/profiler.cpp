@@ -13,6 +13,7 @@
 #include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
 #include <nlohmann/json.hpp>
+#include <stack>
 #include <tracy/TracyTTDevice.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -46,6 +47,8 @@
 namespace tt {
 
 namespace tt_metal {
+
+static uint32_t counter = 0;
 
 static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
@@ -241,29 +244,46 @@ void sortDeviceMarkers(std::vector<std::reference_wrapper<const tracy::TTDeviceM
 }
 
 std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getDeviceMarkersVector(
-    const std::unordered_set<tracy::TTDeviceMarker>& device_markers) {
-    tracy::TTDeviceMarker dummy_marker;
-    std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec(
-        device_markers.size(), std::cref(dummy_marker));
-
-    auto middle = device_markers.begin();
-    std::advance(middle, device_markers.size() / 2);
-
-    std::thread t([&device_markers_vec, &device_markers, &middle]() {
-        uint32_t i = device_markers.size() / 2;
-        for (auto it = middle; it != device_markers.end(); ++it) {
-            device_markers_vec[i] = std::cref(*it);
-            i++;
+    const std::map<CoreCoord, std::map<uint32_t, std::set<tracy::TTDeviceMarker>>>& device_markers_per_core_risc_map) {
+    uint32_t total_num_markers = 0;
+    for (const auto& [core, risc_map] : device_markers_per_core_risc_map) {
+        for (const auto& [risc, markers] : risc_map) {
+            total_num_markers += markers.size();
         }
-    });
-
-    uint32_t i = 0;
-    for (auto it = device_markers.begin(); it != middle; ++it) {
-        device_markers_vec[i] = std::cref(*it);
-        i++;
     }
 
-    t.join();
+    tracy::TTDeviceMarker dummy_marker;
+    std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec(
+        total_num_markers, std::cref(dummy_marker));
+
+    // auto middle = device_markers_per_core_risc_map.begin();
+    // std::advance(middle, device_markers_per_core_risc_map.size() / 2);
+
+    // std::thread t([&device_markers_vec, &device_markers_per_core_risc_map, &middle]() {
+    //     uint32_t i = device_markers_per_core_risc_map.size() / 2;
+    //     for (auto it = middle; it != device_markers_per_core_risc_map.end(); ++it) {
+    //         device_markers_vec[i] = std::cref(*it);
+    //         i++;
+    //     }
+    // });
+
+    // uint32_t i = 0;
+    // for (auto it = device_markers_per_core_risc_map.begin(); it != middle; ++it) {
+    //     device_markers_vec[i] = std::cref(*it);
+    //     i++;
+    // }
+
+    uint32_t i = 0;
+    for (const auto& [core, risc_map] : device_markers_per_core_risc_map) {
+        for (const auto& [risc, markers] : risc_map) {
+            for (const tracy::TTDeviceMarker& marker : markers) {
+                device_markers_vec[i] = std::cref(marker);
+                ++i;
+            }
+        }
+    }
+
+    // t.join();
 
     return device_markers_vec;
 }
@@ -824,6 +844,7 @@ void dumpDeviceResultsToCSV(
         return;
     }
 
+    // iterate over core, risc, timestamp here instead of timestamp for all markers
     for (const tracy::TTDeviceMarker& marker : device_markers) {
         std::string meta_data_str = "";
         if (!marker.meta_data.is_null()) {
@@ -1180,6 +1201,7 @@ void DeviceProfiler::readRiscProfilerResults(
             uint32_t opTime_H = 0;
             uint32_t opTime_L = 0;
             std::string opname;
+            // this->device_markers.clear();
 
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
@@ -1239,7 +1261,7 @@ void DeviceProfiler::readRiscProfilerResults(
                                     runHostCounterRead,
                                     index);
 
-                                readPacketData(
+                                readMarkerData(
                                     runHostCounterRead,
                                     opname,
                                     device_id,
@@ -1255,7 +1277,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
                             uint32_t time_H = opTime_H;
                             uint32_t time_L = opTime_L;
-                            readPacketData(
+                            readMarkerData(
                                 runHostCounterRead,
                                 opname,
                                 device_id,
@@ -1264,7 +1286,6 @@ void DeviceProfiler::readRiscProfilerResults(
                                 sum,
                                 timer_id,
                                 (uint64_t(time_H) << 32) | time_L);
-
                             break;
                         }
                         case kernel_profiler::TS_DATA: {
@@ -1273,7 +1294,7 @@ void DeviceProfiler::readRiscProfilerResults(
                             index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
                             uint32_t data_H = data_buffer.at(index);
                             uint32_t data_L = data_buffer.at(index + 1);
-                            readPacketData(
+                            readMarkerData(
                                 runHostCounterRead,
                                 opname,
                                 device_id,
@@ -1287,7 +1308,7 @@ void DeviceProfiler::readRiscProfilerResults(
                         case kernel_profiler::TS_EVENT: {
                             uint32_t time_H = data_buffer.at(index) & 0xFFF;
                             uint32_t time_L = data_buffer.at(index + 1);
-                            readPacketData(
+                            readMarkerData(
                                 runHostCounterRead,
                                 opname,
                                 device_id,
@@ -1300,6 +1321,50 @@ void DeviceProfiler::readRiscProfilerResults(
                     }
                 }
             }
+
+            // auto device_markers_vector = getDeviceMarkersVector(this->device_markers);
+            // sortDeviceMarkers(device_markers_vector);
+            // std::vector<tracy::TTDeviceMarker> device_markers_vector;
+            // for (const auto& marker : this->device_markers) {
+            //     device_markers_vector.push_back(marker);
+            // }
+            // std::sort(device_markers_vector.begin(), device_markers_vector.end());
+
+            // // log_info(tt::LogMetal, "new vector creation");
+            // std::map<std::pair<CoreCoord, int>, std::stack<tracy::TTDeviceMarker>>
+            //     stack_custom_map;
+            // for (const auto& marker : device_markers_vector) {
+            //     counter++;
+            //     std::stack<tracy::TTDeviceMarker>& stack_custom =
+            //     stack_custom_map[std::make_pair(CoreCoord(marker.core_x, marker.core_y), marker.risc)]; log_info(
+            //         tt::LogMetal,
+            //         "timestamp: {}, chip id: {}, core x: {}, core y: {}, risc: {}, counter: {}, marker name: {}, "
+            //         "type: {}, id: {}",
+            //         marker.timestamp,
+            //         marker.chip_id,
+            //         marker.core_x,
+            //         marker.core_y,
+            //         marker.risc,
+            //         counter,
+            //         marker.marker_name,
+            //         enchantum::to_string(marker.marker_type),
+            //         marker.marker_id & 0xFFFF);
+
+            //     if (marker.marker_type == tracy::TTDeviceMarkerType::START) {
+            //         stack_custom.push(marker);
+            //     } else if (marker.marker_type == tracy::TTDeviceMarkerType::END) {
+            //         TT_FATAL(!stack_custom.empty(), "End marker found without a corresponding start marker");
+
+            //         const auto& start_marker = stack_custom.top();
+            //         TT_FATAL(
+            //             (start_marker.marker_id & 0xFFFF) == (marker.marker_id & 0xFFFF),
+            //             "Start {} and end {} markers do not match",
+            //             start_marker.marker_id & 0xFFFF,
+            //             marker.marker_id & 0xFFFF);
+            //         stack_custom.pop();
+            //         // device_markers.erase(start_marker_it);
+            //     }
+            // }
         }
     }
 }
@@ -1319,7 +1384,7 @@ tracy::MarkerDetails DeviceProfiler::getMarkerDetails(uint16_t timer_id) const {
     }
 }
 
-void DeviceProfiler::readPacketData(
+void DeviceProfiler::readMarkerData(
     uint32_t run_host_id,
     const std::string& op_name,
     chip_id_t device_id,
@@ -1330,151 +1395,291 @@ void DeviceProfiler::readPacketData(
     uint64_t timestamp) {
     ZoneScoped;
 
+    counter++;
+
+    nlohmann::json meta_data;
     tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
 
-    uint32_t new_marker_runtime_host_id = run_host_id;
-    chip_id_t new_marker_device_id = device_id;
-    uint32_t new_marker_core_x = physical_core.x;
-    uint32_t new_marker_core_y = physical_core.y;
-    int new_marker_risc_num = risc_num;
-    uint64_t new_marker_data = data;
-    const std::string& new_marker_op_name = op_name;
-    uint32_t new_marker_timer_id = timer_id;
-    uint64_t new_marker_timestamp = timestamp;
-    uint32_t new_marker_line = marker_details.source_line_num;
-    std::string& new_marker_file = marker_details.source_file;
-    std::string& new_marker_name = marker_details.marker_name;
-    tracy::TTDeviceMarkerType new_marker_type = get_marker_type_from_packet_type(packet_type);
-    std::array<bool, static_cast<uint16_t>(tracy::MarkerDetails::MarkerNameKeyword::COUNT)>&
-        new_marker_name_keyword_flags = marker_details.marker_name_keyword_flags;
-    nlohmann::json new_marker_meta_data;
+    // uint32_t new_marker_runtime_host_id = run_host_id;
+    // chip_id_t new_marker_device_id = device_id;
+    // uint32_t new_marker_core_x = physical_core.x;
+    // uint32_t new_marker_core_y = physical_core.y;
+    // int new_marker_risc_num = risc_num;
+    // uint64_t new_marker_data = data;
+    // const std::string& new_marker_op_name = op_name;
+    // uint32_t new_marker_timer_id = timer_id;
+    // uint64_t new_marker_timestamp = timestamp;
+    // uint32_t new_marker_line = marker_details.source_line_num;
+    // std::string& new_marker_file = marker_details.source_file;
+    // std::string new_marker_name = marker_details.marker_name;
+    // tracy::TTDeviceMarkerType new_marker_type = get_marker_type_from_packet_type(packet_type);
+    // std::array<bool, static_cast<uint16_t>(tracy::MarkerDetails::MarkerNameKeyword::COUNT)>&
+    //     new_marker_name_keyword_flags = marker_details.marker_name_keyword_flags;
+    // nlohmann::json new_marker_meta_data;
 
-    if (packet_type == kernel_profiler::ZONE_START || packet_type == kernel_profiler::ZONE_END) {
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only() && risc_num == TRACE_RISC_ID) {
-            if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                    tracy::MarkerDetails::MarkerNameKeyword::BRISC_FW)] ||
-                marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                    tracy::MarkerDetails::MarkerNameKeyword::NCRISC_FW)] ||
-                marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                    tracy::MarkerDetails::MarkerNameKeyword::TRISC_FW)] ||
-                marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                    tracy::MarkerDetails::MarkerNameKeyword::ERISC_FW)]) {
-                new_marker_name = "TRACE-FW";
-            }
-            if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                    tracy::MarkerDetails::MarkerNameKeyword::BRISC_KERNEL)] ||
-                marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                    tracy::MarkerDetails::MarkerNameKeyword::NCRISC_KERNEL)] ||
-                marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                    tracy::MarkerDetails::MarkerNameKeyword::TRISC_KERNEL)] ||
-                marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                    tracy::MarkerDetails::MarkerNameKeyword::ERISC_KERNEL)]) {
-                new_marker_name = "TRACE-KERNEL";
-            }
-        }
+    // add marker to device_markers first
+    // if it is a start zone, push to stack
+    // if it is a TS_DATA zone, remove corresponding start zone from device_events and stack, update its name, and push
+    // it back to stack and device_events
+    // if it is an end zone, make sure that the start zone matches the end zone, and
+    // if so, pop the start zone from the stack, and update end zone name and push to device_events
 
-        // Reset the command subtype, in case it isn't set during the command.
-        this->current_dispatch_meta_data.cmd_subtype = "";
+    const auto& [new_marker_it, new_marker_inserted] =
+        device_markers_per_core_risc_map[physical_core][risc_num].emplace(
+            run_host_id,
+            device_id,
+            physical_core.x,
+            physical_core.y,
+            risc_num,
+            timer_id,
+            timestamp,
+            data,
+            op_name,
+            marker_details.source_line_num,
+            marker_details.source_file,
+            marker_details.marker_name,
+            get_marker_type_from_packet_type(packet_type),
+            marker_details.marker_name_keyword_flags,
+            meta_data);
+
+    // auto [new_marker_it, new_marker_inserted] = device_markers.emplace(
+    //     run_host_id,
+    //     device_id,
+    //     physical_core.x,
+    //     physical_core.y,
+    //     risc_num,
+    //     timer_id,
+    //     timestamp,
+    //     data,
+    //     op_name,
+    //     marker_details.source_line_num,
+    //     marker_details.source_file,
+    //     marker_details.marker_name,
+    //     get_marker_type_from_packet_type(packet_type),
+    //     marker_details.marker_name_keyword_flags,
+    //     meta_data);
+
+    if (!new_marker_inserted) {
+        return;
     }
-    if (packet_type == kernel_profiler::TS_DATA) {
-        if (this->prev_marker_it != device_markers.end()) {
-            // Check if we are in a Tensix Dispatch zone. If so, we could have gotten dispatch meta data packets
-            // These packets can amend parent zone's info
-            const tracy::MarkerDetails prev_marker_details = getMarkerDetails(this->prev_marker_it->marker_id);
-            if ((tracy::riscName[risc_num] == "BRISC" || tracy::riscName[risc_num] == "NCRISC") &&
-                this->prev_marker_it->marker_type == tracy::TTDeviceMarkerType::START &&
-                prev_marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                    tracy::MarkerDetails::MarkerNameKeyword::DISPATCH)]) {
-                if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                        tracy::MarkerDetails::MarkerNameKeyword::PROCESS_CMD)]) {
-                    this->current_dispatch_meta_data.cmd_type =
-                        fmt::format("{}", enchantum::to_string((CQDispatchCmdId)data));
-                    new_marker_meta_data["dispatch_command_type"] = this->current_dispatch_meta_data.cmd_type;
-                } else if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                               tracy::MarkerDetails::MarkerNameKeyword::RUNTIME_HOST_ID_DISPATCH)]) {
-                    this->current_dispatch_meta_data.worker_runtime_id = (uint32_t)data;
-                    new_marker_meta_data["workers_runtime_id"] = this->current_dispatch_meta_data.worker_runtime_id;
-                } else if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                               tracy::MarkerDetails::MarkerNameKeyword::PACKED_DATA_DISPATCH)]) {
-                    this->current_dispatch_meta_data.cmd_subtype = fmt::format(
-                        "{}{}",
-                        data & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST ? "MCAST," : "",
-                        enchantum::to_string(static_cast<CQDispatchCmdPackedWriteType>(
-                            (data >> 1) << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT)));
-                    new_marker_meta_data["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
-                } else if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                               tracy::MarkerDetails::MarkerNameKeyword::PACKED_LARGE_DATA_DISPATCH)]) {
-                    this->current_dispatch_meta_data.cmd_subtype =
-                        fmt::format("{}", enchantum::to_string(static_cast<CQDispatchCmdPackedWriteLargeType>(data)));
-                    new_marker_meta_data["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
-                }
 
-                log_info(tt::LogMetal, "CMD SUBTYPE: {}", this->current_dispatch_meta_data.cmd_subtype);
-                log_info(tt::LogMetal, "CMD TYPE: {}", this->current_dispatch_meta_data.cmd_type);
-                log_info(tt::LogMetal, "WORKER RUNTIME ID: {}", this->current_dispatch_meta_data.worker_runtime_id);
+    // log_info(
+    //     tt::LogMetal,
+    //     "counter: {}, timestamp: {}, core: {},{} risc: {}, marker name: {}, type: {}, id: {}",
+    //     counter,
+    //     timestamp,
+    //     physical_core.x,
+    //     physical_core.y,
+    //     risc_num,
+    //     marker_details.marker_name,
+    //     enchantum::to_string(packet_type),
+    //     timer_id & 0xFFFF);
+    // counter++;
 
-                std::string newZoneName = this->current_dispatch_meta_data.cmd_type;
-                if (tracy::riscName[risc_num] == "BRISC") {
-                    if (this->current_dispatch_meta_data.cmd_subtype != "") {
-                        newZoneName = fmt::format(
-                            "{}:{}",
-                            this->current_dispatch_meta_data.worker_runtime_id,
-                            this->current_dispatch_meta_data.cmd_subtype);
-                    } else {
-                        newZoneName = fmt::format(
-                            "{}:{}",
-                            this->current_dispatch_meta_data.worker_runtime_id,
-                            this->current_dispatch_meta_data.cmd_type);
-                    }
-                }
+    // std::stack<std::set<tracy::TTDeviceMarker>::iterator>& start_marker_stack =
+    // this->start_marker_stack_map[std::make_pair(physical_core, risc_num)];
 
-                
+    // // log_info(tt::LogMetal, "start marker stack size: {}", start_marker_stack.size());
+    // // std::stack<std::unordered_set<tracy::TTDeviceMarker>::iterator> temp_stack = start_marker_stack;
+    // // while (!temp_stack.empty()) {
+    // //     const auto& marker_it = temp_stack.top();
+    // //     log_info(
+    // //         tt::LogMetal,
+    // //         "start marker stack top timestamp: {}, core: {},{} risc: {}, zone name: {}, start marker stack top:
+    // {}",
+    // //         marker_it->timestamp,
+    // //         marker_it->core_x,
+    // //         marker_it->core_y,
+    // //         marker_it->risc,
+    // //         marker_it->marker_name,
+    // //         marker_it->marker_id & 0xFFFF);
+    // //     temp_stack.pop();
+    // // }
 
-                log_info(tt::LogMetal, "NEW ZONE NAME: {}", newZoneName);
+    // // push/pop from stack in this function, but do the name update in helper function
+    // // pass in stack as param to helper function
 
-                const tracy::TTDeviceMarker prev_marker = *this->prev_marker_it;
-                device_markers.erase(this->prev_marker_it);
+    // // make the name updating functionality happen in helper function
+    // if (packet_type == kernel_profiler::ZONE_START || packet_type == kernel_profiler::ZONE_END) {
+    //     // trace and dispatch profiling are incompatible
+    //     // replace the zone name with TRACE-FW or TRACE-KERNEL if the zone is a trace zone, do not append
+    //     if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only() && risc_num ==
+    //     TRACE_RISC_ID) {
+    //         if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //                 tracy::MarkerDetails::MarkerNameKeyword::BRISC_FW)] ||
+    //             marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //                 tracy::MarkerDetails::MarkerNameKeyword::NCRISC_FW)] ||
+    //             marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //                 tracy::MarkerDetails::MarkerNameKeyword::TRISC_FW)] ||
+    //             marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //                 tracy::MarkerDetails::MarkerNameKeyword::ERISC_FW)]) {
+    //             tracy::TTDeviceMarker new_marker = *new_marker_it;
+    //             device_markers.erase(new_marker_it);
+    //             new_marker.marker_name = "TRACE-FW";
+    //             const auto& ret = device_markers.insert(new_marker);
+    //             new_marker_it = ret.first;
+    //         }
+    //         if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //                 tracy::MarkerDetails::MarkerNameKeyword::BRISC_KERNEL)] ||
+    //             marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //                 tracy::MarkerDetails::MarkerNameKeyword::NCRISC_KERNEL)] ||
+    //             marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //                 tracy::MarkerDetails::MarkerNameKeyword::TRISC_KERNEL)] ||
+    //             marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //                 tracy::MarkerDetails::MarkerNameKeyword::ERISC_KERNEL)]) {
+    //             tracy::TTDeviceMarker new_marker = *new_marker_it;
+    //             device_markers.erase(new_marker_it);
+    //             new_marker.marker_name = "TRACE-KERNEL";
+    //             const auto& ret = device_markers.insert(new_marker);
+    //             new_marker_it = ret.first;
+    //         }
+    //     }
 
-                new_marker_runtime_host_id = this->current_dispatch_meta_data.worker_runtime_id;
-                new_marker_device_id = prev_marker.chip_id;
-                new_marker_core_x = prev_marker.core_x;
-                new_marker_core_y = prev_marker.core_y;
-                new_marker_risc_num = prev_marker.risc;
-                new_marker_timer_id = prev_marker.marker_id;
-                new_marker_timestamp = prev_marker.timestamp;
-                new_marker_data = prev_marker.data;
-                // new_marker_op_name = prev_marker.op_name;
-                new_marker_line = prev_marker.line;
-                new_marker_file = prev_marker.file;
-                new_marker_name = newZoneName;
-                new_marker_type = prev_marker.marker_type;
-                new_marker_name_keyword_flags = prev_marker_details.marker_name_keyword_flags;
-            }
-        }
-    }
+    //     // Reset the command subtype, in case it isn't set during the command.
+    //     this->current_dispatch_meta_data.cmd_subtype = "";
+
+    //     // if (packet_type == kernel_profiler::ZONE_END) {
+    //     //     // log_info(tt::LogMetal, "device markers size: {}", device_markers.size());
+    //     //     // log_info(tt::LogMetal, "start marker stack size: {}", this->start_marker_stack.size());
+    //     //     TT_FATAL(!this->start_marker_stack.empty(), "End marker found without a corresponding start marker");
+    //     //     const auto& start_marker_it = this->start_marker_stack.top();
+    //     //     // log_info(tt::LogMetal, "start marker core: {},{}", start_marker_it->core_x,
+    //     start_marker_it->core_y);
+    //     //     // log_info(tt::LogMetal, "start marker risc: {}", start_marker_it->risc);
+    //     //     // log_info(tt::LogMetal, "end marker core: {},{}", physical_core.x, physical_core.y);
+    //     //     // log_info(tt::LogMetal, "end marker risc: {}", risc_num);
+    //     //     TT_FATAL(
+    //     //         (start_marker_it->marker_id & 0xFFFF) == (new_marker_timer_id & 0xFFFF),
+    //     //         "Start {} and end {} markers do not match",
+    //     //         start_marker_it->marker_id & 0xFFFF,
+    //     //         new_marker_timer_id & 0xFFFF);
+    //     //     // this->start_marker_stack.pop();
+    //     //     // device_markers.erase(start_marker_it);
+    //     //     new_marker_name = start_marker_it->marker_name;
+    //     //     this->start_marker_stack.pop();
+    //     // }
+    //     if (packet_type == kernel_profiler::ZONE_START) {
+    //         start_marker_stack.push(new_marker_it);
+    //     } else if (packet_type == kernel_profiler::ZONE_END) {
+    //         // TT_FATAL(
+    //         //     !start_marker_stack.empty(),
+    //         //     "End marker {} found without a corresponding start marker",
+    //         //     new_marker_it->marker_id & 0xFFFF);
+
+    //         const auto& start_marker_it = start_marker_stack.top();
+    //         // TT_FATAL(
+    //         //     (start_marker_it->marker_id & 0xFFFF) == (new_marker_it->marker_id & 0xFFFF),
+    //         //     "Start {} and end {} markers do not match",
+    //         //     start_marker_it->marker_id & 0xFFFF,
+    //         //     new_marker_it->marker_id & 0xFFFF);
+
+    //         if (start_marker_it->marker_name != new_marker_it->marker_name) {
+    //             tracy::TTDeviceMarker new_marker = *new_marker_it;
+    //             new_marker.marker_name = start_marker_it->marker_name;
+    //             device_markers.erase(new_marker_it);
+    //             const auto& ret = device_markers.insert(new_marker);
+    //             new_marker_it = ret.first;
+    //         }
+    //         start_marker_stack.pop();
+    //     }
+    // }
+    // if (packet_type == kernel_profiler::TS_DATA) {
+    // if (!start_marker_stack.empty()) {
+    //     TT_ASSERT(!start_marker_stack.empty());
+    //     auto curr_zone_start_marker_it = start_marker_stack.top();
+    //     TT_ASSERT(curr_zone_start_marker_it->marker_type == tracy::TTDeviceMarkerType::START);
+
+    //     // Check if we are in a Tensix Dispatch zone. If so, we could have gotten dispatch meta data packets
+    //     // These packets can amend parent zone's info
+    //     const tracy::MarkerDetails curr_zone_start_marker_details =
+    //     getMarkerDetails(curr_zone_start_marker_it->marker_id); if ((tracy::riscName[risc_num] == "BRISC" ||
+    //     tracy::riscName[risc_num] == "NCRISC") &&
+    //         curr_zone_start_marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //             tracy::MarkerDetails::MarkerNameKeyword::DISPATCH)]) {
+    //         if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //                 tracy::MarkerDetails::MarkerNameKeyword::PROCESS_CMD)]) {
+    //             this->current_dispatch_meta_data.cmd_type =
+    //                 fmt::format("{}", enchantum::to_string((CQDispatchCmdId)data));
+    //             meta_data["dispatch_command_type"] = this->current_dispatch_meta_data.cmd_type;
+    //         } else if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //                        tracy::MarkerDetails::MarkerNameKeyword::RUNTIME_HOST_ID_DISPATCH)]) {
+    //             this->current_dispatch_meta_data.worker_runtime_id = (uint32_t)data;
+    //             meta_data["workers_runtime_id"] = this->current_dispatch_meta_data.worker_runtime_id;
+    //         } else if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //                        tracy::MarkerDetails::MarkerNameKeyword::PACKED_DATA_DISPATCH)]) {
+    //             this->current_dispatch_meta_data.cmd_subtype = fmt::format(
+    //                 "{}{}",
+    //                 data & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST ? "MCAST," : "",
+    //                 enchantum::to_string(static_cast<CQDispatchCmdPackedWriteType>(
+    //                     (data >> 1) << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT)));
+    //             meta_data["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
+    //         } else if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+    //                        tracy::MarkerDetails::MarkerNameKeyword::PACKED_LARGE_DATA_DISPATCH)]) {
+    //             this->current_dispatch_meta_data.cmd_subtype =
+    //                 fmt::format("{}", enchantum::to_string(static_cast<CQDispatchCmdPackedWriteLargeType>(data)));
+    //             meta_data["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
+    //         }
+
+    //         log_info(tt::LogMetal, "CMD SUBTYPE: {}", this->current_dispatch_meta_data.cmd_subtype);
+    //         log_info(tt::LogMetal, "CMD TYPE: {}", this->current_dispatch_meta_data.cmd_type);
+    //         log_info(tt::LogMetal, "WORKER RUNTIME ID: {}", this->current_dispatch_meta_data.worker_runtime_id);
+
+    //         std::string new_marker_name = this->current_dispatch_meta_data.cmd_type;
+    //         if (tracy::riscName[risc_num] == "BRISC") {
+    //             if (this->current_dispatch_meta_data.cmd_subtype != "") {
+    //                 new_marker_name = fmt::format(
+    //                     "{}:{}",
+    //                     this->current_dispatch_meta_data.worker_runtime_id,
+    //                     this->current_dispatch_meta_data.cmd_subtype);
+    //             } else {
+    //                 new_marker_name = fmt::format(
+    //                     "{}:{}",
+    //                     this->current_dispatch_meta_data.worker_runtime_id,
+    //                     this->current_dispatch_meta_data.cmd_type);
+    //             }
+    //         }
+
+    //         log_info(tt::LogMetal, "NEW MARKER NAME: {}", new_marker_name);
+
+    //         tracy::TTDeviceMarker curr_zone_start_marker = *curr_zone_start_marker_it;
+    //         curr_zone_start_marker.runtime_host_id = this->current_dispatch_meta_data.worker_runtime_id;
+    //         curr_zone_start_marker.marker_name = new_marker_name;
+    //         device_markers.erase(curr_zone_start_marker_it);
+    //         const auto& ret = device_markers.insert(curr_zone_start_marker);
+    //         curr_zone_start_marker_it = ret.first;
+    //         start_marker_stack.pop();
+    //         start_marker_stack.push(curr_zone_start_marker_it);
+    //     }
+    // }
+    // }
+
+    // Keep TS_DATA packets in the CSV for both dispatch and non-dispatch zones
+
+    // how to handle TS_DATA outside of dispatch?
+    // how to handle json object with consecutive TS_DATA packets?
 
     // if TS_DATA packet comes in and stack is not empty, we need to modify fields at top of stack
     // also need to update the packet at top of stack in device_markers
     // only stack stores the references/iterators/pointers to TT_DEVICE_MARKER objects in device_markers
     // only update the runtime host id and marker name
 
-    auto ret = device_markers.emplace(
-        new_marker_runtime_host_id,
-        new_marker_device_id,
-        new_marker_core_x,
-        new_marker_core_y,
-        new_marker_risc_num,
-        new_marker_timer_id,
-        new_marker_timestamp,
-        new_marker_data,
-        new_marker_op_name,
-        new_marker_line,
-        new_marker_file,
-        new_marker_name,
-        new_marker_type,
-        new_marker_name_keyword_flags,
-        new_marker_meta_data);
+    // auto ret = device_markers.emplace(
+    //     new_marker_runtime_host_id,
+    //     new_marker_device_id,
+    //     new_marker_core_x,
+    //     new_marker_core_y,
+    //     new_marker_risc_num,
+    //     new_marker_timer_id,
+    //     new_marker_timestamp,
+    //     new_marker_data,
+    //     new_marker_op_name,
+    //     new_marker_line,
+    //     new_marker_file,
+    //     new_marker_name,
+    //     new_marker_type,
+    //     new_marker_name_keyword_flags,
+    //     new_marker_meta_data);
 
     // create stack
     // as you pop end markers off the stack, we should see start markers
@@ -1486,9 +1691,21 @@ void DeviceProfiler::readPacketData(
     // start-end pair ids should match, otherwise TT_FATAL
     // if pair ids match, make end zone name = start zone name
 
-    if (new_marker_type == tracy::TTDeviceMarkerType::START) {
-        this->prev_marker_it = ret.first;
-    }
+    // if (new_marker_type == tracy::TTDeviceMarkerType::START) {
+    //     this->prev_marker_it = ret.first;
+    // }
+
+    // if (new_marker_type == tracy::TTDeviceMarkerType::START) {
+    //     this->start_marker_stack.push(ret.first);
+    // }
+
+    // if (!this->start_marker_stack.empty()) {
+    //     // log_info(
+    //     //     tt::LogMetal,
+    //     //     "start marker stack top zone name: {}, start marker stack top: {}",
+    //     //     this->start_marker_stack.top()->marker_name,
+    //     //     this->start_marker_stack.top()->marker_id & 0xFFFF);
+    // }
 
     // if (!ret.second) {
     //     return;
@@ -1502,6 +1719,182 @@ void DeviceProfiler::readPacketData(
     // }
 
     updateFirstTimestamp(timestamp);
+}
+
+// unordered_map<core> -> unordered_map<risc> -> set<tracy::TTDeviceMarker>
+
+void DeviceProfiler::processDeviceMarkers(std::set<tracy::TTDeviceMarker>& device_markers) {
+    std::set<tracy::TTDeviceMarker> device_markers_copy = device_markers;
+
+    std::stack<std::set<tracy::TTDeviceMarker>::iterator> start_marker_stack;
+
+    for (const tracy::TTDeviceMarker& marker : device_markers_copy) {
+        tracy::MarkerDetails marker_details = getMarkerDetails(marker.marker_id);
+        const kernel_profiler::PacketTypes marker_type = get_packet_type(marker.marker_id);
+        // log_info(tt::LogMetal, "marker: {}", marker.marker_id & 0xFFFF);
+        if (marker_type == kernel_profiler::ZONE_START || marker_type == kernel_profiler::ZONE_END) {
+            // trace and dispatch profiling are incompatible
+            // replace the zone name with TRACE-FW or TRACE-KERNEL if the zone is a trace zone, do not append
+            if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only() &&
+                marker.risc == TRACE_RISC_ID) {
+                if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                        tracy::MarkerDetails::MarkerNameKeyword::BRISC_FW)] ||
+                    marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                        tracy::MarkerDetails::MarkerNameKeyword::NCRISC_FW)] ||
+                    marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                        tracy::MarkerDetails::MarkerNameKeyword::TRISC_FW)] ||
+                    marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                        tracy::MarkerDetails::MarkerNameKeyword::ERISC_FW)]) {
+                    auto new_marker_it = device_markers.find(marker);
+                    tracy::TTDeviceMarker new_marker = *new_marker_it;
+                    device_markers.erase(new_marker_it);
+                    new_marker.marker_name = "TRACE-FW";
+                    const auto& ret = device_markers.insert(new_marker);
+                    new_marker_it = ret.first;
+                }
+                if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                        tracy::MarkerDetails::MarkerNameKeyword::BRISC_KERNEL)] ||
+                    marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                        tracy::MarkerDetails::MarkerNameKeyword::NCRISC_KERNEL)] ||
+                    marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                        tracy::MarkerDetails::MarkerNameKeyword::TRISC_KERNEL)] ||
+                    marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                        tracy::MarkerDetails::MarkerNameKeyword::ERISC_KERNEL)]) {
+                    auto new_marker_it = device_markers.find(marker);
+                    tracy::TTDeviceMarker new_marker = *new_marker_it;
+                    device_markers.erase(new_marker_it);
+                    new_marker.marker_name = "TRACE-KERNEL";
+                    const auto& ret = device_markers.insert(new_marker);
+                    new_marker_it = ret.first;
+                }
+            }
+
+            // Reset the command subtype, in case it isn't set during the command.
+            this->current_dispatch_meta_data.cmd_subtype = "";
+
+            // if (packet_type == kernel_profiler::ZONE_END) {
+            //     // log_info(tt::LogMetal, "device markers size: {}", device_markers.size());
+            //     // log_info(tt::LogMetal, "start marker stack size: {}", this->start_marker_stack.size());
+            //     TT_FATAL(!this->start_marker_stack.empty(), "End marker found without a corresponding start marker");
+            //     const auto& start_marker_it = this->start_marker_stack.top();
+            //     // log_info(tt::LogMetal, "start marker core: {},{}", start_marker_it->core_x,
+            //     start_marker_it->core_y);
+            //     // log_info(tt::LogMetal, "start marker risc: {}", start_marker_it->risc);
+            //     // log_info(tt::LogMetal, "end marker core: {},{}", physical_core.x, physical_core.y);
+            //     // log_info(tt::LogMetal, "end marker risc: {}", risc_num);
+            //     TT_FATAL(
+            //         (start_marker_it->marker_id & 0xFFFF) == (new_marker_timer_id & 0xFFFF),
+            //         "Start {} and end {} markers do not match",
+            //         start_marker_it->marker_id & 0xFFFF,
+            //         new_marker_timer_id & 0xFFFF);
+            //     // this->start_marker_stack.pop();
+            //     // device_markers.erase(start_marker_it);
+            //     new_marker_name = start_marker_it->marker_name;
+            //     this->start_marker_stack.pop();
+            // }
+            if (marker_type == kernel_profiler::ZONE_START) {
+                auto new_marker_it = device_markers.find(marker);
+                start_marker_stack.push(new_marker_it);
+            } else if (marker_type == kernel_profiler::ZONE_END) {
+                auto new_marker_it = device_markers.find(marker);
+                TT_FATAL(
+                    !start_marker_stack.empty(),
+                    "End marker {} found without a corresponding start marker",
+                    new_marker_it->marker_id & 0xFFFF);
+
+                const auto& start_marker_it = start_marker_stack.top();
+                TT_FATAL(
+                    (start_marker_it->marker_id & 0xFFFF) == (new_marker_it->marker_id & 0xFFFF),
+                    "Start {} and end {} markers do not match",
+                    start_marker_it->marker_id & 0xFFFF,
+                    new_marker_it->marker_id & 0xFFFF);
+
+                if (start_marker_it->marker_name != new_marker_it->marker_name) {
+                    tracy::TTDeviceMarker new_marker = *new_marker_it;
+                    new_marker.marker_name = start_marker_it->marker_name;
+                    device_markers.erase(new_marker_it);
+                    const auto& ret = device_markers.insert(new_marker);
+                    new_marker_it = ret.first;
+                }
+                start_marker_stack.pop();
+            }
+        } else if (marker_type == kernel_profiler::TS_DATA) {
+            if (!start_marker_stack.empty()) {
+                auto curr_zone_start_marker_it = start_marker_stack.top();
+                TT_ASSERT(curr_zone_start_marker_it->marker_type == tracy::TTDeviceMarkerType::START);
+
+                // Check if we are in a Tensix Dispatch zone. If so, we could have gotten dispatch meta data packets
+                // These packets can amend parent zone's info
+                const tracy::MarkerDetails curr_zone_start_marker_details =
+                    getMarkerDetails(curr_zone_start_marker_it->marker_id);
+                if ((tracy::riscName[marker.risc] == "BRISC" || tracy::riscName[marker.risc] == "NCRISC") &&
+                    curr_zone_start_marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                        tracy::MarkerDetails::MarkerNameKeyword::DISPATCH)]) {
+                    auto new_marker_it = device_markers.find(marker);
+                    tracy::TTDeviceMarker new_marker = *new_marker_it;
+                    device_markers.erase(new_marker_it);
+                    if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                            tracy::MarkerDetails::MarkerNameKeyword::PROCESS_CMD)]) {
+                        this->current_dispatch_meta_data.cmd_type =
+                            fmt::format("{}", enchantum::to_string((CQDispatchCmdId)marker.data));
+                        new_marker.meta_data["dispatch_command_type"] = this->current_dispatch_meta_data.cmd_type;
+                    } else if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                                   tracy::MarkerDetails::MarkerNameKeyword::RUNTIME_HOST_ID_DISPATCH)]) {
+                        this->current_dispatch_meta_data.worker_runtime_id = (uint32_t)marker.data;
+                        new_marker.meta_data["workers_runtime_id"] = this->current_dispatch_meta_data.worker_runtime_id;
+                    } else if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                                   tracy::MarkerDetails::MarkerNameKeyword::PACKED_DATA_DISPATCH)]) {
+                        this->current_dispatch_meta_data.cmd_subtype = fmt::format(
+                            "{}{}",
+                            marker.data & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST ? "MCAST," : "",
+                            enchantum::to_string(static_cast<CQDispatchCmdPackedWriteType>(
+                                (marker.data >> 1) << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT)));
+                        new_marker.meta_data["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
+                    } else if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                                   tracy::MarkerDetails::MarkerNameKeyword::PACKED_LARGE_DATA_DISPATCH)]) {
+                        this->current_dispatch_meta_data.cmd_subtype = fmt::format(
+                            "{}", enchantum::to_string(static_cast<CQDispatchCmdPackedWriteLargeType>(marker.data)));
+                        new_marker.meta_data["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
+                    }
+
+                    // log_info(tt::LogMetal, "CMD SUBTYPE: {}", this->current_dispatch_meta_data.cmd_subtype);
+                    // log_info(tt::LogMetal, "CMD TYPE: {}", this->current_dispatch_meta_data.cmd_type);
+                    // log_info(tt::LogMetal, "WORKER RUNTIME ID: {}",
+                    // this->current_dispatch_meta_data.worker_runtime_id);
+
+                    std::string new_marker_name = this->current_dispatch_meta_data.cmd_type;
+                    if (tracy::riscName[marker.risc] == "BRISC") {
+                        if (this->current_dispatch_meta_data.cmd_subtype != "") {
+                            new_marker_name = fmt::format(
+                                "{}:{}",
+                                this->current_dispatch_meta_data.worker_runtime_id,
+                                this->current_dispatch_meta_data.cmd_subtype);
+                        } else {
+                            new_marker_name = fmt::format(
+                                "{}:{}",
+                                this->current_dispatch_meta_data.worker_runtime_id,
+                                this->current_dispatch_meta_data.cmd_type);
+                        }
+                    }
+                    // new_marker.marker_name = new_marker_name;
+
+                    // log_info(tt::LogMetal, "NEW MARKER NAME: {}", new_marker_name);
+
+                    const auto& new_marker_ret = device_markers.insert(new_marker);
+                    new_marker_it = new_marker_ret.first;
+
+                    tracy::TTDeviceMarker curr_zone_start_marker = *curr_zone_start_marker_it;
+                    curr_zone_start_marker.runtime_host_id = this->current_dispatch_meta_data.worker_runtime_id;
+                    curr_zone_start_marker.marker_name = curr_zone_start_marker.marker_name + ":" + new_marker_name;
+                    device_markers.erase(curr_zone_start_marker_it);
+                    const auto& curr_zone_start_ret = device_markers.insert(curr_zone_start_marker);
+                    curr_zone_start_marker_it = curr_zone_start_ret.first;
+                    start_marker_stack.pop();
+                    start_marker_stack.push(curr_zone_start_marker_it);
+                }
+            }
+        }
+    }
 }
 
 void DeviceProfiler::setLastFDReadAsNotDone() { this->is_last_fd_read_done = false; }
@@ -1534,13 +1927,13 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
     }
 
     this->is_last_fd_read_done = false;
-    this->prev_marker_it = this->device_markers.begin();
+    // this->prev_marker_it = this->device_markers.begin();
 
     const uint32_t approximate_num_device_profiler_markers =
         (MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * device->compute_with_storage_grid_size().x *
          device->compute_with_storage_grid_size().y) /
         kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
-    this->device_markers.reserve(approximate_num_device_profiler_markers);
+    // this->device_markers.reserve(approximate_num_device_profiler_markers);
 
     this->device_cores.reserve(device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
 #endif
@@ -1554,8 +1947,28 @@ DeviceProfiler::~DeviceProfiler() {
     // device_markers unordered set. These are direct references to the original objects, not copies of the data. Thread
     // safety warning: The device_markers set MUST NOT be modified (no insertions, deletions, or rehashing) while these
     // references are in use, as this could invalidate the references and cause undefined behavior.
+    // std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
+    //     getDeviceMarkersVector(device_markers);
+    // sortDeviceMarkers(device_markers_vec);
+
+    log_info(tt::LogMetal, "readMarkerData counter: {}", counter);
+    // print size of all device markers in device_markers_per_core_risc_map
+    uint32_t total_num_markers = 0;
+    for (const auto& [core, risc_map] : this->device_markers_per_core_risc_map) {
+        for (const auto& [risc, device_markers] : risc_map) {
+            total_num_markers += device_markers.size();
+        }
+    }
+    log_info(tt::LogMetal, "total num markers: {}", total_num_markers);
+
+    for (auto& [physical_core, device_markers_per_risc_map] : this->device_markers_per_core_risc_map) {
+        for (auto& [risc_num, device_markers] : device_markers_per_risc_map) {
+            processDeviceMarkers(device_markers);
+        }
+    }
+
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
-        getDeviceMarkersVector(device_markers);
+        getDeviceMarkersVector(this->device_markers_per_core_risc_map);
 
     auto t = std::thread([this, device_markers_vec]() mutable { dumpDeviceResults(device_markers_vec); });
     pushTracyDeviceResults(device_markers_vec);
@@ -1588,6 +2001,13 @@ void DeviceProfiler::readResults(
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
+
+    log_info(
+        tt::LogMetal,
+        "readResults device id: {} state: {}, data source: {}",
+        device->id(),
+        enchantum::to_string(state),
+        enchantum::to_string(data_source));
 
     const std::string zone_name = fmt::format(
         "{}-{}-{}-{}", "readResults", device_id, enchantum::to_string(state), enchantum::to_string(data_source));
@@ -1651,10 +2071,14 @@ void DeviceProfiler::processResults(
         FabricRoutingLookup routing_lookup(device);
 
         std::unordered_set<tracy::TTDeviceMarker> new_device_markers;
-        for (const tracy::TTDeviceMarker& marker : device_markers) {
-            if (noc_trace_markers_processed.find(marker) == noc_trace_markers_processed.end()) {
-                new_device_markers.insert(marker);
-                noc_trace_markers_processed.insert(marker);
+        for (const auto& [core, risc_map] : device_markers_per_core_risc_map) {
+            for (const auto& [risc, device_markers] : risc_map) {
+                for (const tracy::TTDeviceMarker& marker : device_markers) {
+                    if (noc_trace_markers_processed.find(marker) == noc_trace_markers_processed.end()) {
+                        new_device_markers.insert(marker);
+                        noc_trace_markers_processed.insert(marker);
+                    }
+                }
             }
         }
 
@@ -1703,8 +2127,6 @@ void DeviceProfiler::dumpDeviceResults(
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    sortDeviceMarkers(device_markers_vec);
-
     const std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
     dumpDeviceResultsToCSV(device_markers_vec, device_arch, device_core_frequency, log_path);
 
@@ -1726,7 +2148,9 @@ void DeviceProfiler::pushTracyDeviceResults(
         }
     }
 
-    sortDeviceMarkers(device_markers_vec);
+    // sortDeviceMarkers(device_markers_vec);
+    // merge the sorted core-risc timeseries into a single vector sorted by timestamp; use references to the original
+    // TTDeviceMarker objects
 
     // Tracy contexts must be updated in order of their first timestamps
     for (const auto& marker_ref : device_markers_vec) {
@@ -1777,6 +2201,8 @@ void DeviceProfiler::pushTracyDeviceResults(
             TracyTTPushEndMarker(device_tracy_contexts[device_core], marker_to_push);
         }
     }
+
+    // clear the map here
 #endif
 }
 

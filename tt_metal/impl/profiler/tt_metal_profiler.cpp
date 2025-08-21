@@ -309,14 +309,18 @@ void peekDeviceData(IDevice* device, std::vector<CoreCoord>& worker_cores) {
         device_profiler.device_sync_new_markers.clear();
         device_profiler.readResults(device, worker_cores, ProfilerReadState::NORMAL, ProfilerDataBufferSource::L1);
         device_profiler.processResults(device, worker_cores, ProfilerReadState::NORMAL, ProfilerDataBufferSource::L1);
-        for (const tracy::TTDeviceMarker& marker : device_profiler.device_markers) {
-            const tracy::MarkerDetails marker_details = device_profiler.getMarkerDetails(marker.marker_id);
-            if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
-                    tracy::MarkerDetails::MarkerNameKeyword::SYNC_ZONE)]) {
-                ZoneScopedN("Adding_device_sync_marker");
-                auto ret = device_profiler.device_sync_markers.insert(marker);
-                if (ret.second) {
-                    device_profiler.device_sync_new_markers.insert(marker);
+        for (const auto& [core, risc_map] : device_profiler.device_markers_per_core_risc_map) {
+            for (const auto& [risc, device_markers] : risc_map) {
+                for (const tracy::TTDeviceMarker& marker : device_markers) {
+                    const tracy::MarkerDetails marker_details = device_profiler.getMarkerDetails(marker.marker_id);
+                    if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
+                            tracy::MarkerDetails::MarkerNameKeyword::SYNC_ZONE)]) {
+                        ZoneScopedN("Adding_device_sync_marker");
+                        auto ret = device_profiler.device_sync_markers.insert(marker);
+                        if (ret.second) {
+                            device_profiler.device_sync_new_markers.insert(marker);
+                        }
+                    }
                 }
             }
         }
@@ -809,8 +813,8 @@ void ProcessDeviceProfilerResults(
 
         if (pushToTracyMidRun(state)) {
             std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
-                getDeviceMarkersVector(profiler.device_markers);
-            sortDeviceMarkers(device_markers_vec);
+                getDeviceMarkersVector(profiler.device_markers_per_core_risc_map);
+            // sortDeviceMarkers(device_markers_vec);
             profiler.pushTracyDeviceResults(device_markers_vec);
         }
     }
@@ -854,6 +858,11 @@ void ReadDeviceProfilerResults(
     ZoneScoped;
 
     if (getDeviceProfilerState()) {
+        log_info(
+            tt::LogMetal,
+            "ReadDeviceProfilerResults device id: {} state: {}",
+            device->id(),
+            enchantum::to_string(state));
         TT_ASSERT(device->is_initialized());
 
         auto profiler_it = tt_metal_device_profiler_map.find(device->id());
