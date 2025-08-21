@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/container/vector.hpp>
 #include <stdint.h>
 #include <system_mesh.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
@@ -62,7 +61,7 @@ public:
     const DistributedCoordinateTranslator& coordinate_translator() const;
 
     MappedDevices get_mapped_devices(
-        const MeshShape& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
+        const std::optional<MeshShape>& shape, const std::optional<MeshCoordinate>& offset = std::nullopt) const;
 };
 
 MappedDevice SystemMesh::Impl::get_system_mapped_device(const MeshCoordinate& coord) const {
@@ -138,16 +137,12 @@ const DistributedCoordinateTranslator& SystemMesh::Impl::coordinate_translator()
 }
 
 SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
-    const MeshShape& shape, const std::optional<MeshCoordinate>& offset) const {
+    const std::optional<MeshShape>& shape, const std::optional<MeshCoordinate>& offset) const {
     MappedDevices mapped_devices;
 
     const MeshShape& system_shape = coordinate_translator_.global_shape();
-    TT_FATAL(
-        shape.mesh_size() <= system_shape.mesh_size(),
-        "Requested mesh is too big: {}, SystemMesh {}",
-        shape.mesh_size(),
-        system_shape.mesh_size());
-
+    const MeshShape requested_shape = shape.value_or(system_shape);
+    mapped_devices.mesh_shape = requested_shape;
     const size_t system_dimensions = system_shape.dims();
 
     const MeshCoordinate system_offset = [&offset, system_dimensions]() {
@@ -163,18 +158,18 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
         }
     }();
 
-    if (shape.is_line_topology()) {
+    if (requested_shape.is_line_topology()) {
         // TODO: consider if we can do this in 3D.
         TT_FATAL(system_shape.dims() == 2, "Line topology is only supported for 2D meshes");
         TT_FATAL(
             system_shape[0] > system_offset[0] && system_shape[1] > system_offset[1],
-            "The specifed offset {} is out of bounds for the system mesh shape {}",
+            "The specified offset {} is out of bounds for the system mesh shape {}",
             system_offset,
             system_shape);
         Shape2D system_mesh_2d(system_shape[0], system_shape[1]);
         Shape2D system_offset_2d(system_offset[0], system_offset[1]);
 
-        auto line_length = shape.mesh_size();
+        auto line_length = requested_shape.mesh_size();
         for (const auto& logical_coordinate :
              MeshDeviceView::get_line_coordinates(line_length, system_mesh_2d, system_offset_2d)) {
             const auto mapped_device = get_system_mapped_device(logical_coordinate);
@@ -185,7 +180,10 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
     }
 
     TT_FATAL(
-        shape.dims() == system_dimensions, "Requested mesh shape dimensions mismatch: {} != {}", shape, system_shape);
+        requested_shape.dims() == system_dimensions,
+        "Requested mesh shape dimensions mismatch: {} != {}",
+        requested_shape,
+        system_shape);
 
     // Attempt to fit the requested mesh into the system mesh, potentially rotating it.
     auto requested_mesh_fits =
@@ -198,7 +196,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
             return true;
         };
 
-    tt::stl::SmallVector<uint32_t> rotated_shape(shape.cbegin(), shape.cend());
+    tt::stl::SmallVector<uint32_t> rotated_shape(requested_shape.cbegin(), requested_shape.cend());
     size_t rotations = 0;
     while (!requested_mesh_fits(rotated_shape) && rotations < system_dimensions) {
         std::rotate(rotated_shape.begin(), rotated_shape.begin() + 1, rotated_shape.end());
@@ -208,7 +206,7 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
     if (rotations == system_dimensions) {
         TT_THROW(
             "Requested mesh is too big and is not rotatable: {} and SystemMesh {}, offset {}",
-            shape,
+            requested_shape,
             system_shape,
             system_offset);
     }
@@ -226,8 +224,8 @@ SystemMesh::MappedDevices SystemMesh::Impl::get_mapped_devices(
         TT_FATAL(rotations == 1 and system_shape.dims() == 2, "Mesh rotation is only supported for 2D meshes");
 
         // Iterate through user-requested shape, transposing the rows and columns
-        for (int i = 0; i < shape[0]; i++) {
-            for (int j = 0; j < shape[1]; j++) {
+        for (int i = 0; i < requested_shape[0]; i++) {
+            for (int j = 0; j < requested_shape[1]; j++) {
                 const auto system_coord = MeshCoordinate(j, i);
                 const auto mapped_device = get_system_mapped_device(system_coord);
                 mapped_devices.device_ids.push_back(mapped_device.device_id);
@@ -256,7 +254,7 @@ const MeshShape& SystemMesh::shape() const { return pimpl_->coordinate_translato
 const MeshShape& SystemMesh::local_shape() const { return pimpl_->coordinate_translator().local_shape(); }
 
 SystemMesh::MappedDevices SystemMesh::get_mapped_devices(
-    const MeshShape& shape, const std::optional<MeshCoordinate>& offset) const {
+    const std::optional<MeshShape>& shape, const std::optional<MeshCoordinate>& offset) const {
     return pimpl_->get_mapped_devices(shape, offset);
 }
 

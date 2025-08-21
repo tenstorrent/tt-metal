@@ -13,6 +13,8 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/tools/profiler/kernel_profiler.hpp"
+#include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
+#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -88,8 +90,7 @@ void kernel_main() {
     uint32_t opposite_core_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     uint32_t opposite_core_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
-    bool signal_on_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    bool wait_on_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
+    bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
 
@@ -209,19 +210,27 @@ void kernel_main() {
         tt::tt_fabric::fabric_client_connect_finish(*mux_connection_handle);
     }
 
-    // Due to the existing direction of fabric connections, forward writers will signal to backward writers
-    // and backward writers will signal to forward writers
-    if (signal_on_barrier_sem) {
-        uint64_t barrier_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-        pkt_hdr_seminc->to_noc_unicast_atomic_inc(
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
-        tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
-        noc_async_writes_flushed();
-    }
-    if (wait_on_barrier_sem) {
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+    if (use_barrier_sem) {
+        if (num_targets_in_direction) {
+            // multicast to both the forward and backward worker on all devices in your line that your write to
+            ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
+
+            // device going in the same direction
+            uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
+                safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
+            pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                same_direction_barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
+            tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
+
+            // device going in the opposite direction
+            uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
+                safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
+            pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                opposite_direction_barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
+            tt::tt_fabric::fabric_atomic_inc(*mux_connection_handle, pkt_hdr_seminc);
+        }
+
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
@@ -261,11 +270,8 @@ void kernel_main() {
 
                 for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                     uint32_t num_pages_to_write = std::min(contig_pages_advanced, num_pages_to_read - j);
-                    uint32_t payload_size_bytes = num_pages_to_write * intermediate_page_size;
 
                     uint32_t first_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
-                    uint64_t remote_noc0_dest_noc_addr =
-                        get_noc_addr(first_tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                     pages_read_in_row++;
                     if (pages_read_in_row >= slice_Wt) {
@@ -274,15 +280,15 @@ void kernel_main() {
                     }
 
                     if (num_pages_to_write == 1) {
-                        pkt_hdr->to_noc_unicast_write(
-                            tt::tt_fabric::NocUnicastCommandHeader{remote_noc0_dest_noc_addr}, payload_size_bytes);
-                        tt::tt_fabric::fabric_async_write(
-                            *mux_connection_handle, pkt_hdr, l1_read_addr, payload_size_bytes);
-#ifdef ARCH_WORMHOLE
+                        write_for_fabric_write<true, fabric_mux_num_buffers_per_channel>(
+                            intermediate_addrgen,
+                            first_tile_id,
+                            pkt_hdr,
+                            *mux_connection_handle,
+                            l1_read_addr,
+                            intermediate_page_size);
                     } else if (num_pages_to_write == 2) {
                         uint32_t second_tile_id = input_tile_id_start + row_offset + pages_read_in_row;
-                        uint64_t second_remote_noc0_dest_noc_addr =
-                            get_noc_addr(second_tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
 
                         pages_read_in_row++;
                         if (pages_read_in_row >= slice_Wt) {
@@ -290,21 +296,17 @@ void kernel_main() {
                             pages_read_in_row = 0;
                         }
 
-                        pkt_hdr->to_noc_unicast_scatter_write(
-                            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                                remote_noc0_dest_noc_addr,
-                                second_remote_noc0_dest_noc_addr,
-                                intermediate_page_size /*single packet size*/},
-                            payload_size_bytes /*total payload size*/);
-
-                        tt::tt_fabric::fabric_async_write(
-                            *mux_connection_handle, pkt_hdr, l1_read_addr, payload_size_bytes);
-#endif
+                        scatter_write_for_fabric_write<true, fabric_mux_num_buffers_per_channel>(
+                            intermediate_addrgen,
+                            first_tile_id,
+                            second_tile_id,
+                            pkt_hdr,
+                            *mux_connection_handle,
+                            l1_read_addr);
                     } else {
                         ASSERT(false);
                     }
 
-                    l1_read_addr += payload_size_bytes;
                     tiles_read += num_pages_to_write;
                 }
                 cb_pop_front(cb_output_id, tile_granularity);
@@ -365,6 +367,9 @@ void kernel_main() {
             noc_async_write_barrier();
         }
     }
+
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 
     if (mux_connection_valid) {
         tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);

@@ -1,12 +1,47 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#include <tuple>
 
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 
 namespace ttnn::operations::ccl::common {
+
+enum class Polarity : uint8_t {
+    NEGATIVE,
+    POSITIVE,
+};
+namespace routing_state {
+
+struct PolarState {
+    std::array<Polarity, 2> polarity_table = {Polarity::NEGATIVE, Polarity::NEGATIVE};
+
+    inline Polarity reverse(Polarity p) { return p == Polarity::POSITIVE ? Polarity::NEGATIVE : Polarity::POSITIVE; }
+
+    inline uint32_t polar_compare_stateful(
+        uint32_t positive_distance,
+        uint32_t positive_direction,
+        uint32_t negative_distance,
+        uint32_t negative_direction,
+        uint32_t axis) {
+        auto polarity = polarity_table[axis];
+        uint32_t result = 0;
+        if (polarity == Polarity::POSITIVE) {
+            result = positive_distance <= negative_distance ? positive_direction : negative_direction;
+        } else {
+            result = positive_distance < negative_distance ? positive_direction : negative_direction;
+        }
+        if (positive_distance == negative_distance) {
+            polarity_table[axis] = reverse(polarity);
+        }
+        return result;
+    }
+};
+
+PolarState polar_state;
+}
 
 template <size_t Size>
 inline void open_direction_connections(
@@ -18,6 +53,30 @@ inline void open_direction_connections(
             connections[i] =
                 tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
             connections[i].open();
+        }
+    }
+}
+
+template <size_t Size>
+inline void open_direction_connections_async(
+    const std::array<bool, Size>& directions,
+    std::array<WorkerToFabricEdmSender, Size>& connections,
+    size_t& rt_args_idx) {
+    for (uint32_t i = 0; i < Size; i++) {
+        if (directions[i]) {
+            connections[i] =
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+            connections[i].open_start();
+        }
+    }
+}
+
+template <size_t Size>
+inline void open_direction_connections_barrier(
+    const std::array<bool, Size>& directions, std::array<WorkerToFabricEdmSender, Size>& connections) {
+    for (uint32_t i = 0; i < Size; i++) {
+        if (directions[i]) {
+            connections[i].open_finish();
         }
     }
 }
@@ -91,8 +150,8 @@ uint32_t topological_distance(uint32_t position_1, uint32_t position_2, uint32_t
 }
 
 template <uint32_t AxisSize>
-uint32_t directional_wrap_distance(uint32_t position_1, uint32_t position_2, bool is_forward) {
-    if (is_forward) {
+uint32_t directional_wrap_distance(uint32_t position_1, uint32_t position_2, Polarity polarity) {
+    if (polarity == Polarity::POSITIVE) {
         return (position_2 - position_1 + AxisSize) % AxisSize;
     } else {
         return (position_1 - position_2 + AxisSize) % AxisSize;
@@ -111,35 +170,28 @@ template <tt::tt_fabric::Topology Topology, uint32_t MeshRows, uint32_t MeshCols
 uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_mesh_coord) {
     auto [src_row, src_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_src_mesh_coord);
     auto [dest_row, dest_col] = get_mesh_coords<MeshRows, MeshCols>(linearized_dest_mesh_coord);
-
+    // default_polary is for ties in a ring
+    // if default is positive, then for a E-W tie, we go East, and for a N-S tie, we go South
+    // if default is negative, then for a E-W tie, we go West, and for a N-S tie, we go North
     if (src_row == dest_row) {
         if constexpr (!has_wrap_around<Topology>()) {
             return src_col < dest_col ? eth_chan_directions::EAST : eth_chan_directions::WEST;
         } else {
             // with wrap around, we can go either East or West. Choose the shorter route
-            uint32_t east_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, true);
-            uint32_t west_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, false);
-            return east_distance < west_distance ? eth_chan_directions::EAST : eth_chan_directions::WEST;
-        }
-    } else if (src_col == dest_col) {
-        if constexpr (!has_wrap_around<Topology>()) {
-            return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
-        } else {
-            // with wrap around, we can go either North or South. Choose the shorter route
-            uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, false);
-            uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, true);
-            return north_distance < south_distance ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
+            uint32_t east_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::POSITIVE);
+            uint32_t west_distance = directional_wrap_distance<MeshCols>(src_col, dest_col, Polarity::NEGATIVE);
+            return routing_state::polar_state.polar_compare_stateful(
+                east_distance, eth_chan_directions::EAST, west_distance, eth_chan_directions::WEST, 1);
         }
     } else {
-        // when diagonal, we go North or South first, then East or West
-        // so we route either North or South
         if constexpr (!has_wrap_around<Topology>()) {
             return src_row < dest_row ? eth_chan_directions::SOUTH : eth_chan_directions::NORTH;
         } else {
             // with wrap around, we can go either North or South. Choose the shorter route
-            uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, false);
-            uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, true);
-            return north_distance < south_distance ? eth_chan_directions::NORTH : eth_chan_directions::SOUTH;
+            uint32_t south_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::POSITIVE);
+            uint32_t north_distance = directional_wrap_distance<MeshRows>(src_row, dest_row, Polarity::NEGATIVE);
+            return routing_state::polar_state.polar_compare_stateful(
+                south_distance, eth_chan_directions::SOUTH, north_distance, eth_chan_directions::NORTH, 0);
         }
     }
 }
@@ -388,6 +440,76 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only_1d(
     fabric_connections[route].wait_for_empty_write_slot();
     fabric_connections[route].send_payload_flush_blocking_from_address(
         reinterpret_cast<uint32_t>(packet_header), sizeof(PACKET_HEADER_TYPE));
+}
+
+template <typename T, uint32_t Size, bool ReturnIdx>
+inline auto find_if(volatile tt_l1_ptr T* ptr, const uint32_t val) {
+    for (uint32_t i = 0; i < Size; ++i) {
+        if (ptr[i] == val) {
+            if constexpr (ReturnIdx) {
+                return std::make_tuple(true, i);
+            } else {
+                return true;
+            }
+        }
+    }
+    if constexpr (ReturnIdx) {
+        return std::make_tuple(false, 0ul);
+    } else {
+        return false;
+    }
+}
+
+// Send initialization semaphore to configured target devices for synchronization
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t SrcChipId,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    ReplicateGroup Axis,
+    uint32_t NumDevices>
+inline void send_init_semaphore_to_configured_targets(
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    const uint8_t dest_chip_ids[NumDevices],
+    const uint8_t dest_mesh_ids[NumDevices],
+    uint64_t init_noc_semaphore_addr) {
+    uint32_t device_begin_idx = 0;
+    uint32_t device_end_idx = NumDevices;
+    uint32_t device_stride = 1;
+
+    constexpr uint32_t row = LinearizedSrcMeshCoord / MeshCols;
+    constexpr uint32_t col = LinearizedSrcMeshCoord % MeshCols;
+
+    if constexpr (Axis == ReplicateGroup::COLS) {
+        device_begin_idx = col;
+        device_end_idx = col + MeshRows * MeshCols;
+        device_stride = MeshCols;
+    } else if constexpr (Axis == ReplicateGroup::ROWS) {
+        device_begin_idx = row * MeshCols;
+        device_end_idx = row * MeshCols + MeshCols;
+        device_stride = 1;
+    }
+
+    for (uint32_t device_idx = device_begin_idx; device_idx < device_end_idx; device_idx += device_stride) {
+        if (device_idx == LinearizedSrcMeshCoord) {
+            continue;
+        } else if (is_configured_target<LinearizedSrcMeshCoord, MeshRows, MeshCols, Axis>(device_idx)) {
+            if constexpr (is_1d_topology<Topology>()) {
+                fabric_send_chip_unicast_noc_unicast_semaphore_only_1d<
+                    LinearizedSrcMeshCoord,
+                    Topology,
+                    MeshRows,
+                    MeshCols>(fabric_connections, packet_header, device_idx, init_noc_semaphore_addr, 1, false);
+            } else {
+                const auto& dest_chip_id = dest_chip_ids[device_idx];
+                const auto& dest_mesh_id = dest_mesh_ids[device_idx];
+                fabric_send_chip_unicast_noc_unicast_semaphore_only<SrcChipId, MeshRows, MeshCols>(
+                    fabric_connections, packet_header, dest_chip_id, dest_mesh_id, init_noc_semaphore_addr, 1, false);
+            }
+        }
+    }
 }
 
 }  // namespace ttnn::operations::ccl::common

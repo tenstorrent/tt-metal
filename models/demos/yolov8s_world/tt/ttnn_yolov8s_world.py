@@ -79,7 +79,6 @@ class TtConv:
             deallocate_activation=False,
             enable_act_double_buffer=self.enable_act_double_buffer,
             enable_split_reader=self.enable_split_reader,
-            enable_subblock_padding=True,
             output_layout=self.output_layout,
             reallocate_halo_output=False,
             reshard_if_not_optimal=self.reshard_if_not_optimal,
@@ -433,7 +432,7 @@ class TtMaxSigmoidAttnBlock:
         aw = ttnn.reshape(aw, (batch, m, height, width, n))
 
         aw = ttnn.max(aw, dim=-1, keepdim=True)
-        aw = ttnn.permute(aw, (0, 1, 2, 4, 3))  # To increase the perfomance of squeeze operation
+        aw = ttnn.permute(aw, (0, 1, 2, 4, 3))  # To increase the performance of squeeze operation
         aw = ttnn.squeeze(aw, -2)  # If the above permute is removed use ttnn.squeeze(aw, -1)
         aw = ttnn.div(aw, (self.hc**0.5))
         aw = aw + ttnn.reshape(self.bias, (1, -1, 1, 1))
@@ -730,7 +729,7 @@ class TtDFL:
         x = ttnn.softmax(x, dim=-1)
 
         x, _, _ = self.conv(x)
-        x = ttnn.permute(x, (0, 1, 3, 2))  # To increase the perfomance of below reshape operation
+        x = ttnn.permute(x, (0, 1, 3, 2))  # To increase the performance of below reshape operation
         x = ttnn.reshape(x, (x.shape[0], 4, -1))
         return x
 

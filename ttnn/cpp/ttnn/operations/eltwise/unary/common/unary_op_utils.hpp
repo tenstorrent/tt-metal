@@ -77,9 +77,12 @@ bool is_parametrized_type(T val) {
         case UnaryOpType::MINIMUM:
         case UnaryOpType::MAXIMUM:
         case UnaryOpType::LOG1P:
+        case UnaryOpType::SOFTSHRINK:
         case UnaryOpType::HARDSHRINK:
         case UnaryOpType::WHERE_TSS:
-        case UnaryOpType::CELU: return true;
+        case UnaryOpType::CELU:
+        case UnaryOpType::HARDTANH:
+        case UnaryOpType::THRESHOLD: return true;
         default: return false;
     }
     return false;

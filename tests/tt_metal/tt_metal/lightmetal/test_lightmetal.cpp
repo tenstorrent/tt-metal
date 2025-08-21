@@ -126,7 +126,6 @@ bool l1_buffer_read_write_test(IDevice* device, const L1Config& test_config) {
 Program create_simple_datamovement_program(
     const Buffer& input, const Buffer& output, const Buffer& l1_buffer, bool rt_arg_per_core_vec = false) {
     Program program = Program();  // Verify Program constructor can be used.
-    IDevice* device = input.device();
     constexpr CoreCoord core = {0, 0};
 
     std::vector<uint32_t> compile_time_args;
@@ -142,8 +141,6 @@ Program create_simple_datamovement_program(
             .compile_args = compile_time_args});
 
     // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
-    const uint32_t input_bank_id = 0;
-    const uint32_t output_bank_id = 0;
 
     // Handle Runtime Args
     const std::vector<uint32_t> runtime_args = {
@@ -179,7 +176,7 @@ Program create_simple_unary_program(Buffer& input, Buffer& output, Buffer* cb_in
         worker,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto sfpu_kernel = CreateKernel(
+    CreateKernel(
         program,
         "tt_metal/kernels/compute/eltwise_sfpu.cpp",
         worker,
@@ -417,7 +414,8 @@ TEST_F(LightMetalBasicTest, ThreeRISCDataMovementComputeDynamicCBDeallocEarly) {
 }
 
 // Test simple compute test with metal trace, but no explicit trace replay (added automatically by light metal trace).
-TEST_F(LightMetalBasicTest, SingleProgramTraceCapture) {
+// Test currently not supported due to Trace API deprecation. See Issue #24955
+TEST_F(LightMetalBasicTest, DISABLED_SingleProgramTraceCapture) {
     CreateDeviceAndBeginCapture(4096);
 
     uint32_t size_bytes = 64;  // 16 elements. Was 2048 in original test.
@@ -439,26 +437,27 @@ TEST_F(LightMetalBasicTest, SingleProgramTraceCapture) {
     EnqueueWriteBuffer(command_queue, *input, input_data.data(), /*blocking=*/true);
     EnqueueProgram(command_queue, simple_program, /*blocking=*/true);
     // This will verify that outputs matches between capture + replay.
-    LightMetalCompareToCapture(command_queue, *output, eager_output_data.data());
+    // LightMetalCompareToCapture(command_queue, *output, eager_output_data.data());
 
     // Write junk to output buffer to help make sure trace run from standalone binary works.
     write_junk_to_buffer(command_queue, *output);
 
     // Now enable Metal Trace and run program again for capture.
-    uint32_t tid = BeginTraceCapture(device_, command_queue.id());
+    // uint32_t tid = BeginTraceCapture(device_, command_queue.id());
     EnqueueProgram(command_queue, simple_program, false);
-    EndTraceCapture(device_, command_queue.id(), tid);
+    // EndTraceCapture(device_, command_queue.id(), tid);
 
     // Verify trace output during replay matches expected output from original capture.
-    LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
+    // LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
 
     // Done
     Finish(command_queue);
-    ReleaseTrace(device_, tid);
+    // ReleaseTrace(device_, tid);
 }
 
 // Test simple compute test with metal trace, but no explicit trace replay (added automatically by light metal trace).
-TEST_F(LightMetalBasicTest, TwoProgramTraceCapture) {
+// Test currently not supported due to Trace API deprecation. See Issue #24955
+TEST_F(LightMetalBasicTest, DISABLED_TwoProgramTraceCapture) {
     CreateDeviceAndBeginCapture(4096);
 
     uint32_t size_bytes = 64;  // 16 elements. Was 2048 in original test.
@@ -484,24 +483,24 @@ TEST_F(LightMetalBasicTest, TwoProgramTraceCapture) {
     EnqueueProgram(command_queue, op0, /*blocking=*/true);
     EnqueueProgram(command_queue, op1, /*blocking=*/true);
     // This will verify that outputs matches between capture + replay.
-    LightMetalCompareToCapture(command_queue, *output, eager_output_data.data());
+    // LightMetalCompareToCapture(command_queue, *output, eager_output_data.data());
     Finish(command_queue);
 
     // Write junk to output buffer to help make sure trace run from standalone binary works.
     write_junk_to_buffer(command_queue, *output);
 
     // Now enable Metal Trace and run program again for capture.
-    uint32_t tid = BeginTraceCapture(device_, command_queue.id());
+    // uint32_t tid = BeginTraceCapture(device_, command_queue.id());
     EnqueueProgram(command_queue, op0, false);
     EnqueueProgram(command_queue, op1, false);
-    EndTraceCapture(device_, command_queue.id(), tid);
+    // EndTraceCapture(device_, command_queue.id(), tid);
 
     // Verify trace output during replay matches expected output from original capture.
-    LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
+    // LightMetalCompareToGolden(command_queue, *output, eager_output_data.data());
 
     // Done
     Finish(command_queue);
-    ReleaseTrace(device_, tid);
+    // ReleaseTrace(device_, tid);
 }
 
 }  // namespace

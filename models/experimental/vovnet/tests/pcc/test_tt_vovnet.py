@@ -9,14 +9,14 @@ import torch.nn.functional as F
 from models.experimental.vovnet.tt.vovnet import TtVoVNet
 from models.experimental.vovnet.tt.model_preprocessing import custom_preprocessor
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.vovnet.common import load_torch_model
+from models.experimental.vovnet.common import load_torch_model, VOVNET_L1_SMALL_SIZE
 
 
 @pytest.mark.parametrize(
     "model_name",
     (("hf_hub:timm/ese_vovnet19b_dw.ra_in1k"),),
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": VOVNET_L1_SMALL_SIZE}], indirect=True)
 def test_vovnet_model_inference(device, model_name, reset_seeds, model_location_generator):
     model = load_torch_model(model_location_generator)
 
@@ -52,5 +52,5 @@ def test_vovnet_model_inference(device, model_name, reset_seeds, model_location_
 
     tt_output = tt_model.forward(tt_input)
     tt_output_torch = ttnn.to_torch(tt_output)
-
+    # Low pcc is expected and is tracked here - https://github.com/tenstorrent/tt-metal/issues/23474
     assert_with_pcc(model_output, tt_output_torch, 0.7)

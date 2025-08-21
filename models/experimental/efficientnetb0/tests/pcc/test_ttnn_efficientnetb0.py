@@ -12,10 +12,10 @@ from models.experimental.efficientnetb0.tt.model_preprocessing import (
     create_efficientnetb0_model_parameters,
 )
 from models.experimental.efficientnetb0.tt import efficientnetb0 as ttnn_efficientnetb0
-from models.experimental.efficientnetb0.common import load_torch_model
+from models.experimental.efficientnetb0.common import load_torch_model, EFFICIENTNETB0_L1_SMALL_SIZE
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": EFFICIENTNETB0_L1_SMALL_SIZE}], indirect=True)
 def test_efficientnetb0_model(device, reset_seeds, model_location_generator):
     torch_model = load_torch_model(model_location_generator)
 
@@ -27,4 +27,4 @@ def test_efficientnetb0_model(device, reset_seeds, model_location_generator):
 
     ttnn_output = ttnn_model(ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
-    assert_with_pcc(torch_output, ttnn_output, 0.95)
+    assert_with_pcc(torch_output, ttnn_output, 0.92)

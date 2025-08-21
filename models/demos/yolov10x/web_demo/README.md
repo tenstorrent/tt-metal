@@ -1,4 +1,4 @@
-# Yolov10 Web Demo
+# Yolov10x Web Demo
 
 ## How to run the web demo
 
@@ -12,11 +12,6 @@
 - After building metal, once you activate your python env. pip install the requirements on the server side:
   ```
   pip install -r models/demos/yolov10x/web_demo/server/requirements.txt
-  ```
-
-- After installing the server side requirments, ONLY if you are running the demo on an N300 card,run the following to export the approprite envirement variable for N300.
-  ```
-  export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
   ```
 
 - From the server run:

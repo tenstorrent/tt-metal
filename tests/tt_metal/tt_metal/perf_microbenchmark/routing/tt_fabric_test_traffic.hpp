@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <vector>
 
 #include <tt-metalium/mesh_graph.hpp>
@@ -182,6 +183,50 @@ struct NocUnicastWriteAtomicIncFields {
     NocUnicastAtomicIncFields atomic_inc_fields;
 };
 
+struct NocUnicastScatterWriteFields {
+    static constexpr uint32_t MAX_CHUNKS = 2;
+
+    NocUnicastScatterWriteFields(
+        uint32_t payload_size_bytes,
+        const std::array<uint32_t, MAX_CHUNKS>& dst_addresses,
+        const std::array<uint16_t, MAX_CHUNKS - 1>& chunk_sizes,
+        std::optional<uint32_t> dst_noc_encoding = std::nullopt) :
+        payload_size_bytes(payload_size_bytes),
+        dst_addresses(dst_addresses),
+        chunk_sizes(chunk_sizes),
+        dst_noc_encoding(dst_noc_encoding) {}
+
+    template <bool IS_SOURCE>
+    std::vector<uint32_t> get_args() const {
+        if constexpr (IS_SOURCE) {
+            if (!this->dst_noc_encoding.has_value()) {
+                log_fatal(tt::LogTest, "dst_noc_encoding must be set for source");
+                TT_THROW("dst_noc_encoding must be set for source in NocUnicastScatterWriteFields");
+            }
+        }
+
+        std::vector<uint32_t> args;
+        args.push_back(payload_size_bytes);
+        for (uint32_t i = 0; i < MAX_CHUNKS; i++) {
+            args.push_back(dst_addresses[i]);
+        }
+        if (dst_noc_encoding.has_value()) {
+            args.push_back(dst_noc_encoding.value());
+        }
+        // Add chunk sizes (only MAX_CHUNKS-1 since last is implicit)
+        for (uint32_t i = 0; i < MAX_CHUNKS - 1; i++) {
+            args.push_back(static_cast<uint32_t>(chunk_sizes[i]));
+        }
+
+        return args;
+    }
+
+    uint32_t payload_size_bytes;
+    std::array<uint32_t, MAX_CHUNKS> dst_addresses;
+    std::array<uint16_t, MAX_CHUNKS - 1> chunk_sizes;
+    std::optional<uint32_t> dst_noc_encoding;
+};
+
 // create memory maps
 
 // this also has to consider the memory map which has addresses for synchronization etc
@@ -198,8 +243,8 @@ struct TrafficParameters {
 
     // Global context
     uint32_t seed;
-    Topology topology;
-    RoutingType routing_type;
+    bool is_2D_routing_enabled;
+    bool is_dynamic_routing_enabled;
     tt::tt_metal::distributed::MeshShape mesh_shape;
 };
 
@@ -222,6 +267,7 @@ struct TestTrafficSenderConfig {
     FabricNodeId src_node_id;
     std::vector<FabricNodeId> dst_node_ids;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
+    std::optional<FabricNodeId> mcast_start_node_id;
     CoreCoord dst_logical_core;
     size_t target_address;
     std::optional<size_t> atomic_inc_address;
@@ -253,14 +299,12 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         args.insert(args.end(), metadata_args.begin(), metadata_args.end());
     }
 
-    bool is_2d_fabric = (this->parameters.topology == Topology::Mesh);
-
     // push chip send type
     if (!is_sync_config) {
         args.push_back(this->parameters.chip_send_type);
     }
 
-    if (is_2d_fabric) {
+    if (this->parameters.is_2D_routing_enabled) {
         if (this->parameters.chip_send_type == ChipSendType::CHIP_UNICAST) {
             TT_FATAL(this->dst_node_ids.size() == 1, "2D unicast should have exactly one destination node.");
             const auto& dst_node_id = this->dst_node_ids[0];
@@ -273,12 +317,13 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {
             TT_FATAL(!this->dst_node_ids.empty(), "2D multicast should have at least one destination node.");
-            const auto& dst_rep_node_id = this->dst_node_ids[0];  // Representative destination
+
+            const auto& dst_node_id =
+                this->mcast_start_node_id.value_or(this->dst_node_ids[0]);  // Representative destination
             auto adjusted_hops = *(this->hops);
 
             // Handle dynamic routing by adjusting hops
-            bool is_dynamic_routing = (this->parameters.routing_type == RoutingType::Dynamic);
-            if (is_dynamic_routing) {
+            if (this->parameters.is_dynamic_routing_enabled) {
                 auto north_hops = hops->count(RoutingDirection::N) > 0 ? hops->at(RoutingDirection::N) : 0;
                 auto south_hops = hops->count(RoutingDirection::S) > 0 ? hops->at(RoutingDirection::S) : 0;
                 auto east_hops = hops->count(RoutingDirection::E) > 0 ? hops->at(RoutingDirection::E) : 0;
@@ -301,8 +346,7 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             }
 
             // chip_id and mesh_id is unused for low latency 2d mesh mcast
-            const auto mcast_fields =
-                ChipMulticastFields2D(dst_rep_node_id.chip_id, *dst_rep_node_id.mesh_id, adjusted_hops);
+            const auto mcast_fields = ChipMulticastFields2D(dst_node_id.chip_id, *dst_node_id.mesh_id, adjusted_hops);
             const auto mcast_args = mcast_fields.get_args();
             args.insert(args.end(), mcast_args.begin(), mcast_args.end());
         } else {
@@ -372,6 +416,26 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
             const auto fused_args = fused_fields.get_args<true>();
             args.insert(args.end(), fused_args.begin(), fused_args.end());
         } break;
+        case NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+            // For scatter write, we need to split the payload into chunks
+            const auto max_chunks = NocUnicastScatterWriteFields::MAX_CHUNKS;
+            const auto chunk_size = (this->parameters.payload_size_bytes + max_chunks - 1) / max_chunks;
+
+            std::array<uint32_t, max_chunks> dst_addresses{};
+            for (uint32_t i = 0; i < max_chunks; i++) {
+                dst_addresses[i] = static_cast<uint32_t>(this->target_address + i * chunk_size);
+            }
+
+            std::array<uint16_t, max_chunks - 1> chunk_sizes{};
+            for (uint32_t i = 0; i < max_chunks - 1; i++) {
+                chunk_sizes[i] = static_cast<uint16_t>(chunk_size);
+            }
+
+            const auto scatter_write_fields = NocUnicastScatterWriteFields(
+                this->parameters.payload_size_bytes, dst_addresses, chunk_sizes, this->dst_noc_encoding);
+            const auto scatter_write_args = scatter_write_fields.get_args<true>();
+            args.insert(args.end(), scatter_write_args.begin(), scatter_write_args.end());
+        } break;
         default: TT_FATAL(false, "Unsupported noc send type");
     }
 
@@ -422,6 +486,27 @@ inline std::vector<uint32_t> TestTrafficReceiverConfig::get_args() const {
             const auto fused_fields = NocUnicastWriteAtomicIncFields(write_fields, atomic_inc_fields);
             const auto fused_args = fused_fields.get_args<false>();
             args.insert(args.end(), fused_args.begin(), fused_args.end());
+            break;
+        }
+        case NocSendType::NOC_UNICAST_SCATTER_WRITE: {
+            // For scatter write, we need to split the payload into chunks
+            const auto max_chunks = NocUnicastScatterWriteFields::MAX_CHUNKS;
+            const auto chunk_size = (this->parameters.payload_size_bytes + max_chunks - 1) / max_chunks;
+
+            std::array<uint32_t, max_chunks> dst_addresses{};
+            for (uint32_t i = 0; i < max_chunks; i++) {
+                dst_addresses[i] = static_cast<uint32_t>(this->target_address + i * chunk_size);
+            }
+
+            std::array<uint16_t, max_chunks - 1> chunk_sizes{};
+            for (uint32_t i = 0; i < max_chunks - 1; i++) {
+                chunk_sizes[i] = static_cast<uint16_t>(chunk_size);
+            }
+
+            const auto scatter_write_fields =
+                NocUnicastScatterWriteFields(this->parameters.payload_size_bytes, dst_addresses, chunk_sizes);
+            const auto scatter_write_args = scatter_write_fields.get_args<false>();
+            args.insert(args.end(), scatter_write_args.begin(), scatter_write_args.end());
             break;
         }
         default: TT_FATAL(false, "Unsupported noc send type");

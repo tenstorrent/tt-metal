@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <tt-metalium/fabric_host_interface.h>
+#include "hostdevcommon/fabric_common.h"
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/cluster.hpp>
@@ -132,6 +132,10 @@ public:
 
     uint16_t get_bus_id(chip_id_t chip) const {
         return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
+    }
+
+    std::optional<int> get_physical_slot(chip_id_t chip) const {
+        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;
     }
 
     //! device driver and misc apis
@@ -349,8 +353,8 @@ private:
 
     bool supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) const;
 
-    ARCH arch_;
-    TargetDevice target_type_;
+    ARCH arch_{tt::ARCH::Invalid};
+    TargetDevice target_type_{0};
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
     std::unique_ptr<tt::umd::Cluster> driver_;

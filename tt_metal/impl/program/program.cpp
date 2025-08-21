@@ -7,7 +7,7 @@
 #include <circular_buffer_config.hpp>
 #include <device.hpp>
 #include <graph_tracking.hpp>
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <memory_reporter.hpp>
 #include <persistent_kernel_cache.hpp>
 #include <semaphore.hpp>
@@ -65,7 +65,6 @@
 #include <tt_stl/overloaded.hpp>
 #include "sub_device_types.hpp"
 #include "tile.hpp"
-#include "tt_backend_api_types.hpp"
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
@@ -360,6 +359,20 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
     }
 }
 
+namespace {
+
+std::bitset<MAX_PROCESSOR_TYPES_COUNT> get_kernel_processor_set(const Kernel& kernel) {
+    std::bitset<MAX_PROCESSOR_TYPES_COUNT> set;
+    for (int i = 0; i < kernel.expected_num_binaries(); i++) {
+        int processor_id = kernel.get_kernel_processor_type(i);
+        TT_ASSERT(0 <= processor_id && processor_id < MAX_PROCESSOR_TYPES_COUNT);
+        set.set(processor_id);
+    }
+    return set;
+}
+
+}  // namespace
+
 KernelHandle detail::ProgramImpl::add_kernel(
     const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& programmable_core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add kernel to an already compiled program {}", this->id);
@@ -367,22 +380,30 @@ KernelHandle detail::ProgramImpl::add_kernel(
     KernelHandle id = this->num_kernels();
     uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
 
-    RISCV new_kernel_type = kernel->processor();
+    auto new_kernel_core_type = kernel->get_kernel_programmable_core_type();
+    auto new_kernel_processor_class = kernel->get_kernel_processor_class();
+
     std::set<CoreCoord> kernel_logical_cores = kernel->logical_cores();
+    auto new_kernel_processor_set = get_kernel_processor_set(*kernel);
     for (size_t i = 0; i < this->num_kernels(); i++) {
         // Note, looks like id is program specific, and increments naturally as kernels are added.
         //  add_kernel -> id = num_kernels -> kernel is inserted -> next num_kernels() increments.
         std::shared_ptr<Kernel> check_kernel = this->get_kernel(i);
-        RISCV check_kernel_type = check_kernel->processor();
-        std::set<CoreCoord> check_kernel_logical_cores = check_kernel->logical_cores();
-        for (CoreCoord coreCoord : kernel_logical_cores) {
-            TT_FATAL(
-                !(check_kernel_logical_cores.find(coreCoord) != check_kernel_logical_cores.end() &&
-                  new_kernel_type == check_kernel_type),
-                "Core Overlap Between (\"{}\") and new kernel (\"{}\") at {}",
-                check_kernel->name(),
-                kernel->name(),
-                coreCoord.str());
+        auto check_kernel_core_type = check_kernel->get_kernel_programmable_core_type();
+        auto check_kernel_processor_class = check_kernel->get_kernel_processor_class();
+        if (check_kernel_core_type == new_kernel_core_type &&
+            check_kernel_processor_class == new_kernel_processor_class &&
+            (new_kernel_processor_set & get_kernel_processor_set(*check_kernel)).any()) {
+            // Two kernels are using the same processor, need to check core ranges.
+            std::set<CoreCoord> check_kernel_logical_cores = check_kernel->logical_cores();
+            for (CoreCoord coreCoord : kernel_logical_cores) {
+                TT_FATAL(
+                    !(check_kernel_logical_cores.find(coreCoord) != check_kernel_logical_cores.end()),
+                    "Core Overlap Between (\"{}\") and new kernel (\"{}\") at {}",
+                    check_kernel->name(),
+                    kernel->name(),
+                    coreCoord.str());
+            }
         }
     }
 
@@ -510,7 +531,7 @@ KernelGroup* detail::ProgramImpl::kernels_on_core(const CoreCoord& core, uint32_
 }
 
 struct KernelGroupInt {
-    bool valid;
+    bool valid{};
     kernel_id_array_t kernel_ids;
 
     bool operator==(const KernelGroupInt &b) const;
@@ -569,7 +590,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
             for (auto core : kernel->logical_cores()) {
                 int core_index = core.y * grid_extent_[programmable_core_type_index].x + core.x;
                 grid[core_index].valid = true;
-                grid[core_index].update(magic_enum::enum_cast<dispatch_core_processor_classes>(kernel->dispatch_class()).value(), id);
+                grid[core_index].update(enchantum::cast<dispatch_core_processor_classes>(kernel->dispatch_class()).value(), id);
             }
         }
 
@@ -1122,18 +1143,13 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // This is generic for workers and eth cores
     for (const auto &kernels : this->kernels_) {
         for (const auto &[kernel_id, kernel] : kernels) {
-            std::vector<RISCV> sub_kernels;
-            if (kernel->processor() == RISCV::COMPUTE) {
-                sub_kernels = {RISCV::TRISC0, RISCV::TRISC1, RISCV::TRISC2};
-            } else {
-                sub_kernels = {kernel->processor()};
-            }
-            const auto& binaries = KernelImpl::from(*kernel).binaries(
+            auto& kernel_impl = KernelImpl::from(*kernel);
+            const auto& binaries = kernel_impl.binaries(
                 BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
-            std::vector<RISCV> riscvs;
+            std::vector<uint32_t> processor_ids;
             uint32_t transfer_info_index = 0;
 
             for (size_t sub_kernel_index = 0; sub_kernel_index < binaries.size(); ++sub_kernel_index) {
@@ -1145,7 +1161,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                 dst_base_addrs.resize(dst_base_addrs.size() + num_spans);
                 page_offsets.resize(page_offsets.size() + num_spans);
                 lengths.resize(lengths.size() + num_spans);
-                riscvs.resize(riscvs.size() + num_spans);
+                processor_ids.resize(processor_ids.size() + num_spans);
 
                 kernel_bin.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr,
                                              uint64_t dst,
@@ -1155,7 +1171,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                     page_offsets[transfer_info_index] =
                         binaries_data.size() * sizeof(uint32_t) / HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
                     lengths[transfer_info_index] = len * sizeof(uint32_t);
-                    riscvs[transfer_info_index] = sub_kernels[sub_kernel_index];
+                    processor_ids[transfer_info_index] = kernel_impl.get_kernel_processor_type(sub_kernel_index);
 
                     binaries_data.insert(binaries_data.end(), mem_ptr, mem_ptr + len);
                     binaries_data.resize(
@@ -1164,9 +1180,16 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                 });
             }
 
-            kernel_bins_transfer_info kb_transfer_info = {
-                .dst_base_addrs = dst_base_addrs, .page_offsets = page_offsets, .lengths = lengths, .riscvs = riscvs};
-            kernel_transfer_info.insert({kernel_id, kb_transfer_info});
+            kernel_transfer_info.emplace(
+                kernel_id,
+                kernel_bins_transfer_info{
+                    .core_type = kernel->get_kernel_programmable_core_type(),
+                    .processor_class = kernel->get_kernel_processor_class(),
+                    .dst_base_addrs = std::move(dst_base_addrs),
+                    .page_offsets = std::move(page_offsets),
+                    .lengths = std::move(lengths),
+                    .processor_ids = std::move(processor_ids),
+                });
         }
     }
 
@@ -1292,7 +1315,7 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
                 }
                 TT_FATAL(num_intersections == num_cores,
                          "Kernel group cores do not match sub device cores for programmable core type {}",
-                         magic_enum::enum_name(core_type));
+                         enchantum::to_string(core_type));
             };
             find_sub_device_ids(HalProgrammableCoreType::TENSIX);
             find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
@@ -1792,7 +1815,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
             "Program size ({}) too large for kernel config buffer ({}) on {}",
             state.offset,
             max_size,
-            magic_enum::enum_name(programmable_core_type));
+            enchantum::to_string(programmable_core_type));
 
         for (auto& program : programs) {
             program->set_program_offsets_and_sizes(index, state);

@@ -70,7 +70,7 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
     std::vector<ttnn::Tensor> results;
     results.reserve(split_sizes.size());
 
-    const ttnn::SmallVector<const int32_t> steps(input_shape.rank(), 1);
+    const ttnn::SmallVector<int32_t> steps(input_shape.rank(), 1);
     ttnn::SmallVector<int32_t> begins(input_shape.rank(), 0), ends(input_shape.cbegin(), input_shape.cend());
     const tt::stl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
 
@@ -100,8 +100,13 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
     const auto& input_shape = input_tensor.logical_shape();
 
     // special case to use hardcoded kernel for two chunks sometimes
+    tt::tt_metal::IDevice* device = input_tensor.device();
+    uint32_t grid_size_x = device->compute_with_storage_grid_size().x + 1;  // total size of grid in x direction
+    bool fits_in_core_grid =
+        input_shape.rank() >= 2 && (input_shape[0] * input_shape[1] <
+                                    grid_size_x);  // special case parallelizes across first 2 dims without wrapping
     if (split_sizes.size() == detail::TWO_CHUNKS && dim == input_shape.rank() - 1 &&
-        input_tensor.layout() == Layout::TILE && input_shape.rank() >= 2 &&
+        input_tensor.layout() == Layout::TILE && input_shape.rank() >= 2 && fits_in_core_grid &&
         input_shape[-2] / tt::constants::TILE_HEIGHT >= 2 && input_shape[-1] / tt::constants::TILE_WIDTH >= 2) {
         ttnn::Tensor input_tensor_4d;
         if (input_shape.rank() > detail::RANK_FOUR) {

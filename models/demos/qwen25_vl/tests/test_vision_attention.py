@@ -15,7 +15,7 @@ from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,
-    standardize_hf_keys,
+    standardize_hf_keys_multimodal,
 )
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
@@ -32,10 +32,10 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 # Model and attention prefill tests should run both with and without paged attention to debug any issues that may occur with default attention
 def test_vision_attention_inference(
     mesh_device,
-    use_program_cache,
     reset_seeds,
     ensure_gc,
 ):
@@ -57,7 +57,7 @@ def test_vision_attention_inference(
     # reference_model = Qwen2_5_VLVisionAttention(model_args.hf_config.vision_config.hidden_size, model_args.hf_config.vision_config.num_heads)
     # reference_model.load_state_dict(model_args.reference_attention().state_dict())
 
-    state_dict = standardize_hf_keys(reference_model.state_dict())
+    state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
     state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
     state_dict_prefix = model_args.get_state_dict_prefix("VisionAttention", 0)
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
@@ -139,7 +139,7 @@ def test_vision_attention_inference(
     )
     tt_out = ttnn.to_torch(
         tt_out,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1),
     )
     tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(batch_size, seq_len, -1)  # [ batch, seq, hidden_dim]
 
