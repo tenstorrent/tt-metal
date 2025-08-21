@@ -19,6 +19,7 @@ target_sources(
             tt_stl/cleanup.hpp
             tt_stl/concepts.hpp
             tt_stl/indestructible.hpp
+            tt_stl/optional_reference.hpp
             tt_stl/overloaded.hpp
             tt_stl/reflection.hpp
             tt_stl/slotmap.hpp
