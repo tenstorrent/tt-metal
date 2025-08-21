@@ -230,7 +230,9 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     // Receiver
 
     // uint32_t semaphore_id_to_notify_to_start_mcast = CreateSemaphore(program, intermediate_tensor_cores, 0);
-    auto receiver_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    auto receiver_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    // set noc to 1 for now
+
     receiver_kernel_config.compile_args = {
         num_links,                                                         // sem_wait_val
         inter_cb_index,                                                    // intermediate cb index

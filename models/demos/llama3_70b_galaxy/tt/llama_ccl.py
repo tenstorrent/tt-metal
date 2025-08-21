@@ -1066,9 +1066,11 @@ class TT_CCL:
         MAX_DST_TILES = 8
         in0_block_h = M // ttnn.TILE_SIZE
         K = K + (3840 - K)  #
-        in0_block_w = K // cluster_shape[cluster_axis] // ttnn.TILE_SIZE
-        while (K / ttnn.TILE_SIZE) % in0_block_w != 0:
-            in0_block_w -= 1
+
+        # in0_block_w = K // cluster_shape[cluster_axis] // ttnn.TILE_SIZE
+        # while (K / ttnn.TILE_SIZE) % in0_block_w != 0:
+        #     in0_block_w -= 1
+        in0_block_w = 6  # change this to 4 once padding is removed because 28 is divisible by 40 but not 30
 
         out_block_h = M // ttnn.TILE_SIZE
         out_block_w = N_padded // output_num_cores // ttnn.TILE_SIZE

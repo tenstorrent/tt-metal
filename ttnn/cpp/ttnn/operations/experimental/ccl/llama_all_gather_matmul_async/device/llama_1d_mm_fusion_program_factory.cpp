@@ -113,9 +113,8 @@ process_agmm_fusion_program_and_create_override_variables(
     /* Inner dim - no padding needed for multicast approach */
     const uint32_t Kt_total = in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
     constexpr uint32_t num_multicast_steps = 4;
-    in0_block_w = Kt_total / num_multicast_steps;  // Each step sends 1/4 of K dimension
 
-    uint32_t num_blocks = num_multicast_steps;  // Always 4 blocks now
+    uint32_t num_blocks = Kt_total / in0_block_w;  // 30; //num_multicast_steps;  // Always 4 blocks now
     // Only enable packer l1 accumulation when there are spills, otherwise
     // unnecessary overhead for reconfigs are added
     bool packer_l1_acc_en = packer_l1_acc && num_blocks > 1;
@@ -193,6 +192,7 @@ process_agmm_fusion_program_and_create_override_variables(
     uint32_t in1_tensor_size_bytes = in1_block_num_tiles * num_blocks * in1_single_tile_size;
     uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
+    uint32_t num_blocks_per_mcast_step = num_blocks / num_multicast_steps;
 
     /* Create circular buffers */
     uint32_t src0_cb_index = base_cb_index;
@@ -376,7 +376,7 @@ process_agmm_fusion_program_and_create_override_variables(
         in1_tensor_size_bytes,  // in1_tensor_size_bytes
         in1_per_core_w,         // in1_per_core_w
 
-        num_multicast_steps,  // Always 4 steps instead of variable num_blocks
+        num_blocks,  // Always 4 steps instead of variable num_blocks
 
         out_subblock_h,          // out_subblock_h
         out_subblock_w,          // out_subblock_w
@@ -392,6 +392,7 @@ process_agmm_fusion_program_and_create_override_variables(
         src2_cb_index,  // Keep for compatibility though not used
         sync_cb_index,
         sync_cb2_index,
+        num_blocks_per_mcast_step,
     };
     compute_kernel_args.push_back(compute_kernel_args.size() + 1);  // The CT index of the output_cbs
     for (uint32_t i = 0; i < num_output_cb; ++i) {
@@ -605,11 +606,10 @@ process_agmm_fusion_program_and_create_override_variables(
             signaler.push_llama_rs_rt_args_for_mm(mm_in1_args, core, in1_noc, device);
         }
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_args);
-
         /* compute */
         std::vector<uint32_t> mm_kernel_compute_args = {
             (std::uint32_t)core_type,
-            ring_index,  // core_idx (not ring_idx anymore)
+            ring_index * num_blocks_per_mcast_step,  // core_idx (not ring_idx anymore)
         };
         // No need for unpadded widths since all steps process uniform 1/4 chunks
 

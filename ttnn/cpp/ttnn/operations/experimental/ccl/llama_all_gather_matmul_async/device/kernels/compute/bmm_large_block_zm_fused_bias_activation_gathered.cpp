@@ -160,7 +160,8 @@ void MAIN {
     constexpr uint32_t in2_cb_id = get_compile_time_arg_val(20);
     constexpr uint32_t sync_cb = get_compile_time_arg_val(21);
     constexpr uint32_t sync_cb2 = get_compile_time_arg_val(22);
-    constexpr uint32_t OUTPUT_CB_ARRAY_IDX = get_compile_time_arg_val(23);
+    constexpr uint32_t num_blocks_per_mcast_step = get_compile_time_arg_val(23);
+    constexpr uint32_t OUTPUT_CB_ARRAY_IDX = get_compile_time_arg_val(24);
     constexpr std::array<uint32_t, batch> mm_out_cb_ids =
         fill_array_with_next_n_args<uint32_t, OUTPUT_CB_ARRAY_IDX, batch>();
     constexpr uint32_t INTERM_CB_ARRAY_IDX = OUTPUT_CB_ARRAY_IDX + batch;
@@ -232,8 +233,17 @@ void MAIN {
         cb_wait_front(sync_cb2, 1);
         cb_pop_front(sync_cb2, 1);
 
+        uint32_t curr_ring_idx = ring_idx;
         for (uint32_t block = 0; block < num_blocks; block++) {
-            const uint32_t curr_ring_idx = (ring_idx - block + ring_size) % ring_size;
+            // Update ring index
+            if (block > 0) {
+                // At multicast boundary: first decrement by 2X
+                if (block % num_blocks_per_mcast_step == 0) {
+                    curr_ring_idx = (curr_ring_idx + ring_size - 2 * num_blocks_per_mcast_step) % ring_size;
+                }
+                // Always increment by 1
+                curr_ring_idx = (curr_ring_idx + 1) % ring_size;
+            }
             // uint32_t unpadded_in0_block_w = unpadded_in0_shard_widths_in_tiles[curr_ring_idx];
             uint32_t unpadded_in0_block_w = in0_block_w;  // no need to unpad in0
 
@@ -255,7 +265,6 @@ void MAIN {
 
             // Wait to receive in0 block
             cb_wait_front(input0_cb_id, in0_block_num_tiles);
-
 #ifdef ENABLE_GLOBAL_CB
             UNPACK((calculate_next_block_index_and_update_rd_ptr(
                 in1_cb_id,

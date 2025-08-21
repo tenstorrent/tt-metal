@@ -521,7 +521,13 @@ class TtTransformer(LightweightModule):
                 num_layers=self.n_layers,
                 global_cb=self.prefetcher_setup.global_circular_buffer,
                 enable_performance_mode=self.enable_prefetcher_performance_mode,
-                num_blocks_per_tensor=[24, 24, 24, 24, 4],
+                num_blocks_per_tensor=[
+                    24,
+                    24,
+                    24,
+                    24,
+                    20,
+                ],  # set to 28 once padding is removed because 28 is divisible by 4
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 
