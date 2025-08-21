@@ -100,12 +100,12 @@ run_t3000_llama3_perplexity_tests_single_card() {
 
   for MESH_DEVICE in N150 N300; do
     for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py ci-token-matching --timeout=3600 ; fail+=$?
+      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout=3600 ; fail+=$?
     done
   done
 
   # 11B test does not run on N150
-  MESH_DEVICE=N300 LLAMA_DIR="$llama11b" WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n models/tt_transformers/demo/simple_text_demo.py ci-token-matching --timeout=3600 ; fail+=$?
+  MESH_DEVICE=N300 LLAMA_DIR="$llama11b" WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout=3600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -123,7 +123,7 @@ run_t3000_mistral_perplexity_tests() {
 
   tt_cache_path="/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3"
   hf_model="/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db"
-  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py ci-token-matching --timeout=3600
+  WH_ARCH_YAML=$wh_arch_yaml TT_CACHE_PATH=$tt_cache_path HF_MODEL=$hf_model pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout=3600
 
 }
 
