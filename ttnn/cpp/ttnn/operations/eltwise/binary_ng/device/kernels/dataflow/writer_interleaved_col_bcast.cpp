@@ -43,13 +43,10 @@ void kernel_main() {
     uint32_t start_tw = offset_c % Wt;
 
     constexpr auto cb_id_src = tt::CBIndex::c_1;
+    constexpr auto src_args = TensorAccessorArgs<0>();
 #if !SRC_SHARDED
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const DataFormat src_data_format = get_dataformat(cb_id_src);
-
-    const InterleavedAddrGenFast<src_is_dram> src = {
-        .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
+    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 
     // this is the INPUT tile offset
     uint32_t tile_offset = start_nd * nD_stride + start_d * d_stride + start_n * n_stride + start_c * c_stride;
@@ -59,13 +56,10 @@ void kernel_main() {
 #endif
 
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
+    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
 #if !DST_SHARDED
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
-    const DataFormat dst_data_format = get_dataformat(cb_id_dst);
-
-    const InterleavedAddrGenFast<dst_is_dram> dst = {
-        .bank_base_address = dst_addr, .page_size = dst_tile_bytes, .data_format = dst_data_format};
+    const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
 #endif
 
     uint32_t num_tiles_written = 0;

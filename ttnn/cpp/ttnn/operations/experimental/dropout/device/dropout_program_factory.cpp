@@ -219,7 +219,7 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     std::vector<uint32_t> writer_compile_args = {
         static_cast<uint32_t>(kOutputCbIndex), static_cast<uint32_t>(dst_is_dram)};
 
-    DropoutKernels kernels;
+    DropoutKernels kernels{};
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, kReaderKernelPath);
 
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_args, kWriterKernelPath);

@@ -69,7 +69,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_mesh_bu
         .sharding_args = buffer_distribution_spec,
     };
 
-    // Mirrors allocate_mesh_buffer_on_device in ttnn
+    // Mirrors allocate_device_buffer in ttnn
     const tt::tt_metal::distributed::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
     return tt::tt_metal::distributed::MeshBuffer::create(mesh_buffer_config, device_local_config, mesh_device);
 }

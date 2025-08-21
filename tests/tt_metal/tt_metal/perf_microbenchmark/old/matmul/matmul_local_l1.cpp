@@ -140,7 +140,6 @@ int main(int argc, char** argv) {
         uint32_t dprint;
         uint32_t print_tensor;
         uint32_t debug;
-        uint32_t cb;
         uint32_t Mt;
         uint32_t Nt;
         uint32_t Kt;
@@ -281,26 +280,26 @@ int main(int argc, char** argv) {
             tt_metal::CircularBufferConfig(
                 cb_activations_tiles * single_tile_size, {{cb_activations_index, data_format}})
                 .set_page_size(cb_activations_index, single_tile_size);
-        auto cb_activations = tt_metal::CreateCircularBuffer(program, all_cores, cb_activations_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_activations_config);
 
         uint32_t cb_weights_index = 1;
         uint32_t cb_weights_tiles = per_core_weights_tiles;
         tt_metal::CircularBufferConfig cb_weights_config =
             tt_metal::CircularBufferConfig(cb_weights_tiles * single_tile_size, {{cb_weights_index, data_format}})
                 .set_page_size(cb_weights_index, single_tile_size);
-        auto cb_weights = tt_metal::CreateCircularBuffer(program, all_cores, cb_weights_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_weights_config);
 
         uint32_t cb_output_index = 16;
         uint32_t cb_output_tiles = per_core_output_tiles;
         tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(cb_output_tiles * single_tile_size, {{cb_output_index, data_format}})
                 .set_page_size(cb_output_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
 
         // compute kernel setup
         vector<uint32_t> compute_kernel_args = {uint(per_core_Mt), uint(Kt), uint(per_core_Nt)};
 
-        auto mm_kernel = tt_metal::CreateKernel(
+        tt_metal::CreateKernel(
             program,
             "tests/tt_metal/tt_metal/perf_microbenchmark/old/matmul/kernels/"
             "compute_local_l1.cpp",
@@ -311,7 +310,7 @@ int main(int argc, char** argv) {
                 .math_approx_mode = false,
                 .compile_args = compute_kernel_args});
 
-        std::chrono::duration<double, std::nano> duration;
+        std::chrono::duration<double, std::nano> duration{};
         // took from run_operation.cpp
         auto start = std::chrono::high_resolution_clock::now();
         EnqueueProgram(device->command_queue(), program, false);

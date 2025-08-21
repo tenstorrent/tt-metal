@@ -93,6 +93,24 @@ run_t3000_sentence_bert_tests() {
   fi
 }
 
+run_t3000_stable_diffusion_35_large_tests() {
+  # Record the start time
+  fail=0
+  start_time=$(date +%s)
+
+  echo "LOG_METAL: Running run_t3000_stable_diffusion_35_large_tests"
+
+  env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/stable_diffusion_35_large/tests/test_performance.py -k "t3k_cfg2_sp2_tp2" ; fail+=$?
+
+  # Record the end time
+  end_time=$(date +%s)
+  duration=$((end_time - start_time))
+  echo "LOG_METAL: run_t3000_stable_diffusion_35_large_tests $duration seconds to complete"
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
+}
+
 run_t3000_ccl_all_gather_perf_tests() {
   # Record the start time
   fail=0
@@ -135,7 +153,6 @@ run_t3000_ccl_tests() {
   # Run ccl performance tests
   run_t3000_ccl_all_gather_perf_tests
   run_t3000_ccl_reduce_scatter_perf_tests
-
 }
 
 run_t3000_model_perf_tests() {

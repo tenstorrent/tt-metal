@@ -30,6 +30,7 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "tt-metalium/program.hpp"
 #include <tt_stl/span.hpp>
+#include <tt_stl/overloaded.hpp>
 #include "system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
@@ -58,13 +59,9 @@ bool DispatchStateCheck(bool isFastDispatch) {
 
 Buffer& GetBufferObject(const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer) {
     return std::visit(
-        [&](auto&& b) -> Buffer& {
-            using type_buf = std::decay_t<decltype(b)>;
-            if constexpr (std::is_same_v<type_buf, std::shared_ptr<Buffer>>) {
-                return *b;
-            } else {
-                return b.get();
-            }
+        ttsl::overloaded{
+            [](const std::shared_ptr<Buffer>& b) -> Buffer& { return *b; },
+            [](Buffer& b) -> Buffer& { return b; },
         },
         buffer);
 }
@@ -227,15 +224,7 @@ void EnqueueReadSubBuffer(
     detail::DispatchStateCheck(true);
     detail::ValidateBufferRegion(buffer, region);
 
-    std::visit(
-        [&](auto&& b) {
-            using T = std::decay_t<decltype(b)>;
-            if constexpr (
-                std::is_same_v<T, std::reference_wrapper<Buffer>> || std::is_same_v<T, std::shared_ptr<Buffer>>) {
-                cq.enqueue_read_buffer(b, dst, region, blocking);
-            }
-        },
-        buffer);
+    cq.enqueue_read_buffer(buffer, dst, region, blocking);
 }
 
 void EnqueueWriteBuffer(

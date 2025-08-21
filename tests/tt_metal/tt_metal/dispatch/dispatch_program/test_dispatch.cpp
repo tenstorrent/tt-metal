@@ -20,6 +20,8 @@
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
+#include <distributed.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
@@ -39,7 +41,9 @@ using std::vector;
 // Test sync w/ semaphores betweeen eth/tensix cores
 // Test will hang in the kernel if the sync doesn't work properly
 static void test_sems_across_core_types(
-    tt::tt_metal::DispatchFixture* fixture, vector<tt::tt_metal::IDevice*>& devices, bool active_eth) {
+    tt::tt_metal::MeshDispatchFixture* fixture,
+    vector<std::shared_ptr<distributed::MeshDevice>>& devices,
+    bool active_eth) {
     // just something unique...
     constexpr uint32_t eth_sem_init_val = 33;
     constexpr uint32_t tensix_sem_init_val = 102;
@@ -51,7 +55,8 @@ static void test_sems_across_core_types(
         compile_args.push_back(static_cast<uint32_t>(tt::tt_metal::HalProgrammableCoreType::IDLE_ETH));
     }
 
-    for (tt::tt_metal::IDevice* device : devices) {
+    for (const auto& mesh_device : devices) {
+        auto device = mesh_device->get_devices()[0];
         if (not device->is_mmio_capable()) {
             continue;
         }
@@ -61,13 +66,18 @@ static void test_sems_across_core_types(
 
         std::set<CoreCoord> eth_cores(eth_cores_unordered.begin(), eth_cores_unordered.end());
         if (eth_cores.size() > 0) {
+            distributed::MeshWorkload workload;
+            auto zero_coord = distributed::MeshCoordinate(0, 0);
+            auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
             auto program = tt::tt_metal::CreateProgram();
+            distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+            auto& program_ = workload.get_programs().at(device_range);
 
             CoreCoord eth_core = *eth_cores.begin();
-            CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
-            uint32_t eth_sem_id = CreateSemaphore(program, eth_core, eth_sem_init_val, CoreType::ETH);
+            CoreCoord phys_eth_core = mesh_device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
+            uint32_t eth_sem_id = CreateSemaphore(program_, eth_core, eth_sem_init_val, CoreType::ETH);
             auto eth_kernel = CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_across_core_types.cpp",
                 eth_core,
                 tt::tt_metal::EthernetConfig{
@@ -77,10 +87,10 @@ static void test_sems_across_core_types(
                 });
 
             CoreCoord tensix_core(0, 0);
-            CoreCoord phys_tensix_core = device->worker_core_from_logical_core(tensix_core);
-            uint32_t tensix_sem_id = CreateSemaphore(program, tensix_core, tensix_sem_init_val, CoreType::WORKER);
+            CoreCoord phys_tensix_core = mesh_device->worker_core_from_logical_core(tensix_core);
+            uint32_t tensix_sem_id = CreateSemaphore(program_, tensix_core, tensix_sem_init_val, CoreType::WORKER);
             auto tensix_kernel = CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/dataflow/semaphore_across_core_types.cpp",
                 tensix_core,
                 tt::tt_metal::DataMovementConfig{
@@ -104,7 +114,7 @@ static void test_sems_across_core_types(
                 0,  // dummy so eth/tensix are different sizes w/ different offsets
                 0,  // dummy so eth/tensix are different sizes w/ different offsets
             };
-            SetRuntimeArgs(program, eth_kernel, eth_core, eth_rtas);
+            SetRuntimeArgs(program_, eth_kernel, eth_core, eth_rtas);
 
             vector<uint32_t> tensix_rtas = {
                 tt::tt_metal::MetalContext::instance().hal().noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
@@ -112,16 +122,22 @@ static void test_sems_across_core_types(
                 eth_sem_id,
                 tensix_sem_init_val,
             };
-            SetRuntimeArgs(program, tensix_kernel, tensix_core, tensix_rtas);
+            SetRuntimeArgs(program_, tensix_kernel, tensix_core, tensix_rtas);
 
-            fixture->RunProgram(device, program);
+            fixture->RunProgram(mesh_device, workload);
         }
     }
 }
 
-TEST_F(DispatchFixture, EthTestBlank) {
-    IDevice* device = devices_[0];
+TEST_F(MeshDispatchFixture, EthTestBlank) {
+    auto mesh_device = devices_[0];
+    auto device = mesh_device->get_devices()[0];
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
     // TODO: tweak when FD supports idle eth
     const auto& eth_cores_unordered =
@@ -131,44 +147,48 @@ TEST_F(DispatchFixture, EthTestBlank) {
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
-        CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
         CreateKernel(
-            program,
+            program_,
             "tt_metal/kernels/dataflow/blank.cpp",
             eth_core,
             tt::tt_metal::EthernetConfig{
                 .eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER,
             });
 
-        this->RunProgram(device, program);
+        this->RunProgram(mesh_device, workload);
     }
 }
 
-TEST_F(DispatchFixture, TensixTestInitLocalMemory) {
+TEST_F(MeshDispatchFixture, TensixTestInitLocalMemory) {
     // This test will hang/assert if there is a failure
 
-    IDevice* device = devices_[0];
+    auto mesh_device = devices_[0];
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     CoreCoord core = {0, 0};
     Program program;
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
     CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
-    CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", core, ComputeConfig{});
+    CreateKernel(program_, "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp", core, ComputeConfig{});
 
-    this->RunProgram(device, program);
+    this->RunProgram(mesh_device, workload);
 }
 
-TEST_F(DispatchFixture, EthTestInitLocalMemory) {
+TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
     // This test will hang/assert if there is a failure
 
     if (not this->slow_dispatch_) {
@@ -176,8 +196,14 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
         return;
     }
 
-    IDevice* device = devices_[0];
+    auto mesh_device = devices_[0];
+    auto device = mesh_device->get_devices()[0];
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
     // TODO: tweak when FD supports idle eth
     const auto& eth_cores =
@@ -185,20 +211,19 @@ TEST_F(DispatchFixture, EthTestInitLocalMemory) {
 
     if (eth_cores.size() > 0) {
         CoreCoord eth_core = *eth_cores.begin();
-        CoreCoord phys_eth_core = device->virtual_core_from_logical_core(eth_core, CoreType::ETH);
         CreateKernel(
-            program,
+            program_,
             "tests/tt_metal/tt_metal/test_kernels/misc/local_mem.cpp",
             eth_core,
             tt::tt_metal::EthernetConfig{.eth_mode = this->slow_dispatch_ ? Eth::IDLE : Eth::RECEIVER});
 
-        this->RunProgram(device, program);
+        this->RunProgram(mesh_device, workload);
     }
 }
 
-TEST_F(DispatchFixture, TensixActiveEthTestSemaphores) { test_sems_across_core_types(this, this->devices_, true); }
+TEST_F(MeshDispatchFixture, TensixActiveEthTestSemaphores) { test_sems_across_core_types(this, this->devices_, true); }
 
-TEST_F(DispatchFixture, TensixIdleEthTestSemaphores) {
+TEST_F(MeshDispatchFixture, TensixIdleEthTestSemaphores) {
     if (not this->slow_dispatch_) {
         GTEST_SKIP();
     }
@@ -208,7 +233,7 @@ TEST_F(DispatchFixture, TensixIdleEthTestSemaphores) {
 
 // This test was written to cover issue #12738 (CBs for workers showing up on
 // active eth cores)
-TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
+TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
     uint32_t intermediate_cb = 24;
     uint32_t out_cb = 16;
     std::map<uint8_t, tt::DataFormat> intermediate_and_out_data_format_spec = {
@@ -221,8 +246,11 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
     uint32_t cb_config_buffer_size =
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
-    for (IDevice* device : devices_) {
-        CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
+    for (const auto& mesh_device : devices_) {
+        auto device = mesh_device->get_devices()[0];
+        distributed::MeshWorkload workload;
+
+        CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
         bool found_overlapping_core = false;
         CoreCoord core_coord;
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
@@ -238,45 +266,50 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
             return;
         }
 
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program;
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
+
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
                                              .set_page_size(intermediate_cb, single_tile_size)
                                              .set_page_size(out_cb, single_tile_size);
-        auto cb = CreateCircularBuffer(program, core_coord, cb_config);
+        CreateCircularBuffer(program_, core_coord, cb_config);
 
         CreateKernel(
-            program,
+            program_,
             "tt_metal/kernels/dataflow/blank.cpp",
             core_coord,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
 
         CreateKernel(
-            program,
+            program_,
             "tt_metal/kernels/dataflow/blank.cpp",
             core_coord,
             DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
         CreateKernel(
-            program,
+            program_,
             "tt_metal/kernels/dataflow/blank.cpp",
             core_coord,
             EthernetConfig{.eth_mode = Eth::RECEIVER, .noc = NOC::NOC_0});
 
-        this->RunProgram(device, program);
+        this->RunProgram(mesh_device, workload);
 
         vector<uint32_t> cb_config_vector;
 
         tt::tt_metal::detail::ReadFromDeviceL1(
             device,
             core_coord,
-            program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
+            program_.get_cb_base_addr(device, core_coord, CoreType::WORKER),
             cb_config_buffer_size,
             cb_config_vector);
 
         // ETH core doesn't have CB
-        EXPECT_TRUE(program.get_cb_size(device, core_coord, CoreType::ETH) == 0);
+        EXPECT_TRUE(program_.get_cb_size(device, core_coord, CoreType::ETH) == 0);
 
-        uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        uint32_t cb_addr = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
         bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == cb_addr;
@@ -310,7 +343,7 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
         CoreCoord worker{0, 0};
         Program program;
         // Kernel will block if it doesn't early return.
-        auto writer_kernel = CreateKernel(
+        CreateKernel(
             program,
             "tt_metal/kernels/dataflow/writer_unary.cpp",
             worker,
@@ -320,18 +353,24 @@ TEST_F(EarlyReturnFixture, TensixKernelEarlyReturn) {
     }
 }
 
-TEST_F(DispatchFixture, TensixCircularBufferInitFunction) {
-    for (auto& device : devices_) {
+TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
+    for (const auto& mesh_device : devices_) {
         for (bool use_assembly : {true, false}) {
             for (uint32_t mask : {0xffffffffu, 0xaaaaaaaau}) {
                 CoreCoord core{0, 0};
+                distributed::MeshWorkload workload;
+                auto zero_coord = distributed::MeshCoordinate(0, 0);
+                auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
                 Program program;
+                distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+                auto& program_ = workload.get_programs().at(device_range);
+
                 std::map<std::string, std::string> defines;
                 if (!use_assembly) {
                     defines["DISABLE_CB_ASSEMBLY"] = "1";
                 }
                 KernelHandle kernel = CreateKernel(
-                    program,
+                    program_,
                     "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_init.cpp",
                     core,
                     DataMovementConfig{
@@ -339,10 +378,10 @@ TEST_F(DispatchFixture, TensixCircularBufferInitFunction) {
                         .noc = NOC::RISCV_1_default,
                         .defines = defines,
                         .opt_level = KernelBuildOptLevel::O2});
-                uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+                uint32_t l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
                 std::vector<uint32_t> runtime_args{mask, l1_unreserved_base};
-                SetRuntimeArgs(program, kernel, core, runtime_args);
-                this->RunProgram(device, program);
+                SetRuntimeArgs(program_, kernel, core, runtime_args);
+                this->RunProgram(mesh_device, workload);
             }
         }
     }

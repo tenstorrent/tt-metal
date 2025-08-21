@@ -189,6 +189,7 @@ def run_all_to_all_dispatch_test(
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     cluster_axis=1,
+    use_optional_output_tensors=False,
 ):
     torch.manual_seed(2005)
     mesh_device.enable_program_cache()
@@ -318,8 +319,9 @@ def run_all_to_all_dispatch_test(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
-    # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+    # create double buffered global semaphore handles
+    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
+    init_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
 
     tt_out_tensor_list = []
 
@@ -328,8 +330,8 @@ def run_all_to_all_dispatch_test(
         tt_metadata_list = []
 
         for i in range(n_iters):
-            buffer_index = 0 if trace_mode else i
-            ttnn.all_to_all_dispatch(
+            buffer_index = i
+            output_tensor, metadata_tensor = ttnn.all_to_all_dispatch(
                 input_tensors[buffer_index],
                 expert_indices_tensors[buffer_index],
                 expert_mapping_tensors[buffer_index],
@@ -337,13 +339,16 @@ def run_all_to_all_dispatch_test(
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
-                global_semaphore=ccl_semaphore_handles[buffer_index],
+                global_semaphore=ccl_semaphore_handles[buffer_index % 2],
+                init_semaphore=init_semaphore_handles[buffer_index % 2],
                 subdevice_id=worker_sub_device_id,
-                output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]],
+                output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]]
+                if use_optional_output_tensors
+                else None,
             )
 
-            tt_out_tensor = output_tensors[buffer_index]
-            tt_metadata = metadata_tensors[buffer_index]
+            tt_out_tensor = output_tensors[buffer_index] if use_optional_output_tensors else output_tensor
+            tt_metadata = metadata_tensors[buffer_index] if use_optional_output_tensors else metadata_tensor
 
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -358,20 +363,22 @@ def run_all_to_all_dispatch_test(
     if trace_mode:
         # compile run:
         logger.info("Compiling model")
-        tt_out_tensor_list = run_op(1, store_all_results=False)
+        tt_out_tensor_list, tt_metadata_list = run_op(1, store_all_results=True)
+        ttnn.synchronize_device(mesh_device)
 
         logger.info("Capturing Warmup")
 
         if warmup_iters > 0:
             logger.info(f"Capturing Warmup {warmup_iters} iterations")
             trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            run_op(warmup_iters, store_all_results=False)
+            tt_out_tensor_list, tt_metadata_list = run_op(warmup_iters, store_all_results=True)
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
             ttnn.synchronize_device(mesh_device)
+        logger.info("Warmup done")
 
         logger.info("Capturing Trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_out_tensor_list, tt_metadata_list = run_op(num_iters, store_all_results=False)
+        tt_out_tensor_list, tt_metadata_list = run_op(num_iters, store_all_results=True)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
 
@@ -743,6 +750,7 @@ def test_decode_perf(
         output_memory_config=output_memory_config,
         dtype=dtype,
         cluster_axis=cluster_axis,
+        use_optional_output_tensors=True,
     )
 
 
@@ -819,6 +827,7 @@ def test_prefill_perf(
         output_memory_config=output_memory_config,
         dtype=dtype,
         cluster_axis=cluster_axis,
+        use_optional_output_tensors=True,
     )
 
 
@@ -840,7 +849,7 @@ def test_prefill_perf(
 @pytest.mark.parametrize(
     "batches_per_device, seq_len, num_iters, warmup_iters",
     [
-        (16, 7, 2, 1),
+        (16, 7, 10, 5),
     ],
     ids=["b16s2"],
 )
@@ -897,82 +906,4 @@ def test_all_to_all_dispatch_ring_trace(
         dtype=dtype,
         cluster_axis=cluster_axis,
         topology=topology,
-    )
-
-
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 50000},
-    ],
-    indirect=True,
-)
-@pytest.mark.parametrize("trace_mode", [True])
-@pytest.mark.parametrize(
-    "mesh_shape, mesh_device", [pytest.param((1, 8), (1, 8), id="1x8_grid")], indirect=["mesh_device"]
-)
-@pytest.mark.parametrize("cluster_axis", [1], ids=["cluster_row"])
-@pytest.mark.parametrize("experts_per_device", [8])
-@pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("hidden_size", [7168])
-@pytest.mark.parametrize(
-    "batches_per_device, seq_len, num_iters, warmup_iters",
-    [
-        (16, 7, 2, 1),
-    ],
-    ids=["b16s2"],
-)
-@pytest.mark.parametrize("num_links", [1])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Ring])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-def test_all_to_all_dispatch_ring_trace(
-    mesh_device,
-    trace_mode,
-    mesh_shape,
-    cluster_axis,
-    batches_per_device,
-    experts_per_device,
-    select_experts_k,
-    hidden_size,
-    seq_len,
-    num_iters,
-    warmup_iters,
-    num_links,
-    topology,
-    dtype,
-    input_memory_config,
-    output_memory_config,
-    device_params,
-):
-    if cluster_axis is None:
-        dispatch_devices = mesh_shape[0] * mesh_shape[1]
-    else:
-        dispatch_devices = mesh_shape[cluster_axis]
-
-    batch = batches_per_device * dispatch_devices
-    experts = experts_per_device * dispatch_devices
-
-    if num_links == "MAX_LINKS":
-        num_links = get_max_links(cluster_axis, device_params["fabric_config"])
-
-    run_all_to_all_dispatch_test(
-        mesh_device,
-        mesh_shape,
-        batch,
-        experts,
-        select_experts_k,
-        hidden_size,
-        seq_len,
-        num_iters,
-        warmup_iters,
-        trace_mode,
-        num_links=num_links,
-        scheme="sequential",
-        topology=topology,
-        input_memory_config=input_memory_config,
-        output_memory_config=output_memory_config,
-        dtype=dtype,
-        cluster_axis=cluster_axis,
     )

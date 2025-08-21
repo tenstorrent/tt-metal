@@ -15,16 +15,19 @@
 #include <pybind11/pytypes.h>
 
 #include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include <tt-metalium/maybe_remote.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 #include "ttnn-pybind/small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/distributed/tensor_topology.hpp"
 
 // This is required for automatic conversions, as in the creation of mesh devices
 // https://github.com/tenstorrent/tt-metal/issues/18082
@@ -57,7 +60,7 @@ public:
         return device_ids_.at(coord).value();
     }
 
-    bool is_local_at(const MeshCoordinate& coord) const { return device_ids_.at(coord).is_local(); }
+    bool is_local(const MeshCoordinate& coord) const { return device_ids_.at(coord).is_local(); }
 
     bool all_local() const { return global_shape_ == local_shape_; }
 };
@@ -81,6 +84,8 @@ void py_module_types(py::module& module) {
     py::class_<MeshCoordinateRangeSet>(
         module, "MeshCoordinateRangeSet", "Set of coordinate ranges within a mesh device.");
     py::class_<SystemMeshDescriptor>(module, "SystemMeshDescriptor");
+    py::class_<DistributedHostBuffer>(module, "DistributedHostBuffer");
+    py::class_<TensorTopology>(module, "TensorTopology");
 }
 
 void py_module(py::module& module) {
@@ -194,39 +199,11 @@ void py_module(py::module& module) {
         .def("shape", &SystemMeshDescriptor::shape)
         .def("local_shape", &SystemMeshDescriptor::local_shape)
         .def("get_device_id", &SystemMeshDescriptor::get_device_id)
-        .def("is_local_at", &SystemMeshDescriptor::is_local_at)
+        .def("is_local", &SystemMeshDescriptor::is_local)
         .def("all_local", &SystemMeshDescriptor::all_local);
 
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
-    py_mesh_device
-        .def(
-            py::init([](const MeshShape& mesh_shape,
-                        size_t l1_small_size,
-                        size_t trace_region_size,
-                        size_t num_command_queues,
-                        const DispatchCoreConfig& dispatch_core_config,
-                        const std::optional<MeshCoordinate>& offset,
-                        const std::vector<chip_id_t>& physical_device_ids,
-                        size_t worker_l1_size) {
-                return MeshDevice::create(
-                    MeshDeviceConfig(mesh_shape, offset, physical_device_ids),
-                    l1_small_size,
-                    trace_region_size,
-                    num_command_queues,
-                    dispatch_core_config,
-                    {},
-                    worker_l1_size);
-            }),
-            py::kw_only(),
-            py::arg("mesh_shape"),
-            py::arg("l1_small_size"),
-            py::arg("trace_region_size"),
-            py::arg("num_command_queues"),
-            py::arg("dispatch_core_config"),
-            py::arg("offset"),
-            py::arg("physical_device_ids"),
-            py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE)
-        .def("get_num_devices", &MeshDevice::num_devices)
+    py_mesh_device.def("get_num_devices", &MeshDevice::num_devices)
         .def("id", &MeshDevice::id)
         .def("get_device_ids", &MeshDevice::get_device_ids)
         .def(
@@ -441,7 +418,6 @@ void py_module(py::module& module) {
     auto py_mesh_device_view = static_cast<py::class_<MeshDeviceView>>(module.attr("MeshDeviceView"));
     py_mesh_device_view.def("shape", &MeshDeviceView::shape, py::return_value_policy::reference_internal)
         .def("num_devices", &MeshDeviceView::num_devices)
-        .def("fully_local", &MeshDeviceView::fully_local)
         .def("is_local", &MeshDeviceView::is_local, py::arg("coord"));
 
     auto py_tensor_to_mesh =
@@ -452,25 +428,36 @@ void py_module(py::module& module) {
 
     module.def(
         "open_mesh_device",
-        &open_mesh_device,
+        py::overload_cast<
+            size_t,
+            size_t,
+            size_t,
+            const tt::tt_metal::DispatchCoreConfig&,
+            const std::optional<MeshShape>&,
+            const std::optional<MeshCoordinate>&,
+            const std::vector<int>&,
+            size_t>(&open_mesh_device),
         py::kw_only(),
-        py::arg("mesh_shape"),
         py::arg("l1_small_size"),
         py::arg("trace_region_size"),
         py::arg("num_command_queues"),
-        py::arg("offset"),
-        py::arg("physical_device_ids"),
         py::arg("dispatch_core_config"),
+        py::arg("mesh_shape") = std::nullopt,
+        py::arg("offset") = std::nullopt,
+        py::arg("physical_device_ids") = std::vector<int>{},
         py::arg("worker_l1_size") = DEFAULT_WORKER_L1_SIZE);
     module.def("close_mesh_device", &close_mesh_device, py::arg("mesh_device"), py::kw_only());
 
     auto py_placement_shard = static_cast<py::class_<MeshMapperConfig::Shard>>(module.attr("PlacementShard"));
     py_placement_shard.def(py::init([](int dim) { return MeshMapperConfig::Shard{dim}; }))
-        .def("__repr__", [](const MeshMapperConfig::Shard& shard) {
-            std::ostringstream str;
-            str << shard;
-            return str.str();
-        });
+        .def(
+            "__repr__",
+            [](const MeshMapperConfig::Shard& shard) {
+                std::ostringstream str;
+                str << shard;
+                return str.str();
+            })
+        .def_readonly("dim", &MeshMapperConfig::Shard::dim);
     auto py_placement_replicate =
         static_cast<py::class_<MeshMapperConfig::Replicate>>(module.attr("PlacementReplicate"));
     py_placement_replicate.def(py::init([]() { return MeshMapperConfig::Replicate{}; }))
@@ -571,6 +558,16 @@ void py_module(py::module& module) {
             str << config;
             return str.str();
         });
+
+    auto py_distributed_host_buffer =
+        static_cast<py::class_<DistributedHostBuffer>>(module.attr("DistributedHostBuffer"));
+    py_distributed_host_buffer.def("is_local", &DistributedHostBuffer::is_local, py::arg("coord"))
+        .def("shape", &DistributedHostBuffer::shape, py::return_value_policy::reference_internal);
+
+    auto py_tensor_topology = static_cast<py::class_<TensorTopology>>(module.attr("TensorTopology"));
+    py_tensor_topology.def("mesh_shape", &TensorTopology::mesh_shape, py::return_value_policy::reference_internal)
+        .def("placements", &TensorTopology::placements, py::return_value_policy::reference_internal)
+        .def("mesh_coords", &TensorTopology::mesh_coords, py::return_value_policy::reference_internal);
 
     module.def(
         "get_device_tensors",
@@ -729,7 +726,7 @@ void py_module(py::module& module) {
             Returns:
                 Tensor: The combined tensor.
             )doc");
-    module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
+    module.def("using_distributed_env", &tt::tt_metal::distributed::UsingDistributedEnvironment);
 }
 
 }  // namespace ttnn::distributed

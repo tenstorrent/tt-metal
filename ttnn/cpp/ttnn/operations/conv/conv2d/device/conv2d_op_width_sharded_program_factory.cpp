@@ -14,6 +14,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn::operations::conv {
@@ -408,11 +409,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const tt::tt_metal::CBHandle cb_partials = get_cb_info_by_name(cb_info, Conv2dCb::MATMUL_PARTIALS).handle;
 
     compute_kernel_args = {
-        act_block_w_ntiles,      // in0_block_w
-        act_num_subblocks,       // in0_num_sublocks
-        act_block_num_tiles,     // in0_block_num_tiles,
-        act_subblock_num_tiles,  // in0_sublock_num_tiles
-        act_subblock_h_ntiles,   // in0_subblock_h
+        act_block_w_ntiles,                         // in0_block_w
+        act_num_subblocks,                          // in0_num_sublocks
+        act_block_num_tiles,                        // in0_block_num_tiles,
+        act_subblock_num_tiles,                     // in0_sublock_num_tiles
+        act_subblock_h_ntiles * act_num_subblocks,  // reader_num_h_subblocks
 
         weight_num_subblocks,    // in1_num_sublocks
         weight_block_num_tiles,  // in1_block_num_tiles,
@@ -487,8 +488,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         input_num_cores,            // other_core_weight_height_blocks
         per_core_num_blocks_act_w,  // this_core_weight_height_blocks
         num_blocks_act_h_per_core,
-        get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index,
-        bias_in_dram};
+        get_cb_info_by_name(cb_info, Conv2dCb::BIAS).index};
+    tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(weights_kernel_compile_args);
+    tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(weights_kernel_compile_args);
 
     auto act_kernel_id = CreateKernel(
         program,

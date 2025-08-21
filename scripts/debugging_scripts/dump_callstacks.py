@@ -5,11 +5,12 @@
 
 """
 Usage:
-    dump_callstacks [--full_callstack] [--gdb_callstack --port=<port>]
+    dump_callstacks [--full_callstack] [--gdb_callstack --port=<port>] [--active_cores]
 
 Options:
     --full_callstack   Dump full callstack with all frames. Defaults to dumping only the top frame.
     --gdb_callstack    Dump callstack using GDB client instead of built-in methods.
+    --active_cores     Only dump callstacks for cores running kernels.
     --port=<port>      Port to use for GDB client.
 
 Description:
@@ -229,6 +230,7 @@ def dump_callstacks(
     context: Context,
     full_callstack: bool,
     gdb_callstack: bool,
+    active_cores: bool,
     port: int | None,
 ) -> list[DumpCallstacksData]:
     blocks_to_test = ["functional_workers", "eth"]
@@ -260,6 +262,8 @@ def dump_callstacks(
 
                 for risc_name in noc_block.risc_names:
                     dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
+                    if active_cores and dispatcher_core_data.go_message != "GO":
+                        continue
                     if gdb_callstack:
                         if risc_name == "ncrisc":
                             # Cannot attach to NCRISC process due to lack of debug hardware so we return empty struct
@@ -286,7 +290,7 @@ def dump_callstacks(
                         )
                     )
 
-    except:
+    finally:
         if gdb_server is not None:
             gdb_server.stop()
 
@@ -296,11 +300,14 @@ def dump_callstacks(
 def run(args, context: Context):
     full_callstack = args["--full_callstack"]
     gdb_callstack = args["--gdb_callstack"]
+    active_cores = args["--active_cores"]
     port = int(args["--port"]) if gdb_callstack else None
     check_per_device = get_check_per_device(args, context)
     dispatcher_data = get_dispatcher_data(args, context)
     return check_per_device.run_check(
-        lambda device: dump_callstacks(device, dispatcher_data, context, full_callstack, gdb_callstack, port)
+        lambda device: dump_callstacks(
+            device, dispatcher_data, context, full_callstack, gdb_callstack, active_cores, port
+        )
     )
 
 

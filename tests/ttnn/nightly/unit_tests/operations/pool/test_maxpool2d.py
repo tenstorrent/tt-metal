@@ -53,12 +53,14 @@ def run_max_pool(
     dilation_h, dilation_w = dilation
 
     # handle both 2D and 4D padding
+    padding_is_4d = False
     if len(padding) == 2:
         pad_h = int(padding[0] * 2)
         pad_w = int(padding[1] * 2)
         pad_t = pad_b = padding[0]
         pad_l = pad_r = padding[1]
     elif len(padding) == 4:
+        padding_is_4d = True
         pad_t, pad_b, pad_l, pad_r = padding
         pad_h = pad_t + pad_b
         pad_w = pad_l + pad_r
@@ -107,12 +109,17 @@ def run_max_pool(
         pytest.skip("kernel is too large for the padded tensor")
 
     out_n = in_n
-    out_c = (
-        max(in_c, 32) if dtype == ttnn.bfloat8_b else in_c
-    )  # TTNN will pad the output channels to 32 for bfloat8_b only
+    out_c = in_c
+    ceil_mode_out_shape_adj = False
     if ceil_mode:
         out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
         out_w = math.ceil((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        if ((out_h - 1) * stride_h) >= (in_h + pad_t):
+            ceil_mode_out_shape_adj = True
+            out_h -= 1
+        if ((out_w - 1) * stride_w) >= (in_w + pad_l):
+            ceil_mode_out_shape_adj = True
+            out_w -= 1
     else:
         out_h = math.floor((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
         out_w = math.floor((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
@@ -174,17 +181,25 @@ def run_max_pool(
     )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
-    torch_input_padded = torch.nn.functional.pad(
-        torch_input,
-        (pad_l, pad_r, pad_t, pad_b),  # torch is padding in the order (left, right, top, bottom)
-        mode="constant",
-        value=-float("inf"),
-    )
+    if padding_is_4d:
+        assert (
+            not ceil_mode_out_shape_adj
+        ), "current test infrastructure does not support ceil mode output shape adjustments with 4D padding"
+        torch_input_padded = torch.nn.functional.pad(
+            torch_input,
+            (pad_l, pad_r, pad_t, pad_b),  # torch is padding in the order (left, right, top, bottom)
+            mode="constant",
+            value=0,
+        )
+        torch_padding = [0, 0]  # use zero padding for torch avg pool since we are padding manually
+    else:
+        torch_input_padded = torch_input
+        torch_padding = padding
     # run torch maxpool2d
     torch_output = torch.nn.MaxPool2d(
         kernel_size=kernel_size,
         stride=stride,
-        padding=[0, 0],  # always use zero padding we are padding manually
+        padding=torch_padding,
         dilation=dilation,
         return_indices=False,
         ceil_mode=ceil_mode,
@@ -194,7 +209,6 @@ def run_max_pool(
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
-    ttnn_output = ttnn_output[:, :in_c, :, :]
 
     # test for equivalance
     pcc_thresh = 1.0
@@ -234,8 +248,10 @@ def run_max_pool(
             [1, 640, 32, 32],
             [1, 576, 32, 32],
             [1, 384, 32, 32],
-            # C=16 test
+            # C partial tile test
             [1, 16, 12, 12],
+            [1, 1, 56, 56],
+            [2, 290, 10, 10],
             # partial grid tests
             [1, 32, 10, 10],  # BH
             [1, 32, 6, 6],  # WH

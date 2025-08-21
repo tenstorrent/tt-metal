@@ -10,7 +10,7 @@ on:
           - wormhole_b0
           - blackhole
       runner-label:
-        description: 'Optional: N150, N300, BH, config-t3000, config-tg'
+        description: 'Optional: N150, N300, BH, config-t3000, config-tg. for example: ["in-service", "config-t3000"]'
         required: true
         type: string
         default: '["in-service"]'
@@ -75,7 +75,7 @@ jobs:
   test-dispatch:
     # needs: setup
     needs: build-artifact
-    timeout-minutes: 1440
+    timeout-minutes: 120
     runs-on: ${{ fromJSON(inputs.runner-label) }}
     steps:
       - name: ⬇️ Checkout
@@ -110,7 +110,6 @@ jobs:
             -e ARCH_NAME=${{ inputs.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            ${{ (inputs.arch == 'wormhole_b0' ) || '' }}
           run_args: |
             pip3 install pytest-repeat
             ${{ inputs.command }}

@@ -82,11 +82,8 @@ void run_unicast_sender_step(BaseFabricFixture* fixture, tt::tt_metal::distribut
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
     TT_FATAL(topology == Topology::Mesh, "Intermesh Routing tests need Dynamic Routing enabled.");
-    const auto& edm_config = fabric_context.get_fabric_router_config();
 
     auto devices = fixture->get_devices();
-    auto num_devices = devices.size();
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     // Synchronize seeds across hosts (sender and receiver must use the same seed for randomization)
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -208,7 +205,6 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
     const auto topology = fabric_context.get_fabric_topology();
     TT_FATAL(topology == Topology::Mesh, "Intermesh Routing tests need Dynamic Routing enabled.");
     auto devices = fixture->get_devices();
-    const auto fabric_config = tt::tt_metal::MetalContext::instance().get_fabric_config();
 
     // Synchronize seeds across hosts (sender and receiver must use the same seed for randomization)
     uint32_t time_seed = 0;
@@ -227,7 +223,6 @@ void run_unicast_recv_step(BaseFabricFixture* fixture, tt::tt_metal::distributed
     // Randomly select an rx core
     const auto& worker_grid_size = receiver_device->compute_with_storage_grid_size();
     auto recv_x = std::uniform_int_distribution<uint32_t>(0, worker_grid_size.x - 2)(global_rng);
-    auto recv_y = std::uniform_int_distribution<uint32_t>(0, worker_grid_size.y - 2)(global_rng);
     CoreCoord receiver_logical_core = {recv_x, recv_x};
 
     // Send the randomized rx core to the sender host, so it can send packets to the correct destination
@@ -305,7 +300,6 @@ void run_mcast_sender_step(
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
     TT_FATAL(topology == Topology::Mesh, "Intermesh Routing tests need Dynamic Routing enabled.");
-    const auto& edm_config = fabric_context.get_fabric_router_config();
 
     // Synchronize seeds across hosts (sender and receiver must use the same seed for randomization)
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -364,9 +358,8 @@ void run_mcast_sender_step(
 
     std::vector<uint32_t> mcast_header_rtas(4, 0);
     for (const auto& routing_info : mcast_routing_info) {
-        // Increment hop count to account for the mcast start node
-        mcast_header_rtas[static_cast<uint32_t>(control_plane.routing_direction_to_eth_direction(
-            routing_info.mcast_dir))] = routing_info.num_mcast_hops + 1;
+        mcast_header_rtas[static_cast<uint32_t>(
+            control_plane.routing_direction_to_eth_direction(routing_info.mcast_dir))] = routing_info.num_mcast_hops;
     }
 
     sender_runtime_args.insert(sender_runtime_args.end(), mcast_header_rtas.begin(), mcast_header_rtas.end());
@@ -423,7 +416,6 @@ void run_mcast_recv_step(
     const auto& fabric_context = control_plane.get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
     TT_FATAL(topology == Topology::Mesh, "Intermesh Routing tests need Dynamic Routing enabled.");
-    const auto& edm_config = fabric_context.get_fabric_router_config();
 
     // Synchronize seeds across hosts (sender and receiver must use the same seed for randomization)
     uint32_t time_seed = 0;
@@ -439,7 +431,6 @@ void run_mcast_recv_step(
     // Randomly select an mcast receiver core
     const auto& worker_grid_size = mcast_start_device->compute_with_storage_grid_size();
     auto recv_x = std::uniform_int_distribution<uint32_t>(0, worker_grid_size.x - 2)(global_rng);
-    auto recv_y = std::uniform_int_distribution<uint32_t>(0, worker_grid_size.y - 2)(global_rng);
     CoreCoord receiver_logical_core = {recv_x, recv_x};
 
     // Send the randomized receiver core to the sender host, so it can send packets to the correct destination

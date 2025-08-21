@@ -10,10 +10,9 @@
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
 
 #include "ttnn/operations/ccl/common/kernels/command_processor.hpp"
-
+#include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -495,6 +494,34 @@ void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx)
             noc_inline_dw_write(dest_noc_addr, value);
         }
     }
+}
+
+template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename AddrGen>
+FORCE_INLINE std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
+    uint32_t curr_page_idx,
+    const uint32_t offset_into_worker_slice,
+    const ttnn::ccl::Shape4D<uint32_t>& offset_worker_slice,
+    const AddrGen& address_generator,
+    const ttnn::ccl::Shape4D<uint32_t>& tensor_slice_shape,
+    uint8_t noc_id = noc_index) {
+        constexpr uint32_t offset = 0;
+        std::pair<uint64_t, size_t> ret_val =
+            get_contiguous_noc_addr(curr_page_idx,address_generator,offset,noc_id);
+        uint32_t flattened_offset_worker_slice = ttnn::ccl::v2::flattened_index(tensor_slice_shape, offset_worker_slice);
+        uint32_t contig_until_edge_of_tensor_slice = tensor_slice_shape.x - ((flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x);
+        size_t contig_pages = std::min<int32_t>(ret_val.second, contig_until_edge_of_tensor_slice);
+        return {ret_val.first, contig_pages};
+}
+
+template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename AddrGen>
+FORCE_INLINE std::pair<uint64_t, uint16_t> get_noc_addr_and_contiguous_pages_for_fabric_write(
+    uint32_t curr_page_idx,
+    const uint32_t offset_into_worker_slice,
+    const ttnn::ccl::Shape4D<uint32_t>& offset_worker_slice,
+    const AddrGen& address_generator,
+    const ttnn::ccl::Shape4D<uint32_t>& tensor_slice_shape) {
+    return get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT, MEM_LAYOUT, AddrGen>(
+        curr_page_idx, offset_into_worker_slice, offset_worker_slice, address_generator, tensor_slice_shape, 0);
 }
 
 #ifndef NO_TENSOR_MODE

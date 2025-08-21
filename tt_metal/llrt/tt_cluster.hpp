@@ -134,6 +134,10 @@ public:
         return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
     }
 
+    std::optional<int> get_physical_slot(chip_id_t chip) const {
+        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;
+    }
+
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
 
@@ -349,8 +353,8 @@ private:
 
     bool supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) const;
 
-    ARCH arch_;
-    TargetDevice target_type_;
+    ARCH arch_{tt::ARCH::Invalid};
+    TargetDevice target_type_{0};
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
     std::unique_ptr<tt::umd::Cluster> driver_;

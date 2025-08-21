@@ -25,6 +25,10 @@
 /******************************************************************************
  *                   Generic Compute Functions                                 *
  ******************************************************************************/
+
+/**
+ * out_cb = eltwise_max(in0, in1)
+ */
 template <int vector_mode = (int)VectorMode::RC>
 void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) {
     // inputs come in full, outputs go out full
@@ -47,6 +51,9 @@ void max_block(uint32_t in0, uint32_t in1, uint32_t out_cb, uint32_t num_tiles) 
     cb_push_back(out_cb, num_tiles);
 }
 
+/**
+ * out_cb = reduce[MAX,SUM](in0_cb * scale_cb)
+ */
 template <
     PoolType pool_type,
     ReduceDim reduce_dim,
@@ -91,6 +98,9 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
     reduce_uninit();
 }
 
+/**
+ * in_cb = 1 / in_cb
+ */
 template <int vector_mode = (int)VectorMode::RC>
 void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
@@ -110,6 +120,9 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     cb_push_back(in_cb, num_tiles);
 }
 
+/**
+ * in0_cb = exp((in0_cb - in1_cb) * scale_fp32)
+ */
 template <uint32_t in0_cb, uint32_t rows, uint32_t scale_fp32, int vector_mode = (int)VectorMode::RC, uint32_t scale_cb>
 void sub_exp_block_bcast_cols_inplace_reduce(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
@@ -153,6 +166,9 @@ void sub_exp_block_bcast_cols_inplace_reduce(uint32_t in1_cb, uint32_t reduce_cb
     }
 }
 
+/**
+ * in0_cb *= in1_cb
+ */
 void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
@@ -177,6 +193,9 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     cb_pop_front(in1_cb, rows);
 }
 
+/**
+ * out_cb = in0_cb * in1_cb
+ */
 void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
@@ -202,6 +221,9 @@ void mul_block_bcast_cols(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uin
     cb_pop_front(in1_cb, rows);
 }
 
+/**
+ * in0_cb += in1_cb
+ */
 template <bool pop_in1>
 void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
@@ -225,6 +247,9 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     }
 }
 
+/**
+ * out_cb = in0_cb + in1_cb
+ */
 void add_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
@@ -246,6 +271,9 @@ void add_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_t
     cb_pop_front(in1_cb, num_tiles);
 }
 
+/**
+ * in0_cb *= in1_cb
+ */
 void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
@@ -266,6 +294,9 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     }
 }
 
+/**
+ * out_cb = exp((in0_cb - in1_cb) * scale_fp32)
+ */
 template <uint32_t scale_fp32, int vector_mode = (int)VectorMode::RC>
 void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
@@ -291,6 +322,9 @@ void sub_exp_block(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t n
     }
 }
 
+/**
+ * in_cb -> out_cb
+ */
 template <bool pop_in_cb>
 void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
@@ -316,6 +350,9 @@ void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
     }
 }
 
+/**
+ * out_cb = in0_cb @ in1_cb
+ */
 ALWI void cb_matmul_blocks(
     const uint32_t& in0_cb,
     const uint32_t& in1_cb,
@@ -329,7 +366,10 @@ ALWI void cb_matmul_blocks(
     const uint32_t& in0_block_w,
     const uint32_t& subblock_h,
     const uint32_t& subblock_w,
-    const bool& transpose) {
+    const bool& transpose,
+    const bool& add_mask,
+    const uint32_t& mask_cb,
+    const uint32_t& zero_cb) {
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
@@ -348,9 +388,9 @@ ALWI void cb_matmul_blocks(
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_offset = 0;
+
         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; ++in1_subblock) {
             tile_regs_acquire();
-
             uint32_t dst_index = 0;
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
@@ -361,16 +401,26 @@ ALWI void cb_matmul_blocks(
                 in0_index++;
                 in1_index += N;
             }
+            if (add_mask) {
+                cb_wait_front(mask_cb, out_subblock_num_tiles);
+                cb_wait_front(zero_cb, 1);
+                add_tiles_init(zero_cb, mask_cb, true);
+                for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
+                    add_tiles(zero_cb, mask_cb, 0, i, i);
+                }
+                cb_pop_front(mask_cb, out_subblock_num_tiles);
+            }
             tile_regs_commit();
             tile_regs_wait();
+            cb_reserve_back(out_cb, out_subblock_num_tiles);
             for (uint32_t i = 0; i < out_subblock_num_tiles; i++) {
                 pack_tile(i, out_cb);
             }
+            cb_push_back(out_cb, out_subblock_num_tiles);
             tile_regs_release();
             in1_index_offset += subblock_w;
         }
         in0_index_offset += subblock_h * in0_block_w;
     }
     cb_pop_front(in1_cb, K * N);
-    cb_push_back(out_cb, output_num_tiles);
 }

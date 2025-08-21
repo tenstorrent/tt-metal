@@ -10,6 +10,14 @@ name: PR Gate
 #   This includes the cost of checking out the code, preparing a runner, etc.
 # - Individual test cases must be less than 1s.
 
+run-name: >-
+  ${{ github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'merged' && format('[Merge Queue] 🎯 Merged {0}', github.sha) ||
+      github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'dequeued' && format('[Merge Queue] ↩️ Dequeued {0}', github.sha) ||
+      github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'invalidated' && format('[Merge Queue] 💔 Invalidated {0}', github.sha) ||
+      github.event_name == 'merge_group' && github.event.action == 'destroyed' && format('[Merge Queue] {0} {1}', github.event.reason, github.sha) ||
+      github.event_name == 'merge_group' && format('[Merge Queue] 💫 Processing {0}: {1}', github.actor, github.sha) ||
+      '' }}
+
 on:
   workflow_dispatch:
     inputs:
@@ -30,21 +38,24 @@ on:
       - synchronize
       - ready_for_review
   merge_group:
+    types:
+      - checks_requested
+      - destroyed
   push:
     branches:
       - main # Builds on main will populate the shared ccache to speed up builds on branches
 
 concurrency:
   # Groups to control cancelling of obsolete runs.
-  # main (or any protected branch): run_id (read: never cancel other jobs)
+  # main (or any protected branch): run_id (ie: never cancel other jobs)
   # PRs: PR #
-  # Merge Queue: A value unique to each PR (merge_group.head_ref)
-  # All others: commit ID (read: never cancel other jobs)
+  # Merge Queue: branch name; will be paired with the 'destroyed' trigger to cause a cancel when it leaves or moves in the queue.
+  #              See https://github.com/orgs/community/discussions/137976#discussioncomment-14004793
+  # All others: branch name (ie: one run per branch)
   group: >-
     ${{ github.workflow }}-
-    ${{ github.ref_protected && github.run_id
+    ${{ (github.ref_protected && github.run_id)
         || github.event.pull_request.number
-        || github.event.merge_group.head_ref
         || github.ref }}-
     ${{ inputs.build-type || 'default' }}
   cancel-in-progress: true
@@ -57,7 +68,7 @@ permissions:
 
 jobs:
   asan-build:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -70,13 +81,14 @@ jobs:
       skip-tt-train: true
 
   find-changed-files:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ubuntu-latest
     outputs:
       cmake-changed: ${{ steps.find-changes.outputs.cmake-changed }}
       tt-metalium-changed: ${{ steps.find-changes.outputs.tt-metalium-changed }}
       tt-nn-changed: ${{ steps.find-changes.outputs.tt-nn-changed }}
       tt-metalium-or-tt-nn-tests-changed: ${{ steps.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed }}
+      model-charts-changed: ${{ steps.find-changes.outputs.model-charts-changed }}
     steps:
       - id: find-changes
         uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
@@ -94,7 +106,6 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -108,6 +119,7 @@ jobs:
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.cmake-changed == 'true' ||
+        needs.find-changed-files.outputs.tt-metalium-changed == 'true' ||
         needs.find-changed-files.outputs.tt-nn-changed == 'true' ||
         needs.find-changed-files.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
@@ -116,7 +128,6 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -126,7 +137,7 @@ jobs:
       product: tt-nn
 
   build:
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -170,6 +181,25 @@ jobs:
       distro: ubuntu
       version: 22.04
       architecture: amd64
+
+  # A quick check that parses the models charts in README.md and models/README.md
+  # and ensures that models attributes are in sync.
+  model-charts-sync:
+    needs: [find-changed-files]
+    if: ${{ needs.find-changed-files.outputs.model-charts-changed == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+    - name: Run model charts sync Python script
+      run: |
+        # Run script that compares the models chart in README.md with the models chart in models/README.md
+        python .github/scripts/utils/model-charts-sync.py
+
 
   # A lightweight ClangTidy scan.  It does not detect all issues, but is cheap
   # enough to run during PRs without bringing infra to a grinding halt.
@@ -263,13 +293,13 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, metalium-examples, clang-tidy-light]
+    needs: [asan-build, metalium-smoke-tests, ttnn-smoke-tests, build, metalium-examples, clang-tidy-light, model-charts-sync]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "asan-build, build"
-          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples"
+          optional-jobs: "metalium-smoke-tests, ttnn-smoke-tests, metalium-examples, model-charts-sync"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'

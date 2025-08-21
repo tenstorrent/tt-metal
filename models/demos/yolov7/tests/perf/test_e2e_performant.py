@@ -12,9 +12,9 @@ from loguru import logger
 import models.demos.yolov7.reference.yolov7_model as yolov7_model
 import models.demos.yolov7.reference.yolov7_utils as yolov7_utils
 import ttnn
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov7.common import YOLOV7_L1_SMALL_SIZE
 from models.demos.yolov7.runner.performant_runner import YOLOv7PerformantRunner
-from models.demos.yolov7.tt.common import get_mesh_mappers
 from models.utility_functions import run_for_wormhole_b0
 
 sys.modules["models.common"] = yolov7_utils
