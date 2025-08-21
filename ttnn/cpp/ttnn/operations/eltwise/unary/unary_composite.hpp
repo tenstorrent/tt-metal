@@ -54,16 +54,28 @@ struct ExecuteUnaryCompositeOpWithFloats {
 
 struct ExecuteUnaryCompositeClamp {
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         std::optional<float> min = std::nullopt,
         std::optional<float> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output_tensor = std::nullopt);
 
     static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         std::optional<Tensor> min = std::nullopt,
         std::optional<Tensor> max = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        std::optional<int32_t> min = std::nullopt,
+        std::optional<int32_t> max = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& output_tensor = std::nullopt);
 };
 
 struct ExecuteUnaryCompositeThreshold {
