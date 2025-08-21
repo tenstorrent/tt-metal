@@ -1470,8 +1470,6 @@ void write_to_worker_or_fabric_tensix_cores(
         mux_cores_translated = tensix_config.get_translated_fabric_or_dispatch_mux_cores();
     }
 
-    size_t mux_cores_written = 0;
-    size_t worker_cores_written = 0;
     for (const auto& tensix_core : all_tensix_cores) {
         CoreCoord core_coord(tensix_core.x, tensix_core.y);
         bool is_mux_core = mux_cores_translated.find(core_coord) != mux_cores_translated.end();
@@ -2307,7 +2305,6 @@ void ControlPlane::populate_fabric_connection_info(
     constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID = 17;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
-    const auto topology = fabric_context.get_fabric_topology();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
     const auto sender_channel = is_2d_fabric ? router_direction : 0;
 

@@ -95,10 +95,6 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
             .set_page_size(dst_cb_index, rounded_output_unit_size);
     CreateCircularBuffer(program, all_cores, dst_cb_config);
 
-    bool in_is_dram = input.buffer()->is_dram();
-    bool index_is_dram = index.buffer()->is_dram();
-    bool out_is_dram = output.buffer()->is_dram();
-
     // Create Kernels
     // reader
     std::vector<uint32_t> reader_compile_time_args = {

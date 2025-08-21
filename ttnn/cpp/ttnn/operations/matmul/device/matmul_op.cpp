@@ -2199,10 +2199,6 @@ void Matmul::validate(
                         this->output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
                         "Output memory layout must be BLOCK_SHARDED, got: {}",
                         this->output_mem_config.memory_layout());
-                    uint32_t M =
-                        input_tensor_a.physical_volume() / input_tensor_a.padded_shape()[-1] / in0_tile_shape[0];
-                    uint32_t N = input_tensor_b.padded_shape()[-1] / in1_tile_shape[1];
-                    uint32_t per_core_M = program_config.per_core_M;
                     uint32_t per_core_N = program_config.per_core_N;
 
                     TT_FATAL(

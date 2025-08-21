@@ -175,9 +175,7 @@ operation::ProgramWithCallbacks nd_reshard_multicore_copy_local_shard(
             input_num_shard_cores = input_shard_grid.x == 1 ? input_shard_grid.y : input_shard_grid.x;
             output_num_shard_cores = output_shard_grid.x == 1 ? output_shard_grid.y : output_shard_grid.x;
         }
-        uint32_t num_shard_cores = input_buffer == local_buffer ? input_num_shard_cores : output_num_shard_cores;
 
-        uint32_t sharded_width = local_buffer->shard_spec().shape()[1] * input.element_size() * num_shard_cores;
         source_width = input_buffer->shard_spec().shape()[1] * input.element_size() * input_num_shard_cores;
         destination_width = output_buffer->shard_spec().shape()[1] * output.element_size() * output_num_shard_cores;
         uint32_t input_page_size = input_buffer->page_size();

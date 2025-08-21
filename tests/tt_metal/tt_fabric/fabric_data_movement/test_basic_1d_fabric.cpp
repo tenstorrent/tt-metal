@@ -2408,7 +2408,6 @@ void FabricMulticastCommon(
         sender_runtime_args.push_back(dst_mesh_id);
         // Append per-route outgoing eth direction followed by dst dev ids in pair order
         for (size_t i = 0; i < dir_configs.size(); ++i) {
-            auto [dir, start_distance, range] = dir_configs[i];
             auto first_hop_phys_chip_id = first_hop_phys_chip_ids[i];
             const auto dst_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
