@@ -177,14 +177,13 @@ inline void unpack_tilize_to_dest_impl(
         // Increment address to point to bottom faces in L1
         address += bot_face_offset_address;
 
-        // Stall write to cfg until unpacker finishes
-        TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
-
         // Get tile address
-        cfg[THCON_SEC0_REG3_Base_address_ADDR32] = address;
+        TT_SETDMAREG(0, LOWER_HALFWORD(address), 0, LO_16(p_gpr_unpack::TMP0));
+        TT_SETDMAREG(0, UPPER_HALFWORD(address), 0, HI_16(p_gpr_unpack::TMP0));
+        TTI_REG2FLOP(1, 0, 0, 0, THCON_SEC0_REG3_Base_address_ADDR32 - THCON_CFGREG_BASE_ADDR32, p_gpr_unpack::TMP0);
 
         // Stall unpacker until pending CFG writes from Trisc have completed
-        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+        TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::THCON);
 
         // Unpack bottom faces
         ckernel::ckernel_template::run(instrn_buffer);
