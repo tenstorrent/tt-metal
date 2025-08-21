@@ -21,11 +21,11 @@ SSH_USER = "ttuser"
 BINARIES = ("nano_gpt", "nano_gpt_aggregator", "nano_gpt_optimizer")
 SCP_OPTS = ["-p"]  # preserve times & modes
 HOSTS = [
-    "11.228.0.10",  # metal-wh-08
-    "11.228.0.11",  # metal-wh-01
-    "11.228.0.14",  # metal-wh-02
-    "11.228.0.15",  # metal-wh-03
-    "11.228.0.16",  # metal-wh-05
+    "10.140.20.202",  # metal-wh-08
+    "10.140.20.204",  # metal-wh-01
+    "10.140.20.208",  # metal-wh-02
+    "10.140.20.210",  # metal-wh-03
+    "10.140.20.213",  # metal-wh-05
 ]
 # Default MESH_IDS per global rank; falls back to rank id if list is shorter than TOTAL_RANKS
 DEFAULT_MESH_IDS = [0, 0, 0, 0, 0]
