@@ -145,7 +145,7 @@ def test_t5_layers_individually(
     logger.info("\n=== Testing each layer individually ===")
     pcc_values = []
 
-    # compute embeddings once before layer loop
+    # Compute embeddings once before layer loop
     tt_embeddings_output, tt_position_bias = tt_embedding(tt_prompt, encoder_submesh)
     with torch.no_grad():
         hf_token_embeddings = hf_model.encoder.embed_tokens(tokens)
@@ -165,7 +165,7 @@ def test_t5_layers_individually(
         tt_encoder_layer = T5EncoderLayer(config, encoder_submesh, ccl_manager, parallel_config)
         tt_encoder_layer.load_state_dict(substate(hf_model.state_dict(), f"encoder.block.{layer}"))
 
-        # use pre-computed embeddings
+        # Use pre-computed embeddings
         tt_layer_output = tt_encoder_layer(tt_embeddings_output, tt_position_bias)
 
         tt_end_time = time.time()
@@ -174,7 +174,7 @@ def test_t5_layers_individually(
 
         hf_start_time = time.time()
 
-        # use pre-computed HF embeddings
+        # Use pre-computed HF embeddings
         hf_layer_output = hf_model.encoder.block[layer](
             hf_token_embeddings, attention_mask=None, position_bias=hf_position_bias
         )[0]
@@ -183,17 +183,17 @@ def test_t5_layers_individually(
         hf_execution_time = hf_end_time - hf_start_time
         logger.info(f"HF layer {i} execution time: {hf_execution_time:.4f} seconds")
 
-        # convert mesh tensor to torch tensor for pcc
+        # Convert mesh tensor to torch tensor for pcc
         tt_layer_output = ttnn.to_torch(ttnn.get_device_tensors(tt_layer_output)[0])
 
         assert hf_layer_output.shape == tt_layer_output.shape
 
-        # calculate PCC using assert_quality
+        # Calculate PCC using assert_quality
         try:
             assert_quality(hf_layer_output, tt_layer_output, pcc=0.947)
             logger.info(f"Layer {i} passed PCC threshold ✓")
         except Exception as e:
-            # extract PCC value from error message
+            # Extract PCC value from error message
             error_msg = str(e)
             pcc = float(error_msg.split("%")[0].split("=")[1].strip()) / 100
             logger.warning(f"Layer {i} failed: PCC = {pcc:.4f} ✗")

@@ -70,7 +70,6 @@ class T5Encoder:
     def __call__(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
         embeddings, position_bias = self.token_embeddings(prompt, device)
         hidden_states = self.encoder(embeddings, position_bias)
-        # Apply final layer norm to last hidden state
 
         output = self.final_layer_norm(hidden_states[-1])  # Shape [batch, seq_len, embed_dim]
         hidden_states.append(output)
@@ -163,7 +162,8 @@ class T5FF:
         # breakpoint()
         normalized_hidden_states = self.layer_norm(hidden_states)  # [1, 256, 4096]
         gated_hidden_states = self.dense_gated_dense(normalized_hidden_states)
-        return gated_hidden_states + hidden_states  # residual
+        # return gated_hidden_states + hidden_states  # residual
+        return gated_hidden_states
 
 
 class T5DenseGatedActDense:

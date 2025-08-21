@@ -72,6 +72,13 @@ def test_t5_encoder(
     logger.info(f"relative_attention_max_distance: {hf_model.config.relative_attention_max_distance}")
     logger.info(f"layer_norm_epsilon: {hf_model.config.layer_norm_epsilon}")
 
+    # Verify the actual number of layers matches config
+    actual_num_layers = len(hf_model.encoder.block)
+    logger.info(f"Actual number of encoder blocks: {actual_num_layers}")
+    assert (
+        actual_num_layers == hf_model.config.num_layers
+    ), f"Config specifies {hf_model.config.num_layers} layers but model has {actual_num_layers}"
+
     # create input
     max_prompt_length = 256
     torch.manual_seed(0)
@@ -115,7 +122,10 @@ def test_t5_encoder(
     with torch.no_grad():
         # time HF model execution
         hf_start_time = time.time()
-        hf_outputs = hf_model(tokens)
+
+        # Run the full model properly
+        hf_outputs = hf_model(tokens).last_hidden_state
+
         hf_end_time = time.time()
         hf_execution_time = hf_end_time - hf_start_time
 
@@ -126,9 +136,10 @@ def test_t5_encoder(
     logger.info(f"TT encoder execution time: {tt_execution_time:.4f} seconds")
     logger.info(f"HF encoder execution time: {hf_execution_time:.4f} seconds")
 
-    assert hf_outputs.last_hidden_state.shape == tt_output_torch.shape
+    assert hf_outputs.shape == tt_output_torch.shape
 
-    assert_quality(hf_outputs.last_hidden_state, tt_output_torch, pcc=0.95)
+    # Compare against last_hidden_state since that's what we care about
+    assert_quality(hf_outputs, tt_output_torch, pcc=0.95)
 
 
 if __name__ == "__main__":
