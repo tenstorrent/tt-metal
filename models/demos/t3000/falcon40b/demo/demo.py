@@ -571,6 +571,7 @@ def run_falcon_demo_kv(
     logger.info(f"prefill inference time: {round(measurements['inference_prefill'], 5)} s")
     logger.info(f"decode inference time: {round(measurements['inference_decode'], 5)} s")
     logger.info(f"total inference time: {round(measurements['inference_total'], 5)} s")
+    logger.info(f"time to first token (prefill, 1st user): {round(measurements['prefill_time_to_token'], 5)} s")
     if not prefill_on_host:
         logger.info(
             f"inference throughput prefill: {round(measurements['inference_user_throughput_prefill'], 5)} users/s"
@@ -580,6 +581,9 @@ def run_falcon_demo_kv(
         )
     logger.info(f"inference throughput decode: {round(measurements['decode_t/s'], 5)} tok/s")
     logger.info(f"inference throughput decode (per user): {round(measurements['decode_t/s/u'], 5)} tok/s/user")
+    logger.info(
+        f"inference throughput prefill+decode (per user): {round(measurements['prefill_decode_t/s/u'], 5)} tok/s/user"
+    )
 
     # Save benchmark data (will only save if running in CI environment)
     benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets={})
