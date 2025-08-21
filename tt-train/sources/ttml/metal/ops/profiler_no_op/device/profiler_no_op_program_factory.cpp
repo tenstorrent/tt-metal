@@ -123,7 +123,7 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
     const uint32_t twice_block_size = 2U * block_size;
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_dataflow = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
     // -------------------------------------------------------------------------
