@@ -124,6 +124,9 @@ class Plotter:
                 # For Transaction ID tests, plot both data size vs bandwidth and transaction ID count vs bandwidth
                 self.plot_data_size_vs_bandwidth(axes[0], plot_data[test_id])
                 self.plot_transaction_id_count_vs_bandwidth(axes[1], plot_data[test_id])
+            elif "Direct Write" in test_name:
+                self.plot_durations(axes[0], plot_data[test_id])
+                self.plot_bandwidth_direct_write(axes[1], plot_data[test_id])
             else:  # Packet Sizes
                 self.plot_durations(axes[0], plot_data[test_id])
                 self.plot_data_size_vs_bandwidth(axes[1], plot_data[test_id])
@@ -326,6 +329,30 @@ class Plotter:
         ax.set_ylabel("Bandwidth (bytes/cycle)")
         ax.set_title("Transaction ID Count vs Bandwidth")
         ax.grid()
+    # Direct Write: Num of transactions vs Bandwidth
+    def plot_bandwidth_direct_write(self, ax, data):
+        x_key = "num_transactions"
+        y_key = "bandwidth"
+        series_keys = ["stateful", "posted"]
+
+        title = "Number of Transactions vs Bandwidth"
+        xlabel = "Number of Transactions"
+        ylabel = "Bandwidth (bytes/cycle)"
+
+        self._plot_series(
+            ax=ax,
+            data=data,
+            x_key=x_key,
+            y_key=y_key,
+            series_keys=series_keys,
+            label_format=lambda combo, keys: f"Stateful={combo[0]}, Posted={combo[1]}",
+            title=title,
+            xlabel=xlabel,
+            ylabel=ylabel,
+            xscale="log",
+            xbase=2,
+            add_theoretical_max_bw=False,
+        )
 
     # Multicast Schemes: Grid Dimensions vs Bandwidth
     def plot_bandwidth_multicast(self, ax, data, riscv, noc_index):
