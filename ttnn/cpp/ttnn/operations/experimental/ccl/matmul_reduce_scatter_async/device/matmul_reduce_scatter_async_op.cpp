@@ -199,6 +199,7 @@ tt::tt_metal::operation::Hash MatmulReduceScatterAsync::compute_program_hash(
         this->reduce_scatter_minimal_async_struct.dim,
         this->reduce_scatter_minimal_async_struct.num_links,
         this->reduce_scatter_minimal_async_struct.ring_size,
+        this->reduce_scatter_minimal_async_struct.semaphore.has_value(),
         this->reduce_scatter_minimal_async_struct.output_mem_config,
         this->reduce_scatter_minimal_async_struct.intermediate_mem_config,
         this->reduce_scatter_minimal_async_struct.topology,

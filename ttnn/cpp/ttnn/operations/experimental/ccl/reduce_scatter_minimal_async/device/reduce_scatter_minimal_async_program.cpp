@@ -677,6 +677,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
             }
         };
 
+    // Always need to capture the barrier semaphore, as it is created internally within the op.
     // Need to conditionally capture the op semaphores.
     // If the op internally creates it's op semaphores they need to be captured,
     // otherwise (model is managing the op semaphores) we should not capture those semaphores
@@ -1312,6 +1313,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
             }
         };
 
+    // Always need to capture the barrier semaphore, as it is created internally within the op.
     // Need to conditionally capture the op semaphores.
     // If the op internally creates it's op semaphores they need to be captured,
     // otherwise (model is managing the op semaphores) we should not capture those semaphores
