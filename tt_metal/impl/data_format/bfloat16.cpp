@@ -376,8 +376,3 @@ bool packed_uint32_t_vector_comparison(
 
     return true;
 }
-
-uint16_t fp32_to_bf16_bits(float val) {
-    static_assert(sizeof val == 4, "float must have size 4");
-    return fp32_to_bf16_bits_round_to_nearest_even(val);
-}
