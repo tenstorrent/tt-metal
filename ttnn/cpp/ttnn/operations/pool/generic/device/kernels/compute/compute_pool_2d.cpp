@@ -39,15 +39,22 @@ void MAIN {
     constexpr uint32_t in_scalar_cb_id_0 = get_compile_time_arg_val(9);
     constexpr uint32_t in_scalar_cb_id_1 = get_compile_time_arg_val(10);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(11);
-    constexpr bool one_scalar_per_core = get_compile_time_arg_val(12);
+    constexpr uint32_t one_scalar_per_core = get_compile_time_arg_val(12);
     constexpr uint32_t face_r_dim = window_size_hw < FACE_HEIGHT ? window_size_hw : FACE_HEIGHT;
-    constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0 && in_c % TILE_WIDTH <= FACE_WIDTH;
+    constexpr uint32_t last_tile_is_partial = in_c % TILE_WIDTH != 0 && in_c % TILE_WIDTH <= FACE_WIDTH;
     constexpr uint32_t num_faces_in_input_tile =
         (max_sticks_for_reduction < TILE_HEIGHT || window_size_hw <= FACE_HEIGHT) ? 2 : 4;
     constexpr uint32_t num_faces_in_output_tile = 2;
     constexpr uint32_t num_faces_in_last_output_tile = last_tile_is_partial ? 1 : 2;
     constexpr uint32_t num_out_sticks = 1;
-
+    DPRINT << "INPUT:" << in_ntiles_c << " | " << window_size_hw << " | " << split_reader << " | "
+           << nsticks_per_core_by_nblocks << " | " << in_c << " | " << in_nblocks_c << " | " << max_sticks_for_reduction
+           << " | " << in_cb_id_0 << " | " << in_cb_id_1 << " | " << in_scalar_cb_id_0 << " | " << in_scalar_cb_id_1
+           << " | " << out_cb_id << " | " << one_scalar_per_core << " | " << face_r_dim << " | " << last_tile_is_partial
+           << " | " << num_faces_in_input_tile
+           << " | "
+           //<<get_local_cb_interface(out_cb_id).fifo_wr_ptr
+           << ENDL();
     constexpr bool is_avg_pool = REDUCE_OP == PoolType::SUM;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
     // otherwise we can reduce 8 tiles at a time.
@@ -68,6 +75,7 @@ void MAIN {
     // data which is much slower than just untilizing the entire MAX_TILES_PER_REDUCTION
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      window_size_hw <= FACE_HEIGHT && !last_tile_is_partial;
+
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
         in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
     pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
@@ -80,7 +88,7 @@ void MAIN {
     if constexpr (one_scalar_per_core) {
         cb_wait_front(in_scalar_cb_id_0, 1);
     }
-
+    DPRINT << nsticks_per_core_by_nblocks << "|" << in_nblocks_c << "|" << interm_reduction_chunks << ENDL();
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
         const bool reader0 = !(split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
