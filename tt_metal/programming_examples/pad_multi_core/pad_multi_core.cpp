@@ -34,7 +34,7 @@ int main() {
     uint32_t src_num_values_unpacked = src_M * src_N;
     uint32_t src_num_values_packed = src_num_values_unpacked / packing_ratio;
     std::vector<uint32_t> src_vec(src_num_values_packed, 0);
-    // source vector = {1, 2, 3, ... , 30, 31, 32}
+    // source vector = {1, 2, 3, ... , 30, 31, 32,   2048}
     for (uint32_t i = 0; i < src_vec.size(); i++) {
         bfloat16 bfloat_val1 = bfloat16(2 * i + 1);
         bfloat16 bfloat_val2 = bfloat16(2 * i + 2);
