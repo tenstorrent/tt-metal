@@ -33,6 +33,7 @@ jobs:
           { name: "t3k LLM falcon40b model perf tests", model: "falcon40b", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 75, owner_id: U053W15B6JF}, # Djordje Ivanovic
           { name: "t3k CNN resnet50 model perf tests", model: "resnet50", model-type: "CNN", arch: wormhole_b0, cmd: run_t3000_resnet50_tests, timeout: 75, owner_id: U0837MYG788}, # Marko Radosavljevic
           { name: "t3k CNN sentence_bert model perf tests", model: "sentence_bert", model-type: "LLM", arch: wormhole_b0, cmd: run_t3000_sentence_bert_tests, timeout: 75, owner_id: U045U3DEKM4}, # Mohamed Bahnas (Aniruddha Tupe)
+          { name: "t3k DiT SD3.5 model perf tests", model: "stable_diffusion_35_large", model-type: "DiT", arch: wormhole_b0, cmd: run_t3000_stable_diffusion_35_large_tests, timeout: 75, owner_id: U03FJB5TM5Y}, # Colman Glagovich
         ]
     name: ${{ matrix.test-group.name }}
     env:
@@ -118,6 +119,7 @@ jobs:
           sudo cpupower frequency-set -g ondemand
 
   t3000-model-perf-tests-profiler:
+    if: false # Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations. See issue see https://github.com/tenstorrent/tt-metal/issues/26649
     strategy:
       fail-fast: false
       matrix:

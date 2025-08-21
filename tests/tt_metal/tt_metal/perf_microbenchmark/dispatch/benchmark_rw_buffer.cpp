@@ -9,8 +9,6 @@
 #include <cstdint>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <cmath>
-#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -38,42 +36,52 @@ using namespace tt::tt_metal::distributed;
 // (mesh buffer) will be in DRAM.
 //
 // Benchmark Matrix:
-// Page Size: 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768
-// Transfer Size: 32k, 512M
 // Read & Write
+// Page Size (Bytes): 32, 64, 128, 256, 512, 1024, 2048
+// Transfer Size: 64 MB
+// Buffer Type: DRAM, L1
 // Device: 0 (local), 1 (remote) (when possible)
 //
 ////////////////////////////////////////////////////////////////////////////////
 
+/*
+ * The upper bound of the page size & transfer size is derived experimentally on July 31st, 2025.
+ * They are set at the point where diminishing returns are observed.
+ *
+ * Link to data sheet as follows:
+ * https://docs.google.com/spreadsheets/d/1zy1teJtgf7hsMMdgy5uIOtcuI73AGVqy4lnyYwL7YFQ/edit
+ */
+
 static const auto KB = 1024;
 static const auto MB = 1024 * KB;
 
-static const BufferType TARGET_BUFFER_TYPE = tt_metal::BufferType::DRAM;
+static const std::vector<int64_t> PAGE_SIZE_ARGS = benchmark::CreateRange(32, 2048, 2);
+static const std::vector<int64_t> TRANSFER_SIZE_ARGS = {64 * MB};
 
-static const auto PAGE_SIZE_ARGS = benchmark::CreateRange(32, 32 * KB, 2);
-static const std::vector<int64_t> TRANSFER_SIZE_ARGS{32 * KB, 512 * MB};
-static const auto BENCHMARK_ARGS = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS};
-
-// Create a buffer of total transfer_size big that is paged with page_size
-std::shared_ptr<MeshBuffer> create_buffer(int page_size, int transfer_size, std::shared_ptr<MeshDevice> device) {
-    using DataType = uint32_t;
-    auto num_data = transfer_size / sizeof(DataType);
-
-    // Need to use Replicated Buffer instead of Sharded Buffer as we operate on a unit mesh.
-    ReplicatedBufferConfig mesh_buffer_config{transfer_size};
-    DeviceLocalBufferConfig device_local_config{.page_size = page_size, .buffer_type = TARGET_BUFFER_TYPE};
-
-    return MeshBuffer::create(mesh_buffer_config, device_local_config, device.get());
-}
+static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, BufferType::L1};
+static const std::vector<int64_t> BUFFER_TYPE_ARGS = {0, 1};
 
 static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
+    auto buffer_type = BUFFER_TYPES[state.range(2)];
+    [[maybe_unused]] auto device_id = state.range(3);
+
+    log_debug(
+        LogTest,
+        "Running Write Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+        page_size,
+        transfer_size,
+        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        device_id);
 
     auto random_buffer_seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto host_buffer = create_random_vector_of_bfloat16(transfer_size, 1000, random_buffer_seed);
 
-    auto device_buffer = create_buffer(page_size, transfer_size, mesh_device);
+    auto device_buffer = MeshBuffer::create(
+        ReplicatedBufferConfig{transfer_size},
+        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
+        mesh_device.get());
 
     for (auto _ : state) {
         EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), device_buffer, host_buffer, true);
@@ -85,8 +93,21 @@ static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_d
 static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
     auto transfer_size = state.range(1);
+    auto buffer_type = BUFFER_TYPES[state.range(2)];
+    [[maybe_unused]] auto device_id = state.range(3);
 
-    auto device_buffer = create_buffer(page_size, transfer_size, mesh_device);
+    log_debug(
+        LogTest,
+        "Running Read Benchmark for Page Size: {}, Transfer Size: {}, Buffer Type: {}, Device ID: {}",
+        page_size,
+        transfer_size,
+        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
+        device_id);
+
+    auto device_buffer = MeshBuffer::create(
+        ReplicatedBufferConfig{transfer_size},
+        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type},
+        mesh_device.get());
     std::vector<uint32_t> host_buffer;
 
     for (auto _ : state) {
@@ -115,7 +136,7 @@ int main(int argc, char** argv) {
     auto devices = MeshDevice::create_unit_meshes(device_ids);
     for (auto [device_id, device] : devices) {
         // Device ID embedded here for extraction
-        auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, {device_id}};
+        auto benchmark_args = {PAGE_SIZE_ARGS, TRANSFER_SIZE_ARGS, BUFFER_TYPE_ARGS, {device_id}};
         // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
         // benchmark
         benchmark::RegisterBenchmark("Write", BM_write, device)->ArgsProduct(benchmark_args)->UseRealTime();

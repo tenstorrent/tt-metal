@@ -1,43 +1,45 @@
-# Falcon7B Demo (Wormhole)
+# Falcon7B Demo
+
+## Platforms:
+    Wormhole (n150, n300)
+
+## Introduction
+This code was designed for the `tiiuae/falcon-7b-instruct` model version from Huggingface.
+
+Read more about it at [huggingface.co/tiiuae/falcon-7b-instruct](https://huggingface.co/tiiuae/falcon-7b-instruct)
+
+## Prerequisites
+- Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
+- Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
 
 ## How to Run
-
-#### Token Generation (Default) Mode
-
-To run the model for a single user you can use the command line input:
-
+### Token Generation (Default) Mode
+- To run the model for a single user you can use the command line input:
 ```sh
 pytest --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k default_mode_1024_stochastic
 ```
 
-To run the demo using prewritten prompts for a batch of 32 users run (currently only supports same token-length inputs):
+- To run the demo using prewritten prompts for a batch of 32 users run (currently only supports same token-length inputs):
 
 ```sh
 pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k default_mode_1024_stochastic
 ```
+The default decoding method is top-k/top-p (stochastic) sampling, however greedy decoding can also be used by replacing `stochastic` with `greedy` in the command above.
 
-- **Decoding method**: The default decoding method is top-k/top-p (stochastic) sampling, however greedy decoding can also be used by replacing `stochastic` with `greedy` in the command above.
-
-#### Performance Measurement Mode
-
-To measure the performance of generating the `i`'th token while the KV cache is filled with `i-1` rows (where `i` is 128 in the command below):
-
+### Performance Measurement Mode
+- To measure the performance of generating the `i`'th token while the KV cache is filled with `i-1` rows (where `i` is 128 in the command below):
 ```sh
 pytest --disable-warnings -q -s --input-method=json --input-path='models/demos/falcon7b_common/demo/input_data.json' models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "perf_mode_128_stochastic and not verify"
 ```
+Supported sequence lengths: Currently `i` can only be set to 128, 1024, or 2048 for performance measurement mode.
 
-- **Supported sequence lengths**: Currently `i` can only be set to 128, 1024, or 2048 for performance measurement mode.
-
-## Inputs
-
+### Inputs
 A sample of input prompts for 32 users is provided in `input_data.json` in demo directory. If you wish you to run the model using a different set of input prompts you can provide a different path, e.g.:
-
 ```sh
 pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_prompts.json' models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k default_mode_1024_stochastic
 ```
 
 ## Details
-
 - **Weight caching**: This model picks up certain configs and weights from the huggingface pretrained model. We have used the `tiiuae/falcon-7b-instruct` version from huggingface. The first time you run the model, the weights are downloaded and stored on your machine, and it might take a few minutes. The second time you run the model on your machine, the weights are being read from cached files on your machine and it will be faster.
 - **Max Context Length**: The maximum context/sequence length is currently limited to 2048 tokens (the default maximum sequence length for the huggingface model).
 - **Batch Size**: Currently only a batch size of 32 is supported.

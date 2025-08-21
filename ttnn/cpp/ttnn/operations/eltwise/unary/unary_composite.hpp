@@ -66,14 +66,6 @@ struct ExecuteUnaryCompositeClamp {
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-struct ExecuteUnaryCompositeThreshold {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float threshold,
-        float value,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
-};
-
 struct ExecuteUnaryCompositeClip {
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -189,8 +181,6 @@ constexpr auto clamp = ttnn::register_operation<"ttnn::clamp", operations::unary
 constexpr auto selu = ttnn::register_operation<
     "ttnn::selu",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::SELU>>();
-constexpr auto threshold =
-    ttnn::register_operation<"ttnn::threshold", operations::unary::ExecuteUnaryCompositeThreshold>();
 constexpr auto glu = ttnn::register_operation<
     "ttnn::glu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>();
@@ -206,9 +196,6 @@ constexpr auto swiglu = ttnn::register_operation<
 constexpr auto logical_not_ = ttnn::register_operation<
     "ttnn::logical_not_",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::LOGICAL_NOT_>>();
-constexpr auto softshrink = ttnn::register_operation<
-    "ttnn::softshrink",
-    operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::SOFTSHRINK>>();
 constexpr auto logit = ttnn::register_operation<
     "ttnn::logit",
     operations::unary::ExecuteUnaryCompositeOpWithFloat<operations::unary::UnaryCompositeOpType::LOGIT>>();

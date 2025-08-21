@@ -380,7 +380,7 @@ static void print_config_reg(
     tt_metal::Program program = tt_metal::CreateProgram();
 
     // Prepare write kernel
-    auto write_kernel = prepare_writer(program, config);
+    [[maybe_unused]] auto write_kernel = prepare_writer(program, config);
 
     // Generate golden output
     std::string golden_output =

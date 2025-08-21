@@ -348,7 +348,7 @@ public:
     using typename traits::value_type;
 
 private:
-    alignas(any_iterator_alignment) std::byte bytes[Capacity];
+    alignas(any_iterator_alignment) std::byte bytes[Capacity]{};
 
     using iterator_adaptor_type = detail::IAnyIteratorAdaptor<AnyIterator>;
 
@@ -717,7 +717,7 @@ public:
     using typename traits::value_type;
 
 private:
-    alignas(any_range_alignment) mutable std::byte bytes[Capacity];
+    alignas(any_range_alignment) mutable std::byte bytes[Capacity]{};
 
     using range_adaptor_type = detail::IAnyRangeAdaptor<BasicAnyRange, range_category>;
 

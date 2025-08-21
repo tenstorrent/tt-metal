@@ -347,7 +347,11 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds4x1Mesh) {
     auto topology_info = build_mesh_adjacency_map(
         user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
 
-    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info);
+    auto adj_map_sorter = [&](const IntraMeshAdjacencyMap& topology_info) {
+        return std::make_pair(topology_info.adjacency_map, 0);  // Start with chip 0
+    };
+
+    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info, adj_map_sorter);
 
     // Verify all chip mappings for 4x1 mesh
     verify_physical_chip_ids(
@@ -370,7 +374,11 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds1x8Mesh) {
     auto topology_info = build_mesh_adjacency_map(
         user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
 
-    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info);
+    auto adj_map_sorter = [&](const IntraMeshAdjacencyMap& topology_info) {
+        return std::make_pair(topology_info.adjacency_map, 0);  // Start with chip 0
+    };
+
+    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info, adj_map_sorter);
 
     // Verify all chip mappings for 1x8 mesh
     verify_physical_chip_ids(
@@ -381,6 +389,40 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds1x8Mesh) {
         });
 }
 
+TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds1x8MeshOn2x4Physical) {
+    // Test 1x8 large 1D mesh shape
+    // Shape: 4-0-3-6
+    //        | | | |
+    //        5-1-2-7
+    test_adjacency_map = {
+        {0, {1, 4, 3}},
+        {1, {0, 2, 5}},
+        {2, {1, 7, 3}},
+        {3, {0, 2, 6}},
+        {4, {0, 5}},
+        {5, {4, 1}},
+        {6, {7, 3}},
+        {7, {6, 2}}};
+
+    std::set<chip_id_t> user_chip_ids = {0, 1, 2, 3, 4, 5, 6, 7};
+    tt::tt_metal::distributed::MeshShape mesh_shape(1, 8);
+
+    auto topology_info = build_mesh_adjacency_map(
+        user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+
+    auto adj_map_sorter = [&](const IntraMeshAdjacencyMap& topology_info) {
+        return std::make_pair(topology_info.adjacency_map, 0);  // Start with chip 0
+    };
+    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info, adj_map_sorter);
+
+    // Verify all chip mappings for 1x8 mesh
+    verify_physical_chip_ids(
+        physical_chip_ids,
+        8,
+        {
+            {0, 0}, {1, 4}, {2, 5}, {3, 1}, {4, 2}, {5, 7}, {6, 6}, {7, 3}  // horizontal line
+        });
+}
 // Torus and ring support?
 TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsLooped1DMesh) {
     GTEST_SKIP() << "Ring topology currently not supported";

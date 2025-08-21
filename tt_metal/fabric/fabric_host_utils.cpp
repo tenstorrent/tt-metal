@@ -24,38 +24,98 @@
 
 namespace tt::tt_fabric {
 
+namespace {
+
+// Computes BFS distance map from a start chip to all reachable chips using the provided adjacency map.
+std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
+    chip_id_t start_chip, const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map) {
+    std::unordered_map<chip_id_t, std::uint32_t> dist;
+    std::queue<chip_id_t> q;
+    dist[start_chip] = 0;
+    q.push(start_chip);
+
+    while (!q.empty()) {
+        auto cur = q.front();
+        q.pop();
+
+        auto it = adjacency_map.find(cur);
+        if (it != adjacency_map.end()) {
+            for (auto nbr : it->second) {
+                if (dist.find(nbr) == dist.end()) {
+                    dist[nbr] = dist.at(cur) + 1;
+                    q.push(nbr);
+                }
+            }
+        }
+    }
+    return dist;
+}
+
+void create_1d_mesh_view_with_dfs(
+    const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map,
+    chip_id_t start_chip,
+    uint32_t num_chips,
+    std::vector<chip_id_t>& path) {
+    std::unordered_set<chip_id_t> visited;
+    visited.insert(start_chip);
+
+    path.reserve(num_chips);
+    path.push_back(start_chip);
+
+    // Internal recursive helper function
+    std::function<bool(chip_id_t)> dfs = [&](chip_id_t current_chip) -> bool {
+        if (path.size() == num_chips) {
+            return true;
+        }
+
+        auto it = adjacency_map.find(current_chip);
+        if (it == adjacency_map.end()) {
+            return false;  // No neighbors
+        }
+
+        for (chip_id_t nbr : it->second) {
+            if (visited.find(nbr) == visited.end()) {
+                path.push_back(nbr);
+                visited.insert(nbr);
+
+                if (dfs(nbr)) {
+                    return true;
+                }
+
+                // Backtrack
+                path.pop_back();
+                visited.erase(nbr);
+            }
+        }
+        return false;  // No valid path found from this node
+    };
+
+    dfs(start_chip);
+}
+
+}  // namespace
+
 bool is_tt_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
     return is_1d_fabric_config(fabric_config) || is_2d_fabric_config(fabric_config);
 }
 
-uint32_t get_sender_channel_count(tt::tt_fabric::Topology topology) {
-    if (topology == Topology::Mesh) {
-        return FabricEriscDatamoverConfig::num_sender_channels_2d;
-    } else {
-        return FabricEriscDatamoverConfig::num_sender_channels_1d;
+FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config) {
+    switch (fabric_config) {
+        case tt::tt_fabric::FabricConfig::FABRIC_1D_RING: return FabricType::TORUS_XY;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_X: return FabricType::TORUS_X;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_Y: return FabricType::TORUS_Y;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_TORUS_XY: return FabricType::TORUS_XY;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_X: return FabricType::TORUS_X;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_Y: return FabricType::TORUS_Y;
+        case tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY: return FabricType::TORUS_XY;
+        default: return FabricType::MESH;
     }
-}
-
-uint32_t get_downstream_edm_count(tt::tt_fabric::Topology topology) {
-    if (topology == Topology::Mesh) {
-        return FabricEriscDatamoverConfig::num_downstream_edms_2d;
-    } else {
-        return FabricEriscDatamoverConfig::num_downstream_edms;
-    }
-}
-
-FabricType get_fabric_type(tt::tt_fabric::FabricConfig fabric_config, tt::tt_metal::ClusterType cluster_type) {
-    if (cluster_type == tt::tt_metal::ClusterType::GALAXY &&
-        fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D_RING) {
-        return FabricType::TORUS_XY;
-    }
-    return FabricType::MESH;
 }
 
 std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id, RoutingDirection direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-    const bool is_2d_fabric = control_plane.get_fabric_context().get_fabric_topology() == Topology::Mesh;
+    const bool is_2d_fabric = control_plane.get_fabric_context().is_2D_routing_enabled();
 
     const std::vector<chan_id_t>& fabric_channels =
         control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, direction);
@@ -66,6 +126,7 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         forwarding_channels =
             control_plane.get_forwarding_eth_chans_to_chip(src_fabric_node_id, dst_fabric_node_id, direction);
     } else {
+        // TODO: not going to work for Big Mesh
         const auto src_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
         const auto dst_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
         // for 1D check if each port has an active connection to the dst_chip_id
@@ -110,16 +171,6 @@ void set_routing_mode(uint16_t routing_mode) {
             routing_mode & (ROUTING_MODE_RING | ROUTING_MODE_LINE | ROUTING_MODE_MESH | ROUTING_MODE_TORUS)) == 1,
         "Only one topology mode (RING, LINE, MESH, TORUS) can be active at once");
 
-    // Validate push/pull flags are orthogonal
-    TT_FATAL(
-        __builtin_popcount(routing_mode & (ROUTING_MODE_PUSH | ROUTING_MODE_PULL)) <= 1,
-        "PUSH and PULL routing modes cannot be used together");
-
-    // Validate push/pull flags are only for 2D
-    TT_FATAL(
-        !(routing_mode & (ROUTING_MODE_PUSH | ROUTING_MODE_PULL)) || (routing_mode & ROUTING_MODE_2D),
-        "PUSH and PULL routing modes can only be used with 2D topology");
-
     // Validate 1D can't be used with MESH or TORUS
     TT_FATAL(
         !(routing_mode & ROUTING_MODE_1D) || !(routing_mode & (ROUTING_MODE_MESH | ROUTING_MODE_TORUS)),
@@ -148,8 +199,11 @@ void set_routing_mode(Topology topology, tt::tt_fabric::FabricConfig fabric_conf
         mode |= (ROUTING_MODE_1D | ROUTING_MODE_LINE);
     } else if (topology == Topology::Mesh) {
         mode |= (ROUTING_MODE_2D | ROUTING_MODE_MESH);
+    } else if (topology == Topology::Torus) {
+        mode |= (ROUTING_MODE_2D | ROUTING_MODE_TORUS);
     }
-    if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
+
+    if (tt::tt_fabric::FabricContext::is_dynamic_routing_config(fabric_config)) {
         mode |= ROUTING_MODE_DYNAMIC;
     } else {
         mode |= ROUTING_MODE_LOW_LATENCY;
@@ -282,65 +336,64 @@ IntraMeshAdjacencyMap build_mesh_adjacency_map(
     return topology_info;
 }
 
-// Computes BFS distance map from a start chip to all reachable chips using the provided adjacency map.
-std::unordered_map<chip_id_t, std::uint32_t> compute_distances(
-    chip_id_t start_chip, const std::unordered_map<chip_id_t, std::vector<chip_id_t>>& adjacency_map) {
-    std::unordered_map<chip_id_t, std::uint32_t> dist;
-    std::queue<chip_id_t> q;
-    dist[start_chip] = 0;
-    q.push(start_chip);
-
-    while (!q.empty()) {
-        auto cur = q.front();
-        q.pop();
-
-        auto it = adjacency_map.find(cur);
-        if (it != adjacency_map.end()) {
-            for (auto nbr : it->second) {
-                if (dist.find(nbr) == dist.end()) {
-                    dist[nbr] = dist.at(cur) + 1;
-                    q.push(nbr);
-                }
-            }
-        }
+std::pair<std::unordered_map<chip_id_t, std::vector<chip_id_t>>, chip_id_t> sort_adjacency_map_by_eth_coords(
+    const IntraMeshAdjacencyMap& topology_info) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto eth_coords = cluster.get_user_chip_ethernet_coordinates();
+    if (eth_coords.size() != topology_info.adjacency_map.size()) {
+        return {
+            topology_info.adjacency_map,
+            std::min_element(topology_info.adjacency_map.begin(), topology_info.adjacency_map.end())->first};
     }
-    return dist;
+    auto min_eth_chip = std::min_element(eth_coords.begin(), eth_coords.end(), [](const auto& a, const auto& b) {
+        if (a.second.y != b.second.y) {
+            return a.second.y < b.second.y;
+        }
+        return a.second.x < b.second.x;
+    });
+
+    auto adjacency_map = topology_info.adjacency_map;
+    for (auto& [chip_id, neighbors] : adjacency_map) {
+        std::sort(neighbors.begin(), neighbors.end(), [&eth_coords](chip_id_t a, chip_id_t b) {
+            const auto& coord_a = eth_coords.at(a);
+            const auto& coord_b = eth_coords.at(b);
+            if (coord_a.y != coord_b.y) {
+                return coord_a.y < coord_b.y;
+            }
+            return coord_a.x < coord_b.x;
+        });
+    }
+    return {adjacency_map, min_eth_chip->first};
 }
 
-std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(const IntraMeshAdjacencyMap& topology_info) {
-    // For 1D meshes, we expect exactly 2 corners (the endpoints)
-    TT_FATAL(
-        topology_info.corners.size() == 2, "Expected 2 corners for 1D mesh, got {}.", topology_info.corners.size());
-
-    std::vector<chip_id_t> physical_chip_ids(topology_info.ns_size * topology_info.ew_size);
-    std::fill(physical_chip_ids.begin(), physical_chip_ids.end(), static_cast<chip_id_t>(-1));
-
-    // Place the first corner (closest to chip 0) at index 0
-    chip_id_t first_corner = topology_info.corners[0];
-    physical_chip_ids[0] = first_corner;
-
-    // Place the second corner at the last index
-    chip_id_t second_corner = topology_info.corners[1];
-    physical_chip_ids[physical_chip_ids.size() - 1] = second_corner;
-
-    // Fill in the middle chips using BFS distances
-    auto dist_from_first = compute_distances(first_corner, topology_info.adjacency_map);
-
-    for (const auto& [chip, distance] : dist_from_first) {
-        if (chip != first_corner && chip != second_corner) {
-            // For 1D mesh, distance directly corresponds to the index
-            size_t idx = static_cast<size_t>(distance);
-            TT_FATAL(idx < physical_chip_ids.size(), "Index {} out of bounds for 1D mesh.", idx);
-            TT_FATAL(physical_chip_ids[idx] == static_cast<chip_id_t>(-1), "Duplicate mapping at index {}.", idx);
-            physical_chip_ids[idx] = chip;
+std::vector<chip_id_t> convert_1d_mesh_adjacency_to_row_major_vector(
+    const IntraMeshAdjacencyMap& topology_info,
+    std::optional<std::function<std::pair<AdjacencyMap, chip_id_t>(const IntraMeshAdjacencyMap&)>> graph_sorter) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    chip_id_t first_chip = 0;
+    auto adj_map = topology_info.adjacency_map;
+    if (cluster.get_board_type(0) == BoardType::N300) {
+        // #26987: On N300 based systems we currently use Ethernet Coordinates to sort the adjacency map.
+        // This ensures that the Fabric Node IDs are deterministically mapped to physical chips across hosts.
+        // If this is not the case, we will need to regenerate MGDs depending on the host being run on, due to
+        // the current infra tightly coupling logical and physical representations.
+        // This will not be an issue once we have MGD 2.0 in logical space and algorithms to bind logical connections
+        // in the MGD to physical ethernet channels.
+        if (!graph_sorter.has_value()) {
+            // Default behavior: sort adjacency map by Ethernet coordinates
+            std::tie(adj_map, first_chip) = sort_adjacency_map_by_eth_coords(topology_info);
+        } else {
+            // User provided a sorting function. This is primarily done for testing.
+            std::tie(adj_map, first_chip) = graph_sorter.value()(topology_info);
         }
+    } else {
+        first_chip = std::min_element(topology_info.adjacency_map.begin(), topology_info.adjacency_map.end())->first;
     }
 
-    // Verify all chips are mapped
-    for (std::uint32_t i = 0; i < physical_chip_ids.size(); ++i) {
-        TT_FATAL(physical_chip_ids[i] != static_cast<chip_id_t>(-1), "1D mesh embedding incomplete at index {}.", i);
-    }
-
+    // This vector contains a 1D view of devices in the mesh, constructed using DFS. This works since we are using a
+    // mesh topology which guarantees connectivity.
+    std::vector<chip_id_t> physical_chip_ids;
+    create_1d_mesh_view_with_dfs(adj_map, first_chip, topology_info.ns_size * topology_info.ew_size, physical_chip_ids);
     return physical_chip_ids;
 }
 

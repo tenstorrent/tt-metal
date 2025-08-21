@@ -49,13 +49,6 @@ ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
 
-add_library(small_vector INTERFACE)
-target_link_libraries(
-    small_vector
-    INTERFACE
-        "$<BUILD_INTERFACE:Boost::container>" # FIXME: this is a hack so we do not need to package up Boost
-)
-
 ############################################################################################################################
 # yaml-cpp
 ############################################################################################################################
@@ -114,15 +107,13 @@ endif()
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-include(FetchContent)
-
-FetchContent_Declare(
-    enchantum
+CPMAddPackage(
+    NAME enchantum
     GIT_REPOSITORY https://github.com/ZXShady/enchantum.git
     GIT_TAG 8ca5b0eb7e7ebe0252e5bc6915083f1dd1b8294e
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
 )
-
-FetchContent_MakeAvailable(enchantum)
 
 ############################################################################################################################
 # fmt : https://github.com/fmtlib/fmt

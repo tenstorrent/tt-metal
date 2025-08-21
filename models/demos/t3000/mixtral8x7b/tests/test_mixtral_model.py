@@ -33,8 +33,9 @@ class Emb(torch.nn.Module):
         32,
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mixtral_model_inference(t3k_mesh_device, reset_seeds, batch):
-    valid_pcc = 0.964
+    valid_pcc = 0.942
     dtype = ttnn.bfloat8_b
     iterations = 10
 

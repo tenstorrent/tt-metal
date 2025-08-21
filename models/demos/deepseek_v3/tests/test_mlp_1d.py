@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
 
 import pytest
 import torch
@@ -14,7 +13,7 @@ from models.demos.deepseek_v3.tt.mlp.mlp_1d_dequant import MLP1DDequant
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.utils.config_helpers import dequantize
-from models.demos.deepseek_v3.utils.run_config import create_run_config
+from models.demos.deepseek_v3.utils.run_config import create_run_config, load_weight
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
@@ -31,8 +30,8 @@ DEVICE_SHAPE = ttnn.MeshShape(2, min(ttnn.get_num_devices() // 2, 8))
     "device_params", [{"mesh_shape": DEVICE_SHAPE, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
 def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_device):
-    reference_model = DeepseekV3MLP(hf_config)
-    reference_state_dict = reference_model.state_dict()
+    reference_model = DeepseekV3MLP(hf_config).eval()
+    reference_state_dict = reference_model.to(torch.bfloat16).state_dict()
     run_weight_conversion_test(
         MLPClass=MLP1D,
         hf_config=hf_config,
@@ -82,13 +81,13 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     assert "input_tensor_b" in weight_config["w2"]
     assert "input_tensor_b" in weight_config["w3"]
 
-    # Verify files exist
-    assert Path(weight_config["w1"]["input_tensor_b"]).exists()
-    assert Path(weight_config["w2"]["input_tensor_b"]).exists()
-    assert Path(weight_config["w3"]["input_tensor_b"]).exists()
+    # # Verify files exist # TODO: bring regular tensor saving back once Issue #26763 is resolved
+    # assert Path(weight_config["w1"]["input_tensor_b"]).exists()
+    # assert Path(weight_config["w2"]["input_tensor_b"]).exists()
+    # assert Path(weight_config["w3"]["input_tensor_b"]).exists()
 
     # Load and verify a weight
-    w1_ttnn = ttnn.load_tensor(weight_config["w1"]["input_tensor_b"], device=mesh_device)
+    w1_ttnn = load_weight(weight_config["w1"]["input_tensor_b"], device=mesh_device)
     w1_ttnn = ttnn.unsqueeze(w1_ttnn, 0)  # Unsqueeze to collect shards on a separate dim
     w1_torch = ttnn.to_torch(
         w1_ttnn,
@@ -141,15 +140,17 @@ def test_forward_pass(
     mesh_device,
     model_path,
     ccl,
+    reset_seeds,
 ):
     num_module_layers, _ = mesh_device.shape
 
     # Get the reference IO
     if not issubclass(MLPClass, MLP1DDequant):
-        torch.set_default_dtype(torch.bfloat16)
         reference_model = DeepseekV3MLP(hf_config).eval()
-        state_dict = reference_model.state_dict()
+        state_dict = reference_model.to(torch.bfloat16).state_dict()
         torch_input = torch.randn(num_module_layers, 1, seq_len, hf_config.hidden_size)
+
+        reference_model = reference_model.to(torch.float32)
         reference_output = reference_model(torch_input)
     else:
         state_dict = load_state_dict(model_path, module_path)
@@ -167,9 +168,9 @@ def test_forward_pass(
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (0, None)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_device.shape, (0, -1)),
         dtype=ttnn.bfloat16,
-        memory_config=run_config["input_memory_config"],
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
 

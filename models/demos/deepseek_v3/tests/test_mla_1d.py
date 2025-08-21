@@ -9,17 +9,15 @@ import pytest
 import torch
 from loguru import logger
 
-# Import from local reference files instead of HuggingFace
-from transformers import DynamicCache
-
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3Attention
 from models.demos.deepseek_v3.tt.mla_1d import MLA1D
 from models.demos.deepseek_v3.tt.rope import RotarySetup
+from models.demos.deepseek_v3.utils.config_helpers import dequantize_state_dict
+from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_mla as reference_forward
 from models.demos.deepseek_v3.utils.run_config import create_run_config
+from models.demos.deepseek_v3.utils.test_utils import MAX_START_POS, load_state_dict
 from models.utility_functions import comp_pcc
-
-MAX_START_POS = 512
 
 
 @pytest.fixture
@@ -34,96 +32,8 @@ def hf_config_short(hf_config):
 def reference(hf_config_short, reset_seeds):
     """Get the actual DeepSeek MLA model using local implementation."""
 
-    model = DeepseekV3Attention(hf_config_short, layer_idx=0)
-    model.init_weights_with_random()  # Initialize weights with random values
+    model = DeepseekV3Attention(hf_config_short, layer_idx=0).eval()
     return model
-
-
-def reference_forward(
-    reference_model: DeepseekV3Attention,
-    torch_input: torch.Tensor,
-    position_ids: torch.LongTensor,
-    mode: str,
-) -> torch.Tensor:
-    """Run the reference model forward pass.
-
-    This function specifically uses MLA with the "absorption" implementation,
-    called with `forward_mla`, which is simply an extension on top of HF's DeepSeek implementation.
-
-    Notes for Decode Mode:
-        NOTE: This function currently does not support multi-iteration decoding.
-
-        It is critical to note that since the HF implementation uses DynamicCache, we cannot just
-        perform decode on users with arbitrry position_ids. Instead, if we want to simulate this situation,
-        we need to pad the input to the largest position id in the batch, and then use it for the forward pass.
-
-        This has the same effect as doing prefill. As such, on the output side, we must also
-        slice the output to only return the last token for each user.
-
-        The reference cache is also sliced in a similar manner to only return the last token's cache.
-
-    Notes on position_ids_expanded:
-        The HF implementation uses position_ids_expanded, which is a tensor of shape [bsz, q_len].
-
-
-    Args:
-        reference_model (DeepseekV3Attention): The reference model to run.
-        torch_input (torch.Tensor): The input tensor to the model.
-        position_ids (torch.LongTensor): The position ids for the input.
-        mode (str): The mode of operation, either "decode" or "prefill".
-    Returns:
-        torch.Tensor: The output tensor from the model.
-    """
-
-    config = reference_model.config
-    bsz, q_len, dim = torch_input.shape
-    torch_input = torch_input.to(dtype=torch.float32)
-
-    assert bsz == position_ids.shape[0], "Batch size of input and position_ids must match"
-
-    # Generate the cache
-    cache = DynamicCache()
-
-    if mode == "prefill":
-        # Create the mask
-        mask = torch.triu(torch.full((bsz, 1, q_len, q_len), float("-inf")), diagonal=1)
-    else:
-        assert q_len == 1, "Decode mode should have sequence length of 1"
-
-        # Perform special padding for decode mode
-        max_position_idx = position_ids.max().item()
-        new_torch_input = torch.zeros(bsz, max_position_idx + 1, dim)
-        for b in range(bsz):
-            pos = position_ids[b].item()
-            new_torch_input[b, pos] = torch_input[b, 0]
-        torch_input = new_torch_input
-        q_len = torch_input.shape[1]  # Update q_len to the new sequence length
-
-        # Create the mask
-        mask = torch.full((bsz, 1, q_len, q_len), float("-inf"))
-        for i in range(bsz):
-            usable_len = position_ids[i].item() + 1
-            mask[i, 0, :usable_len, :usable_len] = torch.triu(
-                torch.full((usable_len, usable_len), float("-inf")), diagonal=1
-            )
-
-    position_ids_expanded = torch.arange(0, q_len, dtype=torch.long).unsqueeze(0).repeat(bsz, 1)
-
-    out, _, past_key_value = reference_model.forward_mla(
-        hidden_states=torch_input,
-        attention_mask=mask,
-        position_ids=position_ids_expanded,
-        past_key_value=cache,
-    )
-    cache = past_key_value.key_cache[reference_model.layer_idx].squeeze(1)
-
-    if mode == "decode":
-        # Get last token
-        batch_indices = torch.arange(bsz)
-        out = out[batch_indices, position_ids, :].unsqueeze(1)  # [bsz, 1, hidden_size]
-        cache = cache[batch_indices, position_ids, :].unsqueeze(1)  # [bsz, 1, head_dim + rope_head_dim]
-
-    return out, cache
 
 
 def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
@@ -162,6 +72,10 @@ def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.Mes
     [True],
 )
 @pytest.mark.parametrize(
+    "weights_type",
+    ["random", "real"],
+)
+@pytest.mark.parametrize(
     "device_params",
     [
         {
@@ -169,6 +83,10 @@ def get_cache_on_host(tt_cache: ttnn.Tensor, row_idx: int, mesh_device: ttnn.Mes
         }
     ],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "module_path",
+    ["model.layers.0.self_attn"],
 )
 def test_forward_pass(
     mode,
@@ -180,6 +98,9 @@ def test_forward_pass(
     tmp_path,
     mesh_device,
     ccl,
+    weights_type,
+    model_path,
+    module_path,
 ):
     # Hang workaround for large shapes
     if seq_len > 1024:
@@ -192,6 +113,10 @@ def test_forward_pass(
     paged_config = MLA1D.get_valid_paged_config(hf_config.max_seq_len, MLA1D.MAX_BATCH_SIZE, dp_factor)
 
     reference_model = reference
+    if weights_type == "real":
+        state_dict = load_state_dict(model_path, module_path)
+        dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
+        reference_model.load_state_dict(dequantized_state_dict)
 
     if mode == "prefill":
         assert batch_size == 1, "Prefill mode only supports batch size of 1"
@@ -201,7 +126,9 @@ def test_forward_pass(
     ############################
     # Setup: Convert weights and get weight_config
     logger.info(f"Converting weights for MLA1D to {tmp_path}")
-    state_dicts = [reference_model.state_dict()] * mesh_shape[0]  # Duplicate state dicts for each row in the mesh
+    state_dicts = [reference_model.to(torch.bfloat16).state_dict()] * mesh_shape[
+        0
+    ]  # Duplicate state dicts for each row in the mesh
     weight_config = MLA1D.convert_weights(hf_config, state_dicts, tmp_path, mesh_device)
 
     # Generate appropriate configs
@@ -213,13 +140,16 @@ def test_forward_pass(
     # Create a new model state
     model_state = MLA1D.create_state(hf_config, mesh_device, paged_config, ccl)
 
+    # Create a new model shared state
+    model_shared_state = MLA1D.create_shared_state(hf_config, mesh_device)
+
     # Create RunConfig using both weight_config and model_config
-    run_config = create_run_config(model_config, weight_config, model_state)
+    run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     ############################
     ### Torch inputs
     ############################
-
+    logger.info("Preparing Torch inputs")
     torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size).to(dtype=torch.bfloat16)
     if mode == "prefill":
         position_idxs = torch.tensor([seq_len for _ in range(batch_size)])
@@ -229,6 +159,7 @@ def test_forward_pass(
     ############################
     ### Torch reference
     ############################
+    logger.info("Running Torch reference forward pass")
     # TODO: Save reference output?
     reference_output, reference_cache = reference_forward(
         reference_model,

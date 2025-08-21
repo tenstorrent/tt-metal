@@ -49,12 +49,20 @@ def pad_input_32(tensor, value):
     return tensor
 
 
-def load_conditional_generation_ref_model():
-    hf_ref_model = (
-        WhisperForConditionalGeneration.from_pretrained("distil-whisper/distil-large-v3").to(torch.bfloat16).eval()
-    )
-    processor = AutoProcessor.from_pretrained("distil-whisper/distil-large-v3", language="English", task="transcribe")
-    feature_extractor = AutoFeatureExtractor.from_pretrained("distil-whisper/distil-large-v3")
+def load_conditional_generation_ref_model(model_repo):
+    """
+    Load Whisper model for conditional generation.
+
+    Args:
+        model_repo: HuggingFace model repository ID. Must be one of the supported models.
+    """
+    allowed_models = ["distil-whisper/distil-large-v3", "openai/whisper-large-v3"]
+    if model_repo not in allowed_models:
+        raise ValueError(f"Unknown model_repo: {model_repo}. Valid options are {allowed_models}")
+
+    hf_ref_model = WhisperForConditionalGeneration.from_pretrained(model_repo).to(torch.bfloat16).eval()
+    processor = AutoProcessor.from_pretrained(model_repo, language="English", task="transcribe")
+    feature_extractor = AutoFeatureExtractor.from_pretrained(model_repo)
     config = hf_ref_model.config
     return (
         hf_ref_model,
@@ -79,7 +87,7 @@ def init_conditional_generation_tt_model(hf_ref_model, config, ttnn_model, devic
         device=device,
     )
 
-    # Note: config.max_length is 448 for distil-whisper/distil-large-v3
+    # Note: config.max_length is typically 448 for whisper large models
     kv_cache = init_kv_cache(config, device, max_batch_size, max_seq_len=max_seq_len)
 
     return parameters, ttnn_linear_weight, kv_cache
@@ -134,7 +142,7 @@ def run_generate(
             ttnn.from_torch(torch.zeros(unpadded_batch_size), device=device, dtype=ttnn.int32) if kv_cache else None
         )
 
-        MAX_GEN_LEN = config.max_length  # 448 for distil-whisper/distil-large-v3
+        MAX_GEN_LEN = config.max_length  # typically 448 for whisper large models
         print_each_iter = False
         output_ids = []
         total_decode_time = 0
@@ -231,14 +239,19 @@ def run_generate(
             return output
 
 
-def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device):
+def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device, model_repo):
     """
     Returns a callable with signature (data, sampling_rate, stream), where data is is a 1D numpy array
     and sampling_rate is an int representing the sampling rate used to acquire data, and stream turns
     signals the callable to return a generator if True, yielding the decoded tokens as they are processed, else
     the callable returns the full decoded output.
+
+    Args:
+        ttnn_model: The TTNN model
+        device: The target device
+        model_repo: HuggingFace model repository ID. Must be one of the supported models.
     """
-    hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model()
+    hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model(model_repo)
     parameters, ttnn_linear_weight, kv_cache = init_conditional_generation_tt_model(
         hf_ref_model, config, ttnn_model, device
     )
@@ -372,11 +385,13 @@ def run_demo_whisper_for_audio_classification_dataset(ttnn_model, device):
     logger.info(predicted_label)
 
 
-def run_demo_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs):
+def run_demo_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs, model_repo):
     torch.manual_seed(0)
 
     # instantiate model inference pipeline
-    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device)
+    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
+        ttnn_model, device, model_repo
+    )
 
     # load data
     input_data = load_input_paths(input_path)
@@ -405,11 +420,13 @@ def run_demo_whisper_for_conditional_generation_inference(input_path, ttnn_model
     return avg_ttft, avg_decode_throughput
 
 
-def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device):
+def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device, model_repo):
     torch.manual_seed(0)
 
     # instantiate model inference pipeline
-    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device)
+    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(
+        ttnn_model, device, model_repo
+    )
 
     # load data
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
@@ -465,17 +482,21 @@ def test_demo_for_audio_classification_dataset(ttnn_model, device, is_ci_env):
     "num_inputs",
     (2,),
 )
+@pytest.mark.parametrize(
+    "model_repo",
+    ("openai/whisper-large-v3", "distil-whisper/distil-large-v3"),
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inputs, is_ci_env):
+def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inputs, model_repo, is_ci_env):
     ttft, decode_throughput = run_demo_whisper_for_conditional_generation_inference(
-        input_path, ttnn_model, device, num_inputs
+        input_path, ttnn_model, device, num_inputs, model_repo
     )
-    if is_ci_env:
+    if is_ci_env and model_repo == "distil-whisper/distil-large-v3":
         if is_blackhole():
             if device.dram_grid_size().x == 7:  # P100 DRAM grid is 7x1
-                expected_perf_metrics = {"prefill_t/s": 7.67, "decode_t/s/u": 87.0}
+                expected_perf_metrics = {"prefill_t/s": 7.85, "decode_t/s/u": 87.0}
             else:
-                expected_perf_metrics = {"prefill_t/s": 7.67, "decode_t/s/u": 94.0}
+                expected_perf_metrics = {"prefill_t/s": 8.40, "decode_t/s/u": 94.0}
         else:  # wormhole_b0
             expected_perf_metrics = {"prefill_t/s": 3.85, "decode_t/s/u": 51.8}
         expected_perf_metrics["decode_t/s"] = expected_perf_metrics["decode_t/s/u"]  # Only supporting batch 1
@@ -487,8 +508,12 @@ def test_demo_for_conditional_generation(input_path, ttnn_model, device, num_inp
     "ttnn_model",
     (ttnn_optimized_functional_whisper,),
 )
+@pytest.mark.parametrize(
+    "model_repo",
+    ("openai/whisper-large-v3", "distil-whisper/distil-large-v3"),
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_conditional_generation_dataset(ttnn_model, device, is_ci_env):
+def test_demo_for_conditional_generation_dataset(ttnn_model, device, model_repo, is_ci_env):
     if is_ci_env:
         pytest.skip("Skipping test in CI since it provides redundant testing")
-    return run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device)
+    return run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device, model_repo)
