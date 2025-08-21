@@ -122,12 +122,31 @@ protected:
 };
 
 class Fabric1DTensixFixture : public BaseFabricFixture {
+private:
+    inline static bool should_skip_ = false;
+
 protected:
     static void SetUpTestSuite() {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
+                tt::tt_metal::ClusterType::GALAXY ||
+            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
+            should_skip_ = true;
+            return;
+        }
         BaseFabricFixture::DoSetUpTestSuite(
             tt::tt_fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_fabric::FabricTensixConfig::MUX);
     }
-    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+    static void TearDownTestSuite() {
+        if (!should_skip_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+        }
+    }
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "Fabric1DTensixFixture tests are not supported on Galaxy systems";
+        }
+        BaseFabricFixture::SetUp();
+    }
 };
 
 class NightlyFabric1DFixture : public BaseFabricFixture {
