@@ -150,18 +150,7 @@ def run_reduce_scatter_impl(
     ##### Perform the TT ops #####
     tt_reduce_scatter_output_list = []
 
-    if do_sync:
-        delays = []
-        for i in range(t3k_mesh_device.shape[0]):
-            delay_at_i = []
-            for j in range(t3k_mesh_device.shape[1]):
-                delay_at_i.append(0)
-            delays.append(delay_at_i)
-        delays[0][0] = 800000
-
     def run_op(i):
-        if do_sync:
-            ttnn.apply_device_delay(t3k_mesh_device, delays)
         tt_reduce_scatter_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             tt_input_tensor_mesh_list[i],
             persistent_output_buffers=None
