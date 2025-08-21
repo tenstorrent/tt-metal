@@ -167,7 +167,7 @@ private:
 
     // Channel connection liveness check disable array
     mutable std::array<bool, FabricEriscDatamoverConfig::num_sender_channels>
-        channel_connection_liveness_check_disable_array_;
+        channel_connection_liveness_check_disable_array_{};
 
     // Helper methods for kernel compilation
     std::vector<uint32_t> get_compile_time_args() const;
