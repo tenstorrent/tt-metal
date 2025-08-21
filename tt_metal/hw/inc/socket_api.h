@@ -161,9 +161,9 @@ void socket_barrier(const SocketSenderInterface& socket) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
     while (reinterpret_cast<uint32_t>(bytes_acked_ptr) <
            socket.bytes_acked_base_addr + socket.num_downstreams * bytes_acked_size_bytes) {
-        while (socket.bytes_sent != *bytes_acked_ptr) {
+        do {
             invalidate_l1_cache();
-        }
+        } while (socket.bytes_sent != *bytes_acked_ptr);
         bytes_acked_ptr += bytes_acked_size_bytes;
     }
 }

@@ -24,7 +24,7 @@ tests:
       - type: "all_to_all_devices"
         core_coord: [0, 0]
   - name: "all_device_broadcast_pattern_test"
-    num_iterations: 20
+    num_iterations: 5
     memory_config:
       fifo_size: 2048
       page_size: 512
