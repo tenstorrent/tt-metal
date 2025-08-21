@@ -429,3 +429,17 @@ tests:
       of the performance when compared to our L1 Interleaved Page Read Numbers. The reason for this is the
       large number of get_noc_addr(stick_id, s0) calls. Without them, we get ~14.3B/cycle, compared
       to the expected ~18B/cycle. The same reasoning as in the previous test applies here.
+  500:
+    name: "Direct Write Performance Comparison"
+    comment: |
+      Compares stateful vs non-stateful NOC inline write performance.
+      Shows scaling advantage of stateful approach with increasing write counts.
+
+  501:
+    name: "Direct Write Address Patterns"
+
+  502:
+    name: "Direct Write NOC Comparison"
+
+  503:
+    name: "Direct Write Correctness"
