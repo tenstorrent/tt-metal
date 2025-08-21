@@ -238,7 +238,7 @@ void process_write_host_h(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
     // We will send the cmd back in the first X bytes, this makes the logic of reserving/pushing completion queue
     // pages much simpler since we are always sending writing full pages (except for last page)
     uint64_t wlength = cmd->write_linear_host.length;
-    // DPRINT << "process_write_host_h: " << length << ENDL();
+    DPRINT << "process_write_host_h: " << length << ENDL();
     uint32_t data_ptr = cmd_ptr;
 #if !defined(FABRIC_RELAY)
     cq_noc_async_write_init_state<CQ_NOC_sNdl>(0, pcie_noc_xy, 0);
@@ -463,7 +463,7 @@ void process_write_host_d(uint32_t& block_noc_writes_to_clear, uint32_t block_ne
 
 void relay_write_h(uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
     volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
-    uint32_t length = sizeof(CQDispatchCmd) + cmd->write_linear.length;
+    uint64_t length = sizeof(CQDispatchCmd) + cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr;
 
     relay_to_next_cb<split_dispatch_page_preamble_size>(
@@ -490,6 +490,9 @@ void process_write_linear(
     uint32_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
     uint32_t length = cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
+    DPRINT << "process_write_linear: " << dst_noc << " " << dst_addr << " " << write_offset_index << " " << length
+           << " " << data_ptr << ENDL();
+
     if (multicast) {
         cq_noc_async_write_init_state<CQ_NOC_sNdl, true>(0, get_noc_addr_helper(dst_noc, dst_addr));
     } else {
@@ -566,8 +569,9 @@ void process_write_paged(uint32_t& block_noc_writes_to_clear, uint32_t block_nex
     InterleavedAddrGen<is_dram> addr_gen{.bank_base_address = base_addr, .page_size = page_size};
     uint32_t dst_addr_offset = 0;  // Offset into page.
 
-    // DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size
-    //        << " dispatch_cb_page_size: " << dispatch_cb_page_size << ENDL();
+    DPRINT << "process_write_paged - pages: " << pages << " page_size: " << page_size << " page_id: " << page_id
+           << " dispatch_cb_page_size: " << dispatch_cb_page_size << " base_addr: " << base_addr
+           << " write_length: " << write_length << " data_ptr: " << data_ptr << ENDL();
 
     while (write_length != 0) {
         // TODO #7360: Have more performant handling when page_size > dispatch_cb_page_size by not doing multiple writes
@@ -661,8 +665,8 @@ void process_write_packed(
     volatile uint32_t tt_l1_ptr* l1_addr = (uint32_t*)(cmd_ptr + sizeof(CQDispatchCmd));
     cq_noc_async_write_init_state<CQ_NOC_snDL, mcast>(0, dst_addr, xfer_size);
 
-    // DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << " " <<
-    // dst_addr << " " << ENDL();
+    DPRINT << "dispatch_write_packed: " << xfer_size << " " << stride << " " << data_ptr << " " << count << " "
+           << dst_addr << " " << cmd_ptr << ENDL();
     uint32_t writes = 0;
     uint32_t mcasts = 0;
     auto wait_for_barrier = [&]() {
@@ -782,6 +786,8 @@ void process_write_packed_large(
     uint32_t local_write_offset = write_offset[write_offset_index];
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd) + count * sizeof(CQDispatchWritePackedLargeSubCmd);
     data_ptr = round_up_pow2(data_ptr, L1_ALIGNMENT);
+    DPRINT << "process_write_packed_large: " << count << " " << alignment << " " << write_offset_index << " "
+           << local_write_offset << " " << data_ptr << ENDL();
 
     constexpr uint32_t sub_cmd_size = sizeof(CQDispatchWritePackedLargeSubCmd);
     careful_copy_from_l1_to_local_cache<l1_to_local_cache_copy_chunk, l1_cache_elements_rounded>(
@@ -938,6 +944,7 @@ uint32_t stream_wrap_ge(uint32_t a, uint32_t b) {
     // Below relies on taking the diff first then the compare to move the wrap
     // to 2^31 away
     int32_t diff = a - b;
+    DPRINT << "stream_wrap_ge: " << a << " " << b << " " << (diff << shift) << ENDL();
     return (diff << shift) >= 0;
 }
 
@@ -1130,13 +1137,13 @@ re_run_command:
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
             WAYPOINT("DWB");
-            // DPRINT << "cmd_write_linear\n";
+            DPRINT << "cmd_write_linear\n";
             process_write(block_noc_writes_to_clear, block_next_start_addr);
             WAYPOINT("DWD");
             break;
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
-            // DPRINT << "cmd_write_linear_h\n";
+            DPRINT << "cmd_write_linear_h\n";
             if (is_h_variant) {
                 process_write(block_noc_writes_to_clear, block_next_start_addr);
             } else {
@@ -1145,7 +1152,7 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
-            // DPRINT << "cmd_write_linear_h_host\n";
+            DPRINT << "cmd_write_linear_h_host\n";
             if (is_h_variant) {
                 process_write_host_h(block_noc_writes_to_clear, block_next_start_addr);
             } else {
@@ -1163,7 +1170,7 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED: {
-            // DPRINT << "cmd_write_packed" << ENDL();
+            DPRINT << "cmd_write_packed" << ENDL();
             uint32_t flags = cmd->write_packed.flags;
             // Must match unpacking code in tt_metal/impl/profiler/profiler.cpp.
             uint32_t data = ((flags & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_TYPE_MASK) >>
@@ -1180,19 +1187,19 @@ re_run_command:
         } break;
 
         case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
-            // DPRINT << "cmd_notify_dispatch_s_go_signal" << ENDL();
+            DPRINT << "cmd_notify_dispatch_s_go_signal" << ENDL();
             process_notify_dispatch_s_go_signal_cmd();
             break;
 
         case CQ_DISPATCH_CMD_WRITE_PACKED_LARGE:
-            // DPRINT << "cmd_write_packed_large" << ENDL();
+            DPRINT << "cmd_write_packed_large" << ENDL();
             // Must match unpacking code in tt_metal/impl/profiler/profiler.cpp.
             DeviceTimestampedData("packed_large_data_dispatch", cmd->write_packed_large.type);
             process_write_packed_large(l1_cache, block_noc_writes_to_clear, block_next_start_addr);
             break;
 
         case CQ_DISPATCH_CMD_WAIT:
-            // DPRINT << "cmd_wait" << ENDL();
+            DPRINT << "cmd_wait" << ENDL();
             process_wait();
             break;
 
@@ -1210,7 +1217,7 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_EXEC_BUF_END:
-            // DPRINT << "cmd_exec_buf_end\n";
+            DPRINT << "cmd_exec_buf_end\n";
             if (is_h_variant) {
                 process_exec_buf_end_h();
             } else {
@@ -1219,24 +1226,26 @@ re_run_command:
             break;
 
         case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
-            // DPRINT << "cmd_go_send_go_signal" << ENDL();
+            DPRINT << "cmd_go_send_go_signal" << ENDL();
             process_go_signal_mcast_cmd();
             break;
 
         case CQ_DISPATCH_SET_NUM_WORKER_SEMS:
-            // DPRINT << "cmd_set_num_worker_sems" << ENDL();
+            DPRINT << "cmd_set_num_worker_sems" << ENDL();
             // This command is only used by dispatch_s
             ASSERT(0);
             cmd_ptr += sizeof(CQDispatchCmd);
             break;
 
-        case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
+        case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA:
+            DPRINT << "cmd_set_go_signal_noc_data" << ENDL();
+            set_go_signal_noc_data();
+            break;
 
         case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: {
-            // DPRINT << "write offset: " << cmd->set_write_offset.offset0 << " " << cmd->set_write_offset.offset1 << "
-            // "
-            //        << cmd->set_write_offset.offset2 << " host id " << cmd->set_write_offset.program_host_id <<
-            //        ENDL();
+            DPRINT << "cmd_set_write_offset: " << cmd->set_write_offset.offset0 << " " << cmd->set_write_offset.offset1
+                   << " " << cmd->set_write_offset.offset2 << " host id " << cmd->set_write_offset.program_host_id
+                   << ENDL();
             DeviceTimestampedData("runtime_host_id_dispatch", cmd->set_write_offset.program_host_id);
             uint32_t offset_count = cmd->set_write_offset.offset_count;
 
@@ -1284,21 +1293,21 @@ static inline bool process_cmd_h(
     DeviceTimestampedData("process_cmd_h_dispatch", (uint32_t)cmd->base.cmd_id);
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H:
-            // DPRINT << "dispatch_h write_linear_h\n";
+            DPRINT << "dispatch_h write_linear_h\n";
             process_write(block_noc_writes_to_clear, block_next_start_addr);
             break;
 
         case CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST:
-            // DPRINT << "dispatch_h linear_h_host\n";
+            DPRINT << "dispatch_h linear_h_host\n";
             process_write_host_h(block_noc_writes_to_clear, block_next_start_addr);
             break;
 
         case CQ_DISPATCH_CMD_EXEC_BUF_END:
-            // DPRINT << "dispatch_h exec_buf_end\n";
+            DPRINT << "dispatch_h exec_buf_end\n";
             process_exec_buf_end_h();
             break;
         case CQ_DISPATCH_CMD_TERMINATE:
-            // DPRINT << "dispatch_h terminate\n";
+            DPRINT << "dispatch_h terminate\n";
             cmd_ptr += sizeof(CQDispatchCmd);
             done = true;
             break;
