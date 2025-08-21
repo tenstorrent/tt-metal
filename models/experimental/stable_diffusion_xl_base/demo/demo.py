@@ -79,32 +79,16 @@ def run_demo_inference(
             batch_size,
             cpu_device,
         )
-    all_embeds = tt_sdxl.encode_prompts(prompts)
-
-    items_per_core = len(all_embeds) // batch_size  # this will always be a multiple of batch_size because of padding
-
-    if batch_size > 1:  # If batch_size is 1, no need to reorder
-        reordered = []
-        for i in range(batch_size):
-            for j in range(items_per_core):
-                index = i + j * batch_size
-                reordered.append(all_embeds[index])
-        all_embeds = reordered
-
-    prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = zip(*all_embeds)
-
-    prompt_embeds_torch = torch.split(torch.cat(prompt_embeds, dim=0), batch_size, dim=0)
-    negative_prompt_embeds_torch = torch.split(torch.cat(negative_prompt_embeds, dim=0), batch_size, dim=0)
-    pooled_prompt_embeds_torch = torch.split(torch.cat(pooled_prompt_embeds, dim=0), batch_size, dim=0)
-    negative_pooled_prompt_embeds_torch = torch.split(
-        torch.cat(negative_pooled_prompt_embeds, dim=0), batch_size, dim=0
-    )
-
-    tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-        prompt_embeds,
+    (
         prompt_embeds_torch,
         negative_prompt_embeds_torch,
-        pooled_prompt_embeds,
+        pooled_prompt_embeds_torch,
+        negative_pooled_prompt_embeds_torch,
+    ) = tt_sdxl.encode_prompts(prompts)
+
+    tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
+        prompt_embeds_torch,
+        negative_prompt_embeds_torch,
         pooled_prompt_embeds_torch,
         negative_pooled_prompt_embeds_torch,
     )

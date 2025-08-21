@@ -248,17 +248,28 @@ class TtSDXLPipeline(nn.Module):
                     torch.split(negative_pooled_prompt_embeds_batch, 1, dim=0),
                 )
             )
+        prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = zip(*all_embeds)
+
+        prompt_embeds_torch = torch.split(torch.cat(prompt_embeds, dim=0), self.batch_size, dim=0)
+        negative_prompt_embeds_torch = torch.split(torch.cat(negative_prompt_embeds, dim=0), self.batch_size, dim=0)
+        pooled_prompt_embeds_torch = torch.split(torch.cat(pooled_prompt_embeds, dim=0), self.batch_size, dim=0)
+        negative_pooled_prompt_embeds_torch = torch.split(
+            torch.cat(negative_pooled_prompt_embeds, dim=0), self.batch_size, dim=0
+        )
 
         profiler.end("encode_prompts")
         logger.info(f"Encoded prompts")
-        return all_embeds
+        return (
+            prompt_embeds_torch,
+            negative_prompt_embeds_torch,
+            pooled_prompt_embeds_torch,
+            negative_pooled_prompt_embeds_torch,
+        )
 
     def generate_input_tensors(
         self,
-        prompt_embeds,
         prompt_embeds_torch,
         negative_prompt_embeds_torch,
-        pooled_prompt_embeds,
         pooled_prompt_embeds_torch,
         negative_pooled_prompt_embeds_torch,
     ):
@@ -277,14 +288,14 @@ class TtSDXLPipeline(nn.Module):
             num_channels_latents,
             height,
             width,
-            prompt_embeds[0].dtype,
+            prompt_embeds_torch[0].dtype,
             self.cpu_device,
             None,
             None,
         )
 
         self.extra_step_kwargs = self.torch_pipeline.prepare_extra_step_kwargs(None, 0.0)
-        add_text_embeds = pooled_prompt_embeds
+
         text_encoder_projection_dim = self.torch_pipeline.text_encoder_2.config.projection_dim
         assert (
             text_encoder_projection_dim == 1280
@@ -297,7 +308,7 @@ class TtSDXLPipeline(nn.Module):
             original_size,
             crops_coords_top_left,
             target_size,
-            dtype=prompt_embeds[0].dtype,
+            dtype=prompt_embeds_torch[0].dtype,
             text_encoder_projection_dim=text_encoder_projection_dim,
         )
         negative_add_time_ids = add_time_ids
@@ -330,6 +341,8 @@ class TtSDXLPipeline(nn.Module):
 
     def prepare_input_tensors(self, host_tensors):
         # Tensor device transfer for the current users.
+
+        assert self.allocated_device_tensors, "Device tensors are not allocated"
 
         logger.info("Preparing input tensors for TT model...")
         profiler.start("prepare_input_tensors")
