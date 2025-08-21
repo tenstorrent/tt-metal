@@ -235,6 +235,7 @@ list(APPEND SOURCES ${METAL_OPS_FILES})
 # Check if Metalium::Metal target exists
 # If it does not exist, assume that we are building with tt-train as top level project
 if(NOT TARGET Metalium::Metal)
+    #[[
     if("$ENV{TT_METAL_HOME}" STREQUAL "")
         message(FATAL_ERROR "TT_METAL_HOME is not set")
     endif()
@@ -338,6 +339,8 @@ if(NOT TARGET Metalium::Metal)
     else()
         message(FATAL_ERROR "_ttnncpp.so not found in ${METALIUM_LIB_PATH}")
     endif()
+    #]]
+    find_package(TT-NN REQUIRED)
 else()
     message(STATUS "Metalium targets already exists")
 endif()
@@ -359,9 +362,10 @@ target_link_libraries(
         z
         pthread
         atomic
-        Metalium::Metal
-        Metalium::TTNN
-        Metalium::TTNNCPP
+        TT::Metalium
+        # Metalium::Metal
+        TTNN::TTNN
+        # TTNN::TTNNCPP
         Python3::Python
         fmt::fmt-header-only
         enchantum::enchantum

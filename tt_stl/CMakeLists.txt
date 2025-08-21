@@ -14,6 +14,7 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS .
         FILES
+            tt_stl/optional_reference.hpp
             tt_stl/aligned_allocator.hpp
             tt_stl/any_range.hpp
             tt_stl/cleanup.hpp
