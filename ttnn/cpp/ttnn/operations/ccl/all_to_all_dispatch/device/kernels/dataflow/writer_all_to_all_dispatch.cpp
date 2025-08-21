@@ -220,11 +220,12 @@ void kernel_main() {
                                 mesh_rows,
                                 mesh_cols,
                                 fabric_max_packet_size>(
+                                output_addr_gen,
                                 fabric_connections,
                                 unicast_packet_header,
                                 d,
                                 input_token_read_addr,
-                                output_token_write_addr,
+                                global_token,
                                 (int)output_page_size,
                                 alignment);
                         } else {
@@ -233,12 +234,13 @@ void kernel_main() {
                                 mesh_rows,
                                 mesh_cols,
                                 fabric_max_packet_size>(
+                                output_addr_gen,
                                 fabric_connections,
                                 unicast_packet_header,
                                 dest_chip_ids[d],
                                 dest_mesh_ids[d],
                                 input_token_read_addr,
-                                output_token_write_addr,
+                                global_token,
                                 (int)output_page_size,
                                 alignment);
                         }
@@ -281,11 +283,12 @@ void kernel_main() {
                             mesh_rows,
                             mesh_cols,
                             fabric_max_packet_size>(
+                            metadata_addr_gen,
                             fabric_connections,
                             metadata_packet_header,
                             d,
                             token_indices_address,
-                            metadata_write_addr,
+                            global_token,
                             global_noc_semaphore_address,
                             (int)metadata_page_size,
                             alignment,
@@ -297,12 +300,13 @@ void kernel_main() {
                             mesh_rows,
                             mesh_cols,
                             fabric_max_packet_size>(
+                            metadata_addr_gen,
                             fabric_connections,
                             metadata_packet_header,
                             dest_chip_ids[d],
                             dest_mesh_ids[d],
                             token_indices_address,
-                            metadata_write_addr,
+                            global_token,
                             global_noc_semaphore_address,
                             (int)metadata_page_size,
                             alignment,
