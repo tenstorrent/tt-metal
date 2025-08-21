@@ -18,6 +18,8 @@ using namespace tt::tt_fabric;
 // Runtime args (RT) in this order:
 //   0: dest_noc_addr_lo     (u32)
 //   1: dest_noc_addr_hi     (u32)
+//   2: dst_mesh_id          (u32)  logical mesh id (will be truncated to u16)
+//   3: dst_dev_id           (u32)  logical device id in that mesh (u16)
 //   [then]: WorkerToFabricEdmSender RT args (append_fabric_connection_rt_args adds these)
 
 void kernel_main() {
@@ -30,13 +32,30 @@ void kernel_main() {
     const uint32_t dest_noc_hi = get_arg_val<uint32_t>(idx++);
     const uint64_t dest_noc_addr = (uint64_t(dest_noc_hi) << 32) | uint64_t(dest_noc_lo);
 
+    const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+    const uint16_t dst_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
+
     // Build fabric connection from remaining RT args
     auto sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
 
     // Reusable packet header in L1
     volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
     zero_l1_buf((uint32_t*)header, sizeof(PACKET_HEADER_TYPE));
+
+    // NOC header: unicast write of PAGE_SIZE bytes to the destination NOC address
     header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
+
+    // Fabric header (2D dynamic routing): set destination mesh/device on the header.
+    // This call ignores outgoing dir / my_dev / ew_dim under dynamic routing.
+    // Cast to the MeshPacketHeader form expected by the 2D API helper.
+    fabric_set_unicast_route(
+        reinterpret_cast<volatile tt_l1_ptr MeshPacketHeader*>(header),
+        eth_chan_directions::EAST,  // ignored for dynamic routing
+        /*my_dev_id*/ 0,            // ignored
+        /*dst_dev_id*/ dst_dev_id,
+        /*dst_mesh_id*/ dst_mesh_id,
+        /*ew_dim*/ 0  // ignored
+    );
 
     sender.open();
 
