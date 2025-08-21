@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include <vector>
+// #include "debug/dprint.h"
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
@@ -43,6 +44,15 @@ void kernel_main() {
     constexpr bool use_half_tile = get_compile_time_arg_val(25);
     constexpr uint32_t q_chunk_size_bytes = get_compile_time_arg_val(26);
 
+    // TensorAccessorArgs for all buffers
+    constexpr auto k_args = TensorAccessorArgs<27>();
+    constexpr auto q_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
+    constexpr auto v_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
+    constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
+    constexpr auto pos_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
+    constexpr auto page_table_args = TensorAccessorArgs<pos_args.next_compile_time_args_offset()>();
+    constexpr auto attention_sink_args = TensorAccessorArgs<page_table_args.next_compile_time_args_offset()>();
+
     uint32_t arg_idx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t k_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -74,7 +84,10 @@ void kernel_main() {
             cur_pos = cur_pos_arg;
         } else {
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
-            const InterleavedAddrGen<true> addrg = {.bank_base_address = pos_addr, .page_size = index_stick_size_B};
+            // constexpr DataFormat pos_data_format = get_dataformat(cb_index_id);
+            // const InterleavedAddrGenFast<true> addrg = {
+            //     .bank_base_address = pos_addr, .page_size = index_stick_size_B, .data_format = pos_data_format};
+            const auto addrg = TensorAccessor(pos_args, pos_addr, index_stick_size_B);
 
             cb_reserve_back(cb_index_id, 1);
             uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
@@ -116,8 +129,6 @@ void kernel_main() {
     uint32_t v_chunk_tiles = Sk_chunk_t_dynamic * vDHt;
     uint32_t mask_chunk_tiles = PNHt * Sk_chunk_t_dynamic;
 
-    constexpr bool is_dram = true;
-
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -127,15 +138,10 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
-    constexpr DataFormat q_data_format = get_dataformat(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
-    constexpr DataFormat k_data_format = get_dataformat(cb_k_in);
     constexpr uint32_t v_tile_bytes = get_tile_size(cb_v_in);
-    constexpr DataFormat v_data_format = get_dataformat(cb_v_in);
     constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
-    constexpr DataFormat mask_data_format = get_dataformat(cb_mask_in);
     constexpr uint32_t attention_sink_tile_bytes = get_tile_size(cb_attention_sink);
-    constexpr DataFormat attention_sink_data_format = get_dataformat(cb_attention_sink);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
@@ -176,37 +182,51 @@ void kernel_main() {
             cb_push_back(cb_q_in, q_chunk_tiles);
         }
     } else {
-        const InterleavedAddrGenFast<is_dram> q_reader = {
-            .bank_base_address = q_addr, .page_size = q_tile_bytes, .data_format = q_data_format};
+        // constexpr DataFormat q_data_format = get_dataformat(cb_q_in);
+        // const InterleavedAddrGenFast<true> q_reader = {
+        //     .bank_base_address = q_addr, .page_size = q_tile_bytes, .data_format = q_data_format};
+        // DPRINT << "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA q num args just before
+        // TensorAccessor " << q_args.num_compile_time_args() << ENDL();
+        const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
         uint32_t q_tile_id = q_batch_offset;
         cb_reserve_back(cb_q_in, q_chunk_tiles);
         uint32_t q_write_ptr = get_write_ptr(cb_q_in);
         for (uint32_t tile = 0; tile < q_chunk_tiles; ++tile) {
+            // uint64_t q_read_ptr = get_noc_addr(q_tile_id, q_reader);
+            // cb_reserve_back(cb_q_in, 1);
             noc_async_read_tile(q_tile_id, q_reader, q_write_ptr);
             q_tile_id += 1;
             q_write_ptr += q_tile_bytes;
+
             if (++barrier_count == barrier_threshold) {
                 noc_async_read_barrier();
                 barrier_count = 0;
             }
+            // noc_async_read_barrier();
+            // cb_push_back(cb_q_in, 1);
         }
         noc_async_read_barrier();
         cb_push_back(cb_q_in, q_chunk_tiles);
     }
 
     // Read the rest
-    const InterleavedAddrGenFast<is_dram> k_reader = {
-        .bank_base_address = k_addr, .page_size = k_tile_bytes, .data_format = k_data_format};
+    // constexpr DataFormat k_data_format = get_dataformat(cb_k_in);
+    // const InterleavedAddrGenFast<true> k_reader = {
+    // .bank_base_address = k_addr, .page_size = k_tile_bytes, .data_format = k_data_format};
+    const auto k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
 
-    const InterleavedAddrGenFast<is_dram> v_reader = {
-        .bank_base_address = v_addr, .page_size = v_tile_bytes, .data_format = v_data_format};
+    // constexpr DataFormat v_data_format = get_dataformat(cb_v_in);
+    // const InterleavedAddrGenFast<true> v_reader = {
+    //     .bank_base_address = v_addr, .page_size = v_tile_bytes, .data_format = v_data_format};
+    const auto v_reader = TensorAccessor(v_args, v_addr, v_tile_bytes);
 
-    const InterleavedAddrGenFast<is_dram> mask_reader = {
-        .bank_base_address = mask_addr, .page_size = mask_tile_bytes, .data_format = mask_data_format};
+    // constexpr DataFormat mask_data_format = get_dataformat(cb_mask_in);
+    // const InterleavedAddrGenFast<true> mask_reader = {
+    //     .bank_base_address = mask_addr, .page_size = mask_tile_bytes, .data_format = mask_data_format};
+    const auto mask_reader = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
 
     // Read attention sink
     if constexpr (use_attention_sink) {
-        constexpr auto attention_sink_args = TensorAccessorArgs<27>();
         const auto attention_sink_reader =
             TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
 
@@ -224,8 +244,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* page_table_ptr;
     if constexpr (is_paged_attention) {
         constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
-        const InterleavedAddrGen<true> page_table_gen = {
-            .bank_base_address = page_table_addr, .page_size = page_table_page_size};
+        constexpr DataFormat page_table_data_format = get_dataformat(cb_id_page_table);
+        // const InterleavedAddrGenFast<true> page_table_gen = {
+        //     .bank_base_address = page_table_addr, .page_size = page_table_page_size, .data_format =
+        //     page_table_data_format};
+        const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr, page_table_page_size);
         cb_reserve_back(cb_id_page_table, 1);
         uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
         uint64_t page_table_noc_addr = get_noc_addr((cur_batch / q_heads_parallel_factor), page_table_gen);

@@ -724,6 +724,15 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         use_half_tile,
         q_chunk_size_bytes,
     };
+    // Add TensorAccessorArgs for all buffers in the order expected by the kernel
+    tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(attn_mask ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(cur_pos_tensor ? cur_pos_tensor->buffer() : nullptr)
+        .append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(page_table_tensor ? page_table_tensor->buffer() : nullptr)
+        .append_to(reader_compile_time_args_common);
     if (use_attention_sink) {
         tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
     } else {
@@ -757,6 +766,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         max_dynamic_chunk_size,
         q_heads_parallel_factor,
     };
+
+    // Add TensorAccessorArgs for output buffer
+    tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,
