@@ -275,12 +275,6 @@ uint32_t get_num_cores_channels_from_parallel_config(const ParallelConfig& pconf
 
 MemoryConfig create_sharded_memory_config_from_parallel_config(
     const ttnn::Shape& tensor_shape, const ParallelConfig& parallel_config, uint32_t tile_size) {
-    log_debug(
-        tt::LogOp,
-        "create_sharded_memory_config_from_parallel_config: tensor_shape: {}, parallel_config: {}, tile_size: {}",
-        tensor_shape,
-        parallel_config,
-        tile_size);
     // tensor_shape is [N, H, W, C]
     TT_ASSERT(tensor_shape[0] == 1 && tensor_shape[1] == 1);  // todo: add support for generic non-2d shapes
     // uint32_t channels = tensor_shape[3];
@@ -299,7 +293,6 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
     TT_FATAL(channels % num_cores_channels == 0, "Channels: {}, num core channels: {}", channels, num_cores_channels);
     uint32_t channel_shard = channels / num_cores_channels;
     auto shard_spec = tt::tt_metal::ShardSpec{parallel_config.grid, {nhw_shard, channel_shard}, shard_orientation};
-    log_debug(tt::LogOp, "Calculated Shard Spec = {}", shard_spec);
     return MemoryConfig{shard_scheme, BufferType::L1, shard_spec};
 }
 
@@ -1099,25 +1092,40 @@ uint32_t calculate_conv_dram_slice_L1_usage(
     if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
         max_output_slice_height = max_output_slice_size;
         max_output_slice_width = params.output_width;
-        max_input_slice_height = (max_output_slice_size * params.stride[0]);
+        max_input_slice_height =
+            (max_output_slice_size * params.stride[0] + params.dilation[0] * (params.kernel_size[0] - 1) + 1);
         max_input_slice_width = params.input_width;
 
         min_output_slice_height = min_output_slice_size;
         min_output_slice_width = params.output_width;
-        min_input_slice_height = (min_output_slice_size * params.stride[0]);
+        min_input_slice_height =
+            (min_output_slice_size * params.stride[0] + params.dilation[0] * (params.kernel_size[0] - 1) + 1);
         min_input_slice_width = params.input_width;
     } else {
         max_output_slice_height = params.output_height;
         max_output_slice_width = max_output_slice_size;
         max_input_slice_height = params.input_height;
-        max_input_slice_width = (max_output_slice_size * params.stride[1]);
+        max_input_slice_width =
+            (max_output_slice_size * params.stride[1] + params.dilation[1] * (params.kernel_size[1] - 1) + 1);
 
         min_output_slice_height = params.output_height;
         min_output_slice_width = min_output_slice_size;
         min_input_slice_height = params.input_height;
-        min_input_slice_width = (min_output_slice_size * params.stride[1]);
+        min_input_slice_width =
+            (min_output_slice_size * params.stride[1] + params.dilation[1] * (params.kernel_size[1] - 1) + 1);
     }
 
+    log_trace(
+        LogOp,
+        "Min Input = {}x{}, Output = {}x{}, \n Max Input = {}x{}, Output = {}x{}",
+        min_input_slice_height,
+        min_input_slice_width,
+        min_output_slice_height,
+        min_output_slice_width,
+        max_input_slice_height,
+        max_input_slice_width,
+        max_output_slice_height,
+        max_output_slice_width);
     auto compute_l1_usage_for_slice = [&](uint32_t input_slice_height,
                                           uint32_t input_slice_width,
                                           uint32_t output_slice_height,
