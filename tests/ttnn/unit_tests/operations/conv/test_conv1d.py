@@ -354,7 +354,10 @@ def test_squeezebert_conv1d(
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups",
-    ((1, 32, 32, 1024, 3, 1, 1, 1),),
+    (
+        (1, 32, 32, 1024, 3, 1, 1, 1),
+        (2, 512, 512, 1024, 7, 1, 3, 512),
+    ),
 )
 @pytest.mark.parametrize("prepare_weights", [True, False])
 def test_with_prepare_weights(
@@ -400,11 +403,11 @@ def test_with_prepare_weights(
             input_height=input_length,
             input_width=1,
             kernel_size=(kernel_size, 1),
-            stride=(1, 1),
-            padding=(1, 0),
+            stride=(stride, 1),
+            padding=(padding, 0),
             dilation=(1, 1),
             has_bias=False,
-            groups=1,
+            groups=groups,
             device=device,
             input_dtype=ttnn.bfloat16,
         )
