@@ -20,19 +20,16 @@ void kernel_main() {
     const uint32_t offset = get_arg_val<uint32_t>(10);
     const uint32_t batch_read_offset = get_arg_val<uint32_t>(11);
 
-    constexpr bool cache_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t untilized_cache_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(3);
-    constexpr uint32_t untilized_input_cb_id = get_compile_time_arg_val(4);
-    constexpr uint32_t granularity = get_compile_time_arg_val(5);
-    constexpr uint32_t u_count = get_compile_time_arg_val(6);
+    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t untilized_cache_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(2);
+    constexpr uint32_t untilized_input_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t granularity = get_compile_time_arg_val(4);
+    constexpr uint32_t u_count = get_compile_time_arg_val(5);
+    constexpr auto cache_args = TensorAccessorArgs<6>();
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
-    const DataFormat cache_data_format = get_dataformat(cache_cb_id);
-
-    const InterleavedAddrGenFast<cache_is_dram> s0 = {
-        .bank_base_address = cache_addr, .page_size = cache_tile_bytes, .data_format = cache_data_format};
+    const auto s0 = TensorAccessor(cache_args, cache_addr, cache_tile_bytes);
 
     uint32_t cache_id = cache_start_id;
     uint32_t b = batch_start_id;

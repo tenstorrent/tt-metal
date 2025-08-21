@@ -649,7 +649,7 @@ template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     distributed::MeshDevice* mesh_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id) {
     if (tensor.storage_type() == StorageType::DEVICE) {
         return tensor;  // Tensor already on device
@@ -657,13 +657,18 @@ Tensor to_device(
 
     TT_FATAL(mesh_device != nullptr, "Need target device in order to move tensor to device!");
 
-    TensorSpec tensor_spec(
-        tensor.logical_shape(), tensor.tensor_spec().tensor_layout().with_memory_config(memory_config));
+    std::optional<TensorSpec> tensor_spec_overriden_memory_config;
+    if (memory_config) {
+        tensor_spec_overriden_memory_config = tensor.tensor_spec().with_memory_config(*memory_config);
+    }
 
-    auto mesh_buffer = allocate_device_buffer(mesh_device, tensor_spec);
+    const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
+                                  ? &tensor_spec_overriden_memory_config.value()
+                                  : &tensor.tensor_spec();
+    auto mesh_buffer = allocate_device_buffer(mesh_device, *tensor_spec);
     DeviceStorage mesh_storage =
-        to_device_mesh_buffer<T>(tensor.storage(), mesh_buffer, tensor_spec, *tensor.tensor_attributes, cq_id);
-    return Tensor(std::move(mesh_storage), tensor_spec, tensor.distributed_tensor_config(), tensor.tensor_topology());
+        to_device_mesh_buffer<T>(tensor.storage(), mesh_buffer, *tensor_spec, *tensor.tensor_attributes, cq_id);
+    return Tensor(std::move(mesh_storage), *tensor_spec, tensor.distributed_tensor_config(), tensor.tensor_topology());
 }
 
 template <typename T>
@@ -749,39 +754,39 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, ttnn::Queu
 template Tensor to_device<bfloat16>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id);
 template Tensor to_device<float>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id);
 template Tensor to_device<int32_t>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id);
 template Tensor to_device<uint32_t>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id);
 template Tensor to_device<uint16_t>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id);
 template Tensor to_device<uint8_t>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id);
 
 template <>
 Tensor to_device<bfloat4_b>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id) {
     return to_device<uint32_t>(tensor, target_device, memory_config, cq_id);
 }
@@ -790,7 +795,7 @@ template <>
 Tensor to_device<bfloat8_b>(
     const Tensor& tensor,
     distributed::MeshDevice* target_device,
-    const MemoryConfig& memory_config,
+    ttsl::optional_reference<const MemoryConfig> memory_config,
     ttnn::QueueId cq_id) {
     return to_device<uint32_t>(tensor, target_device, memory_config, cq_id);
 }
