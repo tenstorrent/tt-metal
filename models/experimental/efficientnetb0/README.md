@@ -11,12 +11,12 @@ EfficientNet-B0 is a lightweight and efficient convolutional neural network arch
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
   - To obtain the perf reports through profiler, please build with: `./build_metal.sh -p`
 - Login to huggingface using your token: `huggingface-cli login` or by setting the token with the command `export HF_TOKEN=<token>`
-- To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
+  - To obtain a huggingface token visit: https://huggingface.co/docs/hub/security-tokens
 
 
 ## How to run
 
-Use the following command to run the `EfficientNetb0` model:
+- Use the following command to run the `EfficientNetb0` model:
 
   ```sh
   pytest models/experimental/efficientnetb0/tests/pcc/test_ttnn_efficientnetb0.py::test_efficientnetb0_model
@@ -24,24 +24,42 @@ Use the following command to run the `EfficientNetb0` model:
 
 ### Model performant running with Trace+2CQs
 
-- For `224x224`, end-2-end perf is `75` FPS :
+#### Single Device (BS=1)
+
+- For `224x224`, end-2-end perf is `74` FPS :
 
   ```sh
   pytest models/experimental/efficientnetb0/tests/perf/test_e2e_performant.py::test_e2e_performant
   ```
 
-### Model Demo with Trace+2CQs
+#### Multi Device (DP=2, N300)
 
-- Use the following command to run the demo for `224x224`:
+- For `224x224`, end-2-end perf is `146` FPS :
+
+  ```sh
+  pytest models/experimental/efficientnetb0/tests/perf/test_e2e_performant.py::test_e2e_performant_dp
+  ```
+
+## Model Demo with Trace+2CQs
+
+#### Single Device (BS=1)
+
+- Use the following command to run demo for 224x224 resolution:
 
   ```sh
   pytest models/experimental/efficientnetb0/demo/demo.py::test_demo
   ```
 
+#### Multi Device (DP=2, N300)
 
-### Details
+- Use the following command to run demo for 224x224 resolution:
 
-- The entry point to `efficientnetb0` is in `models/experimental/efficientnetb0/tt/ttnn_efficientnetb0.py`.
-- Batch Size : `1` (Single Device).
+  ```sh
+  pytest models/experimental/efficientnetb0/demo/demo.py::test_demo_dp
+  ```
+
+## Details
+- The entry point to efficientnetb0 is in models/experimental/efficientnetb0/tt/ttnn_efficientnetb0.py.
+- Batch Size : `1` (Single Device), `2` (Multi Device).
 - Supported Input Resolution - `(224, 224)` - (Height, Width).
 - Dataset used for evaluation - **imagenet-1k**

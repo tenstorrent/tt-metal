@@ -18,7 +18,6 @@ from models.demos.deepseek_v3.utils.test_utils import assert_hidden_dim_pcc, get
 @pytest.fixture
 def reference_model(hf_config):
     """Get the actual DeepSeek MLP model using local implementation."""
-    torch.manual_seed(5)
     torch.use_deterministic_algorithms(True)
     # Note : Running Reference MoE without shared experts
     hf_config.n_shared_experts = None
@@ -28,7 +27,7 @@ def reference_model(hf_config):
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
     ],
     indirect=True,
 )
@@ -42,6 +41,7 @@ def reference_model(hf_config):
 def test_forward_pass(
     mode,
     seq_len,
+    set_deterministic_env,
     reference_model,
     hf_config,
     tmp_path,
@@ -64,7 +64,7 @@ def test_forward_pass(
         reference_output = reference_model(torch_input)
 
     # Setup: Convert weights and get weight_config
-    weight_config = MoE.convert_weights(hf_config, hf_state_dict, tmp_path, mesh_device)
+    weight_config = MoE.convert_weights(hf_config, [hf_state_dict], tmp_path, mesh_device)
 
     # Generate appropriate config using utility function
     model_config = get_model_config(MoE, mode, hf_config, mesh_device)
@@ -82,7 +82,7 @@ def test_forward_pass(
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(1),
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,

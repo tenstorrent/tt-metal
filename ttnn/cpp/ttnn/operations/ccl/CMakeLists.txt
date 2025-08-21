@@ -15,7 +15,6 @@ file(
     GLOB_RECURSE kernels
     kernel_common/*
     kernels/*
-    all_gather/device/kernels/*
 )
 target_sources(
     ttnn_op_ccl
@@ -32,6 +31,12 @@ target_sources(
             common/types/ccl_types_device.hpp
             common/uops/ccl_command_device.hpp
             common/uops/ccl_command.hpp
+            common/interpreter_backends/kernel_common/algorithms.hpp
+            common/interpreter_backends/kernel_common/io_descriptors.hpp
+            common/kernels/command_processor.hpp
+            common/kernels/ccl_send_reader_two_input.cpp
+            common/kernels/ccl_send.cpp
+            common/kernels/ccl_wait_completion.cpp
     PRIVATE
         # Common
         ccl_op_fusion.cpp
@@ -46,9 +51,6 @@ target_sources(
         common/host/ccl_command_stream_builders.cpp
         common/host/moe_utils.cpp
         # Ops
-        all_gather/all_gather.cpp
-        all_gather/device/all_gather_op.cpp
-        all_gather/device/multi_core/all_gather_op_multi_core.cpp
         all_to_all_combine/all_to_all_combine.cpp
         all_to_all_combine/device/all_to_all_combine_device_operation.cpp
         all_to_all_combine/device/all_to_all_combine_program_factory.cpp
@@ -58,11 +60,6 @@ target_sources(
         mesh_partition/mesh_partition.cpp
         mesh_partition/device/mesh_partition_device_operation.cpp
         mesh_partition/device/mesh_partition_program_factory.cpp
-        reduce_scatter/device/host/reduce_scatter_full_worker_grid.cpp
-        reduce_scatter/device/reduce_scatter_op.cpp
-        reduce_scatter/reduce_scatter.cpp
-        reduce_scatter/host/reduce_scatter_worker_builder.cpp
-        reduce_scatter/host/reduce_scatter_common.cpp
         barrier/device/host/barrier_full_worker_grid.cpp
         barrier/device/barrier_op.cpp
         barrier/barrier.cpp

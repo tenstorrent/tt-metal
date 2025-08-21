@@ -14,8 +14,8 @@ namespace ttnn::operations::sliding_window {
 
 struct ParallelConfig {
     CoreRangeSet grid = {};
-    tt::tt_metal::TensorMemoryLayout shard_scheme;
-    tt::tt_metal::ShardOrientation shard_orientation;
+    tt::tt_metal::TensorMemoryLayout shard_scheme{0};
+    tt::tt_metal::ShardOrientation shard_orientation{0};
 
     bool operator==(const ParallelConfig& other) {
         return (
@@ -36,6 +36,7 @@ std::array<uint32_t, 4> get_pair_n4_padding(
 struct SlidingWindowConfig {
     // input tensor shape
     uint32_t batch_size = 0;
+    uint32_t channels = 0;
     uint32_pair_t input_hw = {0, 0};
 
     // windowing parameters

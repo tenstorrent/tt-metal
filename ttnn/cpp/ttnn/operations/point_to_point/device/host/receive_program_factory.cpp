@@ -4,6 +4,7 @@
 ///
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include "point_to_point_device_op.hpp"
@@ -77,24 +78,22 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const auto [num_hops, sender_is_forward, next_fabric_id] =
         detail::fabric_1d_routing(mesh_device, receive_coord, send_coord, topology);
 
-    const bool intermediate_is_dram = output_tensors.at(0).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
-    const std::vector<uint32_t> reader_ct_args = {
-        intermediate_is_dram, packet_header_cb_id, packet_cb_id, receiver_cb_id, l1_alignment};
+    std::vector<uint32_t> reader_ct_args = {packet_header_cb_id, packet_cb_id, receiver_cb_id, l1_alignment};
+    tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(reader_ct_args);
     tt::tt_metal::KernelHandle receive_unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_receive.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     // And the writer
+    std::vector<uint32_t> writer_ct_args = {receiver_cb_id};
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
     tt::tt_metal::KernelHandle receive_unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/writer_unary_interleaved_start_id_gen.cpp",
         all_cores,
-        tt::tt_metal::WriterDataMovementConfig({receiver_cb_id, output_is_dram}));
+        tt::tt_metal::WriterDataMovementConfig(writer_ct_args));
 
     constexpr auto link_idx = 0;  // for single link implementation
     uint32_t page_idx_start = 0, page_idx_end = 0;

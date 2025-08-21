@@ -146,29 +146,29 @@ bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_
     tt_metal::CircularBufferConfig l1_input0_cb_config =
         tt_metal::CircularBufferConfig(dram_buffer_size_bfp8b, {{in0_id, tt::DataFormat::Bfp8_b}})
             .set_page_size(in0_id, single_tile_size_bfp8b);
-    auto l1_input0_cb = tt_metal::CreateCircularBuffer(program, core, l1_input0_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_input0_cb_config);
 
     tt_metal::CircularBufferConfig l1_input1_cb_config =
         tt_metal::CircularBufferConfig(dram_buffer_size_bfp16b, {{in1_id, tt::DataFormat::Float16_b}})
             .set_page_size(in1_id, single_tile_size_bfp16b);
-    auto l1_input1_cb = tt_metal::CreateCircularBuffer(program, core, l1_input1_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_input1_cb_config);
 
     tt_metal::CircularBufferConfig l1_input2_cb_config =
         tt_metal::CircularBufferConfig(dram_buffer_size_bfp16b, {{in2_id, tt::DataFormat::Float16_b}})
             .set_page_size(in2_id, single_tile_size_bfp16b);
-    auto l1_input2_cb = tt_metal::CreateCircularBuffer(program, core, l1_input2_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_input2_cb_config);
 
     tt_metal::CircularBufferConfig l1_output0_cb_config =
         tt_metal::CircularBufferConfig(
             dram_buffer_size_out0,
             {{out0_id, (test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b)}})
             .set_page_size(out0_id, single_tile_size_out0);
-    auto l1_output0_cb = tt_metal::CreateCircularBuffer(program, core, l1_output0_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_output0_cb_config);
 
     tt_metal::CircularBufferConfig l1_output1_cb_config =
         tt_metal::CircularBufferConfig(dram_buffer_size_bfp8b, {{out1_id, tt::DataFormat::Bfp8_b}})
             .set_page_size(out1_id, single_tile_size_bfp8b);
-    auto l1_output1_cb = tt_metal::CreateCircularBuffer(program, core, l1_output1_cb_config);
+    tt_metal::CreateCircularBuffer(program, core, l1_output1_cb_config);
 
     vector<uint32_t> compute_kernel_args = {};
     std::map<std::string, std::string> defines;
