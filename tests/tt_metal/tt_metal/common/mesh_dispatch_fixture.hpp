@@ -68,6 +68,7 @@ protected:
         l1_small_size_{l1_small_size}, trace_region_size_{trace_region_size} {};
 
     void SetUp() override {
+        std::cout << "entering dispatch fixture set up" << std::endl;
         this->DetectDispatchMode();
         // Must set up all available devices
         this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
