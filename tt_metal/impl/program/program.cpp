@@ -68,6 +68,7 @@
 #include "tt_memory.h"
 #include "tt_metal/detail/kernel_cache.hpp"
 #include "tt_metal/impl/debug/inspector.hpp"
+#include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
@@ -531,7 +532,7 @@ KernelGroup* detail::ProgramImpl::kernels_on_core(const CoreCoord& core, uint32_
 }
 
 struct KernelGroupInt {
-    bool valid;
+    bool valid{};
     kernel_id_array_t kernel_ids;
 
     bool operator==(const KernelGroupInt &b) const;
@@ -718,6 +719,9 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
                 min_remote_cb_start_index,
                 kg_to_cores.second));
             index++;
+        }
+        for (const auto& kg : kernel_groups_[programmable_core_type_index]) {
+            RecordKernelGroup(*this, hal.get_programmable_core_type(programmable_core_type_index), *kg);
         }
     }
 }
@@ -983,7 +987,7 @@ void detail::ProgramImpl::init_semaphores(
     CoreType core_type = MetalContext::instance().hal().get_core_type(programmable_core_type_index);
     auto semaphores_on_core = this->semaphores_on_core(logical_core, core_type);
     for (auto semaphore : semaphores_on_core) {
-        llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device.id(),
             device.virtual_core_from_logical_core(logical_core, core_type),
             std::vector{semaphore.get().initial_value()},

@@ -12,6 +12,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
 
+#include "tt_metal.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 
 #include "llrt.hpp"
@@ -32,11 +33,11 @@ extern bool perf_test_g;
 extern uint32_t hugepage_issue_buffer_size_g;
 
 struct one_core_data_t {
-    CoreType core_type;
+    CoreType core_type{CoreType::COUNT};
     CoreCoord logical_core;
     CoreCoord phys_core;
-    int bank_id;
-    int bank_offset;
+    int bank_id{};
+    int bank_offset{};
     std::vector<bool> valid;
     std::vector<uint32_t> data;
 };
@@ -46,8 +47,8 @@ private:
     bool banked;  // TODO banked and unbanked tests still don't play nicely together
     int amt_written;
     // 10 is a hack...bigger than any core_type
-    uint64_t base_data_addr[static_cast<size_t>(CoreType::COUNT)];
-    uint64_t base_result_data_addr[static_cast<size_t>(CoreType::COUNT)];
+    uint64_t base_data_addr[static_cast<size_t>(CoreType::COUNT)]{};
+    uint64_t base_result_data_addr[static_cast<size_t>(CoreType::COUNT)]{};
     std::unordered_map<CoreCoord, std::unordered_map<uint32_t, one_core_data_t>> all_data;
     CoreCoord host_core;
 
@@ -394,7 +395,8 @@ inline bool DeviceData::validate_one_core(
         tt::tt_metal::detail::ReadFromDeviceDRAMChannel(device, bank_id, result_addr, size_bytes, results);
     } else {
         result_addr += bank_offset;
-        results = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, result_addr, size_bytes);
+        results = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            device->id(), phys_core, result_addr, size_bytes);
     }
 
     log_info(
@@ -773,7 +775,7 @@ inline size_t debug_prologue(std::vector<uint32_t>& cmds) {
     size_t prior = cmds.size();
 
     if (debug_g) {
-        CQDispatchCmd debug_cmd;
+        CQDispatchCmd debug_cmd{};
         memset(&debug_cmd, 0, sizeof(CQDispatchCmd));
 
         debug_cmd.base.cmd_id = CQ_DISPATCH_CMD_DEBUG;
@@ -871,7 +873,7 @@ inline void add_dispatcher_packed_cmd(
 // bare: doesn't generate random payload data, for use w/ eg, dram reads
 inline void gen_bare_dispatcher_unicast_write_cmd(
     IDevice* device, std::vector<uint32_t>& cmds, CoreCoord worker_core, DeviceData& device_data, uint32_t length) {
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
@@ -892,7 +894,7 @@ inline void gen_bare_dispatcher_unicast_write_cmd(
 
 inline void gen_dispatcher_unicast_write_cmd(
     IDevice* device, std::vector<uint32_t>& cmds, CoreCoord worker_core, DeviceData& device_data, uint32_t length) {
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
@@ -918,7 +920,7 @@ inline void gen_dispatcher_multicast_write_cmd(
     // TODO Hmm, ideally only need to relevel the core range
     device_data.relevel(CoreType::WORKER);
 
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     CoreCoord physical_start = device->worker_core_from_logical_core(worker_core_range.start_coord);
@@ -969,7 +971,7 @@ inline void gen_dispatcher_paged_write_cmd(
     uint32_t base_addr = device_data.get_base_result_addr(core_type) + bank_offset;
     uint16_t start_page_cmd = start_page % num_banks;
 
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PAGED;
     cmd.write_paged.is_dram = is_dram;
@@ -1003,7 +1005,7 @@ inline void gen_dispatcher_packed_write_cmd(
     // Pad w/ blank data until all workers are at the same address
     device_data.relevel(CoreType::WORKER);
 
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED;
@@ -1106,7 +1108,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(
         space_available -= xfer_size_bytes;
     }
 
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_PACKED_LARGE;
     cmd.write_packed_large.count = ntransactions;
@@ -1128,7 +1130,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(
 
         device_data.relevel(range);
 
-        CQDispatchWritePackedLargeSubCmd sub_cmd;
+        CQDispatchWritePackedLargeSubCmd sub_cmd{};
         CoreCoord physical_start = device->worker_core_from_logical_core(range.start_coord);
         CoreCoord physical_end = device->worker_core_from_logical_core(range.end_coord);
         sub_cmd.noc_xy_addr = tt::tt_metal::MetalContext::instance().hal().noc_multicast_encoding(
@@ -1156,7 +1158,7 @@ inline bool gen_rnd_dispatcher_packed_write_large_cmd(
 }
 
 inline void gen_dispatcher_host_write_cmd(std::vector<uint32_t>& cmds, DeviceData& device_data, uint32_t length) {
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
@@ -1167,7 +1169,7 @@ inline void gen_dispatcher_host_write_cmd(std::vector<uint32_t>& cmds, DeviceDat
 }
 
 inline void gen_bare_dispatcher_host_write_cmd(std::vector<uint32_t>& cmds, uint32_t length) {
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_WRITE_LINEAR_H_HOST;
@@ -1179,7 +1181,7 @@ inline void gen_bare_dispatcher_host_write_cmd(std::vector<uint32_t>& cmds, uint
 
 inline void gen_dispatcher_set_write_offset_cmd(
     std::vector<uint32_t>& cmds, uint32_t wo0, uint32_t wo1 = 0, uint32_t wo2 = 0) {
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_SET_WRITE_OFFSET;
@@ -1191,7 +1193,7 @@ inline void gen_dispatcher_set_write_offset_cmd(
 }
 
 inline void gen_dispatcher_terminate_cmd(std::vector<uint32_t>& cmds) {
-    CQDispatchCmd cmd;
+    CQDispatchCmd cmd{};
     memset(&cmd, 0, sizeof(CQDispatchCmd));
 
     cmd.base.cmd_id = CQ_DISPATCH_CMD_TERMINATE;
