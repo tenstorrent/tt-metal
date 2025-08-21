@@ -61,7 +61,9 @@ struct MatmulReduceScatterAsync {
         const ttnn::MeshCoordinate& mesh_coordinate,
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+        std::vector<Tensor>& output_tensors,
+        const std::vector<GlobalSemaphore>& op_semaphores,
+        const std::optional<GlobalSemaphore>& barrier_semaphore) const;
     tt::tt_metal::operation::Hash compute_program_hash(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;

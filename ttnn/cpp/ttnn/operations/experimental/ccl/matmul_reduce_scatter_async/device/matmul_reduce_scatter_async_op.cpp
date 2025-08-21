@@ -90,18 +90,44 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks MatmulReduceScatterAsync::cre
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
+    std::vector<ttnn::GlobalSemaphore> op_semaphores;
+    std::optional<GlobalSemaphore> barrier_semaphore;
+    if (this->reduce_scatter_minimal_async_struct.do_sync) {
+        auto mesh_device = input_tensors[0].mesh_device();
+        auto sub_device_id = this->reduce_scatter_minimal_async_struct.sub_device_id;
+
+        auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);
+        const auto available_cores =
+            mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice);
+        auto subdevices = {subdevice};
+
+        barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+        op_semaphores = {
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0),
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0),
+            ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0)};
+        tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    } else {
+        op_semaphores = this->reduce_scatter_minimal_async_struct.semaphore.value();
+        barrier_semaphore = std::nullopt;
+    }
+
     return ttnn::ccl::create_mesh_workload_from_programs(
         tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
-            return create_program_at(coord, input_tensors, optional_input_tensors, output_tensors);
+            return create_program_at(
+                coord, input_tensors, optional_input_tensors, output_tensors, op_semaphores, barrier_semaphore);
         });
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_program_at(
     const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
-    std::vector<Tensor>& output_tensors) const {
+    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,        
+    std::vector<Tensor>& output_tensors,
+    const std::vector<GlobalSemaphore>& op_semaphores,
+    const std::optional<GlobalSemaphore>& barrier_semaphore) const {
     auto mesh_device = input_tensors[0].device();
+
     ::ttnn::ccl::get_device_sender_receiver_config(
         mesh_device->get_device(mesh_coord),
         this->reduce_scatter_minimal_async_struct.devices,
@@ -130,9 +156,6 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
         }
     }
 
-    auto barrier_semaphore = std::nullopt;  // TODO: (GR)
-    std::vector<GlobalSemaphore> semaphore = {};
-
     // Return the MatmulReduceScatterAsync program with callbacks
     return matmul_reduce_scatter_async_multi_core_with_workers(
         input_tensors[0],   // input_tensor
@@ -150,7 +173,7 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
         this->reduce_scatter_minimal_async_struct.ring_size,
         device_index,
         this->reduce_scatter_minimal_async_struct.topology,
-        semaphore,
+        op_semaphores,
         barrier_semaphore,
         this->reduce_scatter_minimal_async_struct.sub_device_id,
         this->reduce_scatter_core_grid_offset,
