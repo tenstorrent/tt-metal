@@ -128,7 +128,8 @@ private:
 protected:
     static void SetUpTestSuite() {
         if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
-            tt::tt_metal::ClusterType::GALAXY) {
+                tt::tt_metal::ClusterType::GALAXY ||
+            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
             should_skip_ = true;
             return;
         }
