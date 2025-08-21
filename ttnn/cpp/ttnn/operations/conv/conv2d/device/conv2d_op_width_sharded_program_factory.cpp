@@ -304,6 +304,56 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     uint32_t conv_act_c_read_bytes = conv_act_size_c * a.element_size() / (input_num_cores * per_core_num_blocks_act_w);
 
+    log_trace(tt::LogOp, "input_channels_padded: {}", input_channels_padded);
+    log_trace(tt::LogOp, "grid_size: {}", p_config.grid_size);
+    log_trace(tt::LogOp, "packer_l1: {}", packer_l1_acc);
+    log_trace(tt::LogOp, "enable_act_double_buffer: {}", enable_act_double_buffer);
+    log_trace(tt::LogOp, "act_block_w_ntiles: {}", act_block_w_ntiles);
+    log_trace(tt::LogOp, "weight_block_w_ntiles: {}", weight_block_w_ntiles);
+    log_trace(tt::LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
+    log_trace(tt::LogOp, "num_blocks_weight_w_per_core: {}", num_blocks_weight_w_per_core);
+    log_trace(tt::LogOp, "OP Name : multi_core_optimized_conv_width_sharded_v2_");
+
+    log_trace(tt::LogOp, "conv_act_size_w: {}", conv_act_size_w);
+    log_trace(tt::LogOp, "act_matrix_height: {}", act_matrix_height);
+    log_trace(tt::LogOp, "act_matrix_width: {}", act_matrix_width);
+    log_trace(tt::LogOp, "act_matrix_height_ntiles: {}", act_matrix_height_ntiles);
+    log_trace(tt::LogOp, "act_matrix_width_ntiles: {}", act_matrix_width_ntiles);
+    log_trace(tt::LogOp, "weight_matrix_width_ntiles: {}", weight_matrix_width_ntiles);
+    log_trace(tt::LogOp, "per_core_out_matrix_height_ntiles: {}", p_config.per_core_out_matrix_height_ntile);
+    log_trace(tt::LogOp, "per_core_out_matrix_width_ntiles: {}", p_config.per_core_out_matrix_width_ntile);
+    log_trace(tt::LogOp, "per_core_num_blocks_act_w: {}", per_core_num_blocks_act_w);
+
+    log_trace(tt::LogOp, "num_blocks_act_h: {}", num_blocks_act_h);
+    log_trace(tt::LogOp, "num_blocks_act_w: {}", num_blocks_act_w);
+    log_trace(tt::LogOp, "num_blocks_weight_w: {}", num_blocks_weight_w);
+
+    log_trace(tt::LogOp, "conv_act_c_read_bytes: {}", conv_act_c_read_bytes);
+    log_trace(tt::LogOp, "act_block_h_ntiles: {}", act_block_h_ntiles);
+    log_trace(tt::LogOp, "act_block_h_datums: {}", act_block_h_datums);
+    log_trace(tt::LogOp, "act_block_w_ntiles: {}", act_block_w_ntiles);
+    log_trace(tt::LogOp, "out_block_h_ntiles: {}", out_block_h_ntiles);
+    log_trace(tt::LogOp, "act_num_subblocks: {}", act_num_subblocks);
+    log_trace(tt::LogOp, "act_block_num_tiles: {}", act_block_num_tiles);
+    log_trace(tt::LogOp, "act_subblock_h_ntiles: {}", act_subblock_h_ntiles);
+    log_trace(tt::LogOp, "act_subblock_num_tiles: {}", act_subblock_num_tiles);
+    log_trace(tt::LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
+    log_trace(tt::LogOp, "weight_num_subblocks: {}", weight_num_subblocks);
+    log_trace(tt::LogOp, "weight_block_num_tiles: {}", weight_block_num_tiles);
+    log_trace(tt::LogOp, "weight_block_w_ntiles: {}", weight_block_w_ntiles);
+    log_trace(tt::LogOp, "weight_block_in_channels_ntiles: {}", weight_block_in_channels_ntiles);
+    log_trace(tt::LogOp, "has_bias: {}", has_bias);
+    log_trace(tt::LogOp, "bias_ntiles: {}", bias_ntiles);
+    log_trace(tt::LogOp, "out_subblock_h_ntiles: {}", out_subblock_h_ntiles);
+    log_trace(tt::LogOp, "out_subblock_w_ntiles: {}", out_subblock_w_ntiles);
+    log_trace(tt::LogOp, "out_subblock_num_tiles: {}", out_subblock_num_tiles);
+    log_trace(tt::LogOp, "math_fidelity: {}", math_fidelity);
+    log_trace(tt::LogOp, "math_approx_mode: {}", math_approx_mode);
+    log_trace(tt::LogOp, "fp32_dest_acc_en: {}", fp32_dest_acc_en);
+    log_trace(tt::LogOp, "packer_l1_acc: {}", packer_l1_acc);
+    log_trace(tt::LogOp, "all_cores: {}", all_cores.str());
+    log_trace(tt::LogOp, "all_reader_cores: {}", all_reader_cores.str());
+
     std::string compute_kernel_path =
         "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/conv_bmm_tilize_col_major_out_blocks.cpp";
     std::string activation_kernel_path =

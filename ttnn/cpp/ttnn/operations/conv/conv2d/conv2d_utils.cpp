@@ -296,9 +296,7 @@ MemoryConfig create_sharded_memory_config_from_parallel_config(
         tensor_shape,
         parallel_config,
         tile_size);
-    // tensor_shape is [N, H, W, C]
-    TT_ASSERT(tensor_shape[0] == 1 && tensor_shape[1] == 1);  // todo: add support for generic non-2d shapes
-    // uint32_t channels = tensor_shape[3];
+
     uint32_t channels = tensor_shape[3];
     uint32_t num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
     uint32_t num_cores_channels = get_num_cores_channels_from_parallel_config(parallel_config);
@@ -660,7 +658,7 @@ static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool> get_conv_padded_input_s
         auto [input_padded_shape, input_tensor_sharded_memory_config] = determine_input_memory_config(
             conv_config,
             batch_size,
-            input_tensor.logical_shape(),
+            conv_config.use_4D_shapes ? input_tensor.padded_shape() : input_tensor.logical_shape(),
             input_tensor.padded_shape(),
             is_mm_conv,
             device,
@@ -706,12 +704,14 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
         determine_output_parallel_config(parallel_config, compute_grid_size, out_channels, is_mm_conv);
 
     // We can have flat and unflattened (n, h, w, c) tensors here
-    const auto flattened_input_shape = flatten_4d_shape(input_tensor.logical_shape());
-    const auto flattened_padded_input_shape = flatten_4d_shape(input_tensor.padded_shape());
-
-    input_tensor = ttnn::reshape(input_tensor, flattened_input_shape, flattened_padded_input_shape);
-    const ttnn::Shape& input_shape = flattened_input_shape;
-
+    const auto input_shape =
+        conv_config.use_4D_shapes ? input_tensor.logical_shape() : flatten_4d_shape(input_tensor.logical_shape());
+    const auto padded_input_shape =
+        conv_config.use_4D_shapes ? input_tensor.padded_shape() : flatten_4d_shape(input_tensor.padded_shape());
+    if (!conv_config.use_4D_shapes) {
+        input_tensor = ttnn::reshape(input_tensor, input_shape, padded_input_shape);
+    }
+    log_info(tt::LogOp, "Conv Reshard Input Shape : {}, Padded Input Shape : {}", input_shape, input_padded_shape);
     if (needs_shard_or_reshard) {
         uint32_t tensor_height = input_shape[2];
         uint32_t tensor_width = input_shape[3];
@@ -745,10 +745,24 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 if (!input_tensor.is_sharded()) {
                     // In case we need to run Interleaved2Sharded switch fron physical sharding
                     // to logical sharding, in order to get smaller allocation size of sharded buffer.
+                    if (conv_config.use_4D_shapes) {
+                        input_tensor_sharded_memory_config_to_layout =
+                            input_tensor_sharded_memory_config_to_layout.with_shard_spec(tt::tt_metal::ShardSpec(
+                                input_tensor_sharded_memory_config.shard_spec().value().grid,
+                                input_tensor_sharded_memory_config.shard_spec().value().shape,
+                                input_tensor_sharded_memory_config.shard_spec().value().orientation));
+                    } else {
+                        // For 2D Tensors, we need logical sharding as the halo input.
+                        input_tensor_sharded_memory_config_to_layout =
+                            input_tensor_sharded_memory_config_to_layout.with_shard_spec(tt::tt_metal::ShardSpec(
+                                input_tensor_sharded_memory_config.shard_spec().value().grid,
+                                input_tensor_sharded_memory_config.shard_spec().value().shape,
+                                input_tensor_sharded_memory_config.shard_spec().value().shape,
+                                input_tensor_sharded_memory_config.shard_spec().value().orientation));
+                    }
                     input_tensor_sharded_memory_config_to_layout =
                         input_tensor_sharded_memory_config_to_layout.with_shard_spec(tt::tt_metal::ShardSpec(
                             input_tensor_sharded_memory_config.shard_spec().value().grid,
-                            input_tensor_sharded_memory_config.shard_spec().value().shape,
                             input_tensor_sharded_memory_config.shard_spec().value().shape,
                             input_tensor_sharded_memory_config.shard_spec().value().orientation));
                 }
@@ -761,10 +775,16 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 input_tensor = resharded_input_tensor;
             }
         } else {
-            input_tensor = ttnn::to_device(
-                input_tensor, device, (auto_shard_mm ? ttnn::DRAM_MEMORY_CONFIG : input_tensor_sharded_memory_config));
+            // Using to_device with sharded memory config causes the alignment to be incorrect.
+            input_tensor = ttnn::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
+            input_tensor = ttnn::to_memory_config(input_tensor, input_tensor_sharded_memory_config, std::nullopt);
         }
     }
+    log_info(
+        tt::LogOp,
+        "Conv Reshard Input Shape : {}, Padded Input Shape : {}",
+        input_tensor.logical_shape(),
+        input_tensor.padded_shape());
     return {input_tensor, parallel_config, output_parallel_config};
 }
 
@@ -991,8 +1011,15 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     uint32_t nhw_out = batch_size * output_height * output_width;
     uint32_t out_channels_padded = tt::round_up(
         out_channels, get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH);
+
+    uint32_t aligned_output_width = (conv_config.output_layout == Layout::TILE)
+                                        ? tt::round_up(output_width, tt::constants::TILE_HEIGHT)
+                                        : output_width;
     MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape({1, 1, nhw_out, out_channels_padded}), output_parallel_config, round_up_size);
+        conv_config.use_4D_shapes ? ttnn::Shape({batch_size, output_height, aligned_output_width, out_channels_padded})
+                                  : ttnn::Shape({1, 1, nhw_out, out_channels_padded}),
+        output_parallel_config,
+        round_up_size);
     ParallelConfig largest_parallel_config =
         output_parallel_config.grid.num_cores() > input_parallel_config.grid.num_cores() ? output_parallel_config
                                                                                          : input_parallel_config;

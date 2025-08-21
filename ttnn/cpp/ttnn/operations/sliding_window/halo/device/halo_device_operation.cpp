@@ -47,6 +47,8 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     // output_shape[1] remains same
     // output_shape[2] changes
     // output_shape[3] remains same
+    output_shape[0] = nbatch;
+    output_shape[1] = 1;
     output_shape[2] = (uint32_t)std::ceil((float)total_nsticks / nbatch);
 
     log_debug(

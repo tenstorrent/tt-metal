@@ -134,6 +134,8 @@ def run_conv(
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and output_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
 
+    if use_4D_shapes and output_layout == ttnn.ROW_MAJOR_LAYOUT and shard_layout == WS:
+        pytest.skip("Row major layout not compatible with 4D shapes and width sharded layout")
     if hasattr(padding, "__len__"):
         if len(padding) == 2:
             pad_top = padding[0]
@@ -298,6 +300,9 @@ def run_conv(
             dtype=output_dtype,
         )
 
+    print(
+        f"Output Shape = {tt_output_tensor_on_device.shape}, Padded Shape = {tt_output_tensor_on_device.padded_shape}"
+    )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     out = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
     # out is in row major layout and NHWC shape

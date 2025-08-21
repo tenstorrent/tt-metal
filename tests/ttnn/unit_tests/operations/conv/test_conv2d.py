@@ -99,6 +99,7 @@ def test_conv_features(
         run_twice=True,
         input_layout=ttnn.TILE_LAYOUT if input_dtype == ttnn.bfloat8_b else None,
         input_dtype=input_dtype,
+        use_4D_shapes=True,
     )
 
 
