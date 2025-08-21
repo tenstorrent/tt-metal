@@ -14,6 +14,7 @@ References [LLaVa, IDEFICS-2]:
 """
 
 import logging
+import os
 from dataclasses import dataclass
 from functools import partial
 from typing import Any, Callable, ClassVar, Dict, List, Optional, Tuple, Union
@@ -27,6 +28,11 @@ import transformers
 from timm.models.vision_transformer import LayerScale
 from transformers import AutoModelForCausalLM, PretrainedConfig, PreTrainedModel
 from transformers.modeling_outputs import ModelOutput
+
+import ttnn
+from models.tt_transformers.demo.simple_text_demo import prepare_generator_args
+from models.tt_transformers.tt.common import create_tt_model
+from models.tt_transformers.tt.model_config import ModelArgs
 
 """
 configuration_prismatic.py
@@ -67,6 +73,72 @@ LLM_BACKBONE_TO_HF_METACLASS = {
 VALID_VISION_BACKBONES = set(VISION_BACKBONE_TO_RESOLUTION.keys())
 VALID_LLM_BACKBONES = set(LLM_BACKBONE_TO_HF_PATH)
 # fmt: on
+
+
+class LLama2OpenVLAArgs(ModelArgs):
+    def __init__(self, *args, **kwargs):
+        HF_MODEL = os.getenv("HF_MODEL")
+        assert (
+            HF_MODEL == "meta-llama/Llama-2-7b-hf"
+        ), f"When LLama2OpenVLAArgs is used, HF_MODEL must be meta-llama/Llama-2-7b-hf"
+        super().__init__(*args, **kwargs)
+
+    def _set_params_from_dict(self, config, is_hf=False):
+        new_config = {
+            "attention_bias": False,
+            "attention_dropout": 0.0,
+            "bos_token_id": 1,
+            "eos_token_id": 2,
+            "hidden_act": "silu",
+            "hidden_size": 4096,
+            "initializer_range": 0.02,
+            "intermediate_size": 11008,
+            "max_position_embeddings": 2048,
+            "model_type": "llama",
+            "num_attention_heads": 32,
+            "num_hidden_layers": 32,
+            "num_key_value_heads": 32,
+            "pad_token_id": 32000,
+            "pretraining_tp": 1,
+            "rms_norm_eps": 1e-06,
+            "rope_scaling": None,
+            "rope_theta": 10000.0,
+            "tie_word_embeddings": False,
+            "torch_dtype": "bfloat16",
+            "transformers_version": "4.38.0",
+            "use_cache": True,
+            "vocab_size": 32064,
+        }
+        text_config = config.get("text_config", config)
+        for key, value in text_config.items():
+            if key not in new_config:
+                new_config[key] = value
+
+        return super()._set_params_from_dict(
+            new_config,
+            is_hf,
+        )
+
+
+class OpenVLALanguageModel:
+    def __init__(self):
+        mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+        generator_args_config = {
+            "num_devices": 1,
+            "data_parallel": 1,
+            "mesh_device": mesh_device,
+            "instruct": True,
+            "global_batch_size": 1,
+            "optimizations": None,
+            "max_seq_len": 1024,
+            "page_params": {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},
+            "paged_attention": True,
+        }
+        self.model_args, self.model, self.page_table, self.tt_kv_cache, self.tokenizer = prepare_generator_args(
+            **generator_args_config,
+            model_factory_fn=lambda *args, **kwargs: create_tt_model(*args, **kwargs, ModelArgsClass=LLama2OpenVLAArgs),
+        )
+        print("DONE")
 
 
 class PrismaticConfig(PretrainedConfig):
@@ -359,6 +431,7 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 
         # Instantiate LLM Backbone
         # TODO: Insert TT LLM HERE
+        self.language_model = OpenVLALanguageModel()
         breakpoint()
         self.language_model = AutoModelForCausalLM.from_config(
             config.text_config, attn_implementation=config._attn_implementation
