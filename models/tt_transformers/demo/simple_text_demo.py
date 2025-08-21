@@ -157,6 +157,7 @@ def prepare_generator_args(
     max_seq_len,
     page_params,
     paged_attention,
+    model_factory_fn=create_tt_model,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -176,7 +177,7 @@ def prepare_generator_args(
     )
 
     for submesh in submesh_devices:
-        model_args_i, model_i, tt_kv_cache_i, state_dict = create_tt_model(
+        model_args_i, model_i, tt_kv_cache_i, state_dict = model_factory_fn(
             submesh,
             instruct=instruct,
             max_batch_size=global_batch_size // data_parallel,
