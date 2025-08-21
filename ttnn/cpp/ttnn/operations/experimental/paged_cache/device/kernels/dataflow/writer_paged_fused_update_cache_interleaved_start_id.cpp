@@ -20,7 +20,8 @@ void kernel_main() {
     const uint32_t send_core_x = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t send_core_y = get_arg_val<uint32_t>(rt_args_idx++);
 
-    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(0);
+    constexpr bool cache_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr uint32_t cache_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t untilized_cache_cb_id = get_compile_time_arg_val(2);
     constexpr uint32_t untilized_cache2_cb_id = get_compile_time_arg_val(3);
     constexpr uint32_t untilized_input_cb_id = get_compile_time_arg_val(4);
@@ -43,11 +44,12 @@ void kernel_main() {
     constexpr uint32_t head_offset_t = Wt * St;
 
     const uint32_t cache_tile_bytes = get_tile_size(cache_cb_id);
+    const DataFormat cache_data_format = get_dataformat(cache_cb_id);
 
     constexpr uint32_t TILE_HEIGHT = 32;
 
-    constexpr auto cache_args = TensorAccessorArgs<18>();
-    const auto s0 = TensorAccessor(cache_args, cache_addr, cache_tile_bytes);
+    const InterleavedAddrGenFast<cache_is_dram> s0 = {
+        .bank_base_address = cache_addr, .page_size = cache_tile_bytes, .data_format = cache_data_format};
 
     uint32_t cache_id = cache_start_id;
     uint32_t update_idx = 0;
