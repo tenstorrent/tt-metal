@@ -89,6 +89,8 @@ venv/
 
 # exclude binaries
 *.bin
+
+# exclude serialized tensor binaries
 *.tensorbin
 
 # exclude serialized tensor binaries
