@@ -280,7 +280,8 @@ enum riscv_id_t {
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
 struct debug_pause_msg_t {
-    volatile uint8_t flags[DebugNumUniqueRiscs];
+    volatile uint8_t flags[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint8_t pad[3];
 };
 
 constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;

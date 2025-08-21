@@ -2,37 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <assert.hpp>
-#include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
-#include <core_coord.hpp>
-#include <ctype.h>
-#include "dev_msgs.h"
-#include <fmt/base.h>
-#include <cstdint>
-#include <cstdio>
-#include <sstream>
-#include <tt-logger/tt-logger.hpp>
-#include <metal_soc_descriptor.h>
-#include "hal.hpp"
-#include "impl/context/metal_context.hpp"
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <ctype.h>
 #include <iostream>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-#include "control_plane.hpp"
-#include "core_descriptor.hpp"
-#include "debug_helpers.hpp"
-#include "dispatch_core_common.hpp"
-#include "hal_types.hpp"
-#include "hw/inc/debug/ring_buffer.h"
-#include "llrt.hpp"
+#include <assert.hpp>
+#include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
+#include <core_coord.hpp>
+#include <fmt/base.h>
+#include <metal_soc_descriptor.h>
+#include <tt-logger/tt-logger.hpp>
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/arch.h>
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <umd/device/types/xy_pair.h>
+
+#include "control_plane.hpp"
+#include "core_descriptor.hpp"
+#include "debug_helpers.hpp"
+#include "dev_msgs.h"
+#include "dispatch_core_common.hpp"
+#include "hal_types.hpp"
+#include "hw/inc/debug/ring_buffer.h"
+#include "impl/context/metal_context.hpp"
+#include "llrt.hpp"
 #include "watcher_device_reader.hpp"
 
 using namespace tt::tt_metal;
@@ -185,12 +185,21 @@ namespace tt::tt_metal {
 struct stack_usage_info_t {
     CoreCoord virtual_coord;
     uint16_t stack_free = uint16_t(~0);
-    uint16_t kernel_id;
+    uint16_t kernel_id{};
+};
+
+struct PausedCoreInfo {
+    CoreCoord virtual_coord;
+    uint32_t processor_index{};
+
+    bool operator<(const PausedCoreInfo& other) const {
+        return std::tie(virtual_coord, processor_index) < std::tie(other.virtual_coord, other.processor_index);
+    }
 };
 
 // Information that needs to be kept around on a per-dump basis, shared per-core
 struct WatcherDeviceReader::DumpData {
-    std::set<std::pair<CoreCoord, riscv_id_t>> paused_cores;
+    std::set<PausedCoreInfo> paused_cores;
     std::map<HalProcessorIdentifier, stack_usage_info_t> highest_stack_usage;
     std::map<int, bool> used_kernel_names;
 };
@@ -388,8 +397,11 @@ void WatcherDeviceReader::Dump(FILE* file) {
     // Handle any paused cores, wait for user input.
     if (!dump_data.paused_cores.empty()) {
         string paused_cores_str = "Paused cores: ";
-        for (auto& [core, risc] : dump_data.paused_cores) {
-            paused_cores_str += fmt::format("{}:{}, ", core.str(), get_riscv_name(core, risc));
+        for (auto& [virtual_core, processor_index] : dump_data.paused_cores) {
+            auto [processor_class, processor_type] =
+                MetalContext::instance().hal().get_processor_class_and_type_from_index(
+                    get_programmable_core_type(virtual_core, device_id), processor_index);
+            paused_cores_str += fmt::format("{}:{}_{}, ", virtual_core.str(), processor_class, processor_type);
         }
         paused_cores_str += "\n";
         fprintf(f, "%s", paused_cores_str.c_str());
@@ -401,16 +413,17 @@ void WatcherDeviceReader::Dump(FILE* file) {
         }
 
         // Clear all pause flags
-        for (auto& [virtual_core, risc_id] : dump_data.paused_cores) {
-            uint64_t addr = MetalContext::instance().hal().get_dev_addr(
-                                get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::WATCHER) +
-                            offsetof(watcher_msg_t, pause_status);
+        const auto& hal = MetalContext::instance().hal();
+        for (auto& [virtual_core, processor_index] : dump_data.paused_cores) {
+            uint64_t addr =
+                hal.get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::WATCHER) +
+                offsetof(watcher_msg_t, pause_status);
 
             // Clear only the one flag that we saved, in case another one was raised on device
             auto pause_data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                 device_id, virtual_core, addr, sizeof(debug_pause_msg_t));
             auto pause_msg = reinterpret_cast<debug_pause_msg_t*>(&(pause_data[0]));
-            pause_msg->flags[risc_id] = 0;
+            pause_msg->flags[processor_index] = 0;
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(device_id, virtual_core, pause_data, addr);
         }
     }
@@ -747,11 +760,13 @@ void WatcherDeviceReader::Core::DumpAssertTrippedDetails(const string& error_msg
 
 void WatcherDeviceReader::Core::DumpPauseStatus() const {
     const debug_pause_msg_t* pause_status = &mbox_data_->watcher.pause_status;
+    const auto& hal = MetalContext::instance().hal();
     // Just record which cores are paused, printing handled at the end.
-    for (int risc_id = 0; risc_id < DebugNumUniqueRiscs; risc_id++) {
-        auto pause = pause_status->flags[risc_id];
+    auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
+    for (uint32_t processor_index = 0; processor_index < num_processors; processor_index++) {
+        auto pause = pause_status->flags[processor_index];
         if (pause == 1) {
-            dump_data_.paused_cores.insert({virtual_coord_, static_cast<riscv_id_t>(risc_id)});
+            dump_data_.paused_cores.insert({virtual_coord_, processor_index});
         } else if (pause > 1) {
             string error_reason = fmt::format(
                 "Watcher data corruption, pause state on core {} unknown code: {}.\n", virtual_coord_.str(), pause);
@@ -1003,29 +1018,17 @@ void WatcherDeviceReader::Core::DumpSyncRegs() const {
 void WatcherDeviceReader::Core::DumpStackUsage() const {
     const debug_stack_usage_t* stack_usage_mbox = &mbox_data_->watcher.stack_usage;
     const auto& hal = MetalContext::instance().hal();
-    uint32_t processor_index = 0;
-    auto processor_class_count = hal.get_processor_classes_count(programmable_core_type_);
-    for (uint32_t processor_class_index = 0; processor_class_index < processor_class_count; processor_class_index++) {
-        auto processor_type_count = hal.get_processor_types_count(programmable_core_type_, processor_class_index);
-        for (uint32_t processor_type = 0; processor_type < processor_type_count; processor_type++) {
-            const auto& usage = stack_usage_mbox->cpu[processor_index];
-            if (usage.min_free) {
-                HalProcessorIdentifier processor = {
-                    programmable_core_type_,
-                    static_cast<HalProcessorClassType>(processor_class_index),
-                    processor_type,
-                };
-                // TODO(HalProcessorClassType): fix this after HAL treats DM0 and DM1 as the same processor class.
-                if (processor_class_index != static_cast<uint32_t>(HalProcessorClassType::COMPUTE)) {
-                    processor.processor_type = static_cast<int>(processor.processor_class);
-                    processor.processor_class = HalProcessorClassType::DM;
-                }
-                auto& slot = dump_data_.highest_stack_usage[processor];
-                if (usage.min_free <= slot.stack_free) {
-                    slot = {virtual_coord_, usage.min_free - 1, usage.watcher_kernel_id};
-                }
+    auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
+    for (uint32_t processor_index = 0; processor_index < num_processors; processor_index++) {
+        const auto& usage = stack_usage_mbox->cpu[processor_index];
+        if (usage.min_free) {
+            auto [processor_class, processor_type] =
+                hal.get_processor_class_and_type_from_index(programmable_core_type_, processor_index);
+            HalProcessorIdentifier processor = {programmable_core_type_, processor_class, processor_type};
+            auto& slot = dump_data_.highest_stack_usage[processor];
+            if (usage.min_free <= slot.stack_free) {
+                slot = {virtual_coord_, usage.min_free - 1, usage.watcher_kernel_id};
             }
-            processor_index++;
         }
     }
 }

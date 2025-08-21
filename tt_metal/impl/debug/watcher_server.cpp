@@ -384,14 +384,9 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
     data->assert_status.which = DEBUG_SANITIZE_NOC_SENTINEL_OK_8;
 
     // Initialize pause flags to 0
-    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
-        data->pause_status.flags[idx] = 0;
-    }
-
+    memset(&data->pause_status, 0, sizeof data->pause_status);
     // Initialize stack usage data to unset
-    for (int idx = 0; idx < DebugNumUniqueRiscs; idx++) {
-        data->stack_usage.cpu[idx].min_free = 0;
-    }
+    memset(&data->stack_usage, 0, sizeof data->stack_usage);
 
     // Initialize debug ring buffer to a known init val, we'll check against this to see if any
     // data has been written.
