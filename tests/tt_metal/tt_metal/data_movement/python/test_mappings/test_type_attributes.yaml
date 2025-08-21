@@ -8,3 +8,9 @@ virtual_channels:
   attributes:
     "Number of Virtual Channels": "num_virtual_channels"
     "NoC Index": "noc_index"
+direct_write:
+  attributes:
+    "Posted writes": "posted"
+    "Same destination": "same_dest"
+    "NOC Index": "noc_index"
+    "Stateful": "stateful"
