@@ -105,9 +105,17 @@ class T5Stack:
         confirm: each encoder layer's weights are replicated across all devices
         """
         # TODO: check if this is correct
+        # logger.info("starting to load T5Stack state dictionary")
         layer_states = indexed_substates(state_dict, "block")
-        for layer, layer_state in zip(self.layers, layer_states):
+        # logger.debug(f"extracted {len(layer_states)} layer states from state dictionary")
+
+        for idx, (layer, layer_state) in enumerate(zip(self.layers, layer_states)):
+            # logger.info(f"loading layer {idx} of {len(self.layers)}")
+            # logger.debug(f"layer {idx} state keys: {list(layer_state.keys())}")
+            # logger.debug(f"layer {idx} state shapes: {[(k, v.shape if hasattr(v, 'shape') else len(v)) for k, v in layer_state.items()]}")
             layer.load_state_dict(layer_state)
+
+        # logger.info("completed loading T5Stack state dictionary")
 
     def __call__(
         self,
@@ -277,12 +285,13 @@ class T5EncoderLayer:
             ccl_manager=self.ccl_manager,
             parallel_config=self.parallel_config,
         )
+
         hidden_states_residual1 = attn_output + hidden_states  # residual
         # breakpoint()
         hidden_states_ff = self.ff(
             hidden_states_residual1, ccl_manager=self.ccl_manager, parallel_config=self.parallel_config
         )
-        return hidden_states_ff + hidden_states  # residual
+        return hidden_states_ff + hidden_states_residual1  # residual
 
 
 class T5Attention:
@@ -301,13 +310,6 @@ class T5Attention:
         self.num_heads = config.num_heads
         self.embed_dim = config.embed_dim
         self.head_dim = config.embed_dim // self.num_heads
-
-        self.layer_norm = RMSNorm(
-            embedding_dim=self.config.embed_dim,
-            norm_eps=self.config.layer_norm_eps,
-            bias=False,
-            mesh_device=self.mesh_device,
-        )
 
         # weights to be added in load_state_dict, column sharded
         self.q_proj = ColParallelLinear(
@@ -343,13 +345,21 @@ class T5Attention:
             init=True,
         )
 
+        self.layer_norm = RMSNorm(
+            embedding_dim=self.config.embed_dim,
+            norm_eps=self.config.layer_norm_eps,
+            bias=False,
+            mesh_device=self.mesh_device,
+        )
+
     # TODO: change all load_state_dict method names to load_weights
     def load_state_dict(self, state_dict):
-        self.layer_norm.load_state_dict(substate(state_dict, "layer_norm"))
         self.q_proj.load_state_dict(substate(state_dict, "SelfAttention.q"))
         self.k_proj.load_state_dict(substate(state_dict, "SelfAttention.k"))
         self.v_proj.load_state_dict(substate(state_dict, "SelfAttention.v"))
         self.o_proj.load_state_dict(substate(state_dict, "SelfAttention.o"))
+
+        self.layer_norm.load_state_dict(substate(state_dict, "layer_norm"))
 
     def __call__(
         self,
