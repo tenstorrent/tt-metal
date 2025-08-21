@@ -165,7 +165,7 @@ def test_perf_device_yolov8s_world(batch_size, expected_perf):
     margin = 0.03
     expected_perf = expected_perf if is_wormhole_b0() else 0
 
-    command = f"pytest models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_YoloModel"
+    command = f"pytest models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_yolo_model"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
