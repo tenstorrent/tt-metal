@@ -96,11 +96,12 @@ target_sources(
 target_include_directories(
     ttnn_core
     PUBLIC
-        api
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>
+        $<INSTALL_INTERFACE:include>
     PRIVATE
-        api/ttnn
-        core
-        cpp # FIXME: Depend on the Ops needed (make the circular obvious)
+        ${CMAKE_CURRENT_SOURCE_DIR}/api/ttnn
+        ${CMAKE_CURRENT_SOURCE_DIR}/core
+        ${CMAKE_CURRENT_SOURCE_DIR}/cpp # FIXME: Depend on the Ops needed (make the circular obvious)
 )
 target_include_directories(ttnn_core SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers)
 target_link_libraries(
@@ -116,12 +117,13 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_core
+    LIBRARY
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}
     FILE_SET
     jit_api
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn
         COMPONENT ttnn-runtime
 )
-install(TARGETS ttnn_core LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR})
 
 ##################################################
 # Collect all the files and folders that TTNN will use
@@ -423,7 +425,15 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
-        FILES ${api} cpp/ttnn/operations/creation.hpp cpp/ttnn/operations/functions.hpp
+        FILES
+            ${api}
+            cpp/ttnn/operations/creation.hpp
+            cpp/ttnn/operations/functions.hpp
+            cpp/ttnn/operations/cb_utils.hpp
+            cpp/ttnn/operations/compute_throttle_utils.hpp
+            cpp/ttnn/operations/math.hpp
+            cpp/ttnn/operations/sharding_utilities.hpp
+            cpp/ttnn/operations/trace.hpp
     PRIVATE
         # FIXME: Move these out to appropriate sub targets
         cpp/ttnn/operations/compute_throttle_utils.cpp
