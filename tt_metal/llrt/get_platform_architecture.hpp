@@ -57,8 +57,7 @@ inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtopti
             arch = cluster_desc->get_arch(*chips.begin());
         }
         return arch;
-    }
-    if (rtoptions.get_target_device() == tt::TargetDevice::Simulator) {
+    } else if (rtoptions.get_target_device() == tt::TargetDevice::Simulator) {
         tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
         arch = init.get_arch_name();
     } else {
