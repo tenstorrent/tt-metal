@@ -223,6 +223,13 @@ format_tile_sizes = {
 }
 
 
+class DstSync(Enum):
+    """Destination synchronization mode for LLK operations."""
+
+    SyncHalf = "SyncHalf"
+    SyncFull = "SyncFull"
+
+
 class L1BufferLocations(Enum):
     srcA = 0x18FE0
     srcB = 0x18FE4

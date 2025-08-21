@@ -234,6 +234,26 @@ def generate_build_header(
                     f"constexpr auto POOL_TYPE = ckernel::PoolType::{pool_type.value};"
                 )
 
+    # Optional extra unary operation (used when both a binary and unary op
+    # need to be present in the same kernel, e.g. binary-eltwise followed by
+    # SFPU unary).  If 'unary_op' exists, append its constant.
+    unary_extra = test_config.get("unary_op", None)
+    if unary_extra is not None:
+        # Only add if we haven't already added a unary operation from the main mathop
+        if mathop == "no_mathop" or mathop not in SFPU_UNARY_OPERATIONS:
+            header_content.extend(["", "// Additional SFPU unary operation"])
+            header_content.append(
+                f"constexpr auto SFPU_UNARY_OPERATION = SfpuType::{unary_extra.cpp_enum_value};"
+            )
+
+    # Destination sync mode configuration
+    dst_sync = test_config.get("dst_sync", None)
+    if dst_sync is not None:
+        header_content.extend(["", "// Destination sync configuration"])
+        header_content.append(
+            f"constexpr auto DST_SYNC = ckernel::DstSync::{dst_sync.value};"
+        )
+
     tile_cnt = test_config.get("tile_cnt", 1)
 
     header_content.append("")

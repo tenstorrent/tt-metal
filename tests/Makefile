@@ -120,7 +120,13 @@ $(SHARED_ELF_DIR)/brisc.elf: $(SHARED_OBJ_DIR)/tmu-crt0.o $(SHARED_OBJ_DIR)/bris
 # disable make automatically deleting important intermediate files
 .SECONDARY: $(SHARED_OBJ_DIR)/*.o $(OBJ_DIR)/*.o
 
-# build kernel_unpack.o, kernel_math.o, kernel_pack.o
+# build kernel_unpack.o, kernel_math.o, kernel_pack.o from ai_gen subdirectory
+$(OBJ_DIR)/kernel_%.o: sources/ai_gen/$(testname).cpp | $(OBJ_DIR) $(DEPS_DIR)
+	$(GXX) $(OPTIONS_ALL) $(TEST_KERNEL_FLAG) $(OPTIONS_COMPILE) \
+	-MMD -MP -MF $(patsubst $(OBJ_DIR)/%.o,$(DEPS_DIR)/%.d,$@) \
+	-DLLK_TRISC_$(call TO_UPPER, $*) -c -o $@ $<
+
+# build kernel_unpack.o, kernel_math.o, kernel_pack.o from main sources directory
 $(OBJ_DIR)/kernel_%.o: sources/$(testname).cpp | $(OBJ_DIR) $(DEPS_DIR)
 	$(GXX) $(OPTIONS_ALL) $(TEST_KERNEL_FLAG) $(OPTIONS_COMPILE) \
 	-MMD -MP -MF $(patsubst $(OBJ_DIR)/%.o,$(DEPS_DIR)/%.d,$@) \
