@@ -18,7 +18,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-template <bool layernorm_compat = false>
+template <bool layernorm_compat = true>
 ALWI void rsqrt_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_rsqrt_init<APPROX, layernorm_compat>()));
 }
