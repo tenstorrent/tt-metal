@@ -11,12 +11,14 @@ ARCUintMetric::ARCUintMetric(
     size_t chip_id,
     std::shared_ptr<ARCTelemetryReader> reader,
     tt::umd::wormhole::TelemetryTag tag,
-    const std::string& metric_name) :
+    const std::string& metric_name,
+    uint32_t mask) :
     UIntMetric(chip_id),
     reader_(reader),
     wormhole_tag_(tag),
     blackhole_tag_(),  // just some dummy tag we will never use
-    metric_name_(metric_name) {
+    metric_name_(metric_name),
+    mask_(mask) {
     TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
     TT_ASSERT(
         reader_->get_arch() == tt::ARCH::WORMHOLE_B0,
@@ -29,8 +31,9 @@ ARCUintMetric::ARCUintMetric(
     size_t chip_id,
     std::shared_ptr<ARCTelemetryReader> reader,
     tt::umd::blackhole::TelemetryTag tag,
-    const std::string& metric_name) :
-    UIntMetric(chip_id), reader_(reader), wormhole_tag_(), blackhole_tag_(tag), metric_name_(metric_name) {
+    const std::string& metric_name,
+    uint32_t mask) :
+    UIntMetric(chip_id), reader_(reader), wormhole_tag_(), blackhole_tag_(tag), metric_name_(metric_name), mask_(mask) {
     TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
     TT_ASSERT(
         reader_->get_arch() == tt::ARCH::BLACKHOLE,
@@ -41,7 +44,7 @@ ARCUintMetric::ARCUintMetric(
 
 ARCUintMetric::ARCUintMetric(
     size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader, CommonTelemetryTag common_metric) :
-    UIntMetric(chip_id), reader_(reader), wormhole_tag_(), blackhole_tag_() {
+    UIntMetric(chip_id), reader_(reader), wormhole_tag_(), blackhole_tag_(), mask_(0xffffffff) {
     TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
 
     // Set metric name and tags based on common metric type
@@ -50,6 +53,7 @@ ARCUintMetric::ARCUintMetric(
             metric_name_ = "AIClock";
             wormhole_tag_ = tt::umd::wormhole::TelemetryTag::AICLK;
             blackhole_tag_ = tt::umd::blackhole::TelemetryTag::AICLK;
+            mask_ = 0xffff;  // 16-bit value
             break;
         case CommonTelemetryTag::AXICLK:
             metric_name_ = "AXIClock";
@@ -70,11 +74,13 @@ ARCUintMetric::ARCUintMetric(
             metric_name_ = "TDP";
             wormhole_tag_ = tt::umd::wormhole::TelemetryTag::TDP;
             blackhole_tag_ = tt::umd::blackhole::TelemetryTag::TDP;
+            mask_ = 0xffff;  // 16-bit value
             break;
         case CommonTelemetryTag::TDC:
             metric_name_ = "TDC";
             wormhole_tag_ = tt::umd::wormhole::TelemetryTag::TDC;
             blackhole_tag_ = tt::umd::blackhole::TelemetryTag::TDC;
+            mask_ = 0xffff;  // 16-bit value
             break;
         case CommonTelemetryTag::VCORE:
             metric_name_ = "VCore";
@@ -101,14 +107,18 @@ void ARCUintMetric::update(const tt::Cluster& cluster) {
     uint64_t new_value = 0;
 
     // Read the appropriate telemetry value based on architecture
+    uint32_t raw_value = 0;
     tt::ARCH arch = reader_->get_arch();
     if (arch == tt::ARCH::WORMHOLE_B0) {
-        new_value = static_cast<uint64_t>(reader_->read_value(wormhole_tag_));
+        raw_value = reader_->read_value(wormhole_tag_);
     } else if (arch == tt::ARCH::BLACKHOLE) {
-        new_value = static_cast<uint64_t>(reader_->read_value(blackhole_tag_));
+        raw_value = reader_->read_value(blackhole_tag_);
     } else {
         TT_ASSERT(false, "Unsupported architecture for chip {}", reader_->id);
     }
+
+    // Apply mask to get the final value
+    new_value = static_cast<uint64_t>(raw_value & mask_);
 
     // Update the metric value and timestamp
     uint64_t old_value = value_;
