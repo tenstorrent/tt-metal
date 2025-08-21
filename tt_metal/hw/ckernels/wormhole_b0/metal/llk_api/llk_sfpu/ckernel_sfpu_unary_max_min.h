@@ -10,6 +10,33 @@
 namespace ckernel {
 namespace sfpu {
 
+sfpi_inline void load_value_param(uint value) {
+    int scalar = value;
+    if (scalar < 0) {  // To convert from 2's complement to sign+magnitude
+        scalar = -scalar;
+        int res = 0x80000000 | (scalar & 0x7FFFFFFF);
+        scalar = res;
+    }
+    _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
+}
+
+sfpi_inline void calculate_unary_max_min_int32_body(bool is_max_op) {
+    // Load input tensor to lreg0
+    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
+
+    // Copy value param to lreg2 to lreg1
+    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
+
+    // Swap and store maximum in lreg1, minimum in lreg0 (sign + magnitude format)
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
+
+    // Store the result
+    if (is_max_op) {
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
+    } else {
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
+    }
+}
 template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min(uint value) {
 
@@ -34,40 +61,17 @@ inline void calculate_unary_max_min(uint value) {
         } else {
             TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, 0);
         }
-        dst_reg++;
+        sfpi::dst_reg++;
     }
 }
 
 template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min_int32(uint value) {
-    int scalar = value;
-    if (scalar < 0) {  // To convert from 2's complement to sign+magnitude
-        scalar = -scalar;
-        int res = 0x80000000 | (scalar & 0x7FFFFFFF);
-        scalar = res;
-    }
-
-    // Load value param to lreg2
-    _sfpu_load_imm32_(p_sfpu::LREG2, scalar);
-
+    load_value_param(value);
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
-        // Load input tensor to lreg0
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
-
-        // Copy value param to lreg2 to lreg1
-        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
-
-        // Swap and store maximum in lreg1, minimum in lreg0 (sign + magnitude format)
-        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1);
-
-        // Store the result
-        if constexpr (IS_MAX_OP) {
-            TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
-        } else {
-            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_3, 0);
-        }
-        dst_reg++;
+        calculate_unary_max_min_int32_body(IS_MAX_OP);
+        sfpi::dst_reg++;
     }
 }
 
