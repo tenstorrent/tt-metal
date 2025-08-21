@@ -14,7 +14,7 @@ namespace sfpu {
 
 template <bool APPROXIMATE = false, bool save_reg = true /* Unused. Enough registers available. */>
 sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
-    return _sfpu_reciprocal_<APPROXIMATE>(in);
+    return _sfpu_reciprocal_<APPROXIMATE ? 0 : 2>(in);
 }
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
