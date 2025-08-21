@@ -68,6 +68,7 @@ void report_page(std::size_t i) {
 
     DataT result = 0;
     for (auto j = 0ul; j < PAGE_SIZE; j++) {
+        // result should be the same as all elements should be the same.
         result |= read_ptr[j];
     }
     result_ptr[i] = result;
