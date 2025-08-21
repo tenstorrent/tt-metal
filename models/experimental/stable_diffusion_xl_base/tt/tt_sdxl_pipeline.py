@@ -62,6 +62,8 @@ class TtSDXLPipeline(nn.Module):
 
         self.encoders_compiled = False
         self.image_processing_compiled = False
+        self.allocated_device_tensors = False
+        self.generated_input_tensors = False
 
         if is_galaxy():
             logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
@@ -93,22 +95,12 @@ class TtSDXLPipeline(nn.Module):
 
         # Tensor shapes
         B, C, H, W = 1, 4, 128, 128
-        self.tt_latents_shape = (1, 1, B * H * W, C)
-        self.tt_prompt_embeds_shape = (1, 77, 2048)
-        self.tt_text_embeds_shape = (1, 1280)
-        self.tt_time_ids_shape = (1, 6)
+        self.tt_latents_shape = [B, C, H, W]
 
-        # Tensor dtypes
-        self.tt_latents_dtype = ttnn.bfloat16
-        self.tt_prompt_embeds_dtype = ttnn.bfloat16
-        self.tt_text_embeds_dtype = ttnn.bfloat16
-        self.tt_time_ids_dtype = ttnn.bfloat16
-
-        # Tensor layouts
-        self.tt_latents_layout = ttnn.TILE_LAYOUT
-        self.tt_prompt_embeds_layout = ttnn.TILE_LAYOUT
-        self.tt_text_embeds_layout = ttnn.ROW_MAJOR_LAYOUT
-        self.tt_time_ids_layout = ttnn.TILE_LAYOUT
+    def set_num_inference_steps(self, num_inference_steps: int):
+        # When changing num_inference_steps, the timesteps and latents need to be recreated.
+        self.pipeline_config.num_inference_steps = num_inference_steps
+        self.generated_input_tensors = False
 
     def set_guidance_scale(self, guidance_scale: float):
         self.pipeline_config.guidance_scale = guidance_scale
@@ -122,49 +114,55 @@ class TtSDXLPipeline(nn.Module):
 
     def compile_text_encoding(self):
         # Compilation of text encoders on the device.
+        if not self.encoders_compiled:
+            assert self.pipeline_config.encoders_on_device, "Host text encoders are used; compile is not needed"
+            assert self.tt_text_encoder is not None, "Text encoder is not loaded on the device"
 
-        assert self.pipeline_config.encoders_on_device, "Host text encoders are used; compile is not needed"
-        assert self.tt_text_encoder is not None, "Text encoder is not loaded on the device"
+            warmup_tt_text_encoders(
+                self.tt_text_encoder,
+                self.tt_text_encoder_2,
+                self.torch_pipeline.tokenizer,
+                self.torch_pipeline.tokenizer_2,
+                self.ttnn_device,
+                self.batch_size,
+            )
 
-        warmup_tt_text_encoders(
-            self.tt_text_encoder,
-            self.tt_text_encoder_2,
-            self.torch_pipeline.tokenizer,
-            self.torch_pipeline.tokenizer_2,
-            self.ttnn_device,
-            self.batch_size,
-        )
+            self.encoders_compiled = True
 
     def compile_image_processing(self):
         # Compile/trace run for denoising loop and vae decoder.
+        if not self.image_processing_compiled:
+            assert self.allocated_device_tensors, "Input tensors are not allocated"
 
-        profiler.start("warmup_run")
-        logger.info("Performing warmup run on denoising, to make use of program caching in actual inference...")
+            profiler.start("warmup_run")
+            logger.info("Performing warmup run on denoising, to make use of program caching in actual inference...")
 
-        _, _, _, self.output_shape, _ = run_tt_image_gen(
-            self.ttnn_device,
-            self.tt_unet,
-            self.tt_scheduler,
-            self.tt_latents_device,
-            self.tt_prompt_embeds_device,
-            self.tt_time_ids_device,
-            self.tt_text_embeds_device,
-            [self.ttnn_timesteps[0]],
-            self.extra_step_kwargs,
-            self.guidance_scale,
-            self.scaling_factor,
-            [1, 4, 128, 128],
-            self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
-            self.batch_size,
-            capture_trace=False,
-        )
-        ttnn.synchronize_device(self.ttnn_device)
-        profiler.end("warmup_run")
+            _, _, _, self.output_shape, _ = run_tt_image_gen(
+                self.ttnn_device,
+                self.tt_unet,
+                self.tt_scheduler,
+                self.tt_latents_device,
+                self.tt_prompt_embeds_device,
+                self.tt_time_ids_device,
+                self.tt_text_embeds_device,
+                [self.ttnn_timesteps[0]],
+                self.extra_step_kwargs,
+                self.guidance_scale,
+                self.scaling_factor,
+                self.tt_latents_shape,
+                self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
+                self.batch_size,
+                capture_trace=False,
+            )
+            ttnn.synchronize_device(self.ttnn_device)
+            profiler.end("warmup_run")
 
-        if self.pipeline_config.capture_trace:
-            self.__trace_image_processing()
+            if self.pipeline_config.capture_trace:
+                self.__trace_image_processing()
 
-    def encode_prompt(self, prompts):
+            self.image_processing_compiled = True
+
+    def encode_prompts(self, prompts):
         # Encode prompts using the text encoders.
 
         if self.pipeline_config.encoders_on_device:
@@ -317,7 +315,7 @@ class TtSDXLPipeline(nn.Module):
             add_text_embeds=pooled_prompt_embeds_torch,
         )
 
-        self.__allocate_input_tensors(
+        self.__allocate_device_tensors(
             tt_latents=tt_latents,
             tt_prompt_embeds=tt_prompt_embeds,
             tt_text_embeds=tt_add_text_embeds,
@@ -326,6 +324,8 @@ class TtSDXLPipeline(nn.Module):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("prepare_latents")
         logger.info("Input tensors generated")
+
+        self.generated_input_tensors = True
         return tt_latents, tt_prompt_embeds, tt_add_text_embeds
 
     def prepare_input_tensors(self, host_tensors):
@@ -343,6 +343,8 @@ class TtSDXLPipeline(nn.Module):
 
     def generate_images(self):
         # SDXL inference run.
+        assert self.image_processing_compiled, "Image processing is not compiled"
+        assert self.generated_input_tensors, "Input tensors are not re/generated"
 
         logger.info("Generating images...")
         imgs, self.tid, self.output_device, self.output_shape, self.tid_vae = run_tt_image_gen(
@@ -357,13 +359,13 @@ class TtSDXLPipeline(nn.Module):
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
-            [1, 4, 128, 128],
+            self.tt_latents_shape,
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
-            tid=self.tid,
-            output_device=self.output_device,
+            tid=self.tid if hasattr(self, "tid") else None,
+            output_device=self.output_device if hasattr(self, "output_device") else None,
             output_shape=self.output_shape,
-            tid_vae=self.tid_vae,
+            tid_vae=self.tid_vae if hasattr(self, "tid_vae") else None,
         )
         return imgs
 
@@ -419,74 +421,94 @@ class TtSDXLPipeline(nn.Module):
         ttnn.synchronize_device(self.ttnn_device)
         profiler.end("load_tt_componenets")
 
-    def __allocate_input_tensors(self, tt_latents, tt_prompt_embeds, tt_text_embeds, tt_time_ids):
+    def __allocate_device_tensors(self, tt_latents, tt_prompt_embeds, tt_text_embeds, tt_time_ids):
         # Allocation of device tensors for the input data.
-
-        profiler.start("allocate_input_tensors")
-
         is_mesh_device = isinstance(self.ttnn_device, ttnn._ttnn.multi_device.MeshDevice)
-        self.tt_latents_device = ttnn.allocate_tensor_on_device(
-            tt_latents.shape,
-            tt_latents.dtype,
-            tt_latents.layout,
-            self.ttnn_device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if not self.allocated_device_tensors:
+            profiler.start("allocate_input_tensors")
 
-        self.tt_prompt_embeds_device = [
-            ttnn.allocate_tensor_on_device(
-                tt_prompt_embeds[0][0].shape,
-                tt_prompt_embeds[0][0].dtype,
-                tt_prompt_embeds[0][0].layout,
+            self.tt_latents_device = ttnn.allocate_tensor_on_device(
+                tt_latents.shape,
+                tt_latents.dtype,
+                tt_latents.layout,
                 self.ttnn_device,
                 ttnn.DRAM_MEMORY_CONFIG,
-            ),
-            ttnn.allocate_tensor_on_device(
-                tt_prompt_embeds[0][1].shape,
-                tt_prompt_embeds[0][1].dtype,
-                tt_prompt_embeds[0][1].layout,
-                self.ttnn_device,
-                ttnn.DRAM_MEMORY_CONFIG,
-            ),
-        ]
+            )
 
-        self.tt_text_embeds_device = [
-            ttnn.allocate_tensor_on_device(
-                tt_text_embeds[0][0].shape,
-                tt_text_embeds[0][0].dtype,
-                tt_text_embeds[0][0].layout,
-                self.ttnn_device,
-                ttnn.DRAM_MEMORY_CONFIG,
-            ),
-            ttnn.allocate_tensor_on_device(
-                tt_text_embeds[0][1].shape,
-                tt_text_embeds[0][1].dtype,
-                tt_text_embeds[0][1].layout,
-                self.ttnn_device,
-                ttnn.DRAM_MEMORY_CONFIG,
-            ),
-        ]
+            self.tt_prompt_embeds_device = [
+                ttnn.allocate_tensor_on_device(
+                    tt_prompt_embeds[0][0].shape,
+                    tt_prompt_embeds[0][0].dtype,
+                    tt_prompt_embeds[0][0].layout,
+                    self.ttnn_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                ttnn.allocate_tensor_on_device(
+                    tt_prompt_embeds[0][1].shape,
+                    tt_prompt_embeds[0][1].dtype,
+                    tt_prompt_embeds[0][1].layout,
+                    self.ttnn_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                ),
+            ]
 
-        self.tt_time_ids_device = [
-            ttnn.from_torch(
-                tt_time_ids[0].squeeze(0),
-                dtype=ttnn.bfloat16,
-                device=self.ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device) if is_mesh_device else None,
-            ),
-            ttnn.from_torch(
-                tt_time_ids[1].squeeze(0),
-                dtype=ttnn.bfloat16,
-                device=self.ttnn_device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device) if is_mesh_device else None,
-            ),
-        ]
-        ttnn.synchronize_device(self.ttnn_device)
-        profiler.end("prepare_input_tensors")
+            self.tt_text_embeds_device = [
+                ttnn.allocate_tensor_on_device(
+                    tt_text_embeds[0][0].shape,
+                    tt_text_embeds[0][0].dtype,
+                    tt_text_embeds[0][0].layout,
+                    self.ttnn_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                ),
+                ttnn.allocate_tensor_on_device(
+                    tt_text_embeds[0][1].shape,
+                    tt_text_embeds[0][1].dtype,
+                    tt_text_embeds[0][1].layout,
+                    self.ttnn_device,
+                    ttnn.DRAM_MEMORY_CONFIG,
+                ),
+            ]
+
+            self.tt_time_ids_device = [
+                ttnn.from_torch(
+                    tt_time_ids[0].squeeze(0),
+                    dtype=ttnn.bfloat16,
+                    device=self.ttnn_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device) if is_mesh_device else None,
+                ),
+                ttnn.from_torch(
+                    tt_time_ids[1].squeeze(0),
+                    dtype=ttnn.bfloat16,
+                    device=self.ttnn_device,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device) if is_mesh_device else None,
+                ),
+            ]
+            ttnn.synchronize_device(self.ttnn_device)
+            profiler.end("prepare_input_tensors")
+
+            self.allocated_device_tensors = True
+        else:
+            tt_time_ids_host = [
+                ttnn.from_torch(
+                    tt_time_ids[0].squeeze(0),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device) if is_mesh_device else None,
+                ),
+                ttnn.from_torch(
+                    tt_time_ids[1].squeeze(0),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.ttnn_device) if is_mesh_device else None,
+                ),
+            ]
+
+            for host_tensor, device_tensor in zip(tt_time_ids_host, self.tt_time_ids_device):
+                ttnn.copy_host_to_device_tensor(host_tensor, device_tensor)
 
     def __create_user_tensors(
         self, latents, negative_prompt_embeds, prompt_embeds, negative_pooled_prompt_embeds, add_text_embeds
@@ -568,7 +590,7 @@ class TtSDXLPipeline(nn.Module):
             self.extra_step_kwargs,
             self.guidance_scale,
             self.scaling_factor,
-            [1, 4, 128, 128],
+            self.tt_latents_shape,
             self.tt_vae if self.pipeline_config.vae_on_device else self.torch_pipeline.vae,
             self.batch_size,
             capture_trace=True,

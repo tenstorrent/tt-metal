@@ -79,7 +79,7 @@ def run_demo_inference(
             batch_size,
             cpu_device,
         )
-    all_embeds = tt_sdxl.encode_prompt(prompts)
+    all_embeds = tt_sdxl.encode_prompts(prompts)
 
     items_per_core = len(all_embeds) // batch_size  # this will always be a multiple of batch_size because of padding
 
