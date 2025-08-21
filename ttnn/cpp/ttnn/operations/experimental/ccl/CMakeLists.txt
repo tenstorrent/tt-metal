@@ -28,11 +28,6 @@ target_sources(
         ring_attention_all_gather_async/ring_attention_all_gather_async.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.cpp
         ring_attention_all_gather_async/device/ring_attention_all_gather_async_program.cpp
-        all_gather_matmul/all_gather_matmul.cpp
-        all_gather_matmul/device/all_gather_matmul_op.cpp
-        all_gather_matmul/device/multi_core/all_gather_matmul_op_multi_core.cpp
-        all_reduce/all_reduce.cpp
-        all_reduce/device/all_reduce_op.cpp
         all_reduce_async/device/all_reduce_async_op.cpp
         all_reduce_async/device/all_reduce_async_program_minimal_variants.cpp
         reduce_scatter_async/device/reduce_scatter_async_op.cpp

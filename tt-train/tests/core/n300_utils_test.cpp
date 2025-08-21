@@ -13,6 +13,7 @@
 #include "core/compute_kernel_config.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 using namespace ttml;
 
@@ -26,6 +27,8 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
+
+        tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::FABRIC_1D);
         ttml::autograd::ctx().open_device(tt::tt_metal::distributed::MeshShape(1, 2));
         ttml::autograd::ctx().set_seed(42);
     }
@@ -129,8 +132,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduce) {
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
 
-    auto sum_tensor = ttnn::experimental::all_reduce(
-        tensor, ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Ring);
+    auto sum_tensor = ttnn_fixed::distributed::all_reduce(tensor);
 
     auto xtensors_back = ttml::core::to_xtensor(sum_tensor, ttml::core::IdentityComposer{});
     auto reduced_tensor = xtensor + xtensor;
@@ -158,8 +160,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     const auto mapper = ttnn::distributed::replicate_tensor_to_mesh_mapper(*device);
     auto tensor = ttml::core::from_xtensor(xtensor, device, ttnn::Layout::TILE, mapper.get());
 
-    auto sum_tensor = ttnn::experimental::all_reduce(
-        tensor, ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Ring);
+    auto sum_tensor = ttnn_fixed::distributed::all_reduce(tensor);
 
     auto xtensors_back = ttml::core::to_xtensor(sum_tensor, ttml::core::IdentityComposer{});
     auto reduced_tensor = xtensor + xtensor;
@@ -212,8 +213,7 @@ TEST_F(N300UtilsTest, TestXTensorShardAxis3Matmul) {
     auto tensor_a = ttml::core::from_xtensor(xtensor_a, device, ttnn::Layout::TILE, mapper.get());
     auto tensor_b = ttml::core::from_xtensor(xtensor_b, device, ttnn::Layout::TILE, mapper.get());
 
-    auto gathered_ta =
-        ttnn::all_gather(tensor_a, 3 /*, {0, 4}, 1 ,std::nullopt, std::nullopt, std::nullopt, std::nullopt*/);
+    auto gathered_ta = ttnn_fixed::distributed::all_gather(tensor_a, 3);
     fmt::print("gathered_ta shape: {}\n", gathered_ta.logical_shape());
     auto mul_tensor = ttnn::matmul(
         gathered_ta,

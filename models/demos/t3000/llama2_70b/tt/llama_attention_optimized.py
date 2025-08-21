@@ -346,17 +346,18 @@ class TtLlamaAttention_optimized:
             num_heads=self.n_local_heads,
         )  # seqlen, 1, batch, hidden_size
 
-        _, tt_matmul_out_tensor, _ = ttnn.experimental.all_gather_matmul(
-            attn_output,
-            self.wo,
-            dim=3,
-            all_gather_core_grid_offset=(0, 4),
-            num_links=1,
-            memory_config_ag=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
-            memory_config_mm=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            program_config=self.model_config["SELFOUT_MM_PROGCFG"],
-            compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
-        )
+        # _, tt_matmul_out_tensor, _ = ttnn.experimental.all_gather_matmul(
+        #     attn_output,
+        #     self.wo,
+        #     dim=3,
+        #     all_gather_core_grid_offset=(0, 4),
+        #     num_links=1,
+        #     memory_config_ag=self.model_config["ATTN_ALL_GATHER_OUTPUT_MEMCFG"],
+        #     memory_config_mm=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        #     program_config=self.model_config["SELFOUT_MM_PROGCFG"],
+        #     compute_kernel_config=self.model_config["COMPUTE_KERNEL_CONFIG"],
+        # )
+        assert False, "Legacy ccl call removed until new implementation is done"
 
         return tt_matmul_out_tensor
 
