@@ -11,6 +11,7 @@ from llama_models.llama3.api.chat_format import create_vision_mask
 from tqdm import tqdm
 from vllm.inputs import EncoderDecoderInputs, InputContext, TokenInputs, token_inputs
 from vllm.model_executor.models.interfaces import SupportsMultiModal, SupportsV0Only
+from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.tt_transformers.tt.generator import Generator, create_submeshes
@@ -95,6 +96,114 @@ def initialize_vllm_text_transformer(
     return tt_model, model_args
 
 
+class MllamaProcessingInfo:
+    """Processing information for Mllama multi-modal models."""
+
+    def __init__(self, ctx):
+        self.ctx = ctx
+
+    def get_hf_config(self):
+        """Get the HuggingFace config for the model."""
+        from transformers import MllamaConfig
+
+        return self.ctx.get_hf_config(MllamaConfig)
+
+    def get_hf_processor(self, **kwargs):
+        """Get the HuggingFace processor for the model."""
+        from transformers.models.mllama.processing_mllama import MllamaProcessor
+
+        return self.ctx.get_hf_processor(MllamaProcessor, **kwargs)
+
+    def get_supported_mm_limits(self):
+        """Get the supported multimodal limits."""
+        return {"image": None}
+
+    def get_tokenizer(self):
+        """Get the tokenizer."""
+        return self.ctx.tokenizer
+
+    @property
+    def model_id(self):
+        return self.ctx.model_config.model
+
+
+class MllamaDummyInputsBuilder:
+    """Builder for dummy inputs used in profiling."""
+
+    def __init__(self, info):
+        self.info = info
+
+    def get_dummy_text(self, mm_counts):
+        """Generate dummy text with appropriate image tokens."""
+        num_images = mm_counts.get("image", 0)
+        processor = self.info.get_hf_processor()
+        image_token = processor.image_token
+        return image_token * num_images
+
+    def get_dummy_mm_data(self, seq_len, mm_counts):
+        """Generate dummy multimodal data for profiling."""
+        import numpy as np
+        from PIL import Image
+
+        num_images = mm_counts.get("image", 0)
+
+        # Create dummy images with reasonable size
+        target_width = 1120
+        target_height = 1120
+
+        images = []
+        for _ in range(num_images):
+            dummy_image_array = np.zeros((target_height, target_width, 3), dtype=np.uint8)
+            images.append(Image.fromarray(dummy_image_array, "RGB"))
+
+        return {"image": images if len(images) > 1 else (images[0] if images else None)}
+
+
+class MllamaMultiModalProcessor:
+    """Multi-modal processor for Mllama that handles encoder-decoder inputs."""
+
+    def __init__(self, info, dummy_inputs, **kwargs):
+        self.info = info
+        self.dummy_inputs = dummy_inputs
+
+    def apply(self, prompt, mm_data, hf_processor_mm_kwargs=None, tokenization_kwargs=None, return_mm_hashes=False):
+        """Apply processing to multimodal inputs."""
+        if hf_processor_mm_kwargs is None:
+            hf_processor_mm_kwargs = {}
+        if tokenization_kwargs is None:
+            tokenization_kwargs = {}
+
+        # Create encoder-decoder inputs in the format expected by input_processor_for_mllama
+        encoder_decoder_inputs = EncoderDecoderInputs(
+            encoder={
+                "type": "token",
+                "prompt_token_ids": [],  # Will be filled by tokenization
+                "prompt": prompt if isinstance(prompt, str) else "",
+                "multi_modal_data": mm_data,
+            },
+            decoder={
+                "type": "token",
+                "prompt_token_ids": [],
+            },
+        )
+
+        # For now, delegate to the existing input_processor_for_mllama function
+        processed = input_processor_for_mllama(ctx=self.info.ctx, inputs=encoder_decoder_inputs)
+
+        # Convert back to the expected format
+        return {
+            "type": "multimodal",
+            "prompt_token_ids": processed["decoder"]["prompt_token_ids"],
+            "prompt": processed["decoder"]["prompt"],
+            "multi_modal_data": processed["decoder"].get("multi_modal_data"),
+            "encoder_prompt_token_ids": processed["encoder"]["prompt_token_ids"],
+            "encoder_prompt": processed["encoder"]["prompt"],
+            "mm_kwargs": {},
+            "mm_hashes": {},
+            "mm_placeholders": {},
+        }
+
+
 # TODO: Update input processor to inherit from EncDecMultiModalProcessor as is done in vllm.model_executor.models.mllama.py
 def input_processor_for_mllama(
     ctx: InputContext,
@@ -168,12 +277,18 @@ def input_processor_for_mllama(
     # }
     MLLAMA_IMAGE_TOKEN_ID = 128256
     MLLAMA_IMAGE_TOKEN = "<|image|>"
+
+    # Create encoder inputs without multi_modal_data in token_inputs
+    encoder_token_inputs = token_inputs(
+        prompt_token_ids=[MLLAMA_IMAGE_TOKEN_ID] * num_vision_tokens,
+        prompt=MLLAMA_IMAGE_TOKEN * num_vision_tokens,
+    )
+
+    # Add multi_modal_data separately
+    encoder_inputs = {**encoder_token_inputs, "multi_modal_data": multi_modal_data}
+
     return EncoderDecoderInputs(
-        encoder=token_inputs(
-            prompt_token_ids=[MLLAMA_IMAGE_TOKEN_ID] * num_vision_tokens,
-            prompt=MLLAMA_IMAGE_TOKEN * num_vision_tokens,
-            multi_modal_data=multi_modal_data,
-        ),
+        encoder=encoder_inputs,
         decoder=dec_inputs,
     )
 
@@ -207,8 +322,9 @@ def input_processor_for_mllama(
 #     }
 
 
-# @MULTIMODAL_REGISTRY.register_image_input_mapper()  # TODO: Add once model can accept inputs from multi_modal_input_mapper (raw pixel values)
-# @INPUT_REGISTRY.register_input_processor(input_processor_for_mllama)  # TODO: replace with MllamaMultiModalProcessor
+@MULTIMODAL_REGISTRY.register_processor(
+    MllamaMultiModalProcessor, info=MllamaProcessingInfo, dummy_inputs=MllamaDummyInputsBuilder
+)
 class MllamaForConditionalGeneration(Generator, SupportsMultiModal, SupportsV0Only):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
