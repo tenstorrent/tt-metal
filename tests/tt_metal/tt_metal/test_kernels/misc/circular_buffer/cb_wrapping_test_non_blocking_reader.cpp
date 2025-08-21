@@ -4,9 +4,18 @@
 
 #include <cstdint>
 
+/**
+ *
+ * Two possible invokation locations:
+ * 1. Reader at UNPACKER core as Compute Kernel, no test will be performed (no cb_pages_available_at_front in compute
+ *    kernel).
+ * 2. Reader at NOC 1 as dataflow, test will be performed.
+ *
+ */
+
 void core_agnostic_main();
 
-#if defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC)
+#ifdef COMPILE_FOR_BRISC
 #include "dataflow_api.h"
 
 void kernel_main() { core_agnostic_main(); }

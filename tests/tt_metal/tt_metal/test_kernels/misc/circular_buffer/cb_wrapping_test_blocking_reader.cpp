@@ -2,6 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ *
+ * Two possible invokation locations:
+ * 1. Reader at UNPACKER core as Compute Kernel
+ * 2. Reader at NOC 1 as dataflow
+ *
+ * Test will be performed in both cases.
+ *
+ */
+
 void core_agnostic_main();
 
 #ifdef COMPILE_FOR_TRISC
@@ -33,16 +43,34 @@ static constexpr std::size_t CHURN_LOOP_COUNT = CHURN_TARGET / CB_STEP_SIZE;
 // This should be enough spining time for the writer to fill the CB with 2 steps of data.
 static constexpr std::size_t NUM_WAIT_CYCLES = 1024 * 1024;
 
+// Returns the sample of the page.
+// The page should contain the same value, so the sample is the or product of every element in the page.
 void report_page(std::size_t i) {
     invalidate_l1_cache();
     auto result_ptr = get_arg_val<DataT*>(0);
+
+    DataT* read_ptr;
+
+// Getting the raw read pointer for CB differes across TRISC and BRISC.
 #ifdef TRISC_UNPACK
-    auto read_ptr = reinterpret_cast<DataT*>(get_local_cb_interface(CB_ID).fifo_rd_ptr << 4);
-    result_ptr[i] = read_ptr[0];
+    static constexpr auto TRISC_RD_PTR_PAGE_SHIFT = 4;
+    read_ptr = reinterpret_cast<DataT*>(get_local_cb_interface(CB_ID).fifo_rd_ptr << TRISC_RD_PTR_PAGE_SHIFT);
 #elif defined(COMPILE_FOR_BRISC)
-    auto read_ptr = reinterpret_cast<DataT*>(get_read_ptr(CB_ID));
-    result_ptr[i] = read_ptr[0];
+    read_ptr = reinterpret_cast<DataT*>(get_read_ptr(CB_ID));
+#else
+    // Non unpack core on TRISC
+    read_ptr = nullptr;
 #endif
+
+    if (read_ptr == nullptr) {
+        return;
+    }
+
+    DataT result = 0;
+    for (auto j = 0ul; j < PAGE_SIZE; j++) {
+        result |= read_ptr[j];
+    }
+    result_ptr[i] = result;
 }
 
 void core_agnostic_main() {

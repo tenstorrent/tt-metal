@@ -2,6 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+/**
+ *
+ * Two possible invokation locations:
+ * 1. Reader at UNPACKER core as Compute Kernel
+ * 2. Reader at NOC 1 as dataflow
+ *
+ * Test will be performed in both cases.
+ *
+ */
+
 void core_agnostic_main();
 
 #ifdef COMPILE_FOR_TRISC
@@ -45,15 +55,14 @@ static constexpr DataT WRAP_WRITE_VALUE = 0xAAAA;
 static constexpr DataT WRITE_OVER_VALUE = 0xBBBB;
 
 void fill_page(DataT value) {
-// Why is there a difference between TRISC and BRISC?
 #ifdef COMPILE_FOR_TRISC
-    static constexpr auto wr_ptr_page_shift = 4;
-    auto ptr = (get_local_cb_interface(CB_ID).fifo_wr_ptr) << wr_ptr_page_shift;
+    static constexpr auto TRISC_WR_PTR_PAGE_SHIFT = 4;
+    auto ptr = (get_local_cb_interface(CB_ID).fifo_wr_ptr) << TRISC_WR_PTR_PAGE_SHIFT;
 #else
     auto ptr = get_write_ptr(CB_ID);
 #endif
 
-    auto page_start = reinterpret_cast<volatile tt_l1_ptr DataT*>(ptr);
+    auto page_start = reinterpret_cast<DataT*>(ptr);
     std::fill(page_start, page_start + PAGE_SIZE, value);
 }
 

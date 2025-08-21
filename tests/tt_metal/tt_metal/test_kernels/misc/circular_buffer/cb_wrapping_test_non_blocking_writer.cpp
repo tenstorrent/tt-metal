@@ -4,6 +4,15 @@
 
 #include <cstdint>
 
+/**
+ *
+ * Two possible invokation locations:
+ * 1. Writer at Packer core as Compute Kernel, no test will be performed (no cb_pages_reservable_at_back in compute
+ *    kernel).
+ * 2. Writer at NOC 0 as dataflow, test will be performed.
+ *
+ */
+
 void core_agnostic_main();
 
 #ifdef COMPILE_FOR_TRISC
@@ -12,7 +21,6 @@ namespace NAMESPACE {
 void MAIN { core_agnostic_main(); }
 }  // namespace NAMESPACE
 #else
-// Compile for data movement land.
 #include "dataflow_api.h"
 void kernel_main() { core_agnostic_main(); }
 #endif
@@ -32,6 +40,7 @@ void core_agnostic_main() {
     }
 
 #ifdef CHECK_BACK
+    // We fill the buffer.
     cb_reserve_back(CB_ID, CB_STEP_SIZE);
     cb_push_back(CB_ID, CB_STEP_SIZE);
     cb_reserve_back(CB_ID, CB_STEP_SIZE);
