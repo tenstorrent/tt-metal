@@ -28,10 +28,10 @@ void kernel_main() {
         // The user can get the wptr directly from the sender_socket, or
         // we can add wrappers issue the write itself
         for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
-            sender_downstream_encoding* downstream_enc = get_downstream_encoding(sender_socket, i);
+            sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
             noc_async_write(
                 data_addr,
-                get_noc_addr(downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, 0) |
+                get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, 0) |
                     sender_socket.write_ptr,
                 page_size);
         }
