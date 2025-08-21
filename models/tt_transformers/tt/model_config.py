@@ -555,6 +555,7 @@ class ModelArgs:
         if max_prefill_chunk_size_div1024 is None:
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
+                "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -1276,9 +1277,9 @@ class ModelArgs:
             )
 
             self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = (
-                ttnn.DRAM_MEMORY_CONFIG if self.model_name == "gemma-3-27b-it" else ttnn.L1_MEMORY_CONFIG
+                ttnn.DRAM_MEMORY_CONFIG if "gemma-3" in self.model_name else ttnn.L1_MEMORY_CONFIG
             )
-            self.lm_head_dtype = ttnn.bfloat16 if self.model_name == "gemma-3-27b-it" else None
+            self.lm_head_dtype = ttnn.bfloat16 if "gemma-3" in self.model_name else None
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
@@ -2319,6 +2320,9 @@ class ModelArgs:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[i].self_attn.q_norm
             layer._load_state_dict = layer.load_state_dict
+            import pdb
+
+            pdb.set_trace()
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
 
@@ -2647,7 +2651,7 @@ class HfDecoderWrapper:
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
         model_name_env = os.getenv("HF_MODEL")
-        if "gemma-3-27b" in model_name_env.lower():
+        if "gemma-3" in model_name_env.lower():
             position_embeddings = self.rotary_emb(x, position_ids)
             position_embeddings_local = self.rotary_emb_local(x, position_ids)
         else:
