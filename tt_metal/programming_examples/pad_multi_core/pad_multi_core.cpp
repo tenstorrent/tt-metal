@@ -87,13 +87,13 @@ int main() {
     std::shared_ptr<tt::tt_metal::Buffer> dst_buffer = CreateBuffer(output_dram_config);
     uint32_t dst_addr = dst_buffer->address();
 
-    // configure circular buffers expected by TTNN v2 reader/writer: c_0 (main), c_1 (pad), c_2 (align)
+    // configure circular buffers expected by TTNN reader/writer: c_0 (main), c_1 (pad), c_2 (align)
     constexpr uint32_t cb0 = CBIndex::c_0;
     constexpr uint32_t cb1 = CBIndex::c_1;
     constexpr uint32_t cb2 = CBIndex::c_2;
     tt::DataFormat cb_df = tt::DataFormat::UInt32;
     const uint32_t stick_size_bytes = packed_data_size;              // 4 bytes per stick (one packed uint32)
-    // Use TTNN v2 row-major minimum of 64B per stick in L1 for padding pattern
+    // Use TTNN row-major minimum of 64B per stick in L1 for padding pattern
     const uint32_t stick_size_padded = 64;
     const uint32_t stick_size_padded_aligned = 64;
     const uint32_t num_packed_row_src = src_N / packing_ratio;
@@ -108,7 +108,7 @@ int main() {
                                        .set_page_size(cb2, stick_size_bytes);
     tt_metal::CreateCircularBuffer(program, cores, cb_cfg);
 
-    // specify compile time args for TTNN v2 reader/writer
+    // specify compile time args for TTNN reader/writer
     std::vector<uint32_t> reader_compile_time_args;
     // N, H, C (treat rows as N, single H=1, columns (packed) as C)
     reader_compile_time_args.push_back(src_M);                // N
@@ -138,7 +138,7 @@ int main() {
         cb0, stick_size_bytes, stick_size_padded_aligned};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
-    // create kernels (TTNN v2)
+    // create kernels (borrowed from TTNN production code)
     KernelHandle reader_id = CreateKernel(
         program,
         "tt_metal/programming_examples/pad_multi_core/kernels/pad_reader_dims_rm_interleaved.cpp",
@@ -166,7 +166,7 @@ int main() {
         CoreCoord core = {0, core_idx};
         uint32_t num_sticks_per_core = num_rows_per_core * num_packed_row_dst;
         uint32_t num_sticks_per_barrier_rt = num_packed_row_dst;  // one row per barrier
-        // Reader v2 runtime: src_addr, num_sticks_per_core, num_sticks_per_barrier, start_id, front_pad_n,c,h, start_dim_offset[0..3]
+        // Reader runtime: src_addr, num_sticks_per_core, num_sticks_per_barrier, start_id, front_pad_n,c,h, start_dim_offset[0..3]
         std::vector<uint32_t> reader_rt = {src_addr,
                                            num_sticks_per_core,
                                            num_sticks_per_barrier_rt,
@@ -179,7 +179,7 @@ int main() {
                                            0,
                                            0};
         tt_metal::SetRuntimeArgs(program, reader_id, core, reader_rt);
-        // Writer v2 runtime: dst_addr, num_sticks_per_core, num_sticks_per_barrier, start_id
+        // Writer runtime: dst_addr, num_sticks_per_core, num_sticks_per_barrier, start_id
         std::vector<uint32_t> writer_rt = {dst_addr, num_sticks_per_core, num_sticks_per_barrier_rt, start_dst_idx};
         tt_metal::SetRuntimeArgs(program, writer_id, core, writer_rt);
         start_src_idx += num_src_sticks_per_core;
