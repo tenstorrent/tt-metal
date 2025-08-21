@@ -65,13 +65,12 @@ jobs:
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           install_wheel: true
           docker_opts: |
-            -v /tmp/hf_cache:/tmp/hf_cache
             -v /mnt/MLPerf:/mnt/MLPerf:ro
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            -e HF_HOME=${{ matrix.model == 'stable_diffusion_xl_base' && '/mnt/MLPerf/tt_dnn-models/hf_home' || '/mnt/MLPerf' }}
+            -e HF_HOME=${{ matrix.model == 'stable_diffusion_xl_base' && '/mnt/MLPerf/tt_dnn-models/hf_home' || '/mnt/MLPerf/huggingface' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           #TMP/HF_CACHE SAM STAVIO TU JER ON IMA RW PERMISSIONS - NIJE DO TOGA UOPSTE
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
