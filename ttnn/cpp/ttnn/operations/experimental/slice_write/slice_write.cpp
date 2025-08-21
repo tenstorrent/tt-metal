@@ -29,10 +29,6 @@ ttnn::Tensor SliceWriteOperation::invoke(
     const auto& padded_input_shape = input_tensor.padded_shape();
     const auto& padded_output_shape = output_tensor.padded_shape();
 
-    TT_FATAL(begins.size() <= 4, "Begins vector must have size <= 4");
-    TT_FATAL(ends.size() <= 4, "Ends vector must have size <= 4");
-    TT_FATAL(step.size() <= 4, "Step vector must have size <= 4");
-
     bool no_step = std::all_of(step.begin(), step.end(), [](uint32_t s) { return s == 1; });
 
     TT_FATAL(no_step, "Slice Write does not support strides");
