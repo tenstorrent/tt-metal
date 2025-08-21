@@ -106,11 +106,6 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
             auto capture_inner = ScopedGraphCapture(GraphProcessor::RunMode::NO_DISPATCH);
             output = detail::extract_output_tensor(std::apply(op, transformed_args));
             op_trace = capture_inner.end_graph_capture();
-            const char* env_var = std::getenv("TTNN_TRACE_FILE");
-            std::ofstream trace_file(env_var ? env_var : "trace.json");
-            trace_file << op_trace.dump(4);
-            trace_file.close();
-            log_info(tt::LogOp, "Graph trace saved to {}", env_var ? env_var : "trace.json");
         }  // end of inner graph capture
         catch (const std::exception& e) {
             log_debug(tt::LogOp, "Error during graph capture: {}", e.what());
@@ -122,7 +117,6 @@ auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, 
 
     // extract memory footprint from the trace
     auto interleaved_storage_cores = device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
-    log_info(tt::LogOp, "Interleaved storage cores: {}", interleaved_storage_cores);
     size_t cb_peak_size_per_core = extract_circular_buffers_peak_size_per_core(op_trace);
     size_t l1_buffers_peak_per_core =
         extract_l1_buffer_allocation_peak_size_per_core(op_trace, interleaved_storage_cores);
