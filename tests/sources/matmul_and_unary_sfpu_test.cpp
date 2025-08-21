@@ -61,49 +61,10 @@ void run_kernel()
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "llk_math_matmul.h"
 #include "params.h"
+#include "sfpu_operations.h"
 
 using namespace ckernel;
 using namespace ckernel::sfpu;
-
-namespace
-{
-void call_sfpu_operation(SfpuType operation)
-{
-    switch (operation)
-    {
-        case SfpuType::abs:
-            ckernel::sfpu::_calculate_abs_<APPROX_MODE, iterations>(iterations);
-            break;
-        case SfpuType::cosine:
-            ckernel::sfpu::_calculate_cosine_<APPROX_MODE, iterations>(iterations);
-            break;
-        case SfpuType::log:
-            ckernel::sfpu::_init_log_<APPROX_MODE>();
-            ckernel::sfpu::_calculate_log_<APPROX_MODE, false, iterations>(iterations, 0);
-            break;
-        case SfpuType::reciprocal:
-            ckernel::sfpu::_init_reciprocal_<APPROX_MODE>();
-            ckernel::sfpu::_calculate_reciprocal_<APPROX_MODE, iterations, is_fp32_dest_acc_en>(iterations);
-            break;
-        case SfpuType::sine:
-            ckernel::sfpu::_calculate_sine_<APPROX_MODE, iterations>(iterations);
-            break;
-        case SfpuType::sqrt:
-            ckernel::sfpu::_init_sqrt_<APPROX_MODE>();
-            ckernel::sfpu::_calculate_sqrt_<APPROX_MODE, iterations, 2>(iterations);
-            break;
-        case SfpuType::square:
-            ckernel::sfpu::_calculate_square_<APPROX_MODE, iterations>(iterations);
-            break;
-        case SfpuType::hardsigmoid:
-            ckernel::sfpu::_init_hardsigmoid_<APPROX_MODE>();
-            ckernel::sfpu::_calculate_activation_<APPROX_MODE, ckernel::ActivationType::Hardsigmoid, iterations>();
-            break;
-        default:
-            return;
-    }
-}
-} // namespace
 
 void run_kernel()
 {
@@ -134,7 +95,7 @@ void run_kernel()
     _llk_math_eltwise_unary_sfpu_start_<DstSync::SyncHalf>(0);
     // calling sfpu function from ckernel
     // this part is where parametrization of operation takes part
-    call_sfpu_operation(SFPU_UNARY_OPERATION);
+    test_utils::call_sfpu_operation_32(SFPU_UNARY_OPERATION);
 
     _llk_math_eltwise_unary_sfpu_done_();
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();

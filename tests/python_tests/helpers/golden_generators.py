@@ -916,7 +916,8 @@ class EltwiseBinaryGolden(FidelityMasking):
         return t1 - t2
 
     def _mul(self, t1, t2):
-        return t1 * t2
+        # Compute in float32 for better fidelity, then cast back to original dtype.
+        return (t1.to(torch.float32) * t2.to(torch.float32)).to(t1.dtype)
 
 
 @register_golden
