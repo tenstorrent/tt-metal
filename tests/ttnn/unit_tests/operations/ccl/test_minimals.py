@@ -38,7 +38,9 @@ def run_allgather_only_with_trace(
     dim,
     num_links,
     output_mem_config,
-    multi_device_global_semaphore,
+    ccl_semaphore_handles,
+    barrier_semaphore_handles,
+    use_barrier,
     num_iter=20,
     warmup_iters=20,
     subdevice_id=None,
@@ -49,11 +51,12 @@ def run_allgather_only_with_trace(
     tt_out_tensor = ttnn.experimental.all_gather_async(
         input_tensor_mesh,
         dim,
-        multi_device_global_semaphore=multi_device_global_semaphore,
+        multi_device_global_semaphore=ccl_semaphore_handles[0],
         num_links=num_links,
         memory_config=output_mem_config,
         topology=all_gather_topology,
         subdevice_id=subdevice_id,
+        barrier_semaphore=barrier_semaphore_handles[0] if use_barrier else None,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -79,11 +82,12 @@ def run_allgather_only_with_trace(
         tt_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
-            multi_device_global_semaphore=multi_device_global_semaphore,
+            multi_device_global_semaphore=ccl_semaphore_handles[i],
             num_links=num_links,
             memory_config=output_mem_config,
             topology=all_gather_topology,
             subdevice_id=subdevice_id,
+            barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
         )
         if i != num_iter - 1:
             tt_out_tensor.deallocate(True)
@@ -127,6 +131,7 @@ def run_all_gather_impl(
     output_shard_grid=None,
     tensor_mem_layout=None,
     warmup_iters=20,
+    use_barrier=False,
 ):
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -148,6 +153,8 @@ def run_all_gather_impl(
 
     # create global semaphore handles
     ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
+    if use_barrier:
+        barrier_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(2)]
 
     ### For sharded all gather only
     if bool(input_shard_shape) != bool(input_shard_grid) and bool(tensor_mem_layout) != bool(input_shard_grid):
@@ -242,7 +249,9 @@ def run_all_gather_impl(
             dim,
             num_links,
             output_mem_config,
-            multi_device_global_semaphore=ccl_semaphore_handles[0],
+            multi_device_global_semaphore=ccl_semaphore_handles,
+            barrier_semaphore=barrier_semaphore_handles,
+            use_barrier=use_barrier,
             num_iter=num_iters,
             warmup_iters=warmup_iters,
             subdevice_id=worker_sub_device_id,
@@ -258,6 +267,7 @@ def run_all_gather_impl(
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
+                barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
             )
             tt_out_tensor_list.append(tt_out_tensor)
 
@@ -356,6 +366,7 @@ def run_all_gather_impl(
     ],
 )
 @pytest.mark.parametrize("num_iters", [8])
+@pytest.mark.parametrize("use_barrier", [True, False])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_all_gather_only(
     t3k_mesh_device,
@@ -372,6 +383,7 @@ def test_all_gather_only(
     output_shard_shape,
     output_shard_grid,
     tensor_mem_layout,
+    use_barrier,
 ):
     run_all_gather_impl(
         t3k_mesh_device,
@@ -389,6 +401,7 @@ def test_all_gather_only(
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
         tensor_mem_layout=tensor_mem_layout,
+        use_barrier=use_barrier,
     )
 
 
@@ -447,6 +460,10 @@ def test_bh_trace_ag(
     output_shard_grid,
     tensor_mem_layout,
 ):
+    if p150_mesh_device.shape[0] != num_devices:
+        pytest.skip("Ring configuration requires the entire row or column so it loops around")
+    if ttnn.get_num_devices() == 8:
+        pytest.skip("Test requires a torus but rackbox is a mesh")
     profiler = BenchmarkProfiler()
     run_all_gather_impl(
         p150_mesh_device,

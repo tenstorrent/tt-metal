@@ -150,27 +150,27 @@ public:
 
     // Rd/Wr/Msg pointer sizes
     uint32_t prefetch_q_rd_ptr_size_{0};    // configured with alignment
-    uint32_t prefetch_q_pcie_rd_ptr_size_;  // configured with alignment
-    uint32_t dispatch_s_sync_sem_;          // configured with alignment
-    uint32_t other_ptrs_size;               // configured with alignment
+    uint32_t prefetch_q_pcie_rd_ptr_size_{};  // configured with alignment
+    uint32_t dispatch_s_sync_sem_{};          // configured with alignment
+    uint32_t other_ptrs_size{};               // configured with alignment
 
     // cq_prefetch
     uint32_t prefetch_q_entries_{0};
-    uint32_t prefetch_q_size_;
-    uint32_t prefetch_max_cmd_size_;
-    uint32_t prefetch_cmddat_q_size_;
-    uint32_t prefetch_scratch_db_size_;
-    uint32_t prefetch_ringbuffer_size_;
-    uint32_t prefetch_d_buffer_size_;
-    uint32_t prefetch_d_pages_;  // prefetch_d_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
+    uint32_t prefetch_q_size_{};
+    uint32_t prefetch_max_cmd_size_{};
+    uint32_t prefetch_cmddat_q_size_{};
+    uint32_t prefetch_scratch_db_size_{};
+    uint32_t prefetch_ringbuffer_size_{};
+    uint32_t prefetch_d_buffer_size_{};
+    uint32_t prefetch_d_pages_{};  // prefetch_d_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
 
     // cq_dispatch
-    uint32_t dispatch_size_;   // total buffer size
-    uint32_t dispatch_pages_;  // total buffer size / page size
-    uint32_t dispatch_s_buffer_size_;
-    uint32_t dispatch_s_buffer_pages_;  // dispatch_s_buffer_size_ / DISPATCH_S_BUFFER_LOG_PAGE_SIZE
+    uint32_t dispatch_size_{};   // total buffer size
+    uint32_t dispatch_pages_{};  // total buffer size / page size
+    uint32_t dispatch_s_buffer_size_{};
+    uint32_t dispatch_s_buffer_pages_{};  // dispatch_s_buffer_size_ / DISPATCH_S_BUFFER_LOG_PAGE_SIZE
 
-    CoreType core_type_;  // Which core this settings is for
+    CoreType core_type_{0};  // Which core this settings is for
 };
 
 // Convenience type alias for arrays of `DISPATCH_MESSAGE_ENTRIES` size.

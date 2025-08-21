@@ -80,8 +80,6 @@ public:
 
     ~DataMovementKernel() override = default;
 
-    RISCV processor() const override;
-
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     bool binaries_exist_on_disk(const IDevice* device) const override;
@@ -125,8 +123,6 @@ public:
 
     ~EthernetKernel() override = default;
 
-    RISCV processor() const override;
-
     uint32_t get_kernel_processor_type(int index) const override;
     void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
     bool binaries_exist_on_disk(const IDevice* device) const override;
@@ -167,8 +163,6 @@ public:
     }
 
     ~ComputeKernel() override = default;
-
-    RISCV processor() const override;
 
     uint32_t get_kernel_processor_type(int index) const override;
     void set_build_options(JitBuildOptions& build_options) const override;

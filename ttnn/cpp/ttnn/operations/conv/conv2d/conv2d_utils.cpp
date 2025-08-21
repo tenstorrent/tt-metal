@@ -821,8 +821,8 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
 
     struct core_count_and_size {
-        uint32_t core_count;
-        uint32_t size;
+        uint32_t core_count{};
+        uint32_t size{};
         Conv2dConfig conv_config;
     };
 

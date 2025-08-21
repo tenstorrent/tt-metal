@@ -56,6 +56,7 @@ using ParsedTestConfig = tt::tt_fabric::fabric_tests::ParsedTestConfig;
 using Topology = tt::tt_fabric::Topology;
 using FabricConfig = tt::tt_fabric::FabricConfig;
 using RoutingType = tt::tt_fabric::fabric_tests::RoutingType;
+using FabricTensixConfig = tt::tt_fabric::FabricTensixConfig;
 
 // Bandwidth measurement result structures
 struct BandwidthResult {
@@ -85,12 +86,12 @@ struct GoldenCsvEntry {
     std::string ntype;
     std::string topology;
     std::string num_devices;
-    uint32_t num_links;
-    uint32_t packet_size;
-    uint64_t cycles;
-    double bandwidth_gb_s;
-    double packets_per_second;
-    double tolerance_percent;  // Per-test tolerance percentage
+    uint32_t num_links{};
+    uint32_t packet_size{};
+    uint64_t cycles{};
+    double bandwidth_gb_s{};
+    double packets_per_second{};
+    double tolerance_percent{};  // Per-test tolerance percentage
 };
 
 struct ComparisonResult {
@@ -99,12 +100,12 @@ struct ComparisonResult {
     std::string ntype;
     std::string topology;
     std::string num_devices;
-    uint32_t num_links;
-    uint32_t packet_size;
-    double current_bandwidth_gb_s;
-    double golden_bandwidth_gb_s;
-    double difference_percent;
-    bool within_tolerance;
+    uint32_t num_links{};
+    uint32_t packet_size{};
+    double current_bandwidth_gb_s{};
+    double golden_bandwidth_gb_s{};
+    double difference_percent{};
+    bool within_tolerance{};
     std::string status;
 };
 
