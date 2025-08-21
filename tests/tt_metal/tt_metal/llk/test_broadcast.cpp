@@ -54,6 +54,8 @@ using namespace tt::test_utils::df;
 
 namespace unit_tests::compute::broadcast {
 
+namespace {
+
 enum ApiConvention : uint8_t {
     DEFAULT = 0,
     SHORT_INIT = 1,  // call <op>_bcast_<dim>_init_short instead of init_bcast
@@ -66,6 +68,8 @@ enum EltwiseOp : uint8_t { ADD = 0, SUB = 1, MUL = 2 };
 enum BroadcastDim : uint8_t { ROW = 0, COL = 1, SCALAR = 2 };
 
 enum TileShape : uint8_t { FULL_TILE = 0, TINY_TILE_16x32 = 1 };
+
+}  // namespace
 
 const map<EltwiseOp, std::string> eltwise_op_to_type = {
     {EltwiseOp::ADD, "EltwiseBinaryType::ELWADD"},

@@ -54,7 +54,11 @@ using namespace tt::test_utils::df;
 
 namespace unit_tests::compute::broadcast {
 
+namespace {
+
 enum BroadcastDim : uint8_t { ROW, COL, SCALAR, NONE, NUM_DIMS };
+
+}  // namespace
 
 const map<BroadcastDim, std::string> broadcast_dim_to_type = {
     {BroadcastDim::ROW, "BroadcastType::ROW"},

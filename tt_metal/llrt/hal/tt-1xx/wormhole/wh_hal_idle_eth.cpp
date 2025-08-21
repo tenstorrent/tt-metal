@@ -5,12 +5,8 @@
 #define COMPILE_FOR_IDLE_ERISC
 
 #include "dev_msgs.h"
-#include <algorithm>
-#include <cstddef>
 #include <cstdint>
-#include <vector>
 
-#include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
 #include "llrt_common/mailbox.hpp"
@@ -23,6 +19,8 @@
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::wormhole {
+
+#include "core_config.h"
 
 HalCoreInfoType create_idle_eth_mem_map() {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
