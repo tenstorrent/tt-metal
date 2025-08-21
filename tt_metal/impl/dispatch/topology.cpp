@@ -1148,12 +1148,12 @@ void build_tt_fabric_program(
                         auto& tensix_builder1 = tensix_builders.at(eth_chan_dir1);
                         auto& tensix_builder2 = tensix_builders.at(eth_chan_dir2);
 
-                        edm_builder1.connect_to_downstream_edm(std::ref(tensix_builder2));
-                        edm_builder2.connect_to_downstream_edm(std::ref(tensix_builder1));
+                        edm_builder1.connect_to_downstream_edm(tensix_builder2);
+                        edm_builder2.connect_to_downstream_edm(tensix_builder1);
                     }
                 } else {
-                    edm_builder1.connect_to_downstream_edm(std::ref(edm_builder2));
-                    edm_builder2.connect_to_downstream_edm(std::ref(edm_builder1));
+                    edm_builder1.connect_to_downstream_edm(edm_builder2);
+                    edm_builder2.connect_to_downstream_edm(edm_builder1);
                 }
 
                 // select VC based on the current link
