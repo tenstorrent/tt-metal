@@ -341,6 +341,8 @@ def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
 
     return ttnn.load_tensor(
         saved_weight.path,
-        device=device,
         enable_multihost_format=True,
+    ).to(
+        device=device,
+        mem_config=saved_weight.memory_config,
     )
