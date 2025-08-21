@@ -15,6 +15,7 @@
 #include "socket_manager.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 using Rank = ttml::core::distributed::Rank;
@@ -25,7 +26,8 @@ void send_aggregated_gradients_from_workers_to_optimizer(
     const std::shared_ptr<ttml::core::distributed::DistributedContext> &workers_and_aggregator_ctx,
     const std::shared_ptr<ttml::core::distributed::DistributedContext> &aggregator_and_optimizer_ctx,
     const SortedParameters &sorted_model_parameters,
-    int workers) {
+    int workers,
+    bool is_ddp = false) {
     Rank optimizer_rank{aggregator_and_optimizer_ctx->rank().get() + 1};
     for (auto &[name, tensor_ptr] : sorted_model_parameters) {
         if (!tensor_ptr->get_requires_grad()) {
@@ -41,6 +43,9 @@ void send_aggregated_gradients_from_workers_to_optimizer(
             tensor = ttnn::add(tensor, tensor_to_add);
         }
         tensor = ttnn::multiply(tensor, 1.0F / static_cast<float>(workers));
+        if (is_ddp) {
+            tensor = ttml::ttnn_fixed::distributed::all_reduce(tensor);
+        }
         socket_manager.send(tensor, aggregator_and_optimizer_ctx, optimizer_rank);
     }
 }
@@ -139,7 +144,8 @@ int main(int argc, char **argv) {
                 workers_and_aggregator_ctx,
                 aggregator_and_optimizer_ctx,
                 sorted_model_parameters,
-                workers);
+                workers,
+                device_config.enable_ddp);
             send_weights_from_optimizer_to_workers(
                 socket_manager,
                 workers_and_aggregator_ctx,
