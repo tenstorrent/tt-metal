@@ -2,11 +2,22 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+void core_agnostic_main();
+
+#ifdef COMPILE_FOR_TRISC
 #include "compute_kernel_api/common.h"
-
+namespace NAMESPACE {
+void MAIN {
 #ifdef TRISC_PACK
+    core_agnostic_main();
+#endif
+}
+}  // namespace NAMESPACE
+#else
+#include "dataflow_api.h"
+void kernel_main() { core_agnostic_main(); }
+#endif
 
-#include <algorithm>
 #include "debug/debug.h"
 #include "circular_buffer.h"
 
@@ -47,8 +58,7 @@ void fill_step(DataT value) {
     }
 }
 
-namespace NAMESPACE {
-void MAIN {
+void core_agnostic_main() {
     for (auto i = 0ul; i < CHURN_LOOP_COUNT; i++) {
         cb_reserve_back(CB_ID, CB_STEP_SIZE);
         fill_step(CHURN_LOOP_VALUE);
@@ -93,9 +103,3 @@ void MAIN {
     fill_step(WRITE_OVER_VALUE);
     cb_push_back(CB_ID, CB_STEP_SIZE);
 }
-}  // namespace NAMESPACE
-#else
-namespace NAMESPACE {
-void MAIN {}
-}  // namespace NAMESPACE
-#endif

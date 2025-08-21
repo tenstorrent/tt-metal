@@ -81,7 +81,7 @@ std::shared_ptr<Buffer> create_result_buffer(IDevice* device) {
     return result_buffer;
 }
 
-TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlocking) {
+TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
     auto device = devices_.at(0);
     Program program;
     CreateKernel(
@@ -95,6 +95,36 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlocking) {
         "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_reader.cpp",
         WORKER_CORE,
         WriterDataMovementConfig{});
+
+    CreateCircularBuffer(
+        program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
+
+    auto result_buffer = Buffer::create(device, RESULT_BUFFER_PAGE_SIZE, RESULT_BUFFER_SIZE, RESULT_BUFFER_TYPE);
+    SetRuntimeArgs(program, reader_kernel, WORKER_CORE, {result_buffer->address()});
+
+    EnqueueProgram(device->command_queue(), program, true);
+
+    std::vector<DataT> host_buffer;
+    auto expected_result_size = EXPECTED_RESULT.size() * sizeof(DataT);
+    detail::ReadFromDeviceL1(device, WORKER_CORE, result_buffer->address(), expected_result_size, host_buffer);
+
+    EXPECT_EQ(host_buffer, EXPECTED_RESULT) << "Page corruption detected.";
+}
+
+TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
+    auto device = devices_.at(0);
+    Program program;
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_writer.cpp",
+        WORKER_CORE,
+        ReaderDataMovementConfig{});
+
+    auto reader_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_wrapping_test_blocking_reader.cpp",
+        WORKER_CORE,
+        ComputeConfig{});
 
     CreateCircularBuffer(
         program, WORKER_CORE, CircularBufferConfig{CB_SIZE, {{CB_ID, DATA_FORMAT}}}.set_page_size(CB_ID, CB_PAGE_SIZE));
