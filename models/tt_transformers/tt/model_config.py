@@ -69,6 +69,7 @@ class OpGroup(Enum):
     LI_QKV_PREFILL = "li_qkv_prefill"
     LI_O_PREFILL = "li_o_prefill"
     SDPA_PREFILL = "sdpa_prefill"
+    ACCURACY = "accuracy"
 
 
 class MathFidelitySetting(Enum):
@@ -77,6 +78,7 @@ class MathFidelitySetting(Enum):
     HIFI2_NA = "hifi2na"  # na specified `packer_l1_acc=False` and `fp32_dest_acc_en=False` in compute kernel config
     HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
     HIFI4 = "hifi4"
+    HIFI4_FP32 = "hifi4fp32"
 
 
 class ModelOptimizations:
@@ -233,7 +235,7 @@ class ModelOptimizations:
                 # Attention
                 TensorGroup.WQKV: PrecisionSetting.BFP8,
                 TensorGroup.WO: PrecisionSetting.BFP8,
-                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                TensorGroup.KV_CACHE: PrecisionSetting.BF16,  # Upgraded from BFP8 to prevent accumulation errors
                 # Activation across whole model
                 TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
             },
@@ -243,11 +245,12 @@ class ModelOptimizations:
                 OpGroup.LI_FF2: MathFidelitySetting.HIFI2_FP16,
                 # Attention operators -- linear and scaled_dot_product_attention, in decode and prefill modes
                 OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
-                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,  # Upgraded from HIFI2 for better precision
                 OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
                 OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
                 OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
                 OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2,  # FP32 accumulate is important here
+                OpGroup.ACCURACY: MathFidelitySetting.HIFI4_FP32,
             },
         }
 
@@ -564,6 +567,7 @@ class ModelArgs:
                 "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
                 "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-1b-it": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
             }
@@ -584,9 +588,10 @@ class ModelArgs:
             max_prefill_chunk_size_div1024 = int(max_prefill_chunk_size_div1024)
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
-        if (self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B"] and self.device_name == "N150") or (
-            self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"
-        ):
+        if (
+            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-1b-it"]
+            and self.device_name == "N150"
+        ) or (self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
             self.prefill_len_cutoff = 512
 
@@ -660,6 +665,12 @@ class ModelArgs:
                 math_approx_mode=False,
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
+            )
+            self.compute_kernel_config_hifi4_en_fp32 = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+                dst_full_sync_en=False,
             )
             self.compute_kernel_config_hifi2_na = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -811,7 +822,7 @@ class ModelArgs:
                 k=k_dim,
                 n=n_dim,
                 grid_size=self.find_prefill_grid(prefill_rows, k_dim // self.tile_size),
-                in0_block_w=1 if self.is_galaxy else None,
+                in0_block_w=32 if "gemma-3" in self.model_name else 1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
                 per_core_N=math.ceil(n_dim / (self.tile_size * dram_shard_grid_width)) if dram_sharded_wo else None,
             )
@@ -1265,7 +1276,7 @@ class ModelArgs:
             self.num_all_gather_links = (
                 2 if self.is_galaxy else 1
             )  # TODO: try out 3 for short axis and 4 for long axis (TG only) <- should work but untested in model
-            self.ccl_dtype = ttnn.bfloat8_b
+            self.ccl_dtype = ttnn.bfloat16 if "gemma-3" in self.model_name else ttnn.bfloat8_b
 
             logger.info(f"Attention grid: {attn_input_grid}")
             logger.info(f"MLP grid: {mlp_core_grid}")
@@ -1411,6 +1422,14 @@ class ModelArgs:
 
     def _set_params_from_dict(self, config, is_hf=False):
         # Try to get text_config, if it doesn't exist everything is text config
+        eos_token_id = config.get("eos_token_id", None)
+
+        self.eos_token_id = (
+            None if isinstance(eos_token_id, int) else eos_token_id
+        )  # Gemma like models can have a list of eos token ids
+
+        self.sliding_window_pattern = config.get("sliding_window_pattern", 1)
+
         text_config = config.get("text_config", config)
 
         # Common params with different names between Meta and HF
@@ -2123,7 +2142,7 @@ class ModelArgs:
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
+                tokenizer.stop_tokens = self.eos_token_id if self.eos_token_id is not None else [tokenizer.eos_token_id]
             return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
@@ -2247,7 +2266,13 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0]
-            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb)
+            rotary_emb = model.model.rotary_emb
+
+            if "gemma-3" in self.model_name:
+                wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb)
+            else:
+                wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb)
+
             return wrapper
 
     def reference_attention(self):
@@ -2258,7 +2283,12 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ in ("Qwen3Attention", "MistralAttention")
+            use_position_embeddings = layer.__class__.__name__ in (
+                "Qwen3Attention",
+                "MistralAttention",
+                "Gemma3Attention",
+            )
+
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2422,7 +2452,12 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        position_embeddings = self.rotary_emb(x, position_ids)
+        # TODO: Generalize for other HF models
+        model_name_env = os.getenv("HF_MODEL")
+        if model_name_env is not None and "mistral" in model_name_env.lower():
+            position_embeddings = self.rotary_emb(x, x.shape[1])
+        else:
+            position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:
@@ -2430,6 +2465,46 @@ class HfDecoderWrapper:
         result = self.decoder.forward(
             x,
             position_embeddings=position_embeddings,
+            past_key_value=self.past_key_values,
+            use_cache=True,
+            position_ids=position_ids,
+            attention_mask=mask,
+        )
+        output = result[0]
+        return output
+
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def load_state_dict(self, state_dict):
+        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+
+
+class HfGemmaDecoderWrapper:
+    def __init__(self, decoder, head_dim, rotary_emb):
+        from transformers import DynamicCache
+
+        self.decoder = decoder
+        self.head_dim = head_dim
+        self.rotary_emb = rotary_emb
+        self.past_key_values = DynamicCache()
+
+    def forward(self, x, start_pos, freqs_cis_i, mask=None):
+        position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+        # TODO: Generalize for other HF models
+        model_name_env = os.getenv("HF_MODEL")
+        if model_name_env is not None and "mistral" in model_name_env.lower():
+            position_embeddings = self.rotary_emb(x, x.shape[1])
+        else:
+            position_embeddings = self.rotary_emb(x, position_ids)
+
+        if mask is not None:
+            while len(mask.shape) < 4:
+                mask = mask.unsqueeze(0)
+        result = self.decoder.forward(
+            x,
+            position_embeddings_global=position_embeddings,
+            position_embeddings_local=position_embeddings,
             past_key_value=self.past_key_values,
             use_cache=True,
             position_ids=position_ids,
@@ -2540,6 +2615,7 @@ class DecodersPrecision:
             MathFidelitySetting.HIFI2_NA: configuration.compute_kernel_config_hifi2_na,
             MathFidelitySetting.HIFI2_FP16: configuration.compute_kernel_config_hifi2_fp16,
             MathFidelitySetting.HIFI4: configuration.compute_kernel_config_hifi4,
+            MathFidelitySetting.HIFI4_FP32: configuration.compute_kernel_config_hifi4_en_fp32,
         }
         return math_fidelity_setting_lookup[self.decoder_optimizations[decoder_id].op_fidelity_settings[op]]
 
