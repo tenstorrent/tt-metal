@@ -16,11 +16,5 @@ void kernel_main() {
     const uint32_t sem_addr = get_arg_val<uint32_t>(idx++);
     const uint32_t expected_value = get_arg_val<uint32_t>(idx++);
 
-    volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
-
-    // Wait until sender signals completion
-    while (*sem_ptr < expected_value) {
-        invalidate_l1_cache();  // make sure we see remote updates
-        asm volatile("" ::: "memory");
-    }
+    noc_semaphore_wait(sem_addr, expected_value);
 }
