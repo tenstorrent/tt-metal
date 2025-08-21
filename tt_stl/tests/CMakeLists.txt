@@ -9,6 +9,7 @@ target_sources(
         test_any_range.cpp
         test_cleanup.cpp
         test_indestructible.cpp
+        test_optional_reference.cpp
         test_slotmap.cpp
         test_span.cpp
         test_strong_type.cpp
