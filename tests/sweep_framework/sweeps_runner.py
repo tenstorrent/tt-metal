@@ -697,8 +697,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--vector-source",
-        required=False,
-        default="elastic",
+        required=True,
         choices=["elastic", "file", "vectors_export"],
         help="Test vector source. Available presets are ['elastic', 'file', 'vectors_export']",
     )
@@ -711,8 +710,7 @@ if __name__ == "__main__":
 
     parser.add_argument(
         "--result-dest",
-        required=False,
-        default="postgres",
+        required=True,
         choices=["elastic", "postgres", "results_export"],
         help="Specify test result destination. Available presets are ['elastic', 'postgres', 'results_export']",
     )
