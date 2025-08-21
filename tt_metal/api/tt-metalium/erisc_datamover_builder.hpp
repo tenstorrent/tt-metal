@@ -215,6 +215,7 @@ struct FabricEriscDatamoverOptions {
     FabricEriscDatamoverType edm_type = FabricEriscDatamoverType::Default;
     FabricEriscDatamoverAxis edm_axis = FabricEriscDatamoverAxis::Short;
     FabricRouterBufferConfig edm_buffer_config = FabricRouterBufferConfig{};
+    FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED;
 };
 
 struct FabricEriscDatamoverConfig {
@@ -239,6 +240,9 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t dateline_upstream_sender_channel_skip_idx = 1;
     static constexpr std::size_t dateline_upstream_receiver_channel_skip_idx = 1;
     static constexpr std::size_t dateline_upstream_adjcent_sender_channel_skip_idx = 2;
+
+    // for fabric with tensix extension, only one sender channel will be present on fabric router
+    static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
 
     // num sender channels based on more accurate topology
     static constexpr std::size_t num_sender_channels_1d_linear = 2;
@@ -412,6 +416,10 @@ struct FabricRiscConfig {
     bool is_sender_channel_serviced(int id) const { return is_sender_channel_serviced_[id]; };
     bool is_receiver_channel_serviced(int id) const { return is_receiver_channel_serviced_[id]; };
     tt::tt_metal::NOC get_configured_noc() const { return noc_; };
+    void reset_sender_channel_serviced() { is_sender_channel_serviced_.fill(false); }
+    void set_sender_channel_serviced(size_t num_channels) {
+        std::fill_n(is_sender_channel_serviced_.begin(), num_channels, true);
+    }
 
 private:
     tt::tt_metal::NOC noc_ = tt::tt_metal::NOC::NOC_0;
