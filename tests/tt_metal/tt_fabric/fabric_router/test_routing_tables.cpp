@@ -132,14 +132,32 @@ TEST(MeshGraphValidation, TestT3kMeshGraphInit) {
         MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 3)));
 }
 
-TEST_F(ControlPlaneFixture, TestT3kControlPlaneInit) {
+class T3kMockControlPlaneFixture : public ControlPlaneFixture {
+protected:
+    void SetUp() override {
+        setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH",
+              "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml",
+              1);
+        // Need to reinitialize to absorb the mock cluster descriptor path
+        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+        ControlPlaneFixture::SetUp();
+    }
+    void TearDown() override {
+        ControlPlaneFixture::TearDown();
+        unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+        // Need to reinitialize to reset the cluster and hal after mocking the test
+        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+    }
+};
+
+TEST_F(T3kMockControlPlaneFixture, TestT3kControlPlaneInit) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
     auto control_plane = make_control_plane(t3k_mesh_graph_desc_path);
 }
 
-TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
+TEST_F(T3kMockControlPlaneFixture, TestT3kFabricRoutes) {
     const std::filesystem::path t3k_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
@@ -158,24 +176,6 @@ TEST_F(ControlPlaneFixture, TestT3kFabricRoutes) {
         EXPECT_EQ(path.size() > 0, true);
     }
 }
-
-class T3kMockControlPlaneFixture : public ControlPlaneFixture {
-protected:
-    void SetUp() override {
-        setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH",
-              "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml",
-              1);
-        // Need to reinitialize to absorb the mock cluster descriptor path
-        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
-        ControlPlaneFixture::SetUp();
-    }
-    void TearDown() override {
-        ControlPlaneFixture::TearDown();
-        unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
-        // Need to reinitialize to reset the cluster and hal after mocking the test
-        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
-    }
-};
 
 class T3kCustomMeshGraphControlPlaneFixture
     : public T3kMockControlPlaneFixture,
@@ -256,15 +256,32 @@ INSTANTIATE_TEST_SUITE_P(
     T3kCustomMeshGraphControlPlaneFixture,
     ::testing::ValuesIn(t3k_mesh_descriptor_chip_mappings));
 
-// TODO: Add tests for 6U
-TEST_F(ControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
+class SingleGalaxyMockControlPlaneFixture : public ControlPlaneFixture {
+protected:
+    void SetUp() override {
+        setenv("TT_METAL_MOCK_CLUSTER_DESC_PATH",
+              "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml",
+              1);
+        // Need to reinitialize to absorb the mock cluster descriptor path
+        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+        ControlPlaneFixture::SetUp();
+    }
+    void TearDown() override {
+        ControlPlaneFixture::TearDown();
+        unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+        // Need to reinitialize to reset the cluster and hal after mocking the test
+        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+    }
+};
+
+TEST_F(SingleGalaxyMockControlPlaneFixture, TestSingleGalaxyControlPlaneInit) {
     const std::filesystem::path single_galaxy_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml";
     [[maybe_unused]] auto control_plane = make_control_plane(single_galaxy_mesh_graph_desc_path.string());
 }
 
-TEST_F(ControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
+TEST_F(SingleGalaxyMockControlPlaneFixture, TestSingleGalaxyMeshAPIs) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);

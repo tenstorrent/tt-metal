@@ -8,46 +8,63 @@
 #include <stdexcept>
 #include <iostream>
 #include <typeinfo>
+#include <filesystem>
 
-#include "umd/device/cluster.h"
-#include "umd/device/tt_cluster_descriptor.h"
-#include "llrt/rtoptions.hpp"
+#include "fabric_fixture.hpp"
 #include <tt-metalium/control_plane.hpp>
 #include "impl/context/metal_context.hpp"
 
-namespace tt::tt_fabric {
+namespace {
 
-namespace mock_cluster_tests {
+constexpr auto k_FabricConfig = tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC;
+constexpr auto k_ReliabilityMode = tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
 
-class ClusterFixture : public ::testing::Test {
+std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::filesystem::path& graph_desc) {
+    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(graph_desc.string());
+    control_plane->initialize_fabric_context(k_FabricConfig);
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(k_FabricConfig, k_ReliabilityMode);
+    return control_plane;
+}
+
+}  // namespace
+
+namespace tt::tt_fabric::fabric_router_tests {
+
+class CustomMockControlPlaneFixture : public ControlPlaneFixture {
 protected:
-    std::unique_ptr<tt_ClusterDescriptor> cluster_desc;
+    void SetUp() override {
+        setenv(
+            "TT_METAL_MOCK_CLUSTER_DESC_PATH",
+            "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/2x2_n300_cluster_desc.yaml",
+            1);
+        // Reinitialize to absorb the mock cluster descriptor path
+        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+        ControlPlaneFixture::SetUp();
+    }
 
-    void SetUp() override { printf("ClusterFixture SetUp\n"); }
-
-    void TearDown() override { printf("ClusterFixture TearDown\n"); }
+    void TearDown() override {
+        ControlPlaneFixture::TearDown();
+        unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
+        // Reinitialize to reset the cluster and hal after mocking the test
+        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+    }
 };
 
-
-TEST_F(ClusterFixture, TestCustomCluster) {
-    uint8_t num_routing_planes = std::numeric_limits<uint8_t>::max();
-    tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
-        tt::tt_fabric::FabricConfig::FABRIC_2D, num_routing_planes);
-
-    auto cluster_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc();
-    cluster_desc->serialize_to_file("t3k_cluster_desc.yaml");
-
+TEST_F(CustomMockControlPlaneFixture, TestCustomControlPlaneInit) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/custom_2x2_mesh_graph_descriptor.yaml";
-        //"tt_metal/fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml";
-
-    auto control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
-
-    control_plane->initialize_fabric_context(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC);
-
-    control_plane->configure_routing_tables_for_fabric_ethernet_channels(tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+    [[maybe_unused]] auto control_plane = make_control_plane(mesh_graph_desc_path);
 }
 
-}  // namespace mock_cluster_tests
-}  // namespace tt::tt_fabric
+TEST_F(CustomMockControlPlaneFixture, TestCustomMeshAPIs) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto user_meshes = control_plane.get_user_physical_mesh_ids();
+    EXPECT_EQ(user_meshes.size(), 1);
+    EXPECT_EQ(user_meshes[0], MeshId{0});
+    EXPECT_EQ(
+        control_plane.get_physical_mesh_shape(MeshId{0}),
+        tt::tt_metal::distributed::MeshShape(2, 2));
+}
+
+}  // namespace tt::tt_fabric::fabric_router_tests
