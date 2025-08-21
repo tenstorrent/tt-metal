@@ -71,6 +71,12 @@ class LMHead(LightweightModule):
                     if args.dim == 2048
                     else args.create_dram_sharded_mem_config(k=args.dim // 4, n=self.padded_vocab_size // 8)
                 )
+
+            memory_config_decode = args.create_dram_sharded_mem_config_lm_head(
+                k=args.dim // 4, n=self.padded_vocab_size // 8
+            )
+            memory_config_prefill = ttnn.DRAM_MEMORY_CONFIG
+
             for i in range(num_splits):
                 index = i * self.padded_vocab_size // num_splits
                 self.output_weights_decode.append(  # (2k, 16k) 128* 1024
@@ -81,7 +87,7 @@ class LMHead(LightweightModule):
                         layout=ttnn.TILE_LAYOUT,
                         dtype=dtype,
                         memory_config=memory_config_decode,
-                        cache_file_name=cache_file_name_decode,
+                        # cache_file_name=cache_file_name_decode,
                     )
                 )
                 self.output_weights_prefill.append(  # (2k, 16k) 128* 1024
@@ -216,8 +222,11 @@ class LMHead(LightweightModule):
                 x.deallocate(True)
                 outputs.append(output)
 
+        breakpoint()
+        x.deallocate(True)
         outputs_reduced = []
         for output in outputs:
+            breakpoint()
             output_reduced = self.tt_ccl.line_all_reduce(
 <<<<<<< HEAD
                 output,
@@ -230,5 +239,6 @@ class LMHead(LightweightModule):
                 output, cluster_axis=1, num_links=3, memory_config=output.memory_config(), lm_head=True
 >>>>>>> e97cfb66d6 (WIP LM head commits)
             )  # self.output_memory_config
+            breakpoint()
             outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         return outputs_reduced

@@ -213,7 +213,6 @@ class TtLlamaMLP(LightweightModule):
             buffer_key="BINARY_MUL",
             use_optimal_ccl_for_llama=False if mode == "prefill" else True,
         )
-        breakpoint()
 
         ttnn.deallocate(ff1ff3)
 
@@ -228,8 +227,6 @@ class TtLlamaMLP(LightweightModule):
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
-
-        breakpoint()
 
         if not self.args.qk_norm:
             w2_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 1, 2048]

@@ -48,7 +48,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 def test_qwen_lm_head_inference(seq_len, batch_size, mesh_device, reset_seeds):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, dummy_weights=True)
+    model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, dummy_weights=False)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 

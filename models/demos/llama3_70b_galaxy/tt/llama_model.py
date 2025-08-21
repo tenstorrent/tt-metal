@@ -14,6 +14,7 @@ from models.demos.llama3_70b_galaxy.tt.lm_head import LMHead
 from models.demos.llama3_70b_galaxy.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
+from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.demos.llama3_70b_galaxy.tt.sampling import TTSampling
 
@@ -46,13 +47,13 @@ class TtTransformer(LightweightModule):
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
 
-        # self.embd = TtLlamaEmbedding(
-        #     mesh_device=mesh_device,
-        #     args=args,
-        #     weight_cache_path=args.weight_cache_path(dtype),
-        #     state_dict=state_dict,
-        #     dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
-        # )
+        self.embd = TtLlamaEmbedding(
+            mesh_device=mesh_device,
+            args=args,
+            weight_cache_path=args.weight_cache_path(dtype),
+            state_dict=state_dict,
+            dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
+        )
 
         self.rope_setup = TtLlamaRotarySetup(
             mesh_device,
@@ -106,7 +107,9 @@ class TtTransformer(LightweightModule):
                 weight_key="norm",
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
-                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+                sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"]
+                if not args.qk_norm
+                else self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"],
             ),
             args,
             args.is_galaxy,
@@ -575,10 +578,9 @@ class TtTransformer(LightweightModule):
             self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
-                # num_layers=self.n_layers,
-                num_layers=1,
+                num_layers=self.n_layers,
                 global_cb=self.prefetcher_setup.global_circular_buffer,
-                # enable_performance_mode=self.enable_prefetcher_performance_mode,
+                enable_performance_mode=self.enable_prefetcher_performance_mode,
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 
@@ -613,6 +615,7 @@ class TtTransformer(LightweightModule):
             return x
         # Output norm
         x, res = self.norm(x, res=None, mode=mode)
+        x = ttnn.to_memory_config(x, self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"])
 
         if get_last_token != -1:
             x = x[:, :, get_last_token:, :]
