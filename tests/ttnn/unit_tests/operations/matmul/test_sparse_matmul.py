@@ -13,7 +13,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("mkn", [(32, 128, 512)])
+@pytest.mark.parametrize("mkn", [(16, 128, 512)])
 @pytest.mark.parametrize("num_experts", [8])
 @pytest.mark.parametrize("num_tokens", [(1, 4)])
 @pytest.mark.parametrize("tile_h", [16])
@@ -77,7 +77,6 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_tokens, tile_h, ti
     )
 
     output_tensor = ttnn.to_torch(output_t)
-    logger.info(output_tensor.shape)
 
     # Compute matmul using torch for each batch and concatenate the results
     for b, s, e in itertools.product(range(b), range(s), range(num_experts)):
@@ -121,7 +120,7 @@ def test_sparse_matmul_without_nnz(device, mkn, num_experts, num_tokens, tile_h,
 
     in0_t = ttnn.from_torch(
         in0,
-        tile=ttnn.Tile((tile_h, 32)),
+        tile=ttnn.Tile((tile_h, tile_w)),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
