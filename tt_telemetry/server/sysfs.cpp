@@ -53,6 +53,14 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
 #include <array>
 #include <memory>
 
+#include "impl/context/metal_context.hpp"
+#include <telemetry/ethernet/ethernet_endpoint.hpp>
+#include <tt-metalium/control_plane.hpp>
+#include <third_party/umd/device/api/umd/device/types/wormhole_telemetry.h>
+#include <third_party/umd/device/api/umd/device/types/blackhole_telemetry.h>
+#include <third_party/umd/device/api/umd/device/chip/local_chip.h>
+#include <third_party/umd/device/api/umd/device/tt_device/tt_device.h>
+
 namespace fs = std::filesystem;
 
 // Constants
@@ -417,4 +425,97 @@ void print_sysfs_metrics() {
     }
     
     std::cout << "=== End Sysfs Metrics Discovery ===\n" << std::endl;
+}
+
+static std::vector<std::pair<ChipIdentifier, uint64_t>> get_chip_to_asic_mapping() {
+    std::vector<std::pair<ChipIdentifier, uint64_t>> chip_asic_pairs;
+    
+    try {
+        // Get the cluster and control plane instances
+        tt::tt_metal::MetalContext &instance = tt::tt_metal::MetalContext::instance();
+        const tt::Cluster &cluster = instance.get_cluster();
+        const tt::tt_fabric::ControlPlane &control_plane = instance.get_control_plane();
+        
+        // Get all chips using get_ethernet_endpoints_by_chip
+        auto ethernet_endpoints_by_chip = get_ethernet_endpoints_by_chip(cluster);
+        
+        // Convert each chip ID to unique ASIC ID using control plane
+        for (const auto &[chip_identifier, endpoints] : ethernet_endpoints_by_chip) {
+            tt::umd::chip_id_t chip_id = chip_identifier.id;
+            
+            try {
+                uint64_t asic_id = control_plane.get_asic_id(chip_id);
+                chip_asic_pairs.emplace_back(chip_identifier, asic_id);
+            } catch (const std::exception& e) {
+                // Skip chips that can't be mapped to ASIC IDs
+                continue;
+            }
+        }
+        
+    } catch (const std::exception& e) {
+        // Return empty vector on error
+        return {};
+    }
+    
+    return chip_asic_pairs;
+}
+
+void report_chip_telemetry() {
+    auto chip_asic_pairs = get_chip_to_asic_mapping();
+    
+    // Get cluster instance to access chip mappings
+    tt::tt_metal::MetalContext &instance = tt::tt_metal::MetalContext::instance();
+    const tt::Cluster &cluster = instance.get_cluster();
+    
+    // Get the mapping from chip ID to PCI device number
+    auto chips_with_mmio = cluster.get_cluster_desc()->get_chips_with_mmio();
+    
+    for (const auto &[chip_identifier, asic_id] : chip_asic_pairs) {
+        std::cout << chip_identifier << " -> ASIC ID " << asic_id << std::endl;
+        
+        tt::umd::chip_id_t chip_id = chip_identifier.id;
+        
+        // Check if this chip has MMIO capability (is a local chip)
+        if (chips_with_mmio.find(chip_id) != chips_with_mmio.end()) {
+            // This is a local chip - create TTDevice from PCI device number
+            int pci_device_number = chips_with_mmio.at(chip_id);
+            auto tt_device = tt::umd::TTDevice::create(pci_device_number);
+            
+            if (tt_device) {
+                auto* telemetry_reader = tt_device->get_arc_telemetry_reader();
+                
+                if (telemetry_reader) {
+                    // Read telemetry data based on chip architecture
+                    auto arch = tt_device->get_arch();
+                    if (arch == tt::ARCH::WORMHOLE_B0) {
+                        // Read ASIC temperature for Wormhole
+                        if (telemetry_reader->is_entry_available(tt::umd::wormhole::TelemetryTag::ASIC_TEMPERATURE)) {
+                            uint32_t temp_raw = telemetry_reader->read_entry(tt::umd::wormhole::TelemetryTag::ASIC_TEMPERATURE);
+                            float temperature = (temp_raw & 0xFFFF) / 16.0f;
+                            std::cout << "  ASIC Temperature: " << temperature << "°C" << std::endl;
+                        } else {
+                            std::cout << "  ASIC Temperature: Not available" << std::endl;
+                        }
+                    } else if (arch == tt::ARCH::BLACKHOLE) {
+                        // Read ASIC temperature for Blackhole
+                        if (telemetry_reader->is_entry_available(tt::umd::blackhole::TelemetryTag::ASIC_TEMPERATURE)) {
+                            uint32_t temp_raw = telemetry_reader->read_entry(tt::umd::blackhole::TelemetryTag::ASIC_TEMPERATURE);
+                            float temperature = static_cast<int32_t>(temp_raw) / 65536.0f;
+                            std::cout << "  ASIC Temperature: " << temperature << "°C" << std::endl;
+                        } else {
+                            std::cout << "  ASIC Temperature: Not available" << std::endl;
+                        }
+                    } else {
+                        std::cout << "  ASIC Temperature: Unsupported architecture" << std::endl;
+                    }
+                } else {
+                    std::cout << "  ASIC Temperature: Telemetry reader not available" << std::endl;
+                }
+            } else {
+                std::cout << "  ASIC Temperature: Failed to create TTDevice" << std::endl;
+            }
+        } else {
+            std::cout << "  ASIC Temperature: Remote chip (no direct telemetry access)" << std::endl;
+        }
+    }
 }
