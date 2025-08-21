@@ -85,6 +85,7 @@ std::string get_macro_definition(UnaryOpType op_type) {
         case UnaryOpType::SOFTSIGN:
         case UnaryOpType::HARDSIGMOID:
         case UnaryOpType::CELU: return "SFPU_OP_ACTIVATIONS_INCLUDE";
+        case UnaryOpType::THRESHOLD: return "SFPU_OP_THRESHOLD_INCLUDE";
         case UnaryOpType::HARDTANH: return "SFPU_OP_HARDTANH_INCLUDE";
         default: return "SFPU_OP_COMPUTE_KERNEL_API_INCLUDE";
     };
@@ -100,7 +101,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
     float param0 = params[0];
     switch (op_type) {
         case UnaryOpType::FILL:
-            if (input_dtype == DataType::INT32) {
+            if (input_dtype == DataType::INT32 || input_dtype == DataType::UINT32) {
                 op_init_and_name = {"fill_tile_init();", fmt::format("fill_tile_int({}, {}u);", idst, (uint)param0)};
             } else {
                 // Note: bit casted to int float is used to properly pass nan/+-inf
@@ -391,6 +392,17 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 "hardtanh_tile_init();",
                 fmt::format(
                     "hardtanh_tile({}, {:#x}u, {:#x}u);",
+                    idst,
+                    std::bit_cast<uint32_t>(param0),
+                    std::bit_cast<uint32_t>(param1))};
+            break;
+        }
+        case UnaryOpType::THRESHOLD: {
+            float param1 = params[1];
+            op_init_and_name = {
+                "threshold_tile_init();",
+                fmt::format(
+                    "threshold_tile({}, {:#x}u, {:#x}u);",
                     idst,
                     std::bit_cast<uint32_t>(param0),
                     std::bit_cast<uint32_t>(param1))};
@@ -760,7 +772,7 @@ std::string get_compute_kernel_path(
 }
 
 uint32_t pack_scalar_runtime_arg(float scalar, DataType dtype) {
-    if (dtype == DataType::INT32) {
+    if (dtype == DataType::INT32 || dtype == DataType::UINT32) {
         return std::bit_cast<uint32_t>(static_cast<int32_t>(scalar));
     }
     return std::bit_cast<uint32_t>(scalar);

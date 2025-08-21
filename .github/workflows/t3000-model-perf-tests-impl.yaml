@@ -119,6 +119,7 @@ jobs:
           sudo cpupower frequency-set -g ondemand
 
   t3000-model-perf-tests-profiler:
+    if: false # Legacy CCL implementation disabled. Test skipped until replaced with newer CCL implementations. See issue see https://github.com/tenstorrent/tt-metal/issues/26649
     strategy:
       fail-fast: false
       matrix:

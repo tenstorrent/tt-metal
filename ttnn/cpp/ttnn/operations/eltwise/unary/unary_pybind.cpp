@@ -1444,7 +1444,7 @@ void bind_unary_composite_int(
 
 // OpHandler_threshold
 template <typename unary_operation_t>
-void bind_unary_composite_threshold(
+void bind_unary_threshold(
     py::module& module,
     const unary_operation_t& operation,
     const std::string& parameter_name_a,
@@ -2221,7 +2221,7 @@ void py_module(py::module& module) {
         "max value",
         1.0f,
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_composite_threshold(
+    bind_unary_threshold(
         module,
         ttnn::threshold,
         "threshold",

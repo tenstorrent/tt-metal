@@ -29,7 +29,6 @@ class Attention(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
         self.num_devices = configuration.num_devices
@@ -151,14 +150,14 @@ class Attention(LightweightModule):
         self.wqkv_bias_prefill = None
 
         # Create combined QKV bias if present in state dict
-        if f"{wq_str}.bias" in self.state_dict:
+        if f"{wq_str}.bias" in state_dict:
             qkv_bias = torch.concat(
                 [
                     torch.concat(
                         [
-                            torch.chunk(self.state_dict[f"{wq_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(self.state_dict[f"{wk_str}.bias"], configuration.num_devices)[i],
-                            torch.chunk(self.state_dict[f"{wv_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(state_dict[f"{wq_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(state_dict[f"{wk_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(state_dict[f"{wv_str}.bias"], configuration.num_devices)[i],
                         ],
                         dim=-1,
                     )
@@ -217,9 +216,9 @@ class Attention(LightweightModule):
         qkv_list = []
         for i in range(self.num_devices_per_group):
             # Chunk weights
-            wq_selected = torch.chunk(self.state_dict[f"{wq_str}.weight"], self.num_devices_per_group, dim=0)[i]
-            wk_selected = torch.chunk(self.state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i]
-            wv_selected = torch.chunk(self.state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i]
+            wq_selected = torch.chunk(state_dict[f"{wq_str}.weight"], self.num_devices_per_group, dim=0)[i]
+            wk_selected = torch.chunk(state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i]
+            wv_selected = torch.chunk(state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i]
 
             # Transpose the selected chunks
             wq = torch.transpose(wq_selected, -2, -1)
@@ -253,12 +252,12 @@ class Attention(LightweightModule):
                 x = ttnn.to_memory_config(x, mem_cfg, dtype=x.dtype)
             return x
 
-        if f"{q_norm_str}.weight" in self.state_dict:
+        if f"{q_norm_str}.weight" in state_dict:
             fn_q_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
-                state_dict=self.state_dict,
+                state_dict=state_dict,
                 state_dict_prefix=None,  # we already prefix q_norm_str
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
@@ -273,12 +272,12 @@ class Attention(LightweightModule):
         else:
             self.q_norm = lambda x, mode: x
 
-        if f"{k_norm_str}.weight" in self.state_dict:
+        if f"{k_norm_str}.weight" in state_dict:
             fn_k_norm = RMSNorm(
                 device=self.mesh_device,
                 dim=self.head_dim,
                 eps=configuration.norm_eps,
-                state_dict=self.state_dict,
+                state_dict=state_dict,
                 state_dict_prefix=None,  # we already prefix k_norm_str
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
                 weight_dtype=ttnn.bfloat16,
@@ -295,7 +294,7 @@ class Attention(LightweightModule):
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
-        pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+        pt_wo = state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
             (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
@@ -548,32 +547,49 @@ class Attention(LightweightModule):
                 attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
             )
 
-            # TODO: #26349
-            # Fused AGMM currently has a PCC bug on small shapes
-            # Using the non-fused version is a temporary workaround
+            # Fused AGMM only valid for ring topology
+            if self.ccl_topology == ttnn.Topology.Ring:
+                _, dense_out_sharded = ttnn.experimental.all_gather_matmul_async(
+                    attn_output_cat,
+                    self.wo,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    all_gather_core_grid_offset=(0, 4),
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    num_links=1,
+                    memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
+                    memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                    program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
+                    compute_kernel_config=self.compute_kernel_config_hifi2,
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
+            else:
+                all_gather_output = ttnn.experimental.all_gather_async(
+                    attn_output_cat,
+                    persistent_output_buffer=None,
+                    dim=3,
+                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                    num_links=1,
+                    topology=self.ccl_topology,
+                    memory_config=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
+                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+                    chunks_per_sync=10,
+                    num_workers_per_link=2,
+                    num_buffers_per_channel=2,
+                )
 
-            all_gather_output = ttnn.experimental.all_gather_async(
-                attn_output_cat,
-                persistent_output_buffer=None,
-                dim=3,
-                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
-                num_links=1,
-                memory_config=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
-                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
-                chunks_per_sync=10,
-                num_workers_per_link=2,
-                num_buffers_per_channel=2,
-            )
+                dense_out_sharded = ttnn.linear(
+                    all_gather_output,
+                    self.wo,
+                    memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                    program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
+                    compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
+                )
 
-            dense_out_sharded = ttnn.linear(
-                all_gather_output,
-                self.wo,
-                memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-                program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
-                compute_kernel_config=self.li_o_decode_compute_kernel_cfg,
-            )
-
-            ttnn.deallocate(all_gather_output)
+                ttnn.deallocate(all_gather_output)
             ttnn.deallocate(attn_output_cat)
             dense_out_sharded = ttnn.to_memory_config(dense_out_sharded, self.model_config["DECODE_RESIDUAL_MEMCFG"])
             return dense_out_sharded
