@@ -18,6 +18,7 @@
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>
+#include <fmt/ranges.h>
 #include <metal_soc_descriptor.h>
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/tt_core_coordinates.h>
@@ -517,30 +518,17 @@ void WatcherDeviceReader::Core::Dump() const {
     }
 
     // Eth core only reports erisc kernel id, uses the brisc field
-    if (is_eth_core) {
-        fprintf(reader_.f, "k_id:%3d", launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]);
-        if (tt::tt_metal::MetalContext::instance().get_cluster().arch() == ARCH::BLACKHOLE) {
-            fprintf(reader_.f, "|%3d", launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]);
-        }
-    } else {
-        fprintf(
-            reader_.f,
-            "k_ids:%3d|%3d|%3d",
-            launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0],
-            launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1],
-            launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]);
-
-        if (rtoptions.get_watcher_text_start()) {
-            uint32_t kernel_config_base = launch_msg_->kernel_config.kernel_config_base[0];
-            fprintf(reader_.f, " text_start:");
-            for (size_t i = 0; i < NUM_PROCESSORS_PER_CORE_TYPE; i++) {
-                const char* separator = (i > 0) ? "|" : "";
-                fprintf(
-                    reader_.f,
-                    "%s0x%x",
-                    separator,
-                    kernel_config_base + launch_msg_->kernel_config.kernel_text_offset[i]);
-            }
+    fprintf(reader_.f, "k_ids:");
+    auto num_processors = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type_);
+    std::span watcher_kernel_ids(launch_msg_->kernel_config.watcher_kernel_ids, num_processors);
+    fmt::print(reader_.f, "{:3d}", fmt::join(watcher_kernel_ids, "|"));
+    if (!is_eth_core && rtoptions.get_watcher_text_start()) {
+        uint32_t kernel_config_base = launch_msg_->kernel_config.kernel_config_base[0];
+        fprintf(reader_.f, " text_start:");
+        for (size_t i = 0; i < NUM_PROCESSORS_PER_CORE_TYPE; i++) {
+            const char* separator = (i > 0) ? "|" : "";
+            fprintf(
+                reader_.f, "%s0x%x", separator, kernel_config_base + launch_msg_->kernel_config.kernel_text_offset[i]);
         }
     }
 
@@ -1009,95 +997,42 @@ void WatcherDeviceReader::Core::DumpStackUsage() const {
 }
 
 void WatcherDeviceReader::Core::ValidateKernelIDs() const {
-    if (programmable_core_type_ == HalProgrammableCoreType::ACTIVE_ETH ||
-        programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH) {
-        if (launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0] >= reader_.kernel_names.size()) {
-            uint16_t watcher_kernel_id = launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0];
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
+    for (size_t i = 0; i < num_processors; i++) {
+        uint16_t watcher_kernel_id = launch_msg_->kernel_config.watcher_kernel_ids[i];
+        if (watcher_kernel_id >= reader_.kernel_names.size()) {
+            auto [processor_class, processor_type] =
+                hal.get_processor_class_and_type_from_index(programmable_core_type_, i);
             TT_THROW(
-                "Watcher data corruption, unexpected erisc0 kernel id on Device {} core {}: {} (last valid {})",
+                "Watcher data corruption, unexpected {}_{}_{} kernel id on Device {} core {}: {} (last valid {})",
+                programmable_core_type_,
+                processor_class,
+                processor_type,
                 reader_.device_id,
                 virtual_coord_.str(),
                 watcher_kernel_id,
                 reader_.kernel_names.size());
         }
-        dump_data_.used_kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]] = true;
-
-        if (launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1] >= reader_.kernel_names.size()) {
-            uint16_t watcher_kernel_id = launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1];
-            TT_THROW(
-                "Watcher data corruption, unexpected erisc1 kernel id on Device {} core {}: {} (last valid {})",
-                reader_.device_id,
-                virtual_coord_.str(),
-                watcher_kernel_id,
-                reader_.kernel_names.size());
-        }
-        dump_data_.used_kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]] = true;
-    } else {
-        if (launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0] >= reader_.kernel_names.size()) {
-            uint16_t watcher_kernel_id = launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0];
-            TT_THROW(
-                "Watcher data corruption, unexpected brisc kernel id on Device {} core {}: {} (last valid {})",
-                reader_.device_id,
-                virtual_coord_.str(),
-                watcher_kernel_id,
-                reader_.kernel_names.size());
-        }
-        dump_data_.used_kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]] = true;
-
-        if (launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1] >= reader_.kernel_names.size()) {
-            uint16_t watcher_kernel_id = launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1];
-            TT_THROW(
-                "Watcher data corruption, unexpected ncrisc kernel id on Device {} core {}: {} (last valid {})",
-                reader_.device_id,
-                virtual_coord_.str(),
-                watcher_kernel_id,
-                reader_.kernel_names.size());
-        }
-        dump_data_.used_kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]] = true;
-
-        if (launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE] >=
-            reader_.kernel_names.size()) {
-            uint16_t watcher_kernel_id = launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE];
-            TT_THROW(
-                "Watcher data corruption, unexpected trisc kernel id on Device {} core {}: {} (last valid {})",
-                reader_.device_id,
-                virtual_coord_.str(),
-                watcher_kernel_id,
-                reader_.kernel_names.size());
-        }
-        dump_data_.used_kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]] =
-            true;
+        dump_data_.used_kernel_names[watcher_kernel_id] = true;
     }
 }
 
 void WatcherDeviceReader::Core::LogRunningKernels() const {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    auto num_processors = hal.get_num_risc_processors(programmable_core_type_);
     log_info(tt::LogMetal, "While running kernels:");
-    if (programmable_core_type_ == HalProgrammableCoreType::ACTIVE_ETH ||
-        programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH) {
+    for (size_t i = 0; i < num_processors; i++) {
+        auto [processor_class, processor_type] =
+            hal.get_processor_class_and_type_from_index(programmable_core_type_, i);
         log_info(
-            tt::LogMetal,
-            " erisc : {}",
-            reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]]);
-    } else {
-        log_info(
-            tt::LogMetal,
-            " brisc : {}",
-            reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]]);
-        log_info(
-            tt::LogMetal,
-            " ncrisc: {}",
-            reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]]);
-        log_info(
-            tt::LogMetal,
-            " triscs: {}",
-            reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]]);
+            tt::LogMetal, " {}_{}_{}: {}", programmable_core_type_, processor_class, processor_type, GetKernelName(i));
     }
 }
 
 const std::string& WatcherDeviceReader::Core::GetKernelName(uint32_t processor_index) const {
-    // XXX: delete once dispatch class is gone.
-    uint32_t dispatch_class = std::min(processor_index, 2u);
-    return reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[dispatch_class]];
+    TT_FATAL(processor_index < NUM_PROCESSORS_PER_CORE_TYPE, "processor_index out of range");
+    return reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[processor_index]];
 }
 
 }  // namespace tt::tt_metal
