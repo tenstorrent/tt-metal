@@ -460,9 +460,13 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) 
     std::memcpy(&header_size, file_data, sizeof(header_size));
 
     const auto* header_start = reinterpret_cast<const std::uint8_t*>(file_data) + sizeof(header_size);
-    TT_FATAL(header_size < flatbuffers::Verifier::Options().max_size, "Tensor file is too large");
+    TT_FATAL(
+        header_size < flatbuffers::Verifier::Options().max_size,
+        "Tensor header size is too large; this most likely indicates data corruption.");
     flatbuffers::Verifier verifier(header_start, header_size);
-    TT_FATAL(ttnn::flatbuffer::VerifyTensorBuffer(verifier), "Tensor deserialization failed: invalid buffer");
+    TT_FATAL(
+        ttnn::flatbuffer::VerifyTensorBuffer(verifier),
+        "Cannot validate tensor data; this most likely indicates data corruption.");
     auto fb_tensor = ttnn::flatbuffer::GetTensor(header_start);
 
     const uint64_t data_offset = sizeof(header_size) + header_size;
