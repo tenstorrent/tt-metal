@@ -67,9 +67,16 @@ SocketSenderInterface create_sender_socket_interface(uint32_t config_addr) {
     return socket;
 }
 
-sender_downstream_encoding* get_downstream_encoding(const SocketSenderInterface& socket, uint32_t downstream_id) {
-    return reinterpret_cast<sender_downstream_encoding*>(
+sender_downstream_encoding get_downstream_encoding(const SocketSenderInterface& socket, uint32_t downstream_id) {
+    tt_l1_ptr sender_downstream_encoding* downstream_enc = reinterpret_cast<tt_l1_ptr sender_downstream_encoding*>(
         socket.downstream_enc_base_addr + downstream_id * downstream_encoding_size_bytes);
+    // Write to risc from L1
+    sender_downstream_encoding downstream_enc_interface;
+    downstream_enc.downstream_mesh_id = downstream_enc->downstream_mesh_id;
+    downstream_enc.downstream_chip_id = downstream_enc->downstream_chip_id;
+    downstream_enc.downstream_noc_y = downstream_enc->downstream_noc_y;
+    downstream_enc.downstream_noc_x = downstream_enc->downstream_noc_x;
+    return downstream_enc;
 }
 
 void set_sender_socket_page_size(SocketSenderInterface& socket, uint32_t page_size) {
@@ -124,9 +131,9 @@ void socket_push_pages(SocketSenderInterface& socket, uint32_t num_pages) {
 void socket_notify_receiver(const SocketSenderInterface& socket) {
     // TODO: Store noc encoding in struct?
     for (uint32_t i = 0; i < socket.num_downstreams; i++) {
-        sender_downstream_encoding* downstream_enc = get_downstream_encoding(socket, i);
+        sender_downstream_encoding downstream_enc = get_downstream_encoding(socket, i);
         auto downstream_bytes_sent_noc_addr = get_noc_addr(
-            downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, socket.downstream_bytes_sent_addr);
+            downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, socket.downstream_bytes_sent_addr);
         noc_inline_dw_write(downstream_bytes_sent_noc_addr, socket.bytes_sent);
     }
 }
@@ -136,10 +143,10 @@ void fabric_socket_notify_receiver(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile tt_l1_ptr PACKET_HEADER_TYPE* fabric_header_addr) {
     for (uint32_t i = 0; i < socket.num_downstreams; i++) {
-        sender_downstream_encoding* downstream_enc = get_downstream_encoding(socket, i);
+        sender_downstream_encoding downstream_enc = get_downstream_encoding(socket, i);
         auto downstream_bytes_sent_noc_addr = get_noc_addr(
-            downstream_enc->downstream_noc_x, downstream_enc->downstream_noc_y, socket.downstream_bytes_sent_addr);
-        fabric_set_unicast_route(fabric_header_addr, *downstream_enc);
+            downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, socket.downstream_bytes_sent_addr);
+        fabric_set_unicast_route(fabric_header_addr, downstream_enc);
         fabric_header_addr->to_noc_unicast_inline_write(
             NocUnicastInlineWriteCommandHeader{downstream_bytes_sent_noc_addr, socket.bytes_sent});
         fabric_connection.wait_for_empty_write_slot();
@@ -154,7 +161,9 @@ void socket_barrier(const SocketSenderInterface& socket) {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr);
     while (reinterpret_cast<uint32_t>(bytes_acked_ptr) <
            socket.bytes_acked_base_addr + socket.num_downstreams * bytes_acked_size_bytes) {
-        while (socket.bytes_sent != *bytes_acked_ptr);
+        while (socket.bytes_sent != *bytes_acked_ptr) {
+            invalidate_l1_cache();
+        }
         bytes_acked_ptr += bytes_acked_size_bytes;
     }
 }
