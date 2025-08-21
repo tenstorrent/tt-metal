@@ -55,7 +55,7 @@ class TokenAccuracy:
         count_t5 = 0
         matching_sz = min(len(self.gt_tokens), len(self.store_predicted_tokens))
         for i in range(matching_sz):
-            if self.top5_tokens[i][0].item() == self.store_predicted_tokens[i]:
+            if self.top5_tokens[i, 0].item() == self.store_predicted_tokens[i]:
                 count += 1
             if self.store_predicted_tokens[i] in self.top5_tokens[i, :]:
                 count_t5 += 1
