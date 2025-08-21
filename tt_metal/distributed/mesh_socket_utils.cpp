@@ -318,12 +318,10 @@ void write_socket_configs(
                 // Write one encoding per receiver, ordered by receiver ID
                 for (const auto& [conn_idx, connection] : connections) {
                     uint32_t receiver_id = receiver_ids_per_sender.at(connection);
-                    auto mesh_id = tt::tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]};
-                    auto chip_id = MetalContext::instance().get_control_plane().get_mesh_graph().coordinate_to_chip(
-                        mesh_id, connection.receiver_core.device_coord);
                     auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
                         mesh_device->get_fabric_node_id(sender_core.device_coord),
-                        tt_fabric::FabricNodeId(mesh_id, chip_id),
+                        tt_fabric::FabricNodeId(
+                            tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
                         fabric_config,
                         SocketEndpoint::SENDER);
                     auto recv_virtual_core = mesh_device->worker_core_from_logical_core(connection.receiver_core.core_coord);
