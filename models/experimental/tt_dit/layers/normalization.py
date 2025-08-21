@@ -200,7 +200,6 @@ class GroupNorm:
         mesh_device=None,
         mesh_axis=None,
         core_grid=None,
-        num_out_blocks=None,
         torch_ref=None,
     ):
         self.eps = eps or torch_ref.eps
@@ -209,7 +208,6 @@ class GroupNorm:
         self.num_devices = tuple(mesh_device.shape)[mesh_axis] if mesh_axis is not None else 1
         self.num_channels = (num_channels or torch_ref.num_channels) // self.num_devices
         self.num_groups = (num_groups or torch_ref.num_groups) // self.num_devices
-        self.num_out_blocks = num_out_blocks
         self.weight = None
         self.bias = None
         self.mask = None
@@ -231,12 +229,11 @@ class GroupNorm:
             self.load_state_dict(torch_ref.state_dict())
 
     @classmethod
-    def from_torch(cls, torch_ref, num_output_blocks=None, mesh_device=None, mesh_axis=None, core_grid=None):
+    def from_torch(cls, torch_ref, mesh_device=None, mesh_axis=None, core_grid=None):
         layer = cls(
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
             core_grid=core_grid,
-            num_out_blocks=num_output_blocks,
             torch_ref=torch_ref,
         )
         return layer
@@ -282,9 +279,8 @@ class GroupNorm:
     def get_num_out_blocks(cls, x_shape):
         return cls.default_num_out_blocks.setdefault(x_shape, x_shape[1] * x_shape[2] // (128 * 128))
 
-    def __call__(self, x):
-        num_out_blocks = self.num_out_blocks or self.get_num_out_blocks(tuple(x.shape))
-
+    def __call__(self, x, num_out_blocks=None):
+        self.num_out_blocks = num_out_blocks or self.get_num_out_blocks(tuple(x.shape))
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
         x = ttnn.group_norm(
@@ -296,7 +292,7 @@ class GroupNorm:
             epsilon=self.eps,
             core_grid=self.core_grid,
             inplace=False,
-            num_out_blocks=num_out_blocks,
+            num_out_blocks=self.num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,
         )
         x = x.reshape([batch_size, height, width, channels])
