@@ -3,14 +3,6 @@ set(TRACY_HOME ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy)
 
 option(ENABLE_TRACY_TIMER_FALLBACK "Enable Tracy timer fallback" OFF)
 
-if(NOT ENABLE_TRACY)
-    # Stub Tracy::TracyClient to provide the headers which themselves provide stubs
-    add_library(TracyClient INTERFACE)
-    add_library(Tracy::TracyClient ALIAS TracyClient)
-    target_include_directories(TracyClient SYSTEM INTERFACE "$<BUILD_INTERFACE:${TRACY_HOME}/public>")
-    return()
-endif()
-
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME tracy)
 add_subdirectory(${TRACY_HOME})
