@@ -72,12 +72,10 @@ def test_t5_embeddings(
     logger.info(f"relative_attention_max_distance: {hf_model.config.relative_attention_max_distance}")
     logger.info(f"layer_norm_epsilon: {hf_model.config.layer_norm_epsilon}")
 
-    # create input
     max_prompt_length = 256
     torch.manual_seed(0)
     tokens = torch.randint(hf_model.config.vocab_size, [1, max_prompt_length])
 
-    # convert to tt tensor
     tt_prompt = ttnn.from_torch(
         tokens,
         layout=ttnn.TILE_LAYOUT,
@@ -87,7 +85,7 @@ def test_t5_embeddings(
 
     logger.info(f"print huggingface state dict keys: {hf_model.state_dict().keys()}")
 
-    # === USING tt-dit T5 ====
+    # === TT-DiT T5 ====
     config = T5Config(
         vocab_size=hf_model.config.vocab_size,
         embed_dim=hf_model.config.d_model,
@@ -102,31 +100,23 @@ def test_t5_embeddings(
     )
 
     tt_embedding = RelativeTextEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
-    # load only the embeddings part of the state dict
     embeddings_state_dict = {}
     for key, value in hf_model.state_dict().items():
-        # logger.info(f"key: {key}")
-        # logger.info(f"value: {value}")
         if key.startswith("encoder.embed_tokens.") or key.startswith(
             "encoder.block.0.layer.0.SelfAttention.relative_attention_bias."
         ):
-            # logger.info(f"loading key: {key}")
             embeddings_state_dict[key] = value
 
     tt_embedding.load_state_dict(embeddings_state_dict)
 
-    # time TT model inference only
     tt_start_time = time.time()
     tt_embeddings_output, tt_position_bias = tt_embedding(tt_prompt, encoder_submesh)
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 
-    # === get HF embeddings for comparison ===
     with torch.no_grad():
-        # time HF model execution
         hf_start_time = time.time()
 
-        # get HF embeddings manually
         hf_token_embeddings = hf_model.encoder.embed_tokens(tokens)
 
         hf_end_time = time.time()
@@ -136,9 +126,6 @@ def test_t5_embeddings(
     # since weights are replicated, can get the tensor from any single device
     tt_embeddings_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_embeddings_output)[0])
     tt_position_bias_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_position_bias)[0])
-
-    logger.info(f"tt_position_bias_torch: {tt_position_bias_torch.shape}")
-    logger.info(f"tt_position_bias_torch shape: {tt_position_bias_torch.shape}")
 
     logger.info(f"TT embeddings execution time: {tt_execution_time:.4f} seconds")
     logger.info(f"HF embeddings execution time: {hf_execution_time:.4f} seconds")

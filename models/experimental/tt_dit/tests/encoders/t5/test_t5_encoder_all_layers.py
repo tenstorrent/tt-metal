@@ -73,12 +73,10 @@ def test_t5_layers_individually(
     logger.info(f"relative_attention_max_distance: {hf_model.config.relative_attention_max_distance}")
     logger.info(f"layer_norm_epsilon: {hf_model.config.layer_norm_epsilon}")
 
-    # create input
     max_prompt_length = 256
     torch.manual_seed(0)
     tokens = torch.randint(hf_model.config.vocab_size, [1, max_prompt_length])
 
-    # convert to tt tensor
     tt_prompt = ttnn.from_torch(
         tokens,
         layout=ttnn.TILE_LAYOUT,
@@ -86,9 +84,7 @@ def test_t5_layers_individually(
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
     )
 
-    # logger.info(f"print huggingface state dict keys: {hf_model.state_dict().keys()}")
-
-    # === USING tt-dit T5 ====
+    # === TT-DiT T5 ====
     config = T5Config(
         vocab_size=hf_model.config.vocab_size,
         embed_dim=hf_model.config.d_model,
@@ -103,18 +99,15 @@ def test_t5_layers_individually(
     )
 
     tt_embedding = RelativeTextEmbeddings(config, encoder_submesh, ccl_manager, parallel_config)
-    # load only the embeddings part of the state dict
     embeddings_state_dict = {}
     for key, value in hf_model.state_dict().items():
-        # logger.info(f"key: {key}")
-        # logger.info(f"value: {value}")
         if key.startswith("encoder.embed_tokens.") or key.startswith(
             "encoder.block.0.layer.0.SelfAttention.relative_attention_bias."
         ):
-            # logger.info(f"loading key: {key}")
             embeddings_state_dict[key] = value
 
     tt_embedding.load_state_dict(embeddings_state_dict)
+
     # time TT model inference only
     tt_start_time = time.time()
     tt_embeddings_output, tt_position_bias = tt_embedding(tt_prompt, encoder_submesh)
@@ -125,9 +118,6 @@ def test_t5_layers_individually(
 
     hf_start_time = time.time()
     with torch.no_grad():
-        # time HF model execution
-
-        # get HF embeddings and first layer output
         hf_token_embeddings = hf_model.encoder.embed_tokens(tokens)
 
         # get position bias from first layer's attention (block 0 always has the bias)
@@ -145,7 +135,6 @@ def test_t5_layers_individually(
     logger.info("\n=== Testing each layer individually ===")
     pcc_values = []
 
-    # Compute embeddings once before layer loop
     tt_embeddings_output, tt_position_bias = tt_embedding(tt_prompt, encoder_submesh)
     with torch.no_grad():
         hf_token_embeddings = hf_model.encoder.embed_tokens(tokens)
@@ -165,7 +154,6 @@ def test_t5_layers_individually(
         tt_encoder_layer = T5EncoderLayer(config, encoder_submesh, ccl_manager, parallel_config)
         tt_encoder_layer.load_state_dict(substate(hf_model.state_dict(), f"encoder.block.{layer}"))
 
-        # Use pre-computed embeddings
         tt_layer_output = tt_encoder_layer(tt_embeddings_output, tt_position_bias)
 
         tt_end_time = time.time()
@@ -174,7 +162,6 @@ def test_t5_layers_individually(
 
         hf_start_time = time.time()
 
-        # Use pre-computed HF embeddings
         hf_layer_output = hf_model.encoder.block[layer](
             hf_token_embeddings, attention_mask=None, position_bias=hf_position_bias
         )[0]
@@ -183,20 +170,18 @@ def test_t5_layers_individually(
         hf_execution_time = hf_end_time - hf_start_time
         logger.info(f"HF layer {i} execution time: {hf_execution_time:.4f} seconds")
 
-        # Convert mesh tensor to torch tensor for pcc
         tt_layer_output = ttnn.to_torch(ttnn.get_device_tensors(tt_layer_output)[0])
 
         assert hf_layer_output.shape == tt_layer_output.shape
 
-        # Calculate PCC using assert_quality
         try:
             assert_quality(hf_layer_output, tt_layer_output, pcc=0.947)
-            logger.info(f"Layer {i} passed PCC threshold ✓")
+            logger.info(f"Layer {i} passed PCC threshold")
         except Exception as e:
-            # Extract PCC value from error message
+            # extract PCC value from error message
             error_msg = str(e)
             pcc = float(error_msg.split("%")[0].split("=")[1].strip()) / 100
-            logger.warning(f"Layer {i} failed: PCC = {pcc:.4f} ✗")
+            logger.warning(f"Layer {i} failed: PCC = {pcc:.4f}")
             pcc_values.append(pcc)
 
 

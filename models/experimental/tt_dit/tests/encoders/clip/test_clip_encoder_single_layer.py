@@ -87,10 +87,8 @@ def test_clip_encoder_layer(
     logger.info(f"num_attention_heads: {hf_model.config.num_attention_heads}")
     logger.info(f"num_hidden_layers: {hf_model.config.num_hidden_layers}")
 
-    # test text
     test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
 
-    # tokenize
     hf_inputs = tokenizer(test_text, padding=True, truncation=True, max_length=77, return_tensors="pt")
     tt_prompt = ttnn.from_torch(
         hf_inputs.input_ids,
@@ -100,7 +98,7 @@ def test_clip_encoder_layer(
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
     )
 
-    # === USING tt-dit CLIPEncoderLayer: ====
+    # === TT-DiT CLIPEncoderLayer ====
     config = CLIPConfig(
         vocab_size=hf_model.config.vocab_size,
         embed_dim=hf_model.config.hidden_size,
@@ -142,9 +140,8 @@ def test_clip_encoder_layer(
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 
-    # === Get HF encoder layer output for comparison ===
+    # get HF encoder layer output
     with torch.no_grad():
-        # time HF model execution
         hf_start_time = time.time()
 
         # get HF embeddings

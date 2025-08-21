@@ -80,10 +80,9 @@ def test_clip_encoder(
     logger.info(f"num_attention_heads: {hf_model.config.num_attention_heads}")
     logger.info(f"num_hidden_layers: {hf_model.config.num_hidden_layers}")
 
-    # test text
+    # Test prompt. Cannot use randn tensor due to specific HF eos token id
     test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
 
-    # tokenize
     hf_inputs = tokenizer(test_text, padding=True, truncation=True, max_length=77, return_tensors="pt")
     tt_prompt = ttnn.from_torch(
         hf_inputs.input_ids,
@@ -94,11 +93,11 @@ def test_clip_encoder(
     )
 
     eos_token_id = hf_model.config.eos_token_id
-    logger.info(f"eos token id: {eos_token_id}")  # eos token id: 2
+    logger.info(f"EOS token id: {eos_token_id}")  # eos token id: 2
 
-    logger.info(f"activation function: {hf_model.config.hidden_act}")
+    logger.info(f"Activation function: {hf_model.config.hidden_act}")  # quick_gelu
 
-    # === USING tt-dit CLIP: ====
+    # === TT-DiT CLIP ====
     config = CLIPConfig(
         vocab_size=hf_model.config.vocab_size,
         embed_dim=hf_model.config.hidden_size,
@@ -112,47 +111,36 @@ def test_clip_encoder(
     )
 
     tt_clip = CLIPEncoder(config, encoder_submesh, ccl_manager, parallel_config, eos_token_id)
-    tt_clip.load_state_dict(hf_model.state_dict())  # load weights
+    tt_clip.load_state_dict(hf_model.state_dict())
 
-    # time TT model inference only
+    # times TT model inference only
     tt_start_time = time.time()
     tt_sequence_output, tt_projected_output = tt_clip(tt_prompt, encoder_submesh, with_projection=False)
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 
-    # === get HF reference outputs ===
+    # get HF reference outputs
     with torch.no_grad():
         hf_start_time = time.time()
-
-        # get the full HF model output with all hidden states
         hf_output = hf_model(hf_inputs.input_ids, output_hidden_states=True)
         hf_end_time = time.time()
         hf_execution_time = hf_end_time - hf_start_time
 
-    # option 1: encoder output (before final layer norm)
-    # hf_sequence_output = hf_output.hidden_states[-1]  # Last encoder layer output (before final layer norm)
-    # option 2: Final layer normed output
-    hf_sequence_output = hf_output.last_hidden_state  # After final layer norm
-    # breakpoint()
+    hf_sequence_output = hf_output.last_hidden_state  # after final layer norm
     hf_projected_output = hf_output.pooler_output  # projected/pooled output
 
     # convert mesh tensor to torch tensor for pcc
     # since weights are replicated, can get the tensor from any single device
-    tt_sequence_output_torch = ttnn.to_torch(
-        ttnn.get_device_tensors(tt_sequence_output[-1])[0]
-    )  # encoder output before final layer norm
-    # tt_final_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_normalized_final_state)[0])  # after final layer norm
+    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output[-1])[0])
     tt_projected_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_projected_output)[0])
 
     logger.info(f"TT model execution time: {tt_execution_time:.4f} seconds")
     logger.info(f"HF model execution time: {hf_execution_time:.4f} seconds")
 
-    # Test shapes match
     assert hf_sequence_output.shape == tt_sequence_output_torch.shape
     assert hf_projected_output.shape == tt_projected_output_torch.shape
 
     assert_quality(hf_sequence_output, tt_sequence_output_torch, pcc=expected_pcc)
-    # assert_quality(hf_final_sequence_output, tt_final_sequence_output_torch, pcc=expected_pcc)
     assert_quality(hf_projected_output, tt_projected_output_torch, pcc=expected_pcc)
 
 

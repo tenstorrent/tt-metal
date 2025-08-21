@@ -71,10 +71,8 @@ def test_clip_text_embeddings(
     logger.info(f"num_attention_heads: {hf_model.config.num_attention_heads}")
     logger.info(f"num_hidden_layers: {hf_model.config.num_hidden_layers}")
 
-    # test text
     test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
 
-    # tokenize
     hf_inputs = tokenizer(test_text, padding=True, truncation=True, max_length=77, return_tensors="pt")
     tt_prompt = ttnn.from_torch(
         hf_inputs.input_ids,
@@ -84,7 +82,7 @@ def test_clip_text_embeddings(
         mesh_mapper=ttnn.ReplicateTensorToMesh(encoder_submesh),
     )
 
-    # === USING tt-dit TextEmbeddings: ====
+    # === TT-DiT TextEmbeddings ====
     config = CLIPConfig(
         vocab_size=hf_model.config.vocab_size,
         embed_dim=hf_model.config.hidden_size,
@@ -98,7 +96,6 @@ def test_clip_text_embeddings(
     )
 
     tt_embedding = TextEmbeddings(config, encoder_submesh)
-    # Load only the embeddings part of the state dict
     embeddings_state_dict = {}
     for key, value in hf_model.state_dict().items():
         if key.startswith("text_model.embeddings."):
@@ -112,12 +109,10 @@ def test_clip_text_embeddings(
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 
-    # === Get HF embeddings for comparison ===
+    # get HF outputs
     with torch.no_grad():
-        # time HF model execution
         hf_start_time = time.time()
 
-        # Get HF embeddings manually
         hf_token_embeddings = hf_model.text_model.embeddings.token_embedding(hf_inputs.input_ids)
         seq_len = hf_inputs.input_ids.shape[-1]
         position_ids = torch.arange(seq_len).expand((1, -1))
@@ -133,15 +128,6 @@ def test_clip_text_embeddings(
 
     logger.info(f"TT embeddings execution time: {tt_execution_time:.4f} seconds")
     logger.info(f"HF embeddings execution time: {hf_execution_time:.4f} seconds")
-
-    # logger.info(f"TT text embeddings output shape: {tt_embeddings_output_torch.shape}")
-    # logger.info(f"HF text embeddings output shape: {hf_embeddings_output.shape}")
-    # logger.info(
-    #     f"TT text embeddings output mean: {tt_embeddings_output_torch.mean():.6f}, std: {tt_embeddings_output_torch.std():.6f}"
-    # )
-    # logger.info(
-    #     f"HF text embeddings output mean: {hf_embeddings_output.mean():.6f}, std: {hf_embeddings_output.std():.6f}"
-    # )
 
     assert hf_embeddings_output.shape == tt_embeddings_output_torch.shape
 
