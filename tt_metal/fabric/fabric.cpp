@@ -236,13 +236,14 @@ void append_routing_plane_connection_manager_rt_args(
 
     for (size_t i = 0; i < next_hop_destinations.size(); ++i) {
         const auto& next_hop_dst = next_hop_destinations[i];
-        auto routing_dir_opt = control_plane.get_forwarding_direction(src_fabric_node_id, next_hop_dst);
+        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, next_hop_dst);
         TT_FATAL(
-            routing_dir_opt.has_value(),
+            dir_opt.has_value(),
             "Could not determine forwarding direction from src {} to first hop {}",
             src_fabric_node_id,
             next_hop_dst);
-        worker_args.push_back(static_cast<uint32_t>(routing_dir_opt.value()));
+        // Use direction as tag for ConnectionSlot
+        worker_args.push_back(static_cast<uint32_t>(dir_opt.value()));
 
         uint32_t link_idx = 0;
         if (!connection_link_indices.empty()) {
@@ -275,9 +276,6 @@ void append_routing_plane_connection_manager_rt_args(
         worker_args.push_back(dst_mesh_id);
 
         for (const auto& next_hop_dst : next_hop_destinations) {
-            auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, next_hop_dst);
-            TT_ASSERT(dir_opt.has_value());
-            worker_args.push_back(static_cast<uint32_t>(dir_opt.value()));
             worker_args.push_back(static_cast<uint16_t>(next_hop_dst.chip_id));
         }
     }
