@@ -4,6 +4,7 @@
 
 #include "ttnn/graph/graph_trace_utils.hpp"
 
+#include <cstdint>
 #include <cstdlib>  // std::strtoul
 #include <string>
 
@@ -328,6 +329,18 @@ uint32_t extract_circular_buffers_peak_size_per_core(const nlohmann::json& trace
     return peak_size_per_core;
 }
 
+// help function for calculating the size of buffer allocated/deallocated on each core
+static uint32_t calculate_buffer_allocation_size(const nlohmann::json& node, size_t interleaved_storage_cores) {
+    uint32_t page_size = std::stoi(node.at(kParams).at(kPageSize).get<std::string>());
+    uint32_t num_of_cores = std::stoi(node.at(kParams).at(kNumCores).get<std::string>());
+    if (num_of_cores == 0) {
+        num_of_cores = interleaved_storage_cores;
+    }
+
+    uint32_t total_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
+    return detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
+}
+
 // returns peak size of memory usage (circular buffers + L1) per core for a given trace
 uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t interleaved_storage_cores) {
     uint32_t current_size = 0;
@@ -350,29 +363,13 @@ uint32_t extract_peak_memory_usage(const nlohmann::json& trace, size_t interleav
             if (node.at(kParams).at(kType) == "DRAM") {
                 continue;
             }
-            uint32_t page_size = std::stoi(node.at(kParams).at(kPageSize).get<std::string>());
-            uint32_t num_of_cores = std::stoi(node.at(kParams).at(kNumCores).get<std::string>());
-            if (num_of_cores == 0) {
-                num_of_cores = interleaved_storage_cores;
-            }
-
-            uint32_t total_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
-            uint32_t alloc_size = detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
-            current_size += alloc_size;
+            current_size += calculate_buffer_allocation_size(node, interleaved_storage_cores);
             peak_size = std::max(peak_size, current_size);
         } else if (node.at(kNodeType) == kNodeBufferDeallocate) {
             if (node.at(kParams).at(kType) == "DRAM") {
                 continue;
             }
-            uint32_t page_size = std::stoi(node.at(kParams).at(kPageSize).get<std::string>());
-            uint32_t num_of_cores = std::stoi(node.at(kParams).at(kNumCores).get<std::string>());
-            if (num_of_cores == 0) {
-                num_of_cores = interleaved_storage_cores;
-            }
-
-            uint32_t total_size = std::stoi(node.at(kParams).at(kSize).get<std::string>());
-            uint32_t dealloc_size = detail::worst_case_per_core_allocation(total_size, page_size, num_of_cores);
-            current_size -= dealloc_size;
+            current_size -= calculate_buffer_allocation_size(node, interleaved_storage_cores);
         }
     }
 
