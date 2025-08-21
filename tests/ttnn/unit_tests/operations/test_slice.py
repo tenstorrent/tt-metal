@@ -14,6 +14,8 @@ import math
 
 
 def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint8:
+        return torch.randint(0, 100, shape).to(torch.int16)
     if dtype == ttnn.uint16:
         return torch.randint(0, 100, shape).to(torch.int16)
     if dtype == ttnn.int32:
@@ -569,7 +571,7 @@ def test_run_slice_test(
 
 # slice alternate elements in a given tensor
 @pytest.mark.parametrize("dim", [4, 12, 20, 68])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
 def test_stride_slice_single_dim_skip_2(dim, dtype, device):
     torch.manual_seed(2005)
     torch_input = random_torch_tensor(dtype, (dim,))
@@ -588,7 +590,7 @@ def test_stride_slice_single_dim_skip_2(dim, dtype, device):
 @pytest.mark.parametrize("begins_w", [2])
 @pytest.mark.parametrize("stride_h", [2])
 @pytest.mark.parametrize("stride_w", [2])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
 def test_stride_slice_two_dim(h, w, begins_h, begins_w, stride_h, stride_w, dtype, device):
     torch.manual_seed(2005)
     torch_input = random_torch_tensor(dtype, (h, w))
@@ -610,7 +612,7 @@ def test_stride_slice_two_dim(h, w, begins_h, begins_w, stride_h, stride_w, dtyp
 @pytest.mark.parametrize("stride_c", [2])
 @pytest.mark.parametrize("stride_h", [1])
 @pytest.mark.parametrize("stride_w", [1])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
 def test_stride_slice_three_dim(c, h, w, begins_c, begins_h, begins_w, stride_c, stride_h, stride_w, dtype, device):
     torch.manual_seed(2005)
     torch_input = random_torch_tensor(dtype, (c, h, w))
@@ -628,8 +630,11 @@ def test_stride_slice_three_dim(c, h, w, begins_c, begins_h, begins_w, stride_c,
 @pytest.mark.parametrize("ends", [[18, 16, 16, 18]])
 @pytest.mark.parametrize("strides", [[2, 2, 2, 2]])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
 def test_stride_slice_four_dim(dims, begins, ends, strides, layout, dtype, device):
+    # Skip if tiled and uint8/16
+    if layout == ttnn.TILE_LAYOUT and (dtype == ttnn.uint16 or dtype == ttnn.uint8):
+        pytest.skip("Skipping test for tiled layout with uint8/16 dtype")
     torch.manual_seed(2005)
     torch_input = random_torch_tensor(dtype, dims)
     slices = []
@@ -649,9 +654,11 @@ def test_stride_slice_four_dim(dims, begins, ends, strides, layout, dtype, devic
 @pytest.mark.parametrize("begins", [[0, 0, 0, 0], [0, 0, 0, 90]])
 @pytest.mark.parametrize("ends", [[1, -1, 56, 96], [1, 56, 56, 95], [-1, 1, -1, -1]])
 @pytest.mark.parametrize("strides", [[1, 2, 1, 1]])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
 def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, dtype, device):
+    if layout == ttnn.TILE_LAYOUT and (dtype == ttnn.uint16 or dtype == ttnn.uint8):
+        pytest.skip("Skipping test for tiled layout with uint8/16 dtype")
     torch.manual_seed(2005)
     torch_input = random_torch_tensor(dtype, dims)
     slices = []
