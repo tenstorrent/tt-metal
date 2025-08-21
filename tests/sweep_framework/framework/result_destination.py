@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Any
 import pathlib
 import json
 import datetime as dt
+import os
 from elasticsearch import Elasticsearch
 from framework.database import (
     postgres_connection,
@@ -452,8 +453,16 @@ class FileResultDestination(ResultDestination):
                         f"Existing export file {export_path} contained invalid JSON and could not be backed up. Overwriting."
                     )
 
-        with open(export_path, "w") as file:
+        # Atomic write to avoid truncated/invalid JSON on interruptions
+        tmp_path = export_path.with_suffix(export_path.suffix + ".tmp")
+        with open(tmp_path, "w") as file:
             json.dump(validated_records, file, indent=2)
+            try:
+                file.flush()
+                os.fsync(file.fileno())
+            except Exception:
+                pass
+        os.replace(tmp_path, export_path)
 
         # Aggregate for OpRun export at finalize_run
         try:
@@ -515,8 +524,16 @@ class FileResultDestination(ResultDestination):
             run_id_str = run_id or self._run_id or run_start_ts.strftime("%Y%m%d_%H%M%S")
             run_path = self.export_dir / f"oprun_{run_id_str}.json"
 
-            with open(run_path, "w") as file:
+            # Atomic write to avoid truncated/invalid JSON on interruptions
+            tmp_path = run_path.with_suffix(run_path.suffix + ".tmp")
+            with open(tmp_path, "w") as file:
                 json.dump(run_dict, file, indent=2)
+                try:
+                    file.flush()
+                    os.fsync(file.fileno())
+                except Exception:
+                    pass
+            os.replace(tmp_path, run_path)
 
             logger.info(f"Successfully exported run metadata to {run_path}")
         except Exception as e:

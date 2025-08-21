@@ -38,7 +38,7 @@ class ElasticVectorSource(VectorSource):
 
     def __init__(self, connection_string: str, username: str, password: str, tag: str):
         logger.info(
-            f"Initializing Elasticsearch vector source with connection string: {connection_string}, username: {username}, password: {password}, tag: {tag}"
+            f"Initializing Elasticsearch vector source with connection string: {connection_string}, username: {username}, tag: {tag}"
         )
         try:
             self.client = Elasticsearch(connection_string, basic_auth=(username, password))
@@ -110,6 +110,7 @@ class ElasticVectorSource(VectorSource):
                 size=0,  # We only want aggregations, not documents
             )
             suites = [suite["key"] for suite in response["aggregations"]["suites"]["buckets"]]
+            logger.info(f"Available suites for module {module_name}: {suites}")
             return suites
         except (NotFoundError, Exception):
             return []
