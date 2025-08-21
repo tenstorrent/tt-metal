@@ -232,9 +232,9 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
     int noc = (use_ncrisc) ? 1 : 0;
     CoreCoord input_core_virtual_coords = device->virtual_noc0_coordinate(noc, input_buf_noc_xy);
     CoreCoord output_core_virtual_coords = device->virtual_noc0_coordinate(noc, output_buf_noc_xy);
-    std::string risc_name = (is_eth_core) ? "erisc" : " brisc";
+    std::string risc_name = (is_eth_core) ? "ACTIVE_ETH_DM_0" : "TENSIX_DM_0";
     if (use_ncrisc) {
-        risc_name = "ncrisc";
+        risc_name = "TENSIX_DM_1";
     }
     switch(feature) {
         case SanitizeAddress:
@@ -248,7 +248,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 core.y,
                 virtual_core.x,
                 virtual_core.y,
-                (is_eth_core) ? "erisc" : " brisc",
+                risc_name,
                 buffer_size,
                 buffer_addr,
                 output_buf_noc_xy.str(),
@@ -320,7 +320,7 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
                 core.y,
                 virtual_core.x,
                 virtual_core.y,
-                (is_eth_core) ? "erisc" : " brisc",
+                risc_name,
                 buffer_size,
                 buffer_addr,
                 input_buf_noc_xy.str(),

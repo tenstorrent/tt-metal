@@ -55,22 +55,6 @@ using std::string;
 
 namespace {  // Helper functions
 
-// Helper function to get string rep of riscv type
-const char* get_riscv_name(const CoreCoord& core, uint32_t type) {
-    switch (type) {
-        case DebugBrisc: return " brisc";
-        case DebugNCrisc: return "ncrisc";
-        case DebugErisc: return "erisc";
-        case DebugIErisc: return "ierisc";
-        case DebugSubordinateIErisc: return "subordinate_ierisc";
-        case DebugTrisc0: return "trisc0";
-        case DebugTrisc1: return "trisc1";
-        case DebugTrisc2: return "trisc2";
-        default: TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", core.str(), type);
-    }
-    return nullptr;
-}
-
 // Helper function to determine core type from virtual coord. TODO: Remove this once we fix code types.
 CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtual_coord) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().is_worker_core(virtual_coord, device_id)) {
@@ -118,7 +102,11 @@ CoreCoord virtual_noc_coordinate(chip_id_t device_id, uint8_t noc_index, CoreCoo
 
 // Helper function to get string rep of noc target.
 string get_noc_target_str(
-    chip_id_t device_id, CoreCoord virtual_coord, int noc, const debug_sanitize_noc_addr_msg_t* san) {
+    chip_id_t device_id,
+    CoreCoord virtual_coord,
+    HalProgrammableCoreType programmable_core_type,
+    int noc,
+    const debug_sanitize_noc_addr_msg_t* san) {
     auto get_core_and_mem_type = [](chip_id_t device_id, CoreCoord& noc_coord, int noc) -> std::pair<string, string> {
         // Get the virtual coord from the noc coord
         CoreCoord virtual_core = virtual_noc_coordinate(device_id, noc, noc_coord);
@@ -137,15 +125,20 @@ string get_noc_target_str(
             default: return {"Unknown", ""};
         }
     };
+    auto [processor_class, processor_type] =
+        MetalContext::instance().hal().get_processor_class_and_type_from_index(programmable_core_type, san->which_risc);
     string out = fmt::format(
-        "{} using noc{} tried to {} {} {} bytes {} ",
-        get_riscv_name(virtual_coord, san->which_risc),
+        "{}_{}_{} using noc{} tried to {} {} {} bytes {} local L1[{:#08x}] {} ",
+        enchantum::to_string(programmable_core_type),
+        enchantum::to_string(processor_class),
+        processor_type,
         noc,
-        string(san->is_multicast ? "multicast" : "unicast"),
-        string(san->is_write ? "write" : "read"),
+        san->is_multicast ? "multicast" : "unicast",
+        san->is_write ? "write" : "read",
         san->len,
-        string(san->is_write ? "from" : "to"));
-    out += fmt::format("local L1[{:#08x}] {} ", san->l1_addr, string(san->is_write ? "to" : "from"));
+        san->is_write ? "from" : "to",
+        san->l1_addr,
+        san->is_write ? "to" : "from");
 
     if (san->is_multicast) {
         CoreCoord target_virtual_noc_core_start = {
@@ -394,13 +387,13 @@ void WatcherDeviceReader::Dump(FILE* file) {
         fprintf(f, "\n");
     }
 
+    const auto& hal = MetalContext::instance().hal();
     // Handle any paused cores, wait for user input.
     if (!dump_data.paused_cores.empty()) {
         string paused_cores_str = "Paused cores: ";
         for (auto& [virtual_core, processor_index] : dump_data.paused_cores) {
-            auto [processor_class, processor_type] =
-                MetalContext::instance().hal().get_processor_class_and_type_from_index(
-                    get_programmable_core_type(virtual_core, device_id), processor_index);
+            auto [processor_class, processor_type] = hal.get_processor_class_and_type_from_index(
+                get_programmable_core_type(virtual_core, device_id), processor_index);
             paused_cores_str += fmt::format("{}:{}_{}, ", virtual_core.str(), processor_class, processor_type);
         }
         paused_cores_str += "\n";
@@ -413,7 +406,6 @@ void WatcherDeviceReader::Dump(FILE* file) {
         }
 
         // Clear all pause flags
-        const auto& hal = MetalContext::instance().hal();
         for (auto& [virtual_core, processor_index] : dump_data.paused_cores) {
             uint64_t addr =
                 hal.get_dev_addr(get_programmable_core_type(virtual_core, device_id), HalL1MemAddrType::WATCHER) +
@@ -606,47 +598,47 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
             }
             break;
         case DebugSanitizeNocAddrUnderflow:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " address underflow).";
             break;
         case DebugSanitizeNocAddrOverflow:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " address overflow).";
             break;
         case DebugSanitizeNocAddrZeroLength:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (zero length transaction).";
             break;
         case DebugSanitizeNocTargetInvalidXY:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (NOC target address did not map to any known Tensix/Ethernet/DRAM/PCIE core).";
             break;
         case DebugSanitizeNocMulticastNonWorker:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (multicast to non-worker core).";
             break;
         case DebugSanitizeNocMulticastInvalidRange:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (multicast invalid range).";
             break;
         case DebugSanitizeNocAlignment:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (invalid address alignment in NOC transaction).";
             break;
         case DebugSanitizeNocMixedVirtualandPhysical:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (mixing virtual and virtual coordinates in Mcast).";
             break;
         case DebugSanitizeInlineWriteDramUnsupported:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += " (inline dw writes do not support DRAM destination addresses).";
             break;
         case DebugSanitizeNocAddrMailbox:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
             break;
         case DebugSanitizeNocLinkedTransactionViolation:
-            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, noc, san);
+            error_msg = get_noc_target_str(reader_.device_id, virtual_coord_, programmable_core_type_, noc, san);
             error_msg += fmt::format(" (submitting a non-mcast transaction when there's a linked transaction).");
             break;
         default:
