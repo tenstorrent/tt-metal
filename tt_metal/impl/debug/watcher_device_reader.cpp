@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <ctype.h>
+#include <enchantum/enchantum.hpp>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -217,7 +218,6 @@ private:
 
     void DumpL1Status() const;
     void DumpNocSanitizeStatus(int noc) const;
-    void DumpAssertTrippedDetails(const std::string& error_msg) const;
     void DumpAssertStatus() const;
     void DumpPauseStatus() const;
     void DumpRingBuffer(bool to_stdout = false) const;
@@ -227,7 +227,7 @@ private:
     void DumpSyncRegs() const;
     void DumpStackUsage() const;
     void LogRunningKernels() const;
-    const std::string& GetKernelName(uint32_t type) const;
+    const std::string& GetKernelName(uint32_t processor_index) const;
     void ValidateKernelIDs() const;
 
 public:
@@ -672,71 +672,56 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
 
 void WatcherDeviceReader::Core::DumpAssertStatus() const {
     const debug_assert_msg_t* assert_status = &mbox_data_->watcher.assert_status;
+    if (assert_status->tripped == DebugAssertOK) {
+        if (assert_status->line_num != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
+            assert_status->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
+            TT_THROW(
+                "Watcher unexpected assert state on core {}, reported OK but got processor {}, line {}.",
+                virtual_coord_.str(),
+                assert_status->which,
+                assert_status->line_num);
+        }
+        return;  // no assert tripped, nothing to do
+    }
+    auto [processor_class, processor_type] = MetalContext::instance().hal().get_processor_class_and_type_from_index(
+        programmable_core_type_, assert_status->which);
+    std::string error_msg = fmt::format(
+        "{}: {}_{}_{} ",
+        core_str_,
+        enchantum::to_string(programmable_core_type_),
+        enchantum::to_string(processor_class),
+        processor_type);
     switch (assert_status->tripped) {
         case DebugAssertTripped: {
+            error_msg += fmt::format("tripped an assert on line {}.", assert_status->line_num);
             // TODO: Get rid of this once #6098 is implemented.
-            const string line_num_warning =
-                "Note that file name reporting is not yet implemented, and the reported line number for the assert may "
-                "be from a different file.";
-            const string error_msg = fmt::format(
-                "{}: {} tripped an assert on line {}. Current kernel: {}. {}",
-                core_str_,
-                get_riscv_name(virtual_coord_, assert_status->which),
-                assert_status->line_num,
-                GetKernelName(assert_status->which),
-                line_num_warning.c_str());
-            this->DumpAssertTrippedDetails(error_msg);
+            error_msg +=
+                " Note that file name reporting is not yet implemented, and the reported line number for the assert "
+                "may be from a different file.";
             break;
         }
         case DebugAssertNCriscNOCReadsFlushedTripped: {
-            const string error_msg = fmt::format(
-                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
-                "NOC transactions (missing NOC reads flushed barrier). Current kernel: {}.",
-                core_str_,
-                get_riscv_name(virtual_coord_, assert_status->which),
-                GetKernelName(assert_status->which));
-            this->DumpAssertTrippedDetails(error_msg);
+            error_msg +=
+                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
+                "NOC reads flushed barrier).";
             break;
         }
         case DebugAssertNCriscNOCNonpostedWritesSentTripped: {
-            const string error_msg = fmt::format(
-                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
-                "NOC transactions (missing NOC non-posted writes sent barrier). Current kernel: {}.",
-                core_str_,
-                get_riscv_name(virtual_coord_, assert_status->which),
-                GetKernelName(assert_status->which));
-            this->DumpAssertTrippedDetails(error_msg);
+            error_msg +=
+                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
+                "NOC non-posted writes sent barrier).";
             break;
         }
         case DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped: {
-            const string error_msg = fmt::format(
-                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
-                "NOC transactions (missing NOC non-posted atomics flushed barrier). Current kernel: {}.",
-                core_str_,
-                get_riscv_name(virtual_coord_, assert_status->which),
-                GetKernelName(assert_status->which));
-            this->DumpAssertTrippedDetails(error_msg);
+            error_msg +=
+                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
+                "NOC non-posted atomics flushed barrier).";
             break;
         }
         case DebugAssertNCriscNOCPostedWritesSentTripped: {
-            const string error_msg = fmt::format(
-                "{}: {} detected an inter-kernel data race due to kernel completing with pending "
-                "NOC transactions (missing NOC posted writes sent barrier). Current kernel: {}.",
-                core_str_,
-                get_riscv_name(virtual_coord_, assert_status->which),
-                GetKernelName(assert_status->which));
-            this->DumpAssertTrippedDetails(error_msg);
-            break;
-        }
-        case DebugAssertOK: {
-            if (assert_status->line_num != DEBUG_SANITIZE_NOC_SENTINEL_OK_16 ||
-                assert_status->which != DEBUG_SANITIZE_NOC_SENTINEL_OK_8) {
-                TT_THROW(
-                    "Watcher unexpected assert state on core {}, reported OK but got risc {}, line {}.",
-                    virtual_coord_.str(),
-                    assert_status->which,
-                    assert_status->line_num);
-            }
+            error_msg +=
+                "detected an inter-kernel data race due to kernel completing with pending NOC transactions (missing "
+                "NOC posted writes sent barrier).";
             break;
         }
         default:
@@ -746,9 +731,7 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
                 virtual_coord_.str(),
                 assert_status->tripped);
     }
-}
-
-void WatcherDeviceReader::Core::DumpAssertTrippedDetails(const string& error_msg) const {
+    error_msg += fmt::format(" Current kernel: {}.", GetKernelName(assert_status->which));
     log_warning(tt::LogMetal, "Watcher stopped the device due to tripped assert, see watcher log for more details");
     log_warning(tt::LogMetal, "{}", error_msg);
     DumpWaypoints(true);
@@ -1119,25 +1102,10 @@ void WatcherDeviceReader::Core::LogRunningKernels() const {
     }
 }
 
-const std::string& WatcherDeviceReader::Core::GetKernelName(uint32_t type) const {
-    switch (type) {
-        case DebugBrisc:
-            return reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0]];
-        case DebugErisc:
-        case DebugIErisc:
-            return reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]];
-        case DebugSubordinateIErisc:
-            return reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]];
-        case DebugNCrisc:
-            return reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM1]];
-        case DebugTrisc0:
-        case DebugTrisc1:
-        case DebugTrisc2:
-            return reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE]];
-        default:
-            LogRunningKernels();
-            TT_THROW("Watcher data corrupted, unexpected riscv type on core {}: {}", virtual_coord_.str(), type);
-    }
+const std::string& WatcherDeviceReader::Core::GetKernelName(uint32_t processor_index) const {
+    // XXX: delete once dispatch class is gone.
+    uint32_t dispatch_class = std::min(processor_index, 2u);
+    return reader_.kernel_names[launch_msg_->kernel_config.watcher_kernel_ids[dispatch_class]];
 }
 
 }  // namespace tt::tt_metal

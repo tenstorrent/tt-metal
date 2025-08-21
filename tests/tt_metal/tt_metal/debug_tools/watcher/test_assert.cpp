@@ -85,7 +85,6 @@ static void RunTest(
                                 DataMovementConfig{
                                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                                     .noc = tt_metal::NOC::RISCV_0_default});
-                            risc = " brisc";
                             break;
                         case 1:
                             assert_kernel = CreateKernel(
@@ -95,7 +94,6 @@ static void RunTest(
                                 DataMovementConfig{
                                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                                     .noc = tt_metal::NOC::RISCV_1_default});
-                            risc = "ncrisc";
                             break;
                         default: TT_THROW("Unsupported DM processor id {}", processor_id);
                     }
@@ -116,26 +114,19 @@ static void RunTest(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
-                EthernetConfig{
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
-            risc = "erisc";
+                EthernetConfig{.noc = tt_metal::NOC::NOC_0});
             break;
         case HalProgrammableCoreType::IDLE_ETH:
             assert_kernel = CreateKernel(
                 program,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp",
                 logical_core,
-                EthernetConfig{
-                    .eth_mode = Eth::IDLE,
-                    .noc = tt_metal::NOC::NOC_0
-                }
-            );
-            risc = "erisc";
+                EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
             break;
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
     }
+    risc = fmt::format(
+        "{}_{}_{}", enchantum::to_string(programmable_core_type), enchantum::to_string(processor_class), processor_id);
 
     // Write runtime args that should not trip an assert.
     const std::vector<uint32_t> safe_args = {3, 4, static_cast<uint32_t>(assert_type)};
@@ -161,8 +152,9 @@ static void RunTest(
     if (assert_type == DebugAssertTripped) {
         const uint32_t line_num = 67;
         expected = fmt::format(
-            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: "
-            "{}.",
+            "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. "
+            "Note that file name reporting is not yet implemented, and the reported line number for the assert may be "
+            "from a different file. Current kernel: {}.",
             device->id(),
             (programmable_core_type == HalProgrammableCoreType::ACTIVE_ETH) ? "acteth" : "worker",
             logical_core.x,
@@ -172,9 +164,6 @@ static void RunTest(
             risc,
             line_num,
             kernel);
-        expected +=
-            " Note that file name reporting is not yet implemented, and the reported line number for the assert may be "
-            "from a different file.";
     } else {
         std::string barrier;
         if (assert_type == DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped) {
@@ -216,7 +205,7 @@ struct WatcherTestParams {
     HalProgrammableCoreType core_type;
     HalProcessorClassType processor_class;
     int processor_id;
-    debug_assert_type_t assert_type;
+    debug_assert_type_t assert_type = DebugAssertTripped;
 };
 
 class WatcherAssertTest : public WatcherFixture, public ::testing::WithParamInterface<WatcherTestParams> {};
@@ -240,64 +229,35 @@ TEST_P(WatcherAssertTest, TestWatcherAssert) {
         this->devices_[0]);
 }
 
+namespace {
+
+using enum HalProgrammableCoreType;
+using enum HalProcessorClassType;
+
 INSTANTIATE_TEST_SUITE_P(
     WatcherAssertTests,
     WatcherAssertTest,
     ::testing::Values(
-        WatcherTestParams{"Brisc", HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 0, DebugAssertTripped},
-        WatcherTestParams{"NCrisc", HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 1, DebugAssertTripped},
-        WatcherTestParams{
-            "Trisc0", HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 0, DebugAssertTripped},
-        WatcherTestParams{
-            "Trisc1", HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 1, DebugAssertTripped},
-        WatcherTestParams{
-            "Trisc2", HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE, 2, DebugAssertTripped},
-        WatcherTestParams{
-            "Erisc", HalProgrammableCoreType::ACTIVE_ETH, HalProcessorClassType::DM, 0, DebugAssertTripped},
-        WatcherTestParams{
-            "IErisc", HalProgrammableCoreType::IDLE_ETH, HalProcessorClassType::DM, 0, DebugAssertTripped}),
+        WatcherTestParams{"Brisc", TENSIX, DM, 0},
+        WatcherTestParams{"NCrisc", TENSIX, DM, 1},
+        WatcherTestParams{"Trisc0", TENSIX, COMPUTE, 0},
+        WatcherTestParams{"Trisc1", TENSIX, COMPUTE, 1},
+        WatcherTestParams{"Trisc2", TENSIX, COMPUTE, 2},
+        WatcherTestParams{"Erisc", ACTIVE_ETH, DM, 0},
+        WatcherTestParams{"IErisc", IDLE_ETH, DM, 0}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
 
 INSTANTIATE_TEST_SUITE_P(
     WatcherNonDefaultAssertTests,
     WatcherAssertTest,
     ::testing::Values(
-        WatcherTestParams{
-            "BriscNonDefault", HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM, 0, DebugAssertTripped},
-        WatcherTestParams{
-            "NCriscNOCAtomics",
-            HalProgrammableCoreType::TENSIX,
-            HalProcessorClassType::DM,
-            1,
-            DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
-        WatcherTestParams{
-            "Trisc0NOCWrites",
-            HalProgrammableCoreType::TENSIX,
-            HalProcessorClassType::COMPUTE,
-            0,
-            DebugAssertNCriscNOCNonpostedWritesSentTripped},
-        WatcherTestParams{
-            "Trisc1NOCPostedWrites",
-            HalProgrammableCoreType::TENSIX,
-            HalProcessorClassType::COMPUTE,
-            1,
-            DebugAssertNCriscNOCPostedWritesSentTripped},
-        WatcherTestParams{
-            "Trisc2NOCReads",
-            HalProgrammableCoreType::TENSIX,
-            HalProcessorClassType::COMPUTE,
-            2,
-            DebugAssertNCriscNOCReadsFlushedTripped},
-        WatcherTestParams{
-            "EriscNOCAtomics",
-            HalProgrammableCoreType::ACTIVE_ETH,
-            HalProcessorClassType::DM,
-            0,
-            DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
-        WatcherTestParams{
-            "IEriscNOCReads",
-            HalProgrammableCoreType::IDLE_ETH,
-            HalProcessorClassType::DM,
-            0,
-            DebugAssertNCriscNOCReadsFlushedTripped}),
+        WatcherTestParams{"Brisc", TENSIX, DM, 0, DebugAssertTripped},
+        WatcherTestParams{"NCrisc", TENSIX, DM, 1, DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
+        WatcherTestParams{"Trisc0", TENSIX, COMPUTE, 0, DebugAssertNCriscNOCNonpostedWritesSentTripped},
+        WatcherTestParams{"Trisc1", TENSIX, COMPUTE, 1, DebugAssertNCriscNOCPostedWritesSentTripped},
+        WatcherTestParams{"Trisc2", TENSIX, COMPUTE, 2, DebugAssertNCriscNOCReadsFlushedTripped},
+        WatcherTestParams{"Erisc", ACTIVE_ETH, DM, 0, DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped},
+        WatcherTestParams{"IErisc", IDLE_ETH, DM, 0, DebugAssertNCriscNOCReadsFlushedTripped}),
     [](const ::testing::TestParamInfo<WatcherTestParams>& info) { return info.param.test_name; });
+
+}  // namespace
