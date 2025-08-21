@@ -609,8 +609,64 @@ inline std::optional<std::string> CmdlineParser::get_yaml_config_path() {
 
 inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config) {
     if (filter_type.has_value()) {
-        if (filter_type == "name") {
+        if (filter_type.value() == "name" || filter_type.value() == "Name") {
             return test_config.name == filter_value;
+        } else if (filter_type.value() == "topology" || filter_type.value() == "Topology") {
+            auto topo = tt::tt_fabric::Topology::Linear;  // Default value
+            if (filter_value == "Ring") {
+                topo = tt::tt_fabric::Topology::Ring;
+            } else if (filter_value == "Linear") {
+                topo = tt::tt_fabric::Topology::Linear;
+            } else if (filter_value == "Mesh") {
+                topo = tt::tt_fabric::Topology::Mesh;
+            } else if (filter_value == "Torus") {
+                topo = tt::tt_fabric::Topology::Torus;
+            } else {
+                log_info(
+                    tt::LogTest,
+                    "Unsupported topology filter value: '{}'. Supported values are: Ring, Linear, Mesh, Torus",
+                    filter_value);
+                return false;
+            }
+            return test_config.fabric_setup.topology == topo;
+        } else if (filter_type.value() == "routing_type" || filter_type.value() == "Routing_Type") {
+            auto r_type = tt::tt_fabric::fabric_tests::RoutingType::LowLatency;  // Default value
+            if (filter_value == "LowLatency") {
+                r_type = tt::tt_fabric::fabric_tests::RoutingType::LowLatency;
+            } else if (filter_value == "Dynamic") {
+                r_type = tt::tt_fabric::fabric_tests::RoutingType::Dynamic;
+            } else {
+                log_info(
+                    tt::LogTest,
+                    "Unsupported routing type filter value: '{}'. Supported values are: LowLatency, Dynamic",
+                    filter_value);
+                return false;
+            }
+            return test_config.fabric_setup.routing_type == r_type;
+        } else if (filter_type.value() == "benchmark_mode" || filter_type.value() == "Benchmark_Mode") {
+            if (filter_value == "true") {
+                return test_config.benchmark_mode == true;
+            } else if (filter_value == "false") {
+                return test_config.benchmark_mode == false;
+            } else {
+                log_info(
+                    tt::LogTest,
+                    "Unsupported benchmark filter value: '{}'. Supported values are: true, false",
+                    filter_value);
+                return false;
+            }
+        } else if (filter_type.value() == "sync" || filter_type.value() == "Sync") {
+            if (filter_value == "true") {
+                return test_config.global_sync == true;
+            } else if (filter_value == "false") {
+                return test_config.global_sync == false;
+            } else {
+                log_info(
+                    tt::LogTest,
+                    "Unsupported sync filter value: '{}'. Supported values are: true, false",
+                    filter_value);
+                return false;
+            }
         }
     }
     return true;
