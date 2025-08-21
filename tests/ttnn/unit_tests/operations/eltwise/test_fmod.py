@@ -8,7 +8,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
 
 
-def test_fmod(device):
+def test_fmod_nan(device):
     torch_input_a = torch.tensor([1.0, 0.0, -1.0], dtype=torch.float32)
     torch_input_b = torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32)
 
