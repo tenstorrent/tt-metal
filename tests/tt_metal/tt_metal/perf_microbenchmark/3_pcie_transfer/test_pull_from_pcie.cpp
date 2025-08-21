@@ -41,6 +41,7 @@
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include "umd/device/tt_xy_pair.h"
+#include <tt-metalium/distributed.hpp>
 
 enum class CoreType;
 
@@ -242,7 +243,7 @@ int main(int argc, char** argv) {
 
         // Device setup
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
         CoreCoord logical_core(0, 0);
         CoreCoord physical_core = device->worker_core_from_logical_core(logical_core);
 
@@ -266,7 +267,7 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> go_signal = {0};
         std::vector<uint32_t> done_signal = {1};
         uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-        tt_metal::detail::WriteToDeviceL1(device, logical_core, l1_unreserved_base, go_signal);
+        tt_metal::detail::WriteToDeviceL1(device->get_devices()[0], logical_core, l1_unreserved_base, go_signal);
 
         // Application setup
         tt_metal::Program program = tt_metal::Program();
@@ -310,11 +311,18 @@ int main(int argc, char** argv) {
             copy_mode_str);
 
         log_info(LogTest, "Num tests {}", num_tests);
+
+        // Create MeshWorkload for kernel execution
+        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        tt_metal::distributed::AddProgramToMeshWorkload(
+            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+
         for (uint32_t i = 0; i < num_tests; ++i) {
             // Execute application
             std::thread t1([&]() {
                 if (enable_kernel_read) {
-                    tt::tt_metal::detail::LaunchProgram(device, program);
+                    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+                    tt_metal::distributed::Finish(device->mesh_command_queue());
                 }
             });
 
@@ -377,7 +385,7 @@ int main(int argc, char** argv) {
                     uint32_t num_write_ptr_updates = write_size_bytes / (32 * 1024);
                     for (int i = 0; i < num_write_ptr_updates; i++) {
                         tt::tt_metal::MetalContext::instance().get_cluster().write_reg(
-                            &val_to_write, tt_cxy_pair(device->id(), physical_core), reg_addr);
+                            &val_to_write, tt_cxy_pair(device->get_devices()[0]->id(), physical_core), reg_addr);
                         reg_addr += sizeof(uint32_t);
                         num_reg_writes = (reg_addr - prefetch_q_base) / sizeof(uint32_t);
                         if (num_reg_writes == num_reg_entries) {
@@ -389,7 +397,10 @@ int main(int argc, char** argv) {
                 if (write_ptr_readback_interval > 0 and num_reg_writes == write_ptr_readback_interval) {
                     std::vector<std::uint32_t> read_hex_vec(1, 0);
                     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
-                        read_hex_vec.data(), sizeof(uint32_t), tt_cxy_pair(device->id(), physical_core), reg_addr);
+                        read_hex_vec.data(),
+                        sizeof(uint32_t),
+                        tt_cxy_pair(device->get_devices()[0]->id(), physical_core),
+                        reg_addr);
                 }
 
                 host_write_ptr += write_size_bytes;
@@ -397,7 +408,7 @@ int main(int argc, char** argv) {
             }
 
             auto t_end = std::chrono::steady_clock::now();
-            tt_metal::detail::WriteToDeviceL1(device, logical_core, l1_unreserved_base, done_signal);
+            tt_metal::detail::WriteToDeviceL1(device->get_devices()[0], logical_core, l1_unreserved_base, done_signal);
 
             t1.join();
 
@@ -406,7 +417,7 @@ int main(int argc, char** argv) {
             log_info(LogTest, "H2D BW: {:.3f}ms, {:.3f}GB/s", elapsed_us / 1000.0, h2d_bandwidth[i]);
         }
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
     } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());
