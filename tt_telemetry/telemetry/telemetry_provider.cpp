@@ -197,6 +197,10 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
         uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::TDP));
         uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::TDC));
         uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::VCORE));
+        uint_metrics.push_back(
+            std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::ASIC_TEMPERATURE));
+        uint_metrics.push_back(
+            std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::BOARD_TEMPERATURE));
     }
 
     // Continuously monitor on a loop
