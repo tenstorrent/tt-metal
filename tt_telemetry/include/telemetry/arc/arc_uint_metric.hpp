@@ -32,14 +32,16 @@ public:
         size_t chip_id,
         std::shared_ptr<ARCTelemetryReader> reader,
         tt::umd::wormhole::TelemetryTag tag,
-        const std::string& metric_name);
+        const std::string& metric_name,
+        uint32_t mask = 0xffffffff);
 
     // Constructor for Blackhole telemetry tags
     ARCUintMetric(
         size_t chip_id,
         std::shared_ptr<ARCTelemetryReader> reader,
         tt::umd::blackhole::TelemetryTag tag,
-        const std::string& metric_name);
+        const std::string& metric_name,
+        uint32_t mask = 0xffffffff);
 
     // Constructor for common metrics (automatically selects appropriate tag based on architecture)
     ARCUintMetric(size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader, CommonTelemetryTag common_metric);
@@ -52,4 +54,5 @@ private:
     tt::umd::wormhole::TelemetryTag wormhole_tag_;
     tt::umd::blackhole::TelemetryTag blackhole_tag_;
     std::string metric_name_;
+    uint32_t mask_;
 };
