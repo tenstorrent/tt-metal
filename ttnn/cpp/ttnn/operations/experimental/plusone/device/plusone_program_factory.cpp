@@ -8,7 +8,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 
 namespace ttnn::operations::experimental::detail {
@@ -48,14 +47,15 @@ tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     auto src_buffer = input.buffer();
+    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args = {
         src0_cb_index,
+        src_is_dram,
         aligned_input_unit_size,
         W,
         H,
     };
-    tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(

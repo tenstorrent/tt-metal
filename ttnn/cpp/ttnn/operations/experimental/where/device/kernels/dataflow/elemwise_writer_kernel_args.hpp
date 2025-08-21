@@ -17,6 +17,7 @@ struct ElemwiseWriterKernelArgs {
 
 struct CompileTimeWriterKernelArgs {
     uint32_t cb_dst;
+    bool is_dst_dram;
 };
 
 static_assert(ttnn::kernel_utils::SerializableKernelArgs<ElemwiseWriterKernelArgs>);

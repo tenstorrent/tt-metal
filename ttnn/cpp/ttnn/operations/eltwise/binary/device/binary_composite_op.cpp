@@ -486,7 +486,8 @@ Tensor run_fmod(
         ttnn::multiply(division_result, input_b, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    return ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
+    result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
+    return ttnn::where(ttnn::eqz(input_b, output_mem_config), std::nanf(""), result);
 }
 
 // FMOD result = input − (other * trunc(input/other))
