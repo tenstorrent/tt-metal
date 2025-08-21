@@ -68,7 +68,6 @@ public:
         const BankMapping& l1_bank_remap,
         size_t worker_l1_size,
         bool minimal = false);
-    void reinitialize();
     void teardown();
 
     // Control plane accessors
