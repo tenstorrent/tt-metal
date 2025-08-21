@@ -32,6 +32,7 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include <tt-metalium/distributed.hpp>
 
 using std::vector;
 using namespace tt;
@@ -94,7 +95,7 @@ int main(int argc, char** argv) {
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
-    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
     auto grid_coord = device->compute_with_storage_grid_size();
     num_cores_c = (num_cores_c == 0) ? grid_coord.x : num_cores_c;
@@ -200,20 +201,22 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::detail::CompileProgram(device, program);
+        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        tt_metal::distributed::AddProgramToMeshWorkload(
+            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
 
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
-            EnqueueProgram(device->command_queue(), program, false);
-            Finish(device->command_queue());
+            tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+            tt_metal::distributed::Finish(device->mesh_command_queue());
             auto t_end = std::chrono::steady_clock::now();
             elapsed_us.push_back(duration_cast<microseconds>(t_end - t_begin).count());
 
             log_info(LogTest, "Time elapsed for executing empty kernels: {}us", elapsed_us[i]);
         }
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
     } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());

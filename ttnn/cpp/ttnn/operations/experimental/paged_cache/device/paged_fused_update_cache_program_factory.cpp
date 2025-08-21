@@ -8,6 +8,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "paged_cache_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/experimental/paged_cache/device/paged_fused_update_cache_program_factory.hpp"
 
 using namespace tt::tt_metal;
@@ -222,20 +223,15 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
 
     auto dst2_buffer = cache_tensor2.buffer();
 
-    bool dst_is_dram = dst1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)dst_is_dram,
         (std::uint32_t)cache_cb_index,
         // Index tensor args
         (std::uint32_t)use_index_tensor,
-        (std::uint32_t)index_is_dram,
         cb_index_id,
         cache_batch_num_tiles,
         Wt,
-        log2_page_size,
         index_stick_size,
         // page_table args
         (std::uint32_t)is_paged_cache,
@@ -243,27 +239,28 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
         (std::uint32_t)block_size,
         (std::uint32_t)block_size_t,
         (std::uint32_t)max_blocks_per_seq,
-        log2_page_table_stick_size,
         page_table_stick_size,
-        (std::uint32_t)page_table_is_dram,
         cb_pagetable_id,
         St,
         in0_sequential_mode_semaphore_id,
     };
+    tt::tt_metal::TensorAccessorArgs(dst1_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(use_index_tensor ? update_idxs_tensor.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(is_paged_cache ? page_table.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
-        (std::uint32_t)dst_is_dram,
         (std::uint32_t)output_cb_index,
+        (std::uint32_t)0,
         (std::uint32_t)intermed0_cb_index,
         (std::uint32_t)intermed1_cb_index,
         (std::uint32_t)intermed2_cb_index,
-        // Index tensor args
         (std::uint32_t)use_index_tensor,
         cb_index_id,
         cache_batch_num_tiles,
         Wt,
         Wbytes,
-        // page_table args
         (std::uint32_t)is_paged_cache,
         (std::uint32_t)num_heads,
         (std::uint32_t)block_size,
@@ -273,6 +270,7 @@ operation::ProgramWithCallbacks paged_tiled_fused_update_cache_multi_core(
         St,
         in0_sequential_mode_semaphore_id,
     };
+    tt::tt_metal::TensorAccessorArgs(dst1_buffer).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {
         src1_cb_index,
