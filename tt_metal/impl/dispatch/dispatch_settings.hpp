@@ -15,7 +15,6 @@ enum class CoreType;
 
 namespace tt {
 class Cluster;
-class Cluster;
 }
 
 namespace tt::tt_metal {

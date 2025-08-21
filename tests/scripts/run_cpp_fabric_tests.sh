@@ -31,6 +31,10 @@ echo "Running fabric unit tests now...";
 # Host side tests: Topology Mapping in Control Plane
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*LogicalToPhysicalConversionFixture*"
 
+# Control Plane tests with mock cluster descriptors
+./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*CustomMockControlPlaneFixture*"
+./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*MockControlPlaneFixture*"
+
 #############################################
 # FABRIC SANITY TESTS                       #
 #############################################

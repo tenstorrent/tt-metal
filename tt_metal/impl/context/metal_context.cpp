@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <filesystem>
-#include <new>
 
 #include <enchantum/enchantum.hpp>
 #include <tracy/Tracy.hpp>
