@@ -1,6 +1,6 @@
 # Install
 
-These instructions will guide you through the installation of Tenstorrent system tools and drivers, followed by the installation of TT-Metalium and TT-NN.
+This document provides advanced users and developers with comprehensive instructions for installing **Tenstorrent**'s stack, featuring multiple deployment options for **TT-Metalium** and **TT-NN**.
 
 > [!IMPORTANT]
 >
