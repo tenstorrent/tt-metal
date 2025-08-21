@@ -47,7 +47,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
     const uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const CoreCoord core_grid_offset,
 
@@ -82,6 +83,7 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
             topology,
             semaphore,
             barrier_semaphore,
+            do_sync,
             sub_device_id,
             reduce_scatter_fused_op_signaler,
             std::nullopt,

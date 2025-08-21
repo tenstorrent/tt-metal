@@ -103,7 +103,7 @@ struct ReduceScatterMinimalAsync {
         const std::vector<Tensor>& input_tensors,
         std::vector<Tensor>& output_tensors,
         const std::vector<GlobalSemaphore>& op_semaphores,
-        const std::optional<GlobalSemaphore>& barrier_semaphore) const;
+        const GlobalSemaphore& barrier_semaphore) const;
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
@@ -123,7 +123,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
@@ -143,7 +144,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -165,7 +167,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -187,7 +190,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
