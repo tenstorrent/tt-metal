@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
 
     bool device_opened = false;
     for (auto& test_config : raw_test_configs) {
-        if(!cmdline_parser.check_filter(test_config)) {
+        if (!cmdline_parser.check_filter(test_config, true)) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to filter policy", test_config.name);
             continue;
         }
@@ -136,7 +136,7 @@ int main(int argc, char** argv) {
         device_opened = true;
 
         log_info(tt::LogTest, "Building tests");
-        auto built_tests = builder.build_tests({test_config});
+        auto built_tests = builder.build_tests({test_config}, cmdline_parser);
 
         // Set benchmark mode and line sync for this test group
         test_context.set_benchmark_mode(test_config.benchmark_mode);

@@ -270,7 +270,7 @@ public:
     CmdlineParser(const std::vector<std::string>& input_args);
 
     std::optional<std::string> get_yaml_config_path();
-    bool check_filter(ParsedTestConfig& test_config);
+    bool check_filter(ParsedTestConfig& test_config, bool fine_grained);
     void apply_overrides(std::vector<ParsedTestConfig>& test_configs);
     std::vector<ParsedTestConfig> generate_default_configs();
     std::optional<uint32_t> get_master_seed();
@@ -607,7 +607,7 @@ inline std::optional<std::string> CmdlineParser::get_yaml_config_path() {
     return std::nullopt;
 }
 
-inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config) {
+inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine_grained) {
     if (filter_type.has_value()) {
         if (filter_type.value() == "name" || filter_type.value() == "Name") {
             return test_config.name == filter_value;
@@ -668,8 +668,38 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config) {
                 return false;
             }
         } else if (filter_type.value() == "num_links" || filter_type.value() == "Num_Links") {
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("num_links");
+                    if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
+                        const auto& num_links_vec = std::get<std::vector<uint32_t>>(it->second);
+                        for (const auto& num_links : num_links_vec) {
+                            if (num_links == stoi(filter_value.value())) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
             return test_config.fabric_setup.num_links == stoi(filter_value.value());
         } else if (filter_type.value() == "ntype") {
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("ntype");
+                    if (it != params.end() && std::holds_alternative<std::vector<std::string>>(it->second)) {
+                        const auto& ntype_vec = std::get<std::vector<std::string>>(it->second);
+                        for (const auto& ntype : ntype_vec) {
+                            if (ntype == filter_value.value()) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
             // soft filter
             std::optional<tt::tt_fabric::NocSendType> ntype;
             ntype = detail::noc_send_type_mapper.from_string(filter_value.value(), "ntype");
@@ -690,6 +720,21 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config) {
             return checker;
         } else if (filter_type.value() == "ftype") {
             // soft filter
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("ftype");
+                    if (it != params.end() && std::holds_alternative<std::vector<std::string>>(it->second)) {
+                        const auto& ftype_vec = std::get<std::vector<std::string>>(it->second);
+                        for (const auto& ftype : ftype_vec) {
+                            if (ftype == filter_value.value()) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
             std::optional<tt::tt_fabric::ChipSendType> ftype;
             ftype = detail::chip_send_type_mapper.from_string(filter_value.value(), "ftype");
             bool checker = false;
@@ -708,6 +753,21 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config) {
             }
             return checker;
         } else if (filter_type.value() == "num_packets") {
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("num_packets");
+                    if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
+                        const auto& num_packets_vec = std::get<std::vector<uint32_t>>(it->second);
+                        for (const auto& num_packets : num_packets_vec) {
+                            if (num_packets == stoi(filter_value.value())) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
             // soft filter
             uint32_t num_packets = stoi(filter_value.value());
             bool checker = false;
@@ -726,6 +786,21 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config) {
             }
             return checker;
         } else if (filter_type.value() == "size") {
+            if (fine_grained) {
+                if (test_config.parametrization_params.has_value() &&
+                    !test_config.parametrization_params.value().empty()) {
+                    auto& params = test_config.parametrization_params.value();
+                    auto it = params.find("size");
+                    if (it != params.end() && std::holds_alternative<std::vector<uint32_t>>(it->second)) {
+                        const auto& size_vec = std::get<std::vector<uint32_t>>(it->second);
+                        for (const auto& size : size_vec) {
+                            if (size == stoi(filter_value.value())) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+            }
             uint32_t size = stoi(filter_value.value());
             bool checker = false;
             for (const auto& sender : test_config.senders) {
@@ -1076,7 +1151,8 @@ public:
     TestConfigBuilder(IDeviceInfoProvider& device_info_provider, IRouteManager& route_manager, std::mt19937& gen) :
         device_info_provider_(device_info_provider), route_manager_(route_manager), gen_(gen) {}
 
-    std::vector<TestConfig> build_tests(const std::vector<ParsedTestConfig>& raw_configs) {
+    std::vector<TestConfig> build_tests(
+        const std::vector<ParsedTestConfig>& raw_configs, CmdlineParser& cmdline_parser) {
         std::vector<TestConfig> built_tests;
 
         for (const auto& raw_config : raw_configs) {
@@ -1084,6 +1160,10 @@ public:
 
             // For each newly generated parametrized config, expand its high-level patterns
             for (auto& p_config : parametrized_configs) {
+                if (!cmdline_parser.check_filter(p_config, false)) {
+                    log_info(LogTest, "Skipping part of test '{}' due to filter criteria.", p_config.name);
+                    continue;
+                }
                 auto expanded_tests = this->expand_high_level_patterns(p_config);
                 built_tests.insert(
                     built_tests.end(),
@@ -1900,7 +1980,6 @@ private:
     IDeviceInfoProvider& device_info_provider_;
     IRouteManager& route_manager_;
     std::mt19937& gen_;
-
     // Randomization helpers
     template <typename T>
     T get_random_choice(const std::vector<T>& choices) {
