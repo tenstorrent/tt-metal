@@ -469,7 +469,6 @@ void FDMeshCommandQueue::write_shard_to_device(
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScoped;
-    std::cout << "[FDMeshCommandQueue::write_shard_to_device] here: device_coord=" << device_coord << std::endl;
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture. trace id: {}", trace_id_.value());
 
