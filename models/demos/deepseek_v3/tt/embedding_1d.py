@@ -48,7 +48,7 @@ class Embedding1D(AbstractModule):
         # Check that there is only one state dict
         assert (
             len(state_dicts) == 1 and state_dicts[0] is not None
-        ), f"MoE expects exactly one non-padding state dict, got {len(state_dicts)}"
+        ), f"Embedding1D expects exactly one non-padding state dict, got {len(state_dicts)}"
         (state_dict,) = cast(tuple[dict[str, torch.Tensor]], state_dicts)
 
         # Get the embedding weight from the state dict (in the full model: model.embed_tokens.weight)
@@ -150,7 +150,7 @@ class Embedding1D(AbstractModule):
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "all_gather": {
-                "multi_device_global_semaphore": ccl.get_semaphore(0),
+                "multi_device_global_semaphore": ccl.get_gather_sem(0),
                 "num_links": ccl.get_max_links(0),
             },
         }

@@ -16,7 +16,6 @@ from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.reference_forwards import reference_forward_model as reference_forward
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
-    MAX_START_POS,
     add_inv_scale_to_state_dict,
     load_reference_io_tensors_for_module,
     load_state_dict,
@@ -73,6 +72,7 @@ def test_forward_pass(
     ccl,
     reset_seeds,
 ):
+    mesh_device.disable_and_clear_program_cache()
     mesh_shape = list(mesh_device.shape)
     num_rows, sdpa_dp_factor = mesh_shape
 
@@ -111,7 +111,8 @@ def test_forward_pass(
     if mode == "prefill":
         position_idxs = torch.tensor([seq_len for _ in range(batch_size)])
     else:
-        position_idxs = torch.tensor([randint(0, MAX_START_POS) for _ in range(batch_size)])
+        # TODO: Why do we need to set zero position ids?
+        position_idxs = torch.tensor([0 for _ in range(batch_size)])
 
     ############################
     ### Torch reference
@@ -146,8 +147,13 @@ def test_forward_pass(
         ccl=ccl,
     )
 
+    model_shared_state = Model1D.create_shared_state(
+        hf_config,
+        mesh_device,
+    )
+
     # Create run config
-    run_config = create_run_config(model_config, weight_config, model_state)
+    run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     ############################
     ### TTNN inputs
@@ -160,7 +166,7 @@ def test_forward_pass(
         torch_input = torch_input.transpose(-1, -2)
 
     tt_input = ttnn.from_torch(
-        torch_input.unsqueeze(0).unsqueeze(0),
+        torch_input.unsqueeze(0),
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.uint32,

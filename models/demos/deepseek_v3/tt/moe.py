@@ -104,7 +104,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "num_links": ccl.get_max_links(1),
             },
             "revert_tp": {
-                "multi_device_global_semaphore": ccl.get_semaphore(1),
+                "multi_device_global_semaphore": ccl.get_gather_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
         }
