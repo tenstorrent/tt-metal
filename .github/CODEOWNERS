@@ -95,7 +95,7 @@ tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @tenstorrent/metalium-dev
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
 tt_metal/third_party/tt_llk @rtawfik01 @rdjogoTT @nvelickovicTT @amahmudTT
-tt_metal/third_party/tt_umd @broskoTT @pjanevskiTT
+tt_metal/third_party/umd @broskoTT @pjanevskiTT
 
 # metal tests
 tests/tt_metal/distributed/ @cfjchu @tt-asaigal @omilyutin-tt
