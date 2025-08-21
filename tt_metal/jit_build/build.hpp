@@ -32,8 +32,8 @@ using vector_cache_aligned = std::vector<T, tt::stl::aligned_allocator<T, CACHE_
 class JitBuildSettings;
 
 struct JitBuiltStateConfig {
-    HalProgrammableCoreType core_type;
-    HalProcessorClassType processor_class;
+    HalProgrammableCoreType core_type{};
+    HalProcessorClassType processor_class{};
     int processor_id = 0;
     bool is_fw = false;
     uint32_t dispatch_message_addr = 0;
@@ -59,7 +59,7 @@ public:
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
 
 private:
-    tt::ARCH arch_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
 
     // Paths
     std::string root_;
@@ -87,7 +87,7 @@ protected:
     int core_id_;
     int is_fw_;
     uint32_t dispatch_message_addr_;
-    bool process_defines_at_compile_;
+    bool process_defines_at_compile_{};
 
     std::string out_path_;
     std::string target_name_;
@@ -128,8 +128,9 @@ public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config);
 
     void build(const JitBuildSettings* settings) const;
-    const std::string& get_out_path() const { return this->out_path_; };
+    const std::string& get_out_path() const { return this->out_path_; }
     const std::string& get_target_name() const { return this->target_name_; };
+    ;
     std::string get_target_out_path(const std::string& kernel_name) const {
         return this->out_path_ + kernel_name + target_full_path_;
     }

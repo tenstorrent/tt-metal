@@ -868,7 +868,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     union {
         float f;
         uint32_t u;
-    } e;
+    } e{};
     e.f = eps;
 
     std::vector<uint32_t> in0_mcast_noc_x;

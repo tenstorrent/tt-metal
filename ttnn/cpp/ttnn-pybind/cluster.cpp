@@ -71,7 +71,8 @@ void py_cluster_module_types(py::module& module) {
         .value("P150_X8", tt::tt_metal::ClusterType::P150_X8, "8 Blackhole single card, ethernet connected")
         .value("SIMULATOR_WORMHOLE_B0", tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "Simulator Wormhole B0")
         .value("SIMULATOR_BLACKHOLE", tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "Simulator Blackhole")
-        .value("N300_2x2", tt::tt_metal::ClusterType::N300_2x2, "2 N300 cards, ethernet connected to form 2x2");
+        .value("N300_2x2", tt::tt_metal::ClusterType::N300_2x2, "2 N300 cards, ethernet connected to form 2x2")
+        .value("P300", tt::tt_metal::ClusterType::P300, "Production P300");
 }
 
 void py_cluster_module(py::module& module) {

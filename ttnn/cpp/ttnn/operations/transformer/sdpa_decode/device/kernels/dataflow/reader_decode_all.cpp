@@ -36,11 +36,12 @@ void kernel_main() {
     constexpr uint32_t num_output_cores = get_compile_time_arg_val(18);
     constexpr bool is_causal = get_compile_time_arg_val(19) == 1;
     constexpr bool use_attention_mask = get_compile_time_arg_val(20) == 1;
-    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(21);
-    constexpr bool tilize_q = get_compile_time_arg_val(22) == 1;
-    constexpr bool reuse_k = get_compile_time_arg_val(23) == 1;
-    constexpr bool use_half_tile = get_compile_time_arg_val(24);
-    constexpr uint32_t q_chunk_size_bytes = get_compile_time_arg_val(25);
+    constexpr bool use_attention_sink = get_compile_time_arg_val(21) == 1;
+    constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(22);
+    constexpr bool tilize_q = get_compile_time_arg_val(23) == 1;
+    constexpr bool reuse_k = get_compile_time_arg_val(24) == 1;
+    constexpr bool use_half_tile = get_compile_time_arg_val(25);
+    constexpr uint32_t q_chunk_size_bytes = get_compile_time_arg_val(26);
 
     uint32_t arg_idx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -49,6 +50,7 @@ void kernel_main() {
     const uint32_t pos_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_table_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mask_addr = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t attention_sink_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t page_table_page_size = get_arg_val<uint32_t>(arg_idx++);
     const bool is_worker = get_arg_val<uint32_t>(arg_idx++) == 0;
     const bool is_output_core = get_arg_val<uint32_t>(arg_idx++) == 1;
@@ -121,6 +123,7 @@ void kernel_main() {
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
     constexpr uint32_t cb_v_in = tt::CBIndex::c_2;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_attention_sink = tt::CBIndex::c_4;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
@@ -131,6 +134,8 @@ void kernel_main() {
     constexpr DataFormat v_data_format = get_dataformat(cb_v_in);
     constexpr uint32_t mask_tile_bytes = get_tile_size(cb_mask_in);
     constexpr DataFormat mask_data_format = get_dataformat(cb_mask_in);
+    constexpr uint32_t attention_sink_tile_bytes = get_tile_size(cb_attention_sink);
+    constexpr DataFormat attention_sink_data_format = get_dataformat(cb_attention_sink);
 
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<q_tile_bytes, num_cores>();
     uint32_t barrier_count = 0;
@@ -198,6 +203,23 @@ void kernel_main() {
 
     const InterleavedAddrGenFast<is_dram> mask_reader = {
         .bank_base_address = mask_addr, .page_size = mask_tile_bytes, .data_format = mask_data_format};
+
+    // Read attention sink
+    if constexpr (use_attention_sink) {
+        constexpr auto attention_sink_args = TensorAccessorArgs<27>();
+        const auto attention_sink_reader =
+            TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
+
+        cb_reserve_back(cb_attention_sink, PNHt);
+        uint32_t attention_sink_write_ptr = get_write_ptr(cb_attention_sink);
+
+        for (uint32_t tile = 0; tile < PNHt; ++tile) {
+            noc_async_read_tile(tile, attention_sink_reader, attention_sink_write_ptr);
+            attention_sink_write_ptr += attention_sink_tile_bytes;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_attention_sink, PNHt);
+    }
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
     if constexpr (is_paged_attention) {
