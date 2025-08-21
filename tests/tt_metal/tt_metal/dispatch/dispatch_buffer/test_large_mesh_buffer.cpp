@@ -131,68 +131,133 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(1024, 2048, 16 << 10, 1 << 20)                                          // page sizes
         ));
 
-class ShardedMeshBufferTestSuite : public LargeMeshBufferTestSuiteBase,
-                                   public testing::WithParamInterface<std::tuple<Shape2D, uint32_t>> {};
+class ShardedMeshBufferTestSuite
+    : public LargeMeshBufferTestSuiteBase,
+      public testing::WithParamInterface<std::tuple<std::pair<Shape2D, CoreCoord>, uint32_t>> {};
 
 TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
     // shard_shape: shape on device (elements)
     // page_size: (bytes)
-    auto [shard_shape, page_size] = GetParam();
+    auto [shard_and_grid, page_size] = GetParam();
+    auto [shard_shape, core_grid_size] = shard_and_grid;
+
     uint64_t shard_size = shard_shape.height() * shard_shape.width() * ElementSize;
     uint32_t num_pages = static_cast<uint32_t>(shard_size / page_size);
-    ASSERT_TRUE(num_pages * page_size == shard_size);
-
-    // Ensure buffer dimensions are divisible by tile dimensions
-    ASSERT_TRUE(shard_shape.height() % constants::TILE_HEIGHT == 0);
-    ASSERT_TRUE(shard_shape.width() % constants::TILE_WIDTH == 0);
+    if (uint64_t(num_pages) * page_size != shard_size) {
+        TT_THROW(
+            "Check test parameters: shard shape:{}, page size:{} are incompatible (shard size:{}, #pages:{})",
+            shard_shape,
+            page_size,
+            shard_size,
+            num_pages);
+    }
 
     CoreCoord available_grid_size = mesh_device_->dram_grid_size();
+    if (core_grid_size.x > available_grid_size.x or core_grid_size.y > available_grid_size.y) {
+        TT_THROW(
+            "Input specified grid shape {} is incompatible with available grid {}",
+            core_grid_size,
+            available_grid_size);
+    }
     CoreCoord start(0, 0);
-    CoreCoord end(7 /*available_grid_size.x - 1*/, available_grid_size.y - 1);
+    CoreCoord end(core_grid_size.x - 1, core_grid_size.y - 1);
     CoreRange cores(start, end);
-    CoreCoord core_grid_size = cores.grid_size();
+
+    constexpr auto tile_height{constants::TILE_HEIGHT};
+    constexpr auto tile_width{constants::TILE_WIDTH};
+    constexpr auto tile_area{tile_height * tile_width};
+    // Ensure buffer dimensions are divisible by tile dimensions
+    ASSERT_TRUE(shard_shape.height() % tile_height == 0);
+    ASSERT_TRUE(shard_shape.width() % tile_width == 0);
+
+    auto test_helper_factor_area = [](uint32_t area, int32_t& height, int32_t& width) {
+        log_info(tt::LogTest, "area:{}", area);
+        // Find all factors of area
+        std::vector<uint32_t> factors{1};
+        auto temp = area;
+        auto f = 2;
+        while (f < temp) {
+            if (temp % f == 0) {
+                factors.push_back(f);
+                temp /= f;
+            } else {
+                f++;
+            }
+        }
+        factors.push_back(temp);
+        // Start with last factor vs product of rest
+        int split_idx = factors.size() - 1;
+        height = 1, width = area;
+        int32_t temp_height, temp_width;
+        int32_t min_diff = std::abs(width - height);
+        while (split_idx > 0) {
+            temp_height = std::accumulate(factors.begin(), factors.begin() + split_idx, 1, std::multiplies<uint32_t>());
+            temp_width = std::accumulate(factors.begin() + split_idx, factors.end(), 1, std::multiplies<uint32_t>());
+            auto temp_diff = std::abs(height - width);
+            if (temp_diff > min_diff) {
+                break;
+            }
+            height = temp_height;
+            width = temp_width;
+            min_diff = temp_diff;
+            split_idx--;
+        }
+    };
 
     // Determine page shape in elements
-    ASSERT_TRUE(page_size > constants::TILE_HEIGHT * constants::TILE_WIDTH / ElementSize);
-    uint32_t page_height = page_size / constants::TILE_WIDTH / ElementSize;
-    uint32_t page_width = constants::TILE_WIDTH;
-    ASSERT_TRUE(page_height * page_width * ElementSize == page_size);
+    uint32_t page_area = page_size / ElementSize;
+    int32_t page_height;
+    int32_t page_width;
+    if (page_area >= tile_area) {
+        // Calculate page dims in terms of number of tiles in a page
+        if ((page_area / tile_area) * tile_area != page_area) {
+            TT_THROW("page size elements {} is incompatible with tile size {}", page_area, tile_area);
+        }
+        test_helper_factor_area(page_area / tile_area, page_height, page_width);
+        page_height *= tile_height;
+        page_width *= tile_width;
+    } else {
+        // calculate page dims in terms of number of pages per tile
+        if ((tile_area / page_area) * page_area != tile_area) {
+            TT_THROW("page size elements {} is incompatible with tile size {}", page_area, tile_area);
+        }
+        int32_t tile_height_pages, tile_width_pages;
+        test_helper_factor_area(tile_area / page_area, tile_height_pages, tile_width_pages);
+        page_height = tile_height / tile_height_pages;
+        page_width = tile_width / tile_width_pages;
+    }
+    if (page_height * page_width != page_area) {
+        TT_THROW("Incorrectly derived page dims: {} {} {}", page_area, page_height, page_width);
+    }
     Shape2D page_shape{page_height, page_width};
 
-    // Define memory bank dimensions (elements) for core grid. A bank must fit whole pages.
+    // Derive memory bank dimensions (elements) for core grid. A bank must fit whole pages.
     auto num_banks = core_grid_size.x * core_grid_size.y;
-    uint32_t num_pages_per_bank = tt::div_up(num_pages, num_banks);
-    // Find all factors of num_pages_per_bank
-    std::vector<uint32_t> factors{1};
-    auto temp = num_pages_per_bank;
-    uint32_t f = 2;
-    while (f < temp) {
-        if (temp % f == 0) {
-            factors.push_back(f);
-            temp /= f;
-        } else {
-            f++;
-        }
+    uint32_t num_pages_per_bank = num_pages / num_banks;
+    if (num_banks * num_pages_per_bank != num_pages) {
+        TT_THROW(
+            "Available banks {} cannot uniformly fit whole pages {} {}",
+            num_banks,
+            num_pages,
+            float(num_pages) / num_banks);
     }
-    factors.push_back(temp);
-    // Start with last factor vs product of rest
-    int split_idx = factors.size() - 1;
-    int32_t bank_height = 1, bank_width = num_pages_per_bank, temp_height, temp_width;
-    int32_t min_diff = std::abs(bank_width - bank_height);
-    while (split_idx > 0) {
-        temp_height = std::accumulate(factors.begin(), factors.begin() + split_idx, 1, std::multiplies<uint32_t>());
-        temp_width = std::accumulate(factors.begin() + split_idx, factors.end(), 1, std::multiplies<uint32_t>());
-        auto temp_diff = std::abs(bank_height - bank_width);
-        if (temp_diff > min_diff) {
-            break;
-        }
-        bank_height = temp_height;
-        bank_width = temp_width;
-        min_diff = temp_diff;
-        split_idx--;
+    int32_t bank_height, bank_width;
+    test_helper_factor_area(num_pages_per_bank, bank_height, bank_width);
+    if (bank_height * bank_width != num_pages_per_bank) {
+        TT_THROW(
+            "Invalid factorization of num_pages_per_bank: {} \\ne {} x {}",
+            num_pages_per_bank,
+            bank_height,
+            bank_width);
     }
-    ASSERT_TRUE(bank_height * bank_width == num_pages_per_bank);
-    ASSERT_TRUE(bank_height * bank_width == num_pages_per_bank);
+    log_info(
+        tt::LogTest,
+        "Primary derived values: num_pages:{}, num_banks:{}, num_pages/bank:{}, bank shape:({},{}) page dims",
+        num_pages,
+        num_banks,
+        num_pages_per_bank,
+        bank_height,
+        bank_width);
     // convert to elements
     bank_height *= page_height;
     bank_width *= page_width;
@@ -201,8 +266,13 @@ TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
     // Device shard shape in pages
     uint32_t shard_height_pages = shard_shape.height() / page_height;
     uint32_t shard_width_pages = shard_shape.width() / page_width;
-    ASSERT_TRUE(shard_height_pages * page_height == shard_shape.height());
-    ASSERT_TRUE(shard_width_pages * page_width == shard_shape.width());
+    if (shard_height_pages * page_height != shard_shape.height()) {
+        TT_THROW(
+            "Shard height {} on device cannot fit integral # pages heightwise {}", shard_shape.height(), page_height);
+    }
+    if (shard_width_pages * page_width != shard_shape.width()) {
+        TT_THROW("Shard width {} on device cannot fit integral # pages widthwise {}", shard_shape.width(), page_width);
+    }
     Shape2D shard_device_shape{shard_height_pages, shard_width_pages};
 
     constexpr auto tensor_layout = TensorMemoryLayout::HEIGHT_SHARDED;
@@ -254,7 +324,9 @@ TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
     auto mesh_buffer = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device_.get());
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
-    ASSERT_TRUE(num_elements <= max_num_elements_);
+    if (num_elements > max_num_elements_) {
+        TT_THROW("Buffer size {} elements exceeds test vector {} elements", num_elements, max_num_elements_);
+    }
     std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
     std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
     for (auto& coord : coord_range) {
@@ -306,10 +378,10 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(
         // shard_shape (elements), page_size (bytes)
         ::testing::Values(
-            Shape2D((1 << 14), (1 << 14)),                // 2 GB with uint64_t
-            Shape2D((1 << 14), (1 << 15)),                // 4 GB with uint64_t
-            Shape2D((1 << 15), (1 << 15))),               // 8 GB with uint64_t
-        ::testing::Values(1024, 4096, 16 << 10, 1 << 20)  // page size
+            std::make_pair(Shape2D((1 << 14), (1 << 14)), CoreCoord(8, 1)),    // 2 GB with uint64_t
+            std::make_pair(Shape2D((1 << 14), (1 << 15)), CoreCoord(8, 1)),    // 4 GB with uint64_t
+            std::make_pair(Shape2D((1 << 14), (3 << 14)), CoreCoord(12, 1))),  // 6 GB --8 GB-- with uint64_t
+        ::testing::Values(1024, 4096, 16 << 10, 1 << 20)                       // page size
         ));
 
 }  // namespace
