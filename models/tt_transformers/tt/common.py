@@ -601,11 +601,15 @@ def create_tt_model(
     dtype=ttnn.bfloat8_b,
     state_dict=None,
     num_layers=None,
+    ModelArgsClass=None,
 ):
     from models.tt_transformers.tt.model import Transformer
-    from models.tt_transformers.tt.model_config import ModelArgs
 
-    tt_model_args = ModelArgs(
+    if ModelArgsClass is None:
+        from models.tt_transformers.tt.model_config import ModelArgs
+
+        ModelArgsClass = ModelArgs
+    tt_model_args = ModelArgsClass(
         mesh_device,
         instruct=instruct,
         max_batch_size=max_batch_size,
