@@ -179,10 +179,19 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
      *    For this case we read and process data by groups: Edim/G
      */
 
-    auto [Bq, Hq, Sq, Eq] = query.logical_shape().to_array_4D();
-    auto [Bk, Gk, Sk, Ek] = key.logical_shape().to_array_4D();
     // [Debug] could I assume that Wt%(heads*TILE_WIDTH) == 0 ?
-    uint32_t heads_per_group = Hq / Gk;
+    uint32_t num_heads = 12;  // will be passed by user into args
+    uint32_t num_groups = 4;  // will be passed by user into args
+    uint32_t heads_per_group = num_heads / num_groups;
+    TT_FATAL(
+        num_heads % num_groups == 0,
+        "Number of heads must be divisible by number of groups, got heads={}, groups={}",
+        num_heads,
+        num_groups);
+
+    uint32_t tiles_per_head = Wt / num_heads;    // number of tiles per head in query
+    uint32_t tiles_per_group = Wt / num_groups;  // number of tiles per group in key and value
+    assert(heads_per_group * tiles_per_head == tiles_per_group);
 
     // TODO[improve]: add memory usage estimation and compare it against available memory. Based on this check,
     // determine the appropriate chunk size for Q, K, and V tensors
@@ -190,7 +199,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // maybe I should process chunks by subblokcs of rows instead of full rows
     // since we read K and V row-wise in this SDPA kernel, the sequence length directly defines how many chunks we’ll
     // process for each
-    const uint32_t kv_chunks_number = Ht_;
 
     uint32_t scaler = std::bit_cast<uint32_t>(1.0F / std::sqrt(static_cast<float>(Et)));  // calculate scale factor
     uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
@@ -345,6 +353,15 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     }
 
     SDPAForwardKernels kernels;
+
+    // Reader compile-time arguments
+    std::vector<uint32_t> reader_compile_args = {
+        Wt,              // num tile in inner dim (d/TILE_W)
+        Ht_,             // num tile in seq len dim (S/TILE_H)
+        block_size,      // block size (dst_reg_count)
+        tiles_per_head,  // number of tiles per head in query
+        tiles_per_group  // number of tiles per group in key and value
+    };
     kernels.reader = create_reader_kernel(
         program,
         all_cores,
