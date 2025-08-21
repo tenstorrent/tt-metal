@@ -55,6 +55,7 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
 
 #include "impl/context/metal_context.hpp"
 #include <telemetry/ethernet/ethernet_endpoint.hpp>
+#include <telemetry/arc/arc_telemetry_reader.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <third_party/umd/device/api/umd/device/types/wormhole_telemetry.h>
 #include <third_party/umd/device/api/umd/device/types/blackhole_telemetry.h>
@@ -72,7 +73,7 @@ const std::regex PCI_PATTERN(R"(pci(.{4}:.{2}(?:/.{4}:.{2}:.{2}\..)+))");
 enum class DataType {
     // Host metadata
     HOST_NAME,
-    
+
     // Card metadata
     CARD_NAME,
     CARD_TYPE,
@@ -80,10 +81,10 @@ enum class DataType {
     TT_DRIVER_VERSION,
     TT_FIRMWARE_BUNDLE_VERSION,
     TT_FLASH_VERSION,
-    
+
     // ASIC metadata
     TT_ASIC_ID_HASHED,
-    
+
     // Card metrics
     AI_CLK,
     ARC_CLK,
@@ -149,12 +150,12 @@ std::optional<std::string> read_file(const fs::path& path) {
     if (!fs::exists(path)) {
         return std::nullopt;
     }
-    
+
     std::ifstream file(path);
     if (!file.is_open()) {
         return std::nullopt;
     }
-    
+
     std::string content;
     std::string line;
     while (std::getline(file, line)) {
@@ -163,11 +164,11 @@ std::optional<std::string> read_file(const fs::path& path) {
         }
         content += line;
     }
-    
+
     // Trim whitespace
     content.erase(0, content.find_first_not_of(" \t\n\r"));
     content.erase(content.find_last_not_of(" \t\n\r") + 1);
-    
+
     return content;
 }
 
@@ -183,7 +184,7 @@ std::optional<std::string> extract_pci_path(const fs::path& sys_dir) {
     try {
         fs::path resolved = fs::canonical(sys_dir);
         std::string resolved_str = resolved.string();
-        
+
         std::smatch match;
         if (std::regex_search(resolved_str, match, PCI_PATTERN)) {
             return match[1].str();
@@ -199,50 +200,50 @@ std::optional<std::string> read_data_type(DataType data_type, const fs::path& tt
         switch (data_type) {
             case DataType::HOST_NAME:
                 return get_hostname();
-                
+
             case DataType::CARD_NAME:
                 return hwmon_dir ? read_file(*hwmon_dir / "name") : std::nullopt;
-                
+
             case DataType::CARD_TYPE:
                 return read_file(tt_dir / "tt_card_type");
-                
+
             case DataType::SERIAL:
                 return read_file(tt_dir / "tt_serial");
-                
+
             case DataType::TT_DRIVER_VERSION:
                 try {
                     return exec_command("modinfo tenstorrent | grep ^version | awk '{print $2}'");
                 } catch (const std::exception&) {
                     return std::nullopt;
                 }
-                
+
             case DataType::TT_FIRMWARE_BUNDLE_VERSION:
                 return read_file(tt_dir / "tt_fw_bundle_ver");
-                
+
             case DataType::TT_FLASH_VERSION:
                 return read_file(tt_dir / "tt_ttflash_ver");
-                
+
             case DataType::TT_ASIC_ID_HASHED:
                 return read_file(tt_dir / "tt_asic_id");
-                
+
             case DataType::AI_CLK:
                 return read_file(tt_dir / "tt_aiclk");
-                
+
             case DataType::ARC_CLK:
                 return read_file(tt_dir / "tt_arcclk");
-                
+
             case DataType::CURRENT:
                 return hwmon_dir ? read_file(*hwmon_dir / "curr1_input") : std::nullopt;
-                
+
             case DataType::POWER:
                 return hwmon_dir ? read_file(*hwmon_dir / "power1_input") : std::nullopt;
-                
+
             case DataType::VOLTAGE:
                 return hwmon_dir ? read_file(*hwmon_dir / "in0_input") : std::nullopt;
-                
+
             case DataType::TEMPERATURE:
                 return hwmon_dir ? read_file(*hwmon_dir / "temp1_input") : std::nullopt;
-                
+
             default:
                 return std::nullopt;
         }
@@ -253,16 +254,16 @@ std::optional<std::string> read_data_type(DataType data_type, const fs::path& tt
 
 std::vector<CardInfo> discover_cards() {
     std::vector<CardInfo> cards;
-    
+
     if (!fs::exists(ROOT_TT_DIR) || !fs::exists(ROOT_HWMON_DIR)) {
         std::cerr << "Warning: sysfs directories not found (" << ROOT_TT_DIR << " or " << ROOT_HWMON_DIR << ")" << std::endl;
         return cards;
     }
-    
+
     // Discover tenstorrent directories
     std::map<std::string, fs::path> tt_dirs_by_pci;
     std::regex tt_pattern(R"(tenstorrent!\d+)");
-    
+
     try {
         for (const auto& entry : fs::directory_iterator(ROOT_TT_DIR)) {
             if (entry.is_directory()) {
@@ -278,11 +279,11 @@ std::vector<CardInfo> discover_cards() {
     } catch (const std::exception& e) {
         std::cerr << "Error scanning tenstorrent directory: " << e.what() << std::endl;
     }
-    
+
     // Discover hwmon directories
     std::map<std::string, fs::path> hwmon_dirs_by_pci;
     std::regex hwmon_pattern(R"(hwmon\d+)");
-    
+
     try {
         for (const auto& entry : fs::directory_iterator(ROOT_HWMON_DIR)) {
             if (entry.is_directory()) {
@@ -298,46 +299,46 @@ std::vector<CardInfo> discover_cards() {
     } catch (const std::exception& e) {
         std::cerr << "Error scanning hwmon directory: " << e.what() << std::endl;
     }
-    
+
     // Create CardInfo for all tenstorrent directories, with optional hwmon
     for (const auto& [pci_path, tt_dir] : tt_dirs_by_pci) {
         auto hwmon_it = hwmon_dirs_by_pci.find(pci_path);
-        std::optional<fs::path> hwmon_dir = (hwmon_it != hwmon_dirs_by_pci.end()) ? 
-            std::optional<fs::path>(hwmon_it->second) : std::nullopt;
+        std::optional<fs::path> hwmon_dir =
+            (hwmon_it != hwmon_dirs_by_pci.end()) ? std::optional<fs::path>(hwmon_it->second) : std::nullopt;
         cards.push_back({tt_dir, hwmon_dir, pci_path});
     }
-    
+
     return cards;
 }
 
 void print_sysfs_metrics() {
     std::cout << "\n=== Sysfs Metrics Discovery ===" << std::endl;
-    
+
     auto cards = discover_cards();
-    
+
     if (cards.empty()) {
         std::cout << "No Tenstorrent cards found in sysfs." << std::endl;
         return;
     }
-    
+
     std::cout << "Found " << cards.size() << " Tenstorrent card(s):" << std::endl;
-    
+
     for (size_t card_idx = 0; card_idx < cards.size(); ++card_idx) {
         const auto& card = cards[card_idx];
-        
+
         std::cout << "\n--- Card " << (card_idx + 1) << " ---" << std::endl;
         std::cout << "TT Directory: " << card.tt_dir << std::endl;
         std::cout << "HWMON Directory: " << (card.hwmon_dir ? card.hwmon_dir->string() : "<not available>") << std::endl;
         std::cout << "PCI Path: " << card.pci_path << std::endl;
-        
+
         // Print all data types
         std::cout << "\nMetrics and Metadata:" << std::endl;
-        
+
         for (const auto& [data_type, info] : DATA_TYPE_INFO) {
             auto value = read_data_type(data_type, card.tt_dir, card.hwmon_dir);
-            
+
             std::cout << "  " << info.name << ":";
-            
+
             if (value) {
                 std::cout << " " << *value;
                 if (!info.unit.empty()) {
@@ -350,10 +351,10 @@ void print_sysfs_metrics() {
                     std::cout << " <ERROR: missing required file>";
                 }
             }
-            
+
             std::cout << std::endl;
             std::cout << "    Description: " << info.docs << std::endl;
-            
+
             // Show the file path being read for debugging
             switch (data_type) {
                 case DataType::HOST_NAME:
@@ -402,7 +403,7 @@ void print_sysfs_metrics() {
             std::cout << std::endl;
         }
     }
-    
+
     // Print summary
     size_t cards_with_hwmon = 0;
     size_t cards_without_hwmon = 0;
@@ -413,36 +414,36 @@ void print_sysfs_metrics() {
             cards_without_hwmon++;
         }
     }
-    
+
     std::cout << "\n--- Summary ---" << std::endl;
     std::cout << "Total Tenstorrent devices found: " << cards.size() << std::endl;
     std::cout << "Devices with hwmon data: " << cards_with_hwmon << std::endl;
     std::cout << "Devices without hwmon data: " << cards_without_hwmon << std::endl;
-    
+
     if (cards_without_hwmon > 0) {
         std::cout << "\nNote: Devices without hwmon data will not have power/thermal metrics available." << std::endl;
         std::cout << "This is normal for some Tenstorrent device configurations." << std::endl;
     }
-    
+
     std::cout << "=== End Sysfs Metrics Discovery ===\n" << std::endl;
 }
 
 static std::vector<std::pair<ChipIdentifier, uint64_t>> get_chip_to_asic_mapping() {
     std::vector<std::pair<ChipIdentifier, uint64_t>> chip_asic_pairs;
-    
+
     try {
         // Get the cluster and control plane instances
         tt::tt_metal::MetalContext &instance = tt::tt_metal::MetalContext::instance();
         const tt::Cluster &cluster = instance.get_cluster();
         const tt::tt_fabric::ControlPlane &control_plane = instance.get_control_plane();
-        
+
         // Get all chips using get_ethernet_endpoints_by_chip
         auto ethernet_endpoints_by_chip = get_ethernet_endpoints_by_chip(cluster);
-        
+
         // Convert each chip ID to unique ASIC ID using control plane
         for (const auto &[chip_identifier, endpoints] : ethernet_endpoints_by_chip) {
             tt::umd::chip_id_t chip_id = chip_identifier.id;
-            
+
             try {
                 uint64_t asic_id = control_plane.get_asic_id(chip_id);
                 chip_asic_pairs.emplace_back(chip_identifier, asic_id);
@@ -451,71 +452,74 @@ static std::vector<std::pair<ChipIdentifier, uint64_t>> get_chip_to_asic_mapping
                 continue;
             }
         }
-        
+
     } catch (const std::exception& e) {
         // Return empty vector on error
         return {};
     }
-    
+
     return chip_asic_pairs;
 }
 
-void report_chip_telemetry() {
-    auto chip_asic_pairs = get_chip_to_asic_mapping();
-    
-    // Get cluster instance to access chip mappings
-    tt::tt_metal::MetalContext &instance = tt::tt_metal::MetalContext::instance();
-    const tt::Cluster &cluster = instance.get_cluster();
-    
-    // Get the mapping from chip ID to PCI device number
-    auto chips_with_mmio = cluster.get_cluster_desc()->get_chips_with_mmio();
-    
-    for (const auto &[chip_identifier, asic_id] : chip_asic_pairs) {
-        std::cout << chip_identifier << " -> ASIC ID " << asic_id << std::endl;
-        
+static std::map<ChipIdentifier, std::unique_ptr<tt::umd::TTDevice>> get_mmio_chips(const tt::Cluster& cluster) {
+    std::map<ChipIdentifier, std::unique_ptr<tt::umd::TTDevice>> mmio_chips;
+
+    // Get all chips using get_ethernet_endpoints_by_chip
+    auto ethernet_endpoints_by_chip = get_ethernet_endpoints_by_chip(cluster);
+
+    // Get the mapping from chip ID to PCI device number for MMIO-capable chips
+    std::unordered_map<tt::umd::chip_id_t, tt::umd::chip_id_t> chips_with_mmio =
+        cluster.get_cluster_desc()->get_chips_with_mmio();
+
+    // Iterate through all chips and create TTDevice instances for MMIO-capable ones
+    for (const auto& [chip_identifier, endpoints] : ethernet_endpoints_by_chip) {
         tt::umd::chip_id_t chip_id = chip_identifier.id;
-        
+
         // Check if this chip has MMIO capability (is a local chip)
         if (chips_with_mmio.find(chip_id) != chips_with_mmio.end()) {
             // This is a local chip - create TTDevice from PCI device number
             int pci_device_number = chips_with_mmio.at(chip_id);
-            auto tt_device = tt::umd::TTDevice::create(pci_device_number);
-            
+            std::unique_ptr<tt::umd::TTDevice> tt_device = tt::umd::TTDevice::create(pci_device_number);
+
             if (tt_device) {
-                auto* telemetry_reader = tt_device->get_arc_telemetry_reader();
-                
-                if (telemetry_reader) {
-                    // Read telemetry data based on chip architecture
-                    auto arch = tt_device->get_arch();
-                    if (arch == tt::ARCH::WORMHOLE_B0) {
-                        // Read ASIC temperature for Wormhole
-                        if (telemetry_reader->is_entry_available(tt::umd::wormhole::TelemetryTag::ASIC_TEMPERATURE)) {
-                            uint32_t temp_raw = telemetry_reader->read_entry(tt::umd::wormhole::TelemetryTag::ASIC_TEMPERATURE);
-                            float temperature = (temp_raw & 0xFFFF) / 16.0f;
-                            std::cout << "  ASIC Temperature: " << temperature << "°C" << std::endl;
-                        } else {
-                            std::cout << "  ASIC Temperature: Not available" << std::endl;
-                        }
-                    } else if (arch == tt::ARCH::BLACKHOLE) {
-                        // Read ASIC temperature for Blackhole
-                        if (telemetry_reader->is_entry_available(tt::umd::blackhole::TelemetryTag::ASIC_TEMPERATURE)) {
-                            uint32_t temp_raw = telemetry_reader->read_entry(tt::umd::blackhole::TelemetryTag::ASIC_TEMPERATURE);
-                            float temperature = static_cast<int32_t>(temp_raw) / 65536.0f;
-                            std::cout << "  ASIC Temperature: " << temperature << "°C" << std::endl;
-                        } else {
-                            std::cout << "  ASIC Temperature: Not available" << std::endl;
-                        }
-                    } else {
-                        std::cout << "  ASIC Temperature: Unsupported architecture" << std::endl;
-                    }
-                } else {
-                    std::cout << "  ASIC Temperature: Telemetry reader not available" << std::endl;
-                }
-            } else {
-                std::cout << "  ASIC Temperature: Failed to create TTDevice" << std::endl;
+                mmio_chips[chip_identifier] = std::move(tt_device);
             }
+        }
+    }
+
+    return mmio_chips;
+}
+
+void report_chip_telemetry() {
+    // Get cluster instance
+    tt::tt_metal::MetalContext& instance = tt::tt_metal::MetalContext::instance();
+    const tt::Cluster& cluster = instance.get_cluster();
+    const tt::tt_fabric::ControlPlane& control_plane = instance.get_control_plane();
+
+    // Create ARC telemetry readers for all MMIO-capable chips
+    std::map<ChipIdentifier, std::shared_ptr<ARCTelemetryReader>> arc_readers =
+        create_arc_telemetry_readers_for_mmio_chips(cluster);
+
+    for (const auto& [chip_identifier, reader] : arc_readers) {
+        // Get ASIC ID for this chip
+        uint64_t asic_id = control_plane.get_asic_id(chip_identifier.id);
+
+        std::cout << chip_identifier << " -> ASIC ID " << asic_id << std::endl;
+
+        // Read telemetry data based on chip architecture
+        tt::ARCH arch = reader->get_arch();
+        if (arch == tt::ARCH::WORMHOLE_B0) {
+            // Read ASIC temperature for Wormhole
+            uint32_t temp_raw = reader->read_value(tt::umd::wormhole::TelemetryTag::ASIC_TEMPERATURE);
+            float temperature = (temp_raw & 0xFFFF) / 16.0f;
+            std::cout << "  ASIC Temperature: " << temperature << "°C" << std::endl;
+        } else if (arch == tt::ARCH::BLACKHOLE) {
+            // Read ASIC temperature for Blackhole
+            uint32_t temp_raw = reader->read_value(tt::umd::blackhole::TelemetryTag::ASIC_TEMPERATURE);
+            float temperature = static_cast<int32_t>(temp_raw) / 65536.0f;
+            std::cout << "  ASIC Temperature: " << temperature << "°C" << std::endl;
         } else {
-            std::cout << "  ASIC Temperature: Remote chip (no direct telemetry access)" << std::endl;
+            std::cout << "  ASIC Temperature: Unsupported architecture" << std::endl;
         }
     }
 }
