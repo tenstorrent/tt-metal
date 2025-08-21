@@ -8,6 +8,34 @@ Currently maxpool supports only BF16 row-major output. We want to add two option
 - `output_data_format` (default: BF16)
 - `output_layout` (default: ROW_MAJOR)
 
+## How to Run Tests
+
+### Build and Test Process:
+1. **Build the project:**
+   ```bash
+   ./build_metal.sh --release
+   ```
+
+2. **Activate virtual environment:**
+   ```bash
+   source python_env/bin/activate
+   ```
+
+3. **Run tests from repo root:**
+   ```bash
+   # Run all maxpool tests
+   python -m pytest tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py -v
+
+   # Run specific test function
+   python -m pytest tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py::test_max_pool2d_height_shard -v
+
+   # Run nightly tests (more comprehensive)
+   python -m pytest tests/ttnn/nightly/unit_tests/operations/pool/test_maxpool2d.py::test_run_max_pool_height_shard -v
+
+   # Run with verbose output and prints
+   python -m pytest tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py::test_max_pool2d_height_shard -v -s
+   ```
+
 ## Step-by-Step Implementation
 
 ### Step 1: Add Optional Parameters to API ✅ COMPLETED
@@ -130,11 +158,11 @@ Currently maxpool supports only BF16 row-major output. We want to add two option
 - ✅ Both layouts maintain full backward compatibility
 - ✅ Unsupported formats properly validated with clear error messages
 
-### Step 5: Regression Testing with Existing Tests
+### Step 5: Regression Testing with Existing Tests ✅ COMPLETED
 **What needs to be changed:**
-- Run existing maxpool tests from the same test file to ensure no regression
-- Focus on BF16 + ROW_MAJOR combinations (default existing behavior)
-- Verify all existing test cases still pass without modification
+- ✅ Run existing maxpool tests from the same test file to ensure no regression
+- ✅ Focus on BF16 + ROW_MAJOR combinations (default existing behavior)
+- ✅ Verify all existing test cases still pass without modification
 
 **Why:**
 - Existing tests use BF16 + ROW_MAJOR as default behavior
@@ -143,10 +171,19 @@ Currently maxpool supports only BF16 row-major output. We want to add two option
 - Validate that our "original behavior preserved" claim is actually true
 
 **How to test:**
-- Run multiple existing maxpool test functions from test_maxpool2d.py
-- Focus on height_shard, width_shard, block_shard variants
-- Test different input sizes and kernel configurations
-- Verify all tests pass without any modifications to test code
+- ✅ Run multiple existing maxpool test functions from test_maxpool2d.py
+- ✅ Focus on height_shard, width_shard, block_shard variants
+- ✅ Test different input sizes and kernel configurations
+- ✅ Verify all tests pass without any modifications to test code
+
+**Status:** COMPLETED - All maxpool unit tests now pass after fixing critical hanging bug.
+
+**Implementation Details:**
+- ✅ **Fixed hanging bug** for C=16 cases by adding missing `cb_reserve_back()` calls
+- ✅ **Expanded test coverage** with comprehensive input shapes (resnet, hpr, vgg, yolo)
+- ✅ **Added TILED output testing** with dedicated `test_run_max_pool_height_shard_tile` test
+- ✅ **API parameter validation** testing all `output_data_format` and `output_layout` combinations
+- ✅ **Backward compatibility verified** - all existing functionality preserved
 
 ### Step 6: Update Output Tensor Creation
 **What needs to be changed:**

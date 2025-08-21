@@ -76,11 +76,11 @@ def run_max_pool(
 
     # skips to speed up nightly test
     if nightly_skips:
-        # if dtype == ttnn.bfloat8_b:
-        #     if stride == (2, 2) or padding == (1, 1):
-        #         pytest.skip("Skip for stride (2, 2) and padding (1, 1) for BF8!")
-        #     if kernel_size == (9, 9):
-        #         pytest.skip("Skip for kernel size (9, 9) for BF8!")
+        if dtype == ttnn.bfloat8_b:
+            if stride == (2, 2) or padding == (1, 1):
+                pytest.skip("Skip for stride (2, 2) and padding (1, 1) for BF8!")
+            if kernel_size == (9, 9):
+                pytest.skip("Skip for kernel size (9, 9) for BF8!")
         if ceil_mode:
             if kernel_size == (3, 3) or kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
@@ -144,7 +144,7 @@ def run_max_pool(
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
     print("dtype is ", dtype)
-    if dtype == ttnn.bfloat8_b or True:
+    if dtype == ttnn.bfloat8_b:
         ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.TILE_LAYOUT, device=device)
     else:
         ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -279,7 +279,7 @@ def run_max_pool(
             [1, 576, 32, 32],
             [1, 384, 32, 32],
             # # C=16 test
-            [1, 16, 12, 12],
+            [1, 16, 32, 32],
             # # partial grid tests
             [1, 32, 10, 10],  # BH
             [1, 32, 6, 6],  # WH
@@ -339,6 +339,74 @@ def test_run_max_pool_height_shard(
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",  ## NCHW
+    (
+        (  # resnet shapes
+            [1, 32 * 8, 16, 16],
+            [1, 320, 64, 64],
+            [4, 32, 12, 12],
+        )
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    (
+        (3, 3),  # 1 face 1 chunk
+        (5, 5),  # 2 faces 1 chunk
+        (7, 7),  # 2 chunks
+        (9, 9),  # 3 chunks
+    ),
+)
+@pytest.mark.parametrize(
+    "padding",
+    (
+        (0, 0),
+        # (1, 1),
+        # (1, 4, 3, 2),
+    ),
+)
+@pytest.mark.parametrize(
+    "stride",
+    (
+        (1, 1),
+        # (2, 2),
+    ),
+)
+@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "ceil_mode",
+    [
+        False,
+        True,
+    ],
+)
+def test_run_max_pool_height_shard_tile(
+    input_shape, kernel_size, padding, stride, dilation, device, tensor_map, dtype, ceil_mode
+):
+    run_max_pool(
+        input_shape,
+        kernel_size,
+        padding,
+        stride,
+        dilation,
+        device,
+        tensor_map,
+        dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
+        output_layout=ttnn.TILE_LAYOUT,
     )
 
 

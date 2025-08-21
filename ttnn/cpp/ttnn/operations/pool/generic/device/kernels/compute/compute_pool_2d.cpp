@@ -90,12 +90,12 @@ void MAIN {
     if constexpr (is_output_tiled) {
         // TILED output: initialize with temp CB for tilization
         tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-            in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tmp_cb_id, 2, face_r_dim);
+            in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tmp_cb_id, num_faces_in_input_tile, face_r_dim);
         pack_untilize_dest_init<max_tiles_per_iter>(tmp_cb_id, num_out_sticks, num_faces_in_output_tile);
     } else {
         // ROW_MAJOR output: initialize directly to output CB (original behavior)
         tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-            in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, 2, face_r_dim);
+            in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
         pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
     }
     uint32_t tilize_stick_counter = 0;
@@ -131,19 +131,6 @@ void MAIN {
                 } else {
                     PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
                         tmp_cb_id, 1, num_faces_in_output_tile)));
-                }
-            } else {
-                // ROW_MAJOR output: initialize pack for direct output CB
-                if (last_c_block) {
-                    PACK((llk_pack_untilize_init<
-                          partial_iter_output_tiles,
-                          partial_iter_output_tiles,
-                          false,
-                          false,
-                          TILE_C_DIM>(out_cb_id, 1, num_faces_in_output_tile)));
-                } else {
-                    PACK((llk_pack_untilize_init<max_tiles_per_iter, max_tiles_per_iter, false, false, TILE_C_DIM>(
-                        out_cb_id, 1, num_faces_in_output_tile)));
                 }
             }
             tile_regs_acquire();
@@ -188,10 +175,12 @@ void MAIN {
             } else {
                 // ROW_MAJOR output: pack directly to output CB (original behavior)
                 if (last_c_block) {
+                    cb_reserve_back(out_cb_id, partial_iter_output_tiles);
                     pack_untilize_dest<partial_iter_output_tiles>(
                         out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                     cb_push_back(out_cb_id, partial_iter_output_tiles);
                 } else {
+                    cb_reserve_back(out_cb_id, max_tiles_per_iter);
                     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                     cb_push_back(out_cb_id, max_tiles_per_iter);
                 }
@@ -227,6 +216,7 @@ void MAIN {
         if constexpr (!one_scalar_per_core) {
             cb_pop_front(curr_scalar_cb_id, 1);
         }
+        DPRINT << "END ITERATION " << n << ENDL();
     }
 }
 
