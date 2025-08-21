@@ -234,6 +234,23 @@ void append_routing_plane_connection_manager_rt_args(
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
 
+    // TODO: Remove this restriction once multiple ethernet cores per direction are supported
+    // https://github.com/tenstorrent/tt-metal/issues/27221
+    // Check for duplicate directions in next_hop_destinations to prevent using multiple ethernet cores in same
+    // direction
+    std::unordered_set<eth_chan_directions> used_directions;
+    for (const auto& next_hop_dst : next_hop_destinations) {
+        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, next_hop_dst);
+        if (dir_opt.has_value()) {
+            TT_FATAL(
+                used_directions.find(dir_opt.value()) == used_directions.end(),
+                "Multiple ethernet cores in the same direction ({}) are not currently supported. "
+                "This restriction will be removed in a future update when proper multi-core routing is implemented.",
+                dir_opt.value());
+            used_directions.insert(dir_opt.value());
+        }
+    }
+
     for (size_t i = 0; i < next_hop_destinations.size(); ++i) {
         const auto& next_hop_dst = next_hop_destinations[i];
         auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, next_hop_dst);
