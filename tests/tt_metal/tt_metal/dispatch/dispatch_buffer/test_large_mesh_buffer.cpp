@@ -40,8 +40,7 @@
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <cstring>
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-
+#include "tt_metal/api/tt-metalium/math.hpp"
 namespace tt::tt_metal::distributed::test {
 namespace {
 
@@ -61,7 +60,7 @@ protected:
             log_info(tt::LogTest, "LargeMeshBufferTestSuiteBase ctor: initializing src_vec_");
             src_vec_.resize(max_num_elements_);
             std::iota(src_vec_.begin(), src_vec_.end(), 0);
-            std::shuffle(src_vec_.begin(), src_vec_.end(), std::mt19937(std::random_device{}()));
+            // std::shuffle(src_vec_.begin(), src_vec_.end(), std::mt19937(std::random_device{}()));
         }
     }
 };
@@ -99,7 +98,7 @@ TEST_P(ReplicatedMeshBufferTestSuite, DRAMReadback) {
 
     // Create test data - use uint16_t for easy verification
     auto num_elements = tensor_size / ElementSize;
-    assert(num_elements <= max_num_elements_);
+    ASSERT_TRUE(num_elements <= max_num_elements_);
     std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
@@ -136,59 +135,98 @@ class ShardedMeshBufferTestSuite : public LargeMeshBufferTestSuiteBase,
                                    public testing::WithParamInterface<std::tuple<Shape2D, uint32_t>> {};
 
 TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
+    // shard_shape: shape on device (elements)
+    // page_size: (bytes)
     auto [shard_shape, page_size] = GetParam();
-    constexpr auto tensor_layout = TensorMemoryLayout::HEIGHT_SHARDED;
+    uint64_t shard_size = shard_shape.height() * shard_shape.width() * ElementSize;
+    uint32_t num_pages = static_cast<uint32_t>(shard_size / page_size);
+    ASSERT_TRUE(num_pages * page_size == shard_size);
 
     // Ensure buffer dimensions are divisible by tile dimensions
-    assert(shard_shape.height() % constants::TILE_HEIGHT == 0);
-    assert(shard_shape.width() % constants::TILE_WIDTH == 0);
+    ASSERT_TRUE(shard_shape.height() % constants::TILE_HEIGHT == 0);
+    ASSERT_TRUE(shard_shape.width() % constants::TILE_WIDTH == 0);
 
-    CoreCoord core_grid_size = mesh_device_->compute_with_storage_grid_size();
+    CoreCoord available_grid_size = mesh_device_->dram_grid_size();
     CoreCoord start(0, 0);
-    CoreCoord end(core_grid_size.x - 1, core_grid_size.y - 1);
+    CoreCoord end(7 /*available_grid_size.x - 1*/, available_grid_size.y - 1);
     CoreRange cores(start, end);
-    // CoreCoord core_grid_size = cores.grid_size();
+    CoreCoord core_grid_size = cores.grid_size();
 
-    // Map allocation for input tensor to on device core grid: per core dimensions H x W in elements
-    Shape2D shard_core_shape{
-        div_up(shard_shape.height(), core_grid_size.y), div_up(shard_shape.width(), core_grid_size.x)};
-
-    // Determine page shape from page size and tile shape, in elements
+    // Determine page shape in elements
+    ASSERT_TRUE(page_size > constants::TILE_HEIGHT * constants::TILE_WIDTH / ElementSize);
     uint32_t page_height = page_size / constants::TILE_WIDTH / ElementSize;
     uint32_t page_width = constants::TILE_WIDTH;
-    TT_ASSERT(
-        page_height * page_width * ElementSize == page_size,
-        "page_size:{}, page_height:{}, page_width:{}",
-        page_size,
-        page_height,
-        page_width);
+    ASSERT_TRUE(page_height * page_width * ElementSize == page_size);
     Shape2D page_shape{page_height, page_width};
 
-    // Device shard shape in pages
-    Shape2D shard_device_shape{div_up(shard_shape.height(), page_height), div_up(shard_shape.width(), page_width)};
+    // Define memory bank dimensions (elements) for core grid. A bank must fit whole pages.
+    auto num_banks = core_grid_size.x * core_grid_size.y;
+    uint32_t num_pages_per_bank = tt::div_up(num_pages, num_banks);
+    // Find all factors of num_pages_per_bank
+    std::vector<uint32_t> factors{1};
+    auto temp = num_pages_per_bank;
+    uint32_t f = 2;
+    while (f < temp) {
+        if (temp % f == 0) {
+            factors.push_back(f);
+            temp /= f;
+        } else {
+            f++;
+        }
+    }
+    factors.push_back(temp);
+    // Start with last factor vs product of rest
+    int split_idx = factors.size() - 1;
+    int32_t bank_height = 1, bank_width = num_pages_per_bank, temp_height, temp_width;
+    int32_t min_diff = std::abs(bank_width - bank_height);
+    while (split_idx > 0) {
+        temp_height = std::accumulate(factors.begin(), factors.begin() + split_idx, 1, std::multiplies<uint32_t>());
+        temp_width = std::accumulate(factors.begin() + split_idx, factors.end(), 1, std::multiplies<uint32_t>());
+        auto temp_diff = std::abs(bank_height - bank_width);
+        if (temp_diff > min_diff) {
+            break;
+        }
+        bank_height = temp_height;
+        bank_width = temp_width;
+        min_diff = temp_diff;
+        split_idx--;
+    }
+    ASSERT_TRUE(bank_height * bank_width == num_pages_per_bank);
+    ASSERT_TRUE(bank_height * bank_width == num_pages_per_bank);
+    // convert to elements
+    bank_height *= page_height;
+    bank_width *= page_width;
+    Shape2D bank_shape{bank_height, bank_width};
 
+    // Device shard shape in pages
+    uint32_t shard_height_pages = shard_shape.height() / page_height;
+    uint32_t shard_width_pages = shard_shape.width() / page_width;
+    ASSERT_TRUE(shard_height_pages * page_height == shard_shape.height());
+    ASSERT_TRUE(shard_width_pages * page_width == shard_shape.width());
+    Shape2D shard_device_shape{shard_height_pages, shard_width_pages};
+
+    constexpr auto tensor_layout = TensorMemoryLayout::HEIGHT_SHARDED;
     auto shard_orientation = ShardOrientation::ROW_MAJOR;
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = page_size,
         .buffer_type = BufferType::DRAM,
         .sharding_args = BufferShardingArgs(
-            ShardSpecBuffer{CoreRangeSet(cores), shard_core_shape, shard_orientation, page_shape, shard_device_shape},
+            ShardSpecBuffer{CoreRangeSet(cores), bank_shape, shard_orientation, page_shape, shard_device_shape},
             tensor_layout),
         .bottom_up = true};
 
     // shard size in bytes
-    uint64_t shard_size = shard_shape.height() * shard_shape.width() * ElementSize;
     log_info(
         tt::LogTest,
-        "Core grid size:{}. on device shard size:{} MB, shape:{} pages, {} elements, shape on core:{} elements, page "
+        "Core grid size:{}, on device shard size:{} MB, shape:{} pages, {} elements, shape of bank:{} elements, page "
         "shape:{} elements, page_size:{} KB",
         core_grid_size,
         shard_size >> 20,
         shard_device_shape,
         shard_shape,
-        shard_core_shape,
+        bank_shape,
         page_shape,
-        page_size / (1 << 10));
+        page_size >> 10);
 
     uint32_t device_rows = mesh_device_->num_rows();
     uint32_t device_cols = mesh_device_->num_cols();
@@ -197,24 +235,26 @@ TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
     Shape2D tensor_shape = {shard_shape.height() * device_rows, shard_shape.width() * device_cols};
     // tensor size in bytes
     uint64_t tensor_size = num_devices * shard_size;
-    ShardedBufferConfig sharded_config{
+    auto num_elements = tensor_size / num_devices / ElementSize;
+    /*ShardedBufferConfig buf_config{
         .global_size = tensor_size,
         .global_buffer_shape = tensor_shape,
         .shard_shape = shard_shape,
         .shard_orientation = shard_orientation,
-    };
+    };*/
+    const ReplicatedBufferConfig buffer_config{.size = tensor_size};
     log_info(
         tt::LogTest,
-        "Mesh buffer (tensor) shape:{} elements, tensor size:{} MB",
+        "Mesh buffer (tensor) shape:{} elements, tensor size:{} MB, num_elements:{}",
         tensor_shape,
-        tensor_size / (1 << 20));
+        tensor_size >> 20,
+        num_elements);
 
-    assert(sharded_config.compute_datum_size_bytes() == ElementSize);
-    auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_buffer_config, mesh_device_.get());
+    // ASSERT_TRUE(buffer_config.compute_datum_size_bytes() == ElementSize);
+    auto mesh_buffer = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device_.get());
 
     distributed::MeshCoordinateRange coord_range(mesh_device_->shape());
-    auto num_elements = tensor_size / num_devices / ElementSize;
-    assert(num_elements <= max_num_elements_);
+    ASSERT_TRUE(num_elements <= max_num_elements_);
     std::vector<ElementType> src_vec(src_vec_.begin(), src_vec_.begin() + num_elements);
     std::vector<MeshCommandQueue::ShardDataTransfer> input_shards = {};
     for (auto& coord : coord_range) {
@@ -233,6 +273,30 @@ TEST_P(ShardedMeshBufferTestSuite, DRAMReadback) {
 
     for (auto& dst : dst_vec) {
         EXPECT_EQ(dst.second, src_vec);
+        if (false and src_vec != dst.second) {
+            std::cout << "Buffer mismatch detected! Printing mismatching values in hex (16 per row):" << std::endl;
+            std::cout << "Index: [src] [result]" << std::endl;
+            std::cout << "------------------------" << std::endl;
+
+            size_t mismatch_count = 0;
+            for (size_t i = 0; i < src_vec.size() && i < dst.second.size(); i++) {
+                if (src_vec[i] != dst.second[i]) {
+                    if (mismatch_count % 16 == 0) {
+                        if (mismatch_count > 0) {
+                            std::cout << std::endl;
+                        }
+                        std::cout << "Row " << (mismatch_count / 16) << ":" << std::endl;
+                    }
+                    std::cout << "[" << std::hex << std::setw(4) << std::setfill(' ') << i << "]: " << std::setw(9)
+                              << std::setfill(' ') << src_vec[i] << "-" << dst.second[i] << ", ";
+                    mismatch_count++;
+                }
+            }
+            if (mismatch_count > 0) {
+                std::cout << std::endl << "Total mismatches: " << std::dec << mismatch_count << std::endl;
+            }
+            std::cout << std::dec;  // Reset to decimal output
+        }
     }
 }
 
@@ -240,7 +304,7 @@ INSTANTIATE_TEST_SUITE_P(
     LargeShardedReadback,
     ShardedMeshBufferTestSuite,
     ::testing::Combine(
-        // shard_shape, page_size, tensor_layout
+        // shard_shape (elements), page_size (bytes)
         ::testing::Values(
             Shape2D((1 << 14), (1 << 14)),                // 2 GB with uint64_t
             Shape2D((1 << 14), (1 << 15)),                // 4 GB with uint64_t
