@@ -63,7 +63,7 @@ struct MatmulReduceScatterAsync {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors,
         const std::vector<GlobalSemaphore>& op_semaphores,
-        const std::optional<GlobalSemaphore>& barrier_semaphore) const;
+        const GlobalSemaphore& barrier_semaphore) const;
     tt::tt_metal::operation::Hash compute_program_hash(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
@@ -100,7 +100,8 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_reduce_scatter_async_multi_
     uint32_t ring_index,
     ttnn::ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     CoreCoord core_grid_offset,
 
