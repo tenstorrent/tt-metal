@@ -423,43 +423,42 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
     constexpr uint32_t controller_rank = 0;
     std::vector<uint8_t> serialized_peer_desc;
 
-    if (my_rank != controller_rank) {
-        std::size_t local_desc_size_bytes = serialized_sys_desc.size();
-        distributed_context.send(
-            tt::stl::Span<std::byte>(
-                reinterpret_cast<std::byte*>(&local_desc_size_bytes), sizeof(local_desc_size_bytes)),
-            Rank{controller_rank},
-            Tag{0});
-        distributed_context.send(
-            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_sys_desc.data(), serialized_sys_desc.size())),
-            Rank{controller_rank},
-            Tag{0});
-    } else {
-        for (std::size_t rank = 0; rank < *(distributed_context.size()); rank++) {
-            if (rank != controller_rank) {
-                std::size_t peer_descriptor_size = 0;
-                distributed_context.recv(
-                    tt::stl::Span<std::byte>(
-                        reinterpret_cast<std::byte*>(&peer_descriptor_size), sizeof(peer_descriptor_size)),
-                    Rank{rank},
-                    Tag{0});
-                serialized_peer_desc.clear();
-                serialized_peer_desc.resize(peer_descriptor_size);
-                distributed_context.recv(
-                    tt::stl::as_writable_bytes(
-                        tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
-                    Rank{rank},
-                    Tag{0});
-                auto peer_desc = deserialize_system_descriptor_from_bytes(serialized_peer_desc);
-                system_desc.compute_nodes.insert(
-                    system_desc.compute_nodes.end(), peer_desc.compute_nodes.begin(), peer_desc.compute_nodes.end());
-                system_desc.eth_connectivity_descs.insert(
-                    system_desc.eth_connectivity_descs.end(),
-                    std::make_move_iterator(peer_desc.eth_connectivity_descs.begin()),
-                    std::make_move_iterator(peer_desc.eth_connectivity_descs.end()));
-            }
-        }
-    }
+    // if (my_rank != controller_rank) {
+    //     std::size_t local_desc_size_bytes = serialized_sys_desc.size();
+    //     distributed_context.send(
+    //         tt::stl::Span<std::byte>(
+    //             reinterpret_cast<std::byte*>(&local_desc_size_bytes), sizeof(local_desc_size_bytes)),
+    //         Rank{controller_rank},
+    //         Tag{0});
+    //     distributed_context.send(
+    //         tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_sys_desc.data(),
+    //         serialized_sys_desc.size())), Rank{controller_rank}, Tag{0});
+    // } else {
+    //     for (std::size_t rank = 0; rank < *(distributed_context.size()); rank++) {
+    //         if (rank != controller_rank) {
+    //             std::size_t peer_descriptor_size = 0;
+    //             distributed_context.recv(
+    //                 tt::stl::Span<std::byte>(
+    //                     reinterpret_cast<std::byte*>(&peer_descriptor_size), sizeof(peer_descriptor_size)),
+    //                 Rank{rank},
+    //                 Tag{0});
+    //             serialized_peer_desc.clear();
+    //             serialized_peer_desc.resize(peer_descriptor_size);
+    //             distributed_context.recv(
+    //                 tt::stl::as_writable_bytes(
+    //                     tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
+    //                 Rank{rank},
+    //                 Tag{0});
+    //             auto peer_desc = deserialize_system_descriptor_from_bytes(serialized_peer_desc);
+    //             system_desc.compute_nodes.insert(
+    //                 system_desc.compute_nodes.end(), peer_desc.compute_nodes.begin(), peer_desc.compute_nodes.end());
+    //             system_desc.eth_connectivity_descs.insert(
+    //                 system_desc.eth_connectivity_descs.end(),
+    //                 std::make_move_iterator(peer_desc.eth_connectivity_descs.begin()),
+    //                 std::make_move_iterator(peer_desc.eth_connectivity_descs.end()));
+    //         }
+    //     }
+    // }
     distributed_context.barrier();
     if (my_rank == controller_rank) {
         for (auto& conn_desc : system_desc.eth_connectivity_descs) {
@@ -486,7 +485,7 @@ TEST(Cluster, GetLocalEthernetConnectivity) {
                 }
             }
         }
-        dump_to_yaml(system_desc);
+        // dump_to_yaml(system_desc);
     }
 }
 

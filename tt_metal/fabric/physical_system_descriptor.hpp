@@ -11,9 +11,10 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-#include <yaml-cpp/yaml.h>
+// #include <yaml-cpp/yaml.h>
 
 #include <umd/device/types/cluster_descriptor_types.h>
+#include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
 namespace tt::tt_metal {
 
@@ -32,21 +33,45 @@ struct ASICDescriptor {
     tray_id_t tray_id;
     n_id_t n_id;
     BoardType board_type;  // e.g., "A0", "B1", etc.
+    // std::vector<chan_id_t>
 };
 
 struct EthConnection {
     tt_fabric::chan_id_t src_chan;
     tt_fabric::chan_id_t dst_chan;
+
+    bool operator==(const EthConnection& other) const {
+        return src_chan == other.src_chan && dst_chan == other.dst_chan;
+    }
+    bool operator<(const EthConnection& other) const {
+        if (src_chan != other.src_chan) {
+            return src_chan < other.src_chan;
+        }
+        return dst_chan < other.dst_chan;
+    }
 };
 
-// Specifies an ethernet connection between 2 Compute
-// Nodes using src/dst Exit Nodes (ASICs) and src/dst
-// channel ids
 struct ExitNodeConnection {
     asic_id_t src_exit_node;
     asic_id_t dst_exit_node;
     EthConnection eth_conn;
+
+    bool operator==(const ExitNodeConnection& other) const {
+        return src_exit_node == other.src_exit_node && dst_exit_node == other.dst_exit_node &&
+               eth_conn == other.eth_conn;
+    }
+    bool operator<(const ExitNodeConnection& other) const {
+        if (src_exit_node != other.src_exit_node) {
+            return src_exit_node < other.src_exit_node;
+        }
+        if (dst_exit_node != other.dst_exit_node) {
+            return dst_exit_node < other.dst_exit_node;
+        }
+        return eth_conn < other.eth_conn;
+    }
 };
+
+using ExitNodeConnectionTable = std::unordered_map<std::string, std::vector<ExitNodeConnection>>;
 
 // Can be used to specify the downstream ASICs a node in a graph of ASICs connects to.
 // First entry in the pair specifies the Node/ASIC the current node is connected to.
@@ -104,7 +129,7 @@ public:
     //    - This can be used by the provisioning SW to maintain an accurate representation
     //      of the system
     //    - Fairly expensive to repeatedly do at runtime for large systems
-    PhysicalSystemDescriptor(bool perform_global_discovery = true);
+    PhysicalSystemDescriptor(bool perform_global_discovery = true, bool run_discovery = true);
     void run_discovery(bool perform_global_discovery = true);
     void validate_with_factory_desc(const std::string& path_to_factory_desc);
     void dump_to_yaml(const std::string& path_to_yaml);
@@ -135,14 +160,27 @@ public:
         bool terminate_at_exit_node,
         std::optional<uint32_t> chan_idx = std::nullopt) const;
 
+    const PhysicalConnectivityGraph& get_system_graph() const { return system_graph_; }
+    const std::unordered_map<asic_id_t, ASICDescriptor>& get_asic_descriptors() const { return asic_descriptors_; }
+    const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
+    const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
+
+    PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
+    std::unordered_map<asic_id_t, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }
+    std::unordered_map<std::string, std::string>& get_host_mobo_name_map() { return host_to_mobo_name_; }
+    ExitNodeConnectionTable& get_exit_node_connection_table() { return exit_node_connection_table_; }
+
 private:
     void run_local_discovery();
     void run_global_discovery();
-
+    void merge(PhysicalSystemDescriptor&& other);
+    void exchange_metadata(bool issue_gather);
+    void generate_cross_host_connections();
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<asic_id_t, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
-    YAML::Node serialized_desc_;
+    ExitNodeConnectionTable exit_node_connection_table_;
+    // YAML::Node serialized_desc_;
 };
 
 }  // namespace tt::tt_metal
