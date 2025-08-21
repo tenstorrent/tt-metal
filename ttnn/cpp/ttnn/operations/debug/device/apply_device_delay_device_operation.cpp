@@ -89,7 +89,6 @@ ApplyDeviceDelayDeviceOperation::ApplyDeviceDelayMeshWorkload::create_at(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& tensor_return_value) {
     log_info(tt::LogAlways, "Creating delay program at mesh coordinate: {}", mesh_coordinate);
-    const auto& mesh_device = *operation_attributes.mesh_device;
     tt::tt_metal::Program program{};
     auto subdevice_cores = corerange_to_cores(operation_attributes.worker_core_range_set);
     auto kernel_id = CreateKernel(
