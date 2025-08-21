@@ -35,6 +35,7 @@ class TransformerBlock(LightweightModule):
         layer_num,
         weight_cache_path,
         transformation_mats,
+        transformation_mats_local=None,
         paged_attention_config=None,
         use_paged_kv_cache=False,
         attention_class=None,
@@ -58,6 +59,10 @@ class TransformerBlock(LightweightModule):
 
         self.layer_num = layer_num
 
+        self.is_attention_sliding = (
+            self.args.layer_types[layer_num] == "sliding_attention" if self.args.layer_types else False
+        )
+
         self.attention = Attention(
             mesh_device=mesh_device,
             tt_ccl=self.tt_ccl,
@@ -65,7 +70,7 @@ class TransformerBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
             dtype=dtype,
-            transformation_mats=transformation_mats,
+            transformation_mats=transformation_mats_local if self.is_attention_sliding else transformation_mats,
             configuration=args,
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
@@ -191,9 +196,7 @@ class TransformerBlock(LightweightModule):
         ), f"decoder input memcfg mismatch: {hidden_states.memory_config()} != {skip_mem_cfg}"
 
         # Choose the correct rotation matrices based on the mode
-        rot_mats = (
-            rot_mats_local if (hasattr(self.attention, "is_sliding") and self.attention.is_sliding) else rot_mats_global
-        )
+        rot_mats = rot_mats_local if self.is_attention_sliding else rot_mats_global
         residual = hidden_states
 
         attn_in = self.attention_norm(hidden_states, mode)

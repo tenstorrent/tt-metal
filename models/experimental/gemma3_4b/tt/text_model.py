@@ -67,16 +67,20 @@ class Gemma3_4BTransformer(LightweightModule):
             args.rope_scaling,
         )
 
-        self.rope_setup_local = RotarySetup(
-            mesh_device,
-            args.max_batch_size,
-            args.head_dim,
-            args.max_seq_len,
-            10000,
-            None,
-        )
+        if args.rope_theta_local:
+            self.rope_setup_local = RotarySetup(
+                mesh_device,
+                args.max_batch_size,
+                args.head_dim,
+                args.max_seq_len,
+                args.rope_theta_local,
+                None,
+            )
+        else:
+            self.rope_setup_local = None
 
-        self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
+        trans_mats_dict = self.rope_setup.get_both_trans_mats()
+        trans_mats_dict_local = self.rope_setup_local.get_both_trans_mats()
 
         self.layers = [
             TransformerBlock(
@@ -87,7 +91,8 @@ class Gemma3_4BTransformer(LightweightModule):
                 state_dict=state_dict,
                 weight_cache_path=weight_cache_path,
                 layer_num=i,
-                transformation_mats=self.trans_mats_dict,
+                transformation_mats=trans_mats_dict,
+                transformation_mats_local=trans_mats_dict_local,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
             )
@@ -225,10 +230,10 @@ class Gemma3_4BTransformer(LightweightModule):
             self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
         ]
 
-        if hasattr(self, "rope_local_setup"):
+        if self.rope_setup_local is not None:
             tt_rot_mats_prefill_local = [
-                self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-                self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
+                self.rope_setup_local.cos_matrix[:, :, start_pos : start_pos + S, :],
+                self.rope_setup_local.sin_matrix[:, :, start_pos : start_pos + S, :],
             ]
         else:
             tt_rot_mats_prefill_local = None
@@ -291,8 +296,8 @@ class Gemma3_4BTransformer(LightweightModule):
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
         rope_idxs_global = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
-        if hasattr(self, "rope_local_setup"):
-            rope_idxs_local = self.rope_local_setup.get_rot_idxs(rot_current_pos, on_host=True)
+        if self.rope_setup_local is not None:
+            rope_idxs_local = self.rope_setup_local.get_rot_idxs(rot_current_pos, on_host=True)
         else:
             rope_idxs_local = None
 
@@ -435,9 +440,11 @@ class Gemma3_4BTransformer(LightweightModule):
         It returns ttnn device tensors.
         """
         rot_mats_global = self.rope_setup.get_rot_mats(rot_mat_idxs_global)
-        rot_mats_local = (
-            self.rope_local_setup.get_rot_mats(rot_mat_idxs_local) if rot_mat_idxs_local is not None else None
-        )
+        if self.rope_setup_local is not None:
+            rot_mats_local = self.rope_setup_local.get_rot_mats(rot_mat_idxs_local)
+        else:
+            rot_mats_local = None
+
         x_embed = self._transform_decode_inputs_device(x)
 
         tt_logits = self.forward(
