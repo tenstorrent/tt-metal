@@ -5,9 +5,6 @@ ttnn/cpp/ttnn/graph/graph_processor.cpp
 ttnn/cpp/ttnn/graph/graph_processor.hpp
 ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.cpp
 ttnn/cpp/ttnn/operations/bernoulli/device/bernoulli_device_operation.hpp
-ttnn/cpp/ttnn/operations/ccl/all_gather/all_gather.cpp
-ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp
-ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp
 ttnn/cpp/ttnn/operations/ccl/all_gather_v2/device/all_gather_op.hpp
 ttnn/cpp/ttnn/operations/ccl/all_gather_v2/device/multi_core/all_gather_op_multi_core_new.cpp
 ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp
@@ -22,8 +19,6 @@ ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp
 ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.cpp
 ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_host_commands.hpp
 ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp
-ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.cpp
-ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp
 ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp
 ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp
 ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_stick_layout_sharded_blocks_interleaved_start_id.cpp

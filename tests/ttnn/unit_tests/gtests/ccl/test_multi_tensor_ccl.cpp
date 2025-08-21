@@ -4,9 +4,6 @@
 
 #include "gtest/gtest.h"
 
-#include "ttnn/operations/ccl/all_gather/all_gather.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter.hpp"
-#include "ttnn/operations/experimental/ccl/all_reduce/all_reduce.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/reduce_scatter.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
