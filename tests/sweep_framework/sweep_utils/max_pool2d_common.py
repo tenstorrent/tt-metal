@@ -94,8 +94,6 @@ def run_max_pool2d(
         memory_config=memory_config,
         applied_shard_scheme=sharding,
         in_place_halo=in_place,
-        deallocate_input=True,
-        reallocate_halo_output=True,
     )
 
     output_host = output.cpu()

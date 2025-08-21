@@ -40,7 +40,7 @@ static Tensor pool2d_invoke(
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     bool in_place_halo = false,
     bool deallocate_input = false,
-    bool reallocate_halo_output = false) {
+    bool reallocate_halo_output = true) {
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     bool is_out_tiled = false;  // pool output is row major
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
@@ -211,7 +211,7 @@ static Tensor pool2d_invoke(
         input_tensor_sharded.deallocate(/*force*/ true);
     }
 
-    if (reallocate_halo_output || is_input_tensor_in_dram) {
+    if (reallocate_halo_output) {
         haloed_tensor = ttnn::move(haloed_tensor);
     }
 

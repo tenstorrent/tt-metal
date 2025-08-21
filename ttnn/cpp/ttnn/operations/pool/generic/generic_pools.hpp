@@ -31,7 +31,7 @@ struct MaxPool2DOp {
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         bool in_place_halo = false,
         bool deallocate_input = false,
-        bool reallocate_halo_output = false);
+        bool reallocate_halo_output = true);
 };
 struct AvgPool2DOp {
     static Tensor invoke(
@@ -51,7 +51,7 @@ struct AvgPool2DOp {
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         bool in_place_halo = false,
         bool deallocate_input = false,
-        bool reallocate_halo_output = false);
+        bool reallocate_halo_output = true);
 };
 
 }  // namespace operations::pool

@@ -190,8 +190,6 @@ def run_avg_pool2d(
         count_include_pad=count_include_pad,
         memory_config=None,
         applied_shard_scheme=shard_scheme,
-        deallocate_input=True,
-        reallocate_halo_output=True,
     )
 
     # TODO always use run_twice after resolution of https://github.com/tenstorrent/tt-metal/issues/26093
