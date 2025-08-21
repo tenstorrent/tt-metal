@@ -8,11 +8,11 @@ bool GalaxyUbbIdentifier::operator<(const GalaxyUbbIdentifier &other) const {
     if (tray_id != other.tray_id) {
         return tray_id < other.tray_id;
     }
-    return asic_id < other.asic_id;
+    return chip_number < other.chip_number;
 }
 
 bool GalaxyUbbIdentifier::operator==(const GalaxyUbbIdentifier &other) const {
-    return tray_id == other.tray_id && asic_id == other.asic_id;
+    return tray_id == other.tray_id && chip_number == other.chip_number;
 }
 
 bool ChipIdentifier::operator<(const ChipIdentifier &other) const {
@@ -29,15 +29,15 @@ bool ChipIdentifier::operator==(const ChipIdentifier &other) const {
 std::vector<std::string> ChipIdentifier::telemetry_path() const {
     if (galaxy_ubb.has_value()) {
         auto tray_id = galaxy_ubb.value().tray_id;
-        auto asic_id = galaxy_ubb.value().asic_id;
-        return { "tray" + std::to_string(tray_id), "n" + std::to_string(asic_id) };
+        auto chip_number = galaxy_ubb.value().chip_number;
+        return { "tray" + std::to_string(tray_id), "n" + std::to_string(chip_number) };
     }
     return { "chip" + std::to_string(id) };
 }
 
 std::ostream &operator<<(std::ostream &os, const ChipIdentifier &chip) {
     if (chip.galaxy_ubb.has_value()) {
-        os << "Tray " << chip.galaxy_ubb.value().tray_id << ", N" << chip.galaxy_ubb.value().asic_id << " (Chip " << chip.id << ')';
+        os << "Tray " << chip.galaxy_ubb.value().tray_id << ", N" << chip.galaxy_ubb.value().chip_number << " (Chip " << chip.id << ')';
     } else {
         os << "Chip " << chip.id;
     }
@@ -48,7 +48,7 @@ std::ostream &operator<<(std::ostream &os, const ChipIdentifier &chip) {
 size_t hash_value(const GalaxyUbbIdentifier &g) {
     size_t seed = 0;
     boost::hash_combine(seed, g.tray_id);
-    boost::hash_combine(seed, g.asic_id);
+    boost::hash_combine(seed, g.chip_number);
     return seed;
 }
 
@@ -69,8 +69,8 @@ ChipIdentifier get_chip_identifier_from_umd_chip_id(const tt::Cluster &cluster, 
         const auto bus_id = cluster.get_bus_id(chip_id);
         auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
         if (tray_bus_id_it != tray_bus_ids.end()) {
-            auto ubb_asic_id = bus_id & 0x0F;
-            return { .id = chip_id, .galaxy_ubb = GalaxyUbbIdentifier{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id} };
+            auto ubb_chip_number = bus_id & 0x0F;
+            return { .id = chip_id, .galaxy_ubb = GalaxyUbbIdentifier{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_chip_number} };
         }
 
         // Invalid UBB, drop through
