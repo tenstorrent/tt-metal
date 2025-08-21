@@ -763,6 +763,25 @@ void ReadDeviceProfilerResults(
 #endif
 }
 
+bool pushToTracyMidRun(const ProfilerReadState state) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
+        return false;
+    }
+
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push() &&
+            !tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only(),
+        "Cannot push to Tracy GUI mid-run if only profiling trace runs");
+
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push() &&
+            !tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores(),
+        "Cannot push to Tracy GUI mid-run if profiling dispatch cores");
+
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push() &&
+           state == ProfilerReadState::NORMAL;
+}
+
 void ProcessDeviceProfilerResults(
     IDevice* device,
     const std::vector<CoreCoord>& virtual_cores,
@@ -785,7 +804,8 @@ void ProcessDeviceProfilerResults(
         } else {
             profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
         }
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
+
+        if (pushToTracyMidRun(state)) {
             profiler.pushTracyDeviceResults();
         }
     }
