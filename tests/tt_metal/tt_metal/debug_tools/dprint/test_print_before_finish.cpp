@@ -41,6 +41,7 @@ static void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::Mes
     // This tests prints only on a single core
     CoreCoord xy_start = {0, 0};
     CoreCoord xy_end = {0, 0};
+    
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/print_with_wait.cpp",

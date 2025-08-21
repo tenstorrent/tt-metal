@@ -26,7 +26,6 @@ class DebugToolsFixture : public DispatchFixture {
 class DebugToolsMeshFixture : public MeshDispatchFixture {
    protected:
        bool watcher_previous_enabled{};
-       
        void TearDown() override { MeshDispatchFixture::TearDown(); }
 
        template <typename T>
