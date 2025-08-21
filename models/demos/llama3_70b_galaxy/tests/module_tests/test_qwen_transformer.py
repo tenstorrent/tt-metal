@@ -71,7 +71,7 @@ def test_qwen_transformer_inference(
 ):
     dtype = ttnn.bfloat8_b
 
-    model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=True)
+    model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
