@@ -419,34 +419,43 @@ class Efficientnetb0:
         x = self._blocks2(x_1)
 
         x = ttnn.add(x, x_1)
+        ttnn.deallocate(x_1)
         x_3 = self._blocks3(x)
         x = self._blocks4(x_3)
 
         x = x + x_3
+        ttnn.deallocate(x_3)
         x_5 = self._blocks5(x)
         x = self._blocks6(x_5)
 
         x_7_in = x + x_5
+        ttnn.deallocate(x_5)
         x = self._blocks7(x_7_in)
 
         x = x_7_in + x
+        ttnn.deallocate(x_7_in)
         x_8 = self._blocks8(x)
         x = self._blocks9(x_8)
 
         x_10_in = x + x_8
+        ttnn.deallocate(x_8)
         x = self._blocks10(x_10_in)
 
         x = x + x_10_in
+        ttnn.deallocate(x_10_in)
         x_11 = self._blocks11(x)
         x = self._blocks12(x_11)
 
         x_13_in = x + x_11
+        ttnn.deallocate(x_11)
         x = self._blocks13(x_13_in)
 
         x_14_in = x + x_13_in
+        ttnn.deallocate(x_13_in)
         x = self._blocks14(x_14_in)
 
         x = x_14_in + x
+        ttnn.deallocate(x_14_in)
         x = self._blocks15(x)
         x = self._conv_head(x)
 
