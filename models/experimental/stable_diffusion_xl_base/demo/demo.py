@@ -12,6 +12,7 @@ from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl impor
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
 from models.experimental.stable_diffusion_xl_base.tt.model_configs import ModelOptimisations
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
+    TTNN_FABRIC_CONFIG,
     SDXL_L1_SMALL_SIZE,
     retrieve_timesteps,
     run_tt_image_gen,
@@ -318,7 +319,9 @@ def prepare_device(mesh_device, use_tp):
         mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "fabric_config": TTNN_FABRIC_CONFIG}], indirect=True
+)
 @pytest.mark.parametrize(
     "prompt",
     (("An astronaut riding a green horse"),),
