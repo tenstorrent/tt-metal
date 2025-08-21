@@ -15,8 +15,7 @@ ARCUintMetric::ARCUintMetric(
     UIntMetric(chip_id),
     reader_(reader),
     wormhole_tag_(tag),
-    blackhole_tag_()  // just some dummy tag we will never use
-    ,
+    blackhole_tag_(),  // just some dummy tag we will never use
     metric_name_(metric_name) {
     TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
     TT_ASSERT(
@@ -37,6 +36,54 @@ ARCUintMetric::ARCUintMetric(
         reader_->get_arch() == tt::ARCH::BLACKHOLE,
         "Reader architecture mismatch: expected Blackhole for chip {}",
         reader_->id);
+    value_ = 0;
+}
+
+ARCUintMetric::ARCUintMetric(
+    size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader, CommonTelemetryTag common_metric) :
+    UIntMetric(chip_id), reader_(reader), wormhole_tag_(), blackhole_tag_() {
+    TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
+
+    // Set metric name and tags based on common metric type
+    switch (common_metric) {
+        case CommonTelemetryTag::AICLK:
+            metric_name_ = "AIClock";
+            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::AICLK;
+            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::AICLK;
+            break;
+        case CommonTelemetryTag::AXICLK:
+            metric_name_ = "AXIClock";
+            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::AXICLK;
+            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::AXICLK;
+            break;
+        case CommonTelemetryTag::ARCCLK:
+            metric_name_ = "ARCClock";
+            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::ARCCLK;
+            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::ARCCLK;
+            break;
+        case CommonTelemetryTag::FAN_SPEED:
+            metric_name_ = "FanSpeed";
+            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::FAN_SPEED;
+            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::FAN_SPEED;
+            break;
+        case CommonTelemetryTag::TDP:
+            metric_name_ = "TDP";
+            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::TDP;
+            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::TDP;
+            break;
+        case CommonTelemetryTag::TDC:
+            metric_name_ = "TDC";
+            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::TDC;
+            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::TDC;
+            break;
+        case CommonTelemetryTag::VCORE:
+            metric_name_ = "VCore";
+            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::VCORE;
+            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::VCORE;
+            break;
+        default: TT_ASSERT(false, "Unknown CommonTelemetryTag type for chip {}", reader_->id);
+    }
+
     value_ = 0;
 }
 

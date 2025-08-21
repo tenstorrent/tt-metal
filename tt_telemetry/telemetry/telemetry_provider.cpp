@@ -187,10 +187,16 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
 
     // Create ARC telemetry metrics for MMIO-capable chips
     for (const auto& [chip_identifier, reader] : create_arc_telemetry_readers_for_mmio_chips(cluster)) {
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::AICLK));
         uint_metrics.push_back(
-            reader->get_arch() == tt::ARCH::WORMHOLE_B0
-                ? std::make_unique<ARCUintMetric>(id++, reader, tt::umd::wormhole::TelemetryTag::AICLK, "AIClock")
-                : std::make_unique<ARCUintMetric>(id++, reader, tt::umd::blackhole::TelemetryTag::AICLK, "AIClock"));
+            std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::AXICLK));
+        uint_metrics.push_back(
+            std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::ARCCLK));
+        uint_metrics.push_back(
+            std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::FAN_SPEED));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::TDP));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::TDC));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::VCORE));
     }
 
     // Continuously monitor on a loop
