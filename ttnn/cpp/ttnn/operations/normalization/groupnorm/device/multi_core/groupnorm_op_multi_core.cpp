@@ -2541,7 +2541,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             auto dst_buffer = output_tensors.at(0).buffer()->address();
 
             for (uint32_t i = 0; i < num_cores; ++i) {
-                CoreCoord core = {i % grid_size.x, i / grid_size.x};
+                CoreCoord core = {i / grid_size.x, i % grid_size.x};
 
                 auto writer_kernel_id = writer_kernel_ids.at(i);
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
