@@ -117,9 +117,8 @@ def test_t5_single_layer(
     tt_embedding.load_state_dict(embeddings_state_dict)
 
     tt_encoder_layer = T5EncoderLayer(config, encoder_submesh, ccl_manager, parallel_config)
-    # load only the embeddings part of the state dict
 
-    tt_encoder_layer.load_state_dict(substate(hf_model.state_dict(), "encoder.block.0"))
+    tt_encoder_layer.load_state_dict(substate(hf_model.state_dict(), "encoder.block.0"))  # layer 1 weights
 
     # time TT model inference only
     tt_start_time = time.time()
@@ -129,31 +128,43 @@ def test_t5_single_layer(
     tt_end_time = time.time()
     tt_execution_time = tt_end_time - tt_start_time
 
-    # === get HF embeddings for comparison ===
     with torch.no_grad():
         # time HF model execution
         hf_start_time = time.time()
 
-        # get HF embeddings manually
+        # get HF embeddings and first layer output
         hf_token_embeddings = hf_model.encoder.embed_tokens(tokens)
+
+        # get position bias from first layer's attention
+        hf_position_bias = (
+            hf_model.encoder.block[0]
+            .layer[0]
+            .SelfAttention.compute_bias(
+                hf_token_embeddings.size(1), hf_token_embeddings.size(1), device=hf_token_embeddings.device
+            )
+        )
+
+        # run through first encoder layer
+        hf_layer_output = hf_model.encoder.block[0](
+            hf_token_embeddings, attention_mask=None, position_bias=hf_position_bias
+        )[0]
 
         hf_end_time = time.time()
         hf_execution_time = hf_end_time - hf_start_time
 
     # convert mesh tensor to torch tensor for pcc
     # since weights are replicated, can get the tensor from any single device
-    tt_embeddings_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_embeddings_output)[0])
-    tt_position_bias_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_position_bias)[0])
+    tt_layer_output = ttnn.to_torch(ttnn.get_device_tensors(tt_layer_output)[0])
 
-    logger.info(f"tt_position_bias_torch: {tt_position_bias_torch.shape}")
-    logger.info(f"tt_position_bias_torch shape: {tt_position_bias_torch.shape}")
+    logger.info(f"tt_layer_output shape: {tt_layer_output.shape}")
+    logger.info(f"hf_layer_output shape: {hf_layer_output.shape}")
 
-    logger.info(f"TT embeddings execution time: {tt_execution_time:.4f} seconds")
-    logger.info(f"HF embeddings execution time: {hf_execution_time:.4f} seconds")
+    logger.info(f"TT layer execution time: {tt_execution_time:.4f} seconds")
+    logger.info(f"HF layer execution time: {hf_execution_time:.4f} seconds")
 
-    assert hf_token_embeddings.shape == tt_embeddings_output_torch.shape
+    assert hf_layer_output.shape == tt_layer_output.shape
 
-    assert_quality(hf_token_embeddings, tt_embeddings_output_torch, pcc=0.95)
+    assert_quality(hf_layer_output, tt_layer_output, pcc=0.947)
 
 
 if __name__ == "__main__":

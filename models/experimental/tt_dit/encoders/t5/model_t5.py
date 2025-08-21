@@ -53,12 +53,8 @@ class T5Encoder:
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
-        self.embeddings, self.position_bias = RelativeTextEmbeddings(
-            config, self.mesh_device, self.ccl_manager, self.parallel_config
-        )
-        self.encoder = T5Stack(
-            config, self.mesh_device, self.embeddings, self.position_bias, self.ccl_manager, self.parallel_config
-        )
+        self.token_embeddings = RelativeTextEmbeddings(config, self.mesh_device, self.ccl_manager, self.parallel_config)
+        self.encoder = T5Stack(config, self.mesh_device, self.ccl_manager, self.parallel_config)
         self.layer_norm = RMSNorm(
             embedding_dim=self.config.embed_dim,
             norm_eps=self.config.layer_norm_eps,
@@ -67,7 +63,7 @@ class T5Encoder:
         )
 
     def load_state_dict(self, state_dict):
-        self.embeddings.load_state_dict(state_dict)
+        self.token_embeddings.load_state_dict(state_dict)
         self.encoder.load_state_dict(substate(state_dict, "encoder"))
 
         self.final_layer_norm = bf16_tensor(
@@ -80,9 +76,9 @@ class T5Encoder:
         )
 
     def __call__(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
-        embeddings, position_bias = self.embeddings(prompt, device)
+        embeddings, position_bias = self.token_embeddings(prompt, device)
 
-        hidden_states = self.encoder(embeddings, position_bias, self.ccl_manager, self.parallel_config)
+        hidden_states = self.encoder(embeddings, position_bias)
 
         return self.layer_norm(hidden_states[-1])  # final layer norm
 
@@ -96,13 +92,11 @@ class T5Stack:
         self,
         config: T5Config,
         mesh_device: ttnn.Device,
-        position_bias: ttnn.Tensor,
         ccl_manager: CCLManager,
         parallel_config: EncoderParallelConfig,
     ) -> None:
         self.config = config
         self.mesh_device = mesh_device
-        self.position_bias = position_bias
         self.ccl_manager = ccl_manager
         self.parallel_config = parallel_config
 
@@ -129,12 +123,7 @@ class T5Stack:
         all_hidden_states.append(hidden_states)
 
         for layer in self.layers:
-            hidden_states = layer(
-                hidden_states,
-                position_bias=self.position_bias,
-                ccl_manager=self.ccl_manager,
-                parallel_config=self.parallel_config,
-            )
+            hidden_states = layer(hidden_states, position_bias=position_bias)
             all_hidden_states.append(hidden_states)
         return all_hidden_states  # list of hidden states from each layer before final layer norm
 
@@ -168,7 +157,7 @@ class T5FF:
     def __call__(
         self, hidden_states: ttnn.Tensor, ccl_manager: CCLManager, parallel_config: EncoderParallelConfig
     ) -> ttnn.Tensor:
-        breakpoint()
+        # breakpoint()
         normalized_hidden_states = self.layer_norm(hidden_states)  # [1, 256, 4096]
         gated_hidden_states = self.dense_gated_dense(normalized_hidden_states)
         return gated_hidden_states + hidden_states  # residual
@@ -219,7 +208,7 @@ class T5DenseGatedActDense:
         self.wo.load_state_dict({"weight": state_dict["wo.weight"]})
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        breakpoint()
+        # breakpoint()
         # self.wi1.weight.shape = Shape([4096, 2560])
         # self.wi0.weight.shape = Shape([4096, 2560])
         # self.wo.weight.shape = Shape([2560, 4096])
@@ -301,7 +290,7 @@ class T5EncoderLayer:
             parallel_config=self.parallel_config,
         )
         hidden_states_residual1 = attn_output + hidden_states  # residual
-        breakpoint()
+        # breakpoint()
         hidden_states_ff = self.ff(
             hidden_states_residual1, ccl_manager=self.ccl_manager, parallel_config=self.parallel_config
         )
