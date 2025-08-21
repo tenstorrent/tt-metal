@@ -4,6 +4,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <yaml-cpp/yaml.h>
+
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
@@ -32,11 +34,17 @@ std::string get_mobo_name() {
     return motherboard;
 }
 
+struct EthEndpoint {
+    uint64_t board_id;
+    uint8_t chan_id;
+
+    auto operator<=>(const EthEndpoint&) const = default;
+};
+
 }  // namespace
 
 PhysicalSystemDescriptor::PhysicalSystemDescriptor(bool perform_global_discovery, bool run_discovery) {
     if (run_discovery) {
-        std::cout << "Running discovery..." << std::endl;
         run_local_discovery();
         if (perform_global_discovery) {
             run_global_discovery();
@@ -55,6 +63,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
 
     auto my_rank = *(distributed_context.rank());
     auto hostname = get_host_name() + "_" + std::to_string(my_rank);
+    host_to_mobo_name_[hostname] = get_mobo_name();
 
     std::set<uint32_t, std::greater<uint32_t>> sorted_pcie_slots = {};
     auto& asic_graph = system_graph_.asic_connectivity_graph[hostname];
@@ -71,7 +80,8 @@ void PhysicalSystemDescriptor::run_local_discovery() {
         uint32_t tray_id =
             1 +
             std::distance(sorted_pcie_slots.begin(), sorted_pcie_slots.find(cluster.get_physical_slot(src).value()));
-        asic_descriptors_[src_unique_id] = ASICDescriptor{tray_id, n_id, cluster_desc->get_board_type(src)};
+        asic_descriptors_[src_unique_id] =
+            ASICDescriptor{tray_id, n_id, cluster_desc->get_board_type(src), src_unique_id, hostname};
 
         std::unordered_map<chip_id_t, size_t> visited_dst;
         // Populate ASIC Graph for Current Host
@@ -80,12 +90,13 @@ void PhysicalSystemDescriptor::run_local_discovery() {
             auto dst_chan = std::get<1>(dst);
             if (visited_dst.find(dst_chip) == visited_dst.end()) {
                 // This neighbor has not been visited. Add it to the graph and mark visited.
-                asic_graph[src_unique_id].push_back({chip_unique_ids.at(dst_chip), {EthConnection(chan, dst_chan)}});
+                asic_graph[src_unique_id].push_back(
+                    {chip_unique_ids.at(dst_chip), {EthConnection(chan, dst_chan, true)}});
                 visited_dst[dst_chip] = asic_graph[src_unique_id].size() - 1;
             } else {
                 // This neighbor has already been visited. There is more than one channel to it.
                 // Update the existing entry with the new channel.
-                asic_graph[src_unique_id][visited_dst[dst_chip]].second.push_back(EthConnection(chan, dst_chan));
+                asic_graph[src_unique_id][visited_dst[dst_chip]].second.push_back(EthConnection(chan, dst_chan, true));
             }
         }
     }
@@ -97,18 +108,19 @@ void PhysicalSystemDescriptor::run_local_discovery() {
             auto dst_unique_id = std::get<0>(remote_info);
             auto dst_chan = std::get<1>(remote_info);
             if (visited_dst.find(dst_unique_id) == visited_dst.end()) {
-                asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan)}});
+                asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan, false)}});
                 visited_dst[dst_unique_id] = asic_graph[local_unique_id].size() - 1;
             } else {
                 asic_graph[local_unique_id][visited_dst[dst_unique_id]].second.push_back(
-                    EthConnection(eth_chan, dst_chan));
+                    EthConnection(eth_chan, dst_chan, false));
             }
             exit_nodes.push_back(ExitNodeConnection{
                 .src_exit_node = local_unique_id,
                 .dst_exit_node = dst_unique_id,
-                .eth_conn = EthConnection(eth_chan, dst_chan)});
+                .eth_conn = EthConnection(eth_chan, dst_chan, false)});
         }
     }
+    // exit(0);
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
@@ -126,6 +138,15 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
     }
     for (auto& [host_name, exit_connections] : other.exit_node_connection_table_) {
         exit_node_connection_table_[host_name] = std::move(exit_connections);
+    }
+}
+
+void PhysicalSystemDescriptor::remove_unresolved_nodes() {
+    for (auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
+        for (auto& [src_asic, edges] : asic_group) {
+            std::erase_if(
+                edges, [&](const auto& pair) { return asic_descriptors_.find(pair.first) == asic_descriptors_.end(); });
+        }
     }
 }
 
@@ -225,12 +246,108 @@ void PhysicalSystemDescriptor::run_global_discovery() {
     constexpr uint32_t controller_rank = 0;
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     auto my_rank = *(distributed_context.rank());
-
     this->exchange_metadata(true);
     if (my_rank == controller_rank) {
+        this->remove_unresolved_nodes();
         this->generate_cross_host_connections();
     }
-    this->exchange_metadata(false);
+    // this->exchange_metadata(false);
+    if (my_rank == controller_rank) {
+        this->dump_to_yaml("/tmp/physical_system_descriptor.yaml");
+    }
+    distributed_context.barrier();
+}
+
+void PhysicalSystemDescriptor::dump_to_yaml(const std::string& path_to_yaml) {
+    YAML::Node root;
+    YAML::Node compute_nodes;
+    YAML::Node local_eth_connections(YAML::NodeType::Sequence);
+    YAML::Node global_eth_connections(YAML::NodeType::Sequence);
+
+    std::set<std::pair<EthEndpoint, EthEndpoint>> processed_connections;
+    for (const auto& [host_name, mobo_name] : host_to_mobo_name_) {
+        YAML::Node host_node;
+        YAML::Node tray_groups;
+        host_node["motherboard"] = mobo_name;
+
+        std::unordered_map<tray_id_t, std::vector<ASICDescriptor>> grouped_asics;
+
+        for (const auto& asic : system_graph_.asic_connectivity_graph[host_name]) {
+            asic_id_t asic_id = asic.first;
+            tray_id_t tray_id = asic_descriptors_.at(asic_id).tray_id;
+            grouped_asics[tray_id].push_back(asic_descriptors_.at(asic_id));
+        }
+
+        for (const auto& group : grouped_asics) {
+            YAML::Node tray_group;
+            tray_group["tray_id"] = group.first;  // tray_id
+            tray_group["board_type"] = enchantum::to_string(group.second.front().board_type);
+            std::vector<ASICDescriptor> sorted_asics = group.second;
+            std::sort(sorted_asics.begin(), sorted_asics.end(), [](const ASICDescriptor& a, const ASICDescriptor& b) {
+                return a.n_id < b.n_id;
+            });
+            // Create asics array
+            YAML::Node asics_array;
+            for (const auto& asic : sorted_asics) {
+                YAML::Node asic_node;
+                asic_node["nid"] = asic.n_id;
+                asic_node["asic_id"] = asic.unique_id;
+                asics_array.push_back(asic_node);
+            }
+            tray_group["asics"] = asics_array;
+            tray_groups.push_back(tray_group);
+        }
+        host_node["asic_info"] = tray_groups;
+        compute_nodes[host_name] = host_node;
+
+        for (const auto& asic : system_graph_.asic_connectivity_graph[host_name]) {
+            auto src_asic_id = asic.first;
+            const auto& src_asic_desc = asic_descriptors_.at(src_asic_id);
+            for (const auto& edge : asic.second) {
+                auto dst_asic_id = edge.first;
+                const auto& dst_asic_desc = asic_descriptors_.at(dst_asic_id);
+                for (const auto& eth_conn : edge.second) {
+                    EthEndpoint src_id{src_asic_id, eth_conn.src_chan};
+                    EthEndpoint dst_id{dst_asic_id, eth_conn.dst_chan};
+                    auto connection_key = std::make_pair(std::min(src_id, dst_id), std::max(src_id, dst_id));
+
+                    if (processed_connections.find(connection_key) != processed_connections.end()) {
+                        continue;
+                    }
+                    processed_connections.insert(connection_key);
+
+                    YAML::Node src_conn_node;
+                    YAML::Node dst_conn_node;
+                    YAML::Node connection_pair(YAML::NodeType::Sequence);
+                    connection_pair.SetStyle(YAML::EmitterStyle::Flow);
+                    src_conn_node["host_name"] = src_asic_desc.host_name;
+                    dst_conn_node["host_name"] = dst_asic_desc.host_name;
+                    src_conn_node["tray_id"] = src_asic_desc.tray_id;
+                    src_conn_node["nid"] = src_asic_desc.n_id;
+                    dst_conn_node["tray_id"] = dst_asic_desc.tray_id;
+                    dst_conn_node["nid"] = dst_asic_desc.n_id;
+                    src_conn_node["chan_id"] = +eth_conn.src_chan;
+                    dst_conn_node["chan_id"] = +eth_conn.dst_chan;
+
+                    connection_pair.push_back(src_conn_node);
+                    connection_pair.push_back(dst_conn_node);
+
+                    if (eth_conn.is_local) {
+                        local_eth_connections.push_back(connection_pair);
+                    } else {
+                        global_eth_connections.push_back(connection_pair);
+                    }
+                }
+            }
+        }
+    }
+
+    root["compute_node_specs"] = compute_nodes;
+    root["local_eth_connections"] = local_eth_connections;
+    root["global_eth_connections"] = global_eth_connections;
+
+    // for (const auto& )
+    std::cout << root << std::endl;
 }
 
 }  // namespace tt::tt_metal

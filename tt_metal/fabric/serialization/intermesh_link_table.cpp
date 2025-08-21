@@ -243,7 +243,7 @@ std::vector<uint8_t> serialize_physical_descriptor_to_bytes(
 
     // Helper lambda to create EthConnection
     auto create_eth_connection = [&builder](const tt_metal::EthConnection& conn) {
-        return tt::tt_fabric::flatbuffer::CreateEthConnection(builder, conn.src_chan, conn.dst_chan);
+        return tt::tt_fabric::flatbuffer::CreateEthConnection(builder, conn.src_chan, conn.dst_chan, conn.is_local);
     };
 
     // Helper lambda to create ExitNodeConnection
@@ -257,7 +257,12 @@ std::vector<uint8_t> serialize_physical_descriptor_to_bytes(
     std::vector<flatbuffers::Offset<tt::tt_fabric::flatbuffer::AsicDescriptorMap>> asic_descriptor_maps;
     for (const auto& [asic_id, descriptor] : physical_descriptor.get_asic_descriptors()) {
         auto asic_desc = tt::tt_fabric::flatbuffer::CreateAsicDescriptor(
-            builder, descriptor.tray_id, descriptor.n_id, descriptor.board_type);
+            builder,
+            descriptor.tray_id,
+            descriptor.n_id,
+            descriptor.board_type,
+            descriptor.unique_id,
+            builder.CreateString(descriptor.host_name));
         auto asic_desc_map = tt::tt_fabric::flatbuffer::CreateAsicDescriptorMap(builder, asic_id, asic_desc);
         asic_descriptor_maps.push_back(asic_desc_map);
     }
@@ -375,6 +380,8 @@ tt_metal::PhysicalSystemDescriptor deserialize_physical_descriptor_from_bytes(co
             desc.tray_id = fb_asic_desc->descriptor()->tray_id();
             desc.n_id = fb_asic_desc->descriptor()->n_id();
             desc.board_type = static_cast<BoardType>(fb_asic_desc->descriptor()->board_type());
+            desc.unique_id = fb_asic_desc->descriptor()->unique_id();
+            desc.host_name = fb_asic_desc->descriptor()->host_name()->str();
             result.get_asic_descriptors()[fb_asic_desc->asic_id()] = desc;
         }
     }
@@ -422,6 +429,7 @@ tt_metal::PhysicalSystemDescriptor deserialize_physical_descriptor_from_bytes(co
                                         tt_metal::EthConnection eth_conn;
                                         eth_conn.src_chan = fb_eth_conn->src_chan();
                                         eth_conn.dst_chan = fb_eth_conn->dst_chan();
+                                        eth_conn.is_local = fb_eth_conn->is_local();
                                         eth_connections.push_back(eth_conn);
                                     }
                                 }

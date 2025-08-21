@@ -11,7 +11,6 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
-// #include <yaml-cpp/yaml.h>
 
 #include <umd/device/types/cluster_descriptor_types.h>
 #include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
@@ -32,16 +31,19 @@ using aisle_id_t = uint32_t;
 struct ASICDescriptor {
     tray_id_t tray_id;
     n_id_t n_id;
-    BoardType board_type;  // e.g., "A0", "B1", etc.
+    BoardType board_type;
+    asic_id_t unique_id;
+    std::string host_name;
     // std::vector<chan_id_t>
 };
 
 struct EthConnection {
     tt_fabric::chan_id_t src_chan;
     tt_fabric::chan_id_t dst_chan;
+    bool is_local = false;
 
     bool operator==(const EthConnection& other) const {
-        return src_chan == other.src_chan && dst_chan == other.dst_chan;
+        return src_chan == other.src_chan && dst_chan == other.dst_chan && other.is_local == is_local;
     }
     bool operator<(const EthConnection& other) const {
         if (src_chan != other.src_chan) {
@@ -176,6 +178,7 @@ private:
     void merge(PhysicalSystemDescriptor&& other);
     void exchange_metadata(bool issue_gather);
     void generate_cross_host_connections();
+    void remove_unresolved_nodes();
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<asic_id_t, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;

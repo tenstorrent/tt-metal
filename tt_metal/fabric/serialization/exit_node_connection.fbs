@@ -4,6 +4,7 @@ namespace tt.tt_fabric.flatbuffer;
 table EthConnection {
     src_chan: uint64;  // tt_fabric::chan_id_t
     dst_chan: uint64;  // tt_fabric::chan_id_t
+    is_local: bool;    // Indicates if the connection is local (true) or remote (false)
 }
 table AsicConnectionEdge {
     dst_asic_id: uint64;                    // Target ASIC ID
@@ -49,6 +50,8 @@ table AsicDescriptor {
     tray_id: uint32;     // tray_id_t
     n_id: uint32;        // n_id_t
     board_type: uint32;  // BoardType as uint32_t
+    unique_id: uint64;   // asic_id_t (unique identifier for this ASIC)
+    host_name: string;
 }
 
 table AsicDescriptorMap {
