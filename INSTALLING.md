@@ -14,52 +14,18 @@ This document provides advanced users and developers with comprehensive instruct
 
 ---
 
-### 2: Install Driver & Firmware
+### 2: Install Software Dependencies
 
-#### Compatibility matrix:
-
-| Device               | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
-|----------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-| Galaxy (Wormhole 4U) | Ubuntu 22.04    | 3.10     | v1.33 or above     | fw_pack-80.10.1.0                          | v2.2.3 or lower       | v1.1.3, `mesh` config          |
-| Galaxy (Wormhole 6U) | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.6.0.fwbundle (v18.6.0)          | v3.0.20 or above      | N/A                            |
-| Wormhole             | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.3.0.fwbundle (v18.3.0)          | v3.0.20 or above      | N/A                            |
-| T3000 (Wormhole)     | Ubuntu 22.04    | 3.10     | v2.0.0 or above    | fw_pack-18.3.0.fwbundle (v18.3.0)          | v3.0.20 or above      | v1.2.5 or above, `mesh` config |
-| Blackhole            | Ubuntu 22.04    | 3.10     | v2.1.0 or above    | fw_pack-18.5.0.fwbundle (v18.5.0)          | v3.0.20 or above      | N/A                            |
-
-#### Install the Software Dependencies with TT-Installer
-
-- Download the installation script:
+- Download and run the **TT-Installer** installation script:
 ```
 curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
 chmod +x install.sh
-```
-
-- Run the script and follow the prompts:
-> [!CAUTION]
-> Substitute the version flags according to the [compatibility matrix](#compatibility-matrix)
-```
-./install.sh \
-  --kmd-version=1.34 \
-  --fw-version=18.3.0 \
-  --smi-version=v3.0.20 \
-  --no-install-podman \
-  --no-install-metalium-container
+./install.sh --no-install-podman --no-install-metalium-container
 ```
 
 You can customize your installation with command-line arguments, read more about it at [TT-Installer's Wiki.](https://github.com/tenstorrent/tt-installer/wiki/Customizing-your-installation)
 
 - For more information visit Tenstorrent's [TT-Installer GitHub repository](https://github.com/tenstorrent/tt-installer).
-
----
-
-### (Optional) Multi-Card Configuration (TT-Topology)
-
-> [!CAUTION]
-> Be sure to align the topology version with the compatible version in the table above for your particular configuration.
-
-- For TT-Loudbox or TT-QuietBox systems, visit Tenstorrent's [TT-Topology README](https://github.com/tenstorrent/tt-topology/blob/main/README.md).
-
----
 
 ## TT-NN / TT-Metalium Installation
 
@@ -190,8 +156,6 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
   conda create -n metalium python=3.10 tt-metalium -c conda-forge
   ```
 
----
-
 ## You are All Set!
 
 ### To verify your installation (for source or wheel installation only), try executing a programming example:
@@ -210,12 +174,16 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
 
 - For more programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html)
 
----
 
 ### Interested in Contributing?
 - For more information on development and contributing, visit Tenstorrent's [CONTRIBUTING.md page](https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md).
 
 ---
+
+### Multi-Card Configuration (TT-Topology)
+TT-Topology can be used to specify different eth routing configurations for some multi-card systems such as **TT-Loudbox** and **TT-QuietBox**.
+
+- For more information, visit Tenstorrent's [TT-Topology README](https://github.com/tenstorrent/tt-topology/blob/main/README.md).
 
 ## Virtual Machine Requirements
 
