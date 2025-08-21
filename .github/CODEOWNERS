@@ -7,7 +7,7 @@ METALIUM_GUIDE.md @davorchap
 
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra
-.github/workflows/ttnn-run-sweeps.yaml @jdesousa-TT @sjameelTT @stevendae
+.github/workflows/ttnn-run-sweeps.yaml @stevendae
 .github/workflows/tg-deepseek-tests.yaml @yieldthought @avoraTT @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
 .github/workflows/tg-deepseek-tests-impl.yaml @yieldthought @avoraTT @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
 
@@ -190,7 +190,7 @@ tests/ttnn/unit_tests/operations/data_movement/ @sjameelTT @ntarafdar @nardoTT @
 tests/ttnn/nightly/unit_tests/operations/conv/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/nightly/unit_tests/operations/pool/ @tenstorrent/metalium-developers-convolutions
 tests/ttnn/nightly/unit_tests/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @nsorabaTT @vsureshTT @edwinleeTT
-tests/sweep_framework/ @jdesousa-TT @sjameelTT @stevendae
+tests/sweep_framework/ @stevendae
 tests/sweep_framework/sweeps
 tests/sweep_framework/sweeps/eltwise/ @patrickroberts @sjameelTT @ntarafdar @dchenTT
 tests/sweep_framework/sweeps/conv2d/  @tenstorrent/metalium-developers-convolutions
