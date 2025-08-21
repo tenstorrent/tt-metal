@@ -48,13 +48,13 @@ class TtTransformer(LightweightModule):
         self.allocate_prefill_buffers = allocate_prefill_buffers
         self.paged_attention_config = paged_attention_config
 
-        # self.embd = TtLlamaEmbedding(
-        #     mesh_device=mesh_device,
-        #     args=args,
-        #     weight_cache_path=args.weight_cache_path(dtype),
-        #     state_dict=state_dict,
-        #     dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
-        # )
+        self.embd = TtLlamaEmbedding(
+            mesh_device=mesh_device,
+            args=args,
+            weight_cache_path=args.weight_cache_path(dtype),
+            state_dict=state_dict,
+            dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
+        )
 
         self.rope_setup = TtLlamaRotarySetup(
             mesh_device,
@@ -633,10 +633,9 @@ class TtTransformer(LightweightModule):
             self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
-                # num_layers=self.n_layers,
-                num_layers=1,
+                num_layers=self.n_layers,
                 global_cb=self.prefetcher_setup.global_circular_buffer,
-                # enable_performance_mode=self.enable_prefetcher_performance_mode,
+                enable_performance_mode=self.enable_prefetcher_performance_mode,
             )
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 

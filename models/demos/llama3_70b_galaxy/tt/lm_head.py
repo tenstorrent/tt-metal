@@ -87,7 +87,7 @@ class LMHead(LightweightModule):
                         layout=ttnn.TILE_LAYOUT,
                         dtype=dtype,
                         memory_config=memory_config_decode,
-                        cache_file_name=cache_file_name_decode,
+                        # cache_file_name=cache_file_name_decode,
                     )
                 )
                 self.output_weights_prefill.append(  # (2k, 16k) 128* 1024
@@ -224,6 +224,7 @@ class LMHead(LightweightModule):
 
         outputs_reduced = []
         for output in outputs:
+            breakpoint()
             output_reduced = self.tt_ccl.line_all_reduce(
 <<<<<<< HEAD
                 output,
@@ -236,5 +237,6 @@ class LMHead(LightweightModule):
                 output, cluster_axis=1, num_links=3, memory_config=output.memory_config(), lm_head=True
 >>>>>>> e97cfb66d6 (WIP LM head commits)
             )  # self.output_memory_config
+            breakpoint()
             outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
         return outputs_reduced
