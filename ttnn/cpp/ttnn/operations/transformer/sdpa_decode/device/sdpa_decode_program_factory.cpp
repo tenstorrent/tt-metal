@@ -740,8 +740,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         use_half_tile,
         q_chunk_size_bytes,
         is_cur_pos_tensor_sharded,
-        is_page_table_sharded};
-        
+        is_page_table_sharded,
+    };
+
     if (use_attention_sink) {
         tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
     } else {
