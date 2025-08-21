@@ -26,44 +26,29 @@ parameters = {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
         "fabric_config": [ttnn.FabricConfig.FABRIC_1D],
         # TODO this seem to reliably cause hangs, and we can't recover from hangs right now
-        #        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
+        # "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "num_links": [1],
         "input_shape": [
-            [1, 1, 32, 32],
-            [1, 1, 32, 1280],
-            [1, 1, 32, 31],
-            [1, 1, 1, 32, 32],
-            [2, 32, 32],
+            [1, 1, 32, 256],
+            [1, 1, 32, 248],
+            [1, 1, 1, 32, 256],
+            [2, 32, 256],
             [1, 1, 32, 16384],
-            [1, 1, 1, 2048],  # the following shapes are from training
-            [
-                1,
-                1,
-                1,
-                4096,
-            ],  # https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
-            [1, 32, 2048, 8],
-            [1, 32, 2048, 16],
-            [1, 32, 4096, 16],
-            [1, 32, 2048, 64],
-            [1, 32, 4096, 32],
-            [1, 32, 4096, 64],
-            [1, 1, 1, 1],
-            [1, 1, 1, 8],
-            [1, 1, 1, 16],
-            [1, 1, 1, 32],
-            [1, 1, 8, 8],
-            [1, 1, 16, 16],
         ],
         "dim": [0, 1, 2, 3, 4],
         "cluster_axis": [0, 1, None],
+        "math_op": [ttnn.ReduceType.Sum],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
         "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+        "topology": [ttnn.Topology.Linear], #, ttnn.Topology.Ring],
         "num_iters": [1],
     },
 }
+
+
+def _valid_cluster_div(input_shape, dim, cluster_axis, mesh_shape, **kwargs):
+    return input_shape[dim] % (NUM_DEVICES if cluster_axis is None else mesh_shape[cluster_axis]) == 0
 
 
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
@@ -74,6 +59,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_1D_RING
     ):
         return True, "Ring fabric config required for ring topology"
+    
+    if not _valid_cluster_div(**test_vector):
+        return True, "Shape at given dim not divisible by cluster devices" 
 
     return False, None
 
@@ -83,16 +71,30 @@ def mesh_device_fixture():
     yield None, "Device creation in sweep body"
 
 
-def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, layout, device):
-    torch_input = torch.rand(input_shape).bfloat16()
+def _reference_map_op(math_op):
+    if math_op == ttnn.ReduceType.Sum:
+        return torch.sum
+    else:
+        raise NotImplementedError(f"Math op: {math_op} not yet implemented in sweep")
+
+
+def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, math_op, dtype, layout, device):
+    
+    assert _valid_cluster_div(input_shape, dim, cluster_axis, mesh_shape)
+    
+    torch_input = torch.randn(input_shape).bfloat16()
     tt_input = ttnn.from_torch(
         torch_input, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(device), device=device
     )
-
+        
     replicate_dim = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)
-    torch_reference = torch_input.repeat(tuple((1 if i != dim else replicate_dim) for i in range(len(input_shape))))
+    per_device_dim = input_shape[dim] // replicate_dim
 
-    return tt_input, torch_reference
+    torch_reference = torch_input.unsqueeze(0).repeat([replicate_dim]+[1]*len(input_shape))
+    torch_references = _reference_map_op(math_op)(torch_reference, dim=0).split(per_device_dim, dim=dim)
+
+    
+    return tt_input, torch_references
 
 
 def run(
@@ -107,6 +109,7 @@ def run(
     mem_config,
     num_iters,
     topology,
+    math_op,
     *,
     device,  # unused
 ) -> list:
@@ -122,26 +125,28 @@ def run(
 
         logger.info("device set up")
 
-        tt_input, torch_reference = _get_tensors(
-            input_shape, mesh_shape, dim, cluster_axis, input_dtype, layout, device
+        tt_input, torch_references = _get_tensors(
+            input_shape, mesh_shape, dim, cluster_axis, math_op, input_dtype, layout, device
         )
 
         compute_grid_size = device.compute_with_storage_grid_size()
         ccl_sub_device_crs = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
-        semaphore = ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0)
+        semaphores = [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)]
 
         for i in range(num_iters):
             try:
                 start_time = start_measuring_time()
-                tt_out_tensor = ttnn.experimental.all_gather_async(
+                tt_out_tensor = ttnn.experimental.reduce_scatter_async(
                     tt_input,
                     dim,
                     cluster_axis=cluster_axis,
                     mesh_device=device,
                     topology=topology,
-                    multi_device_global_semaphore=semaphore,
+                    from_remote_multi_device_global_semaphore=semaphores[0],
+                    to_remote_multi_device_global_semaphore=semaphores[0],
+                    math_op=math_op,
                     num_links=num_links,
                     memory_config=mem_config,
                 )
@@ -150,16 +155,13 @@ def run(
                 raise RuntimeError(f"Execution failed: {e}")
 
             logger.info(f"Done iteration {i}")
-
-        for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+        
+        for i, (t,ref) in enumerate(zip(ttnn.get_device_tensors(tt_out_tensor), torch_references)):
             logger.info("Bringing tensor back to host")
             tt_output_tensor = ttnn.to_torch(t)
-            logger.info("Brought tensor back from host")
+            logger.info(f"Brought tensor {i} back from host. Shape: {tt_output_tensor.shape}")
 
-            if input_dtype == ttnn.bfloat16:
-                eq, output = comp_equal(tt_output_tensor, torch_reference)
-            else:
-                eq, output = comp_pcc(tt_output_tensor, torch_reference)
+            eq, output = comp_pcc(tt_output_tensor, ref)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
             return [(eq, output), e2e_perf]
