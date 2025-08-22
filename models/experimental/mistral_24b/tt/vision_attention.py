@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+"""
+This file implements the vision attention submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
 
+"""
 import torch
 
 import ttnn
@@ -139,7 +142,6 @@ class TtMistralImageAttention(LightweightModule):
             dtype=self.dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
-            # cache_file_name=cache_name("wqkv_sharded"),
         )
 
         self.wo = ttnn.as_tensor(
@@ -153,7 +155,6 @@ class TtMistralImageAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
-            # cache_file_name=cache_name("wo_sharded"),
         )
 
         self.scale = self.head_dim**-0.5

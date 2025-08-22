@@ -391,7 +391,7 @@ def apply_scaling_vision(freqs: torch.Tensor, scale_factor: float, orig_context_
     return freqs / scale_factor
 
 
-def precompute_vision_freqs(
+def precompute_mistral_vision_freqs(
     dim: int, max_patches_per_side: int, theta: float, scale_factor=None, orig_context_len=None
 ):
     # Compute base frequencies

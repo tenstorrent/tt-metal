@@ -2,6 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+This file implements the Vision Tower submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
+"""
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.mistral_24b.tt.vision_conv2d import TtMistralConv2dPatch
@@ -139,7 +143,7 @@ class MistralVisionTower(LightweightModule):
         patch_embeds = ttnn.concat(reshaped_patches, dim=0)
 
         # ln_pre RMS Norm
-        mode = "prefill"  # if self.max_seq_len <= 32 else "prefill"
+        mode = "prefill"
         patch_embeds = self.ln_pre(patch_embeds, mode=mode)
 
         # # positional embeddings

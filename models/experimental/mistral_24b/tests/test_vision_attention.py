@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
-
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 import os
@@ -80,11 +79,6 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
     B, T, D = pt_attention_input.shape
     cos = torch.ones((1, T, head_dim)).to(torch.bfloat16)
     sin = torch.zeros((1, T, head_dim)).to(torch.bfloat16)
-
-    # attention_input = model_args.prepare_residual_tensor_prefill(
-    #     pt_attention_input,
-    #     force_replicated=True,
-    # )
 
     attention_input = ttnn.from_torch(
         pt_attention_input.unsqueeze(0),

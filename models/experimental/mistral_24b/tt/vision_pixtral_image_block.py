@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,10 @@ from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 
 from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAttention as TtLlamaImageAttention
 from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as MLP
+
+"""
+This file implements the Pixtral_image_block submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
+"""
 
 
 class TtPixtralImageTransformerBlock(LightweightModule):

@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
+
 """Test for Mistral-24B End-to-End Vision-Text Pipeline"""
 
 import torch
@@ -157,7 +160,6 @@ def process_real_vision_inputs(messages, model_args):
     )
 
     image_inputs, video_inputs = process_vision_info(messages)
-    # image_inputs, video_inputs = None, None
 
     encoded = processor(
         text=[text], images=image_inputs, videos=video_inputs, return_tensors="pt", return_dict=True
@@ -284,7 +286,7 @@ def run_generation_exactly_like_test_end2end(
 
     topk_tokens = [model_args.tokenizer.decode([idx.item()]) for idx in topk_indices]
 
-    logger.info("🔍 Top-5 predicted tokens (with probabilities):")
+    logger.info("Top-5 predicted tokens (with probabilities):")
     for i in range(top_k):
         logger.info(f"{i+1}. Token: '{topk_tokens[i]}' (ID={topk_indices[i].item()}), P={topk_probs[i].item():.4f}")
 
@@ -347,8 +349,8 @@ def run_generation_exactly_like_test_end2end(
 
         # Final response (exactly like test_end2end.py)
         response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
-        logger.info(f"📝 Each iteration Generated Response:\n{response}")
-        logger.info(f"📝 Each iteration Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
+        logger.info(f"Each iteration Generated Response:\n{response}")
+        logger.info(f"Each iteration Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
         chat = parse_chat_output(response)
         display_chat(logger, chat)
 
@@ -356,8 +358,8 @@ def run_generation_exactly_like_test_end2end(
 
     # Final response (exactly like test_end2end.py)
     response = model_args.tokenizer.decode(all_outputs[0], skip_special_tokens=True)
-    logger.info(f"📝 Final Generated Response:\n{response}")
-    logger.info(f"📝 Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
+    logger.info(f"Final Generated Response:\n{response}")
+    logger.info(f"Generated {len(all_outputs[0])} tokens: {all_outputs[0]}")
     chat = parse_chat_output(response)
     display_chat(logger, chat)
 
@@ -469,9 +471,6 @@ def test_e2e_vision_text_pipeline(
     # Setup vision prompts and tokenizer
     messages, tokenizer = setup_vision_prompts_and_tokenizer(model_args, instruct)
 
-    # logger.info("Running reference HF vision-text model using messages..... ")
-    # hf_output = run_reference_demo_pipeline(messages)
-
     # Process real vision inputs from images
     processed_inputs = process_real_vision_inputs(messages, model_args)
 
@@ -524,12 +523,12 @@ def test_e2e_vision_text_pipeline(
 
     # Final validation
     if validation_passed and len(results) > 0:
-        logger.info("✅ E2E vision-text pipeline test PASSED!")
+        logger.info("E2E vision-text pipeline test PASSED!")
         logger.info(f"Successfully generated {len(results)} tokens")
 
         # Log generated tokens for debugging
         for i, result in enumerate(results[:5]):
             logger.info(f"Token {i}: {result.token} -> '{result.text}'")
     else:
-        logger.error("❌ E2E pipeline test failed")
+        logger.error("E2E pipeline test failed")
         assert False, f"E2E pipeline failed - generated {len(results)} tokens, validation: {validation_passed}"

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,12 +6,12 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.common import precompute_vision_freqs
+from models.tt_transformers.tt.common import precompute_mistral_vision_freqs
 from ttnn import ReplicateTensorToMesh
 
 
 def compute_gather_cos_sin(dhead, max_patches_per_side, theta, scale_factor, orig_context_len, position_ids):
-    cos, sin = precompute_vision_freqs(dhead, max_patches_per_side, theta, scale_factor, orig_context_len)
+    cos, sin = precompute_mistral_vision_freqs(dhead, max_patches_per_side, theta, scale_factor, orig_context_len)
     return cos, sin
 
 

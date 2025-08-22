@@ -1,7 +1,10 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+"""
+This file implements the Vision FeedForward submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
 
+"""
 import torch
 
 import ttnn
@@ -74,9 +77,6 @@ class MistralTTVisionMLP(LightweightModule):
             w3 -> up_proj
             w2 -> down_proj
         """
-
-        # if x.shape[-2] >= self.args.prefill_len_cutoff and mode != "decode":
-        #     x = ttnn.reshape(x, [1, x.shape[-2] // self.args.prefill_len_cutoff, self.args.prefill_len_cutoff, -1])
 
         # Linear with SILU activation
         w1_out = ttnn.linear(

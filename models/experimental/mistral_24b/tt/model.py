@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """
 This is the end-to-end pipeline for the Mistral-Small-3.1-24B-Instruct-2503 model.
 
@@ -51,9 +55,7 @@ class MistralTransformer(Transformer):
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-        # self.embed_scale = args.dim**0.5
         tokens_embd = self.embd(tokens)
-        # tokens_embd = ttnn.multiply(tokens_embd, self.embed_scale)
 
         pixel_values = kwargs["processed_inputs"]["pixel_values"]
         input_ids = kwargs["processed_inputs"]["input_ids"]
@@ -73,7 +75,6 @@ class MistralTransformer(Transformer):
             input_ids = torch.nn.functional.pad(
                 input_ids, (0, tokens_embd.shape[1] - input_ids.shape[1]), "constant", 0
             )
-            # image_features = image_features.squeeze(0)
             special_image_mask = (input_ids == 10).unsqueeze(-1)
             special_image_mask = special_image_mask.expand_as(tokens_embd)
             image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)

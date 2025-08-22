@@ -1,5 +1,9 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
+
+"""
+This file is a unit test for validating the Mistral-24B Vision Tower model.
+"""
 
 import os
 import pytest
