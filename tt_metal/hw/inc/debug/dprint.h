@@ -25,6 +25,7 @@
  */
 
 #include <cstdint>
+#include <type_traits>
 #if defined(COMPILE_FOR_NCRISC) | defined(COMPILE_FOR_BRISC)
 // TODO(AP): this ifdef doesn't seem to make sense given we include risc_common.h
 // The issue is some files included inside risc_common.h only apply to NC/BRISCS
@@ -467,6 +468,15 @@ template DebugPrinter operator<< <SETPRECISION>(DebugPrinter, SETPRECISION val);
 template DebugPrinter operator<< <BF16>(DebugPrinter, BF16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);
+
+// This allows printing of any (non char) pointer types as uint32_t
+template <typename T, typename = std::enable_if_t<!std::is_same_v<std::remove_cv_t<T>, char>>>
+DebugPrinter operator<<(DebugPrinter dp, T* val) {
+    using KernelPointerType = uint32_t;
+    static_assert(sizeof(KernelPointerType) == sizeof(T*));
+
+    return dp << reinterpret_cast<KernelPointerType>(val);
+}
 
 // Tile printing only supported in kernels
 #if defined(KERNEL_BUILD)
