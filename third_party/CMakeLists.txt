@@ -324,6 +324,7 @@ CPMAddPackage(
     OPTIONS
         "BUILD_TESTING OFF"
         "CAPNP_LITE OFF"
+        "BUILD_SHARED_LIBS OFF"
 )
 
 # Restore original CMAKE_CXX_EXTENSIONS setting
