@@ -27,7 +27,7 @@ target_compile_options(
     PRIVATE
         -g
         -fsanitize-coverage=func,trace-pc-guard
-        # -fsanitize-coverage-allowlist=${PROJECT_SOURCE_DIR}/sancov_allowlist.txt
+        -fsanitize-coverage-allowlist=${PROJECT_SOURCE_DIR}/sanitizer_allowlist.txt
         -fno-omit-frame-pointer
         -fno-inline
         -fno-inline-functions
@@ -422,7 +422,7 @@ target_compile_options(
     PRIVATE
         -g
         -fsanitize-coverage=func,trace-pc-guard
-        # -fsanitize-coverage-allowlist=${PROJECT_SOURCE_DIR}/sancov_allowlist.txt
+        -fsanitize-coverage-allowlist=${PROJECT_SOURCE_DIR}/sanitizer_allowlist.txt
         -fno-omit-frame-pointer
         -fno-inline
         -fno-inline-functions
@@ -589,7 +589,7 @@ if(WITH_PYTHON_BINDINGS)
         PRIVATE
             -g
             -fsanitize-coverage=func,trace-pc-guard
-            # -fsanitize-coverage-allowlist=${PROJECT_SOURCE_DIR}/sancov_allowlist.txt
+            -fsanitize-coverage-allowlist=${PROJECT_SOURCE_DIR}/sanitizer_allowlist.txt
             -fno-omit-frame-pointer
             -fno-inline
             -fno-inline-functions

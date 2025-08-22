@@ -1,2 +1,3 @@
-src:^/home/ubuntu/tt-metal/tt_metal/.*
+src:^/home/ubuntu/tt-metal/.*
 fun:^_ZN2tt8tt_metal.*
+fun:^_ZN4ttnn.*
