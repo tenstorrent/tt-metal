@@ -1,185 +1,160 @@
-#!/bin/bash
+#!/usr/bin/env bash
 set -euo pipefail
 
-if [ -f /.dockerenv ]; then
-    echo "Running inside Docker"
-    # Try to get container ID
-    container_id=$(cat /proc/self/cgroup | grep 'docker' | sed 's/^.*\///' | tail -n1)
-    echo "Container ID: $container_id"
-    # Try to get image name (if available, usually not inside container)
-    if [ -f /etc/os-release ]; then
-        grep PRETTY_NAME /etc/os-release
-    fi
+die() { echo "ERROR: $*" >&2; exit 1; }
+
+# Detect container (best-effort)
+if [ -f /.dockerenv ] || grep -Eq '(docker|containerd|kubepods)' /proc/1/cgroup 2>/dev/null; then
+  echo "Running inside a container"
+  cid="$(awk -F/ '/(docker|containerd)/{id=$NF} END{print id}' /proc/self/cgroup 2>/dev/null || true)"
+  [ -n "${cid:-}" ] && echo "Container ID: $cid"
+  [ -f /etc/os-release ] && grep '^PRETTY_NAME=' /etc/os-release || true
 else
-    echo "Not running inside Docker"
+  echo "Not running inside Docker"
 fi
 
 : << 'END'
-This script is used to find the commit that broke a test.
-Flags:
-    -f | --file : test file to run, also the test that broke
-    -g | --good : good commit to start bisect
-    -b | --bad : bad commit to start bisect
-    -p | --path : commit-ish to cherry-pick onto each commit before building
-    -t | --timeout : timeout duration for one iteration of the test
-Example:
-    ./tests/scripts/tt_bisect.sh -f ./build/test/tt_metal/test_add_two_ints -b HEAD -g 1eb7930
-If the test involves multiple words you have to do "test_file":
-    ./tests/scripts/tt_bisect.sh -f "pytest $TT_METAL_HOME/models/demos/resnet/tests/test_resnet18.py" -b HEAD -g 1eb7930
-    ./tests/scripts/tt_bisect.sh -f "python tests/scripts/run_tt_metal.py --dispatch-mode fast" -b HEAD -g HEAD~10
+Usage:
+  -f TEST        : test command to run (quote if it has spaces)
+  -g GOOD_SHA    : known good commit
+  -b BAD_SHA     : known bad commit
+  -t TIMEOUT     : per-iteration timeout (default 30m)
 END
 
-cd $TT_METAL_HOME
-export PYTHONPATH=$TT_METAL_HOME
+timeout_duration_iteration="30m"
+test=""
+good_commit=""
+bad_commit=""
 
-timeout_duration_iteration=30m  # default per-iteration timeout
-patch=""
-while getopts "f:g:b:t:p:" opt; do
-    case $opt in
-         f | file)
-            test=$OPTARG
-            ;;
-         g | good)
-            good_commit=$OPTARG
-            ;;
-         b | bad)
-            bad_commit=$OPTARG
-            ;;
-         t | timeout)
-            timeout_duration_iteration=$OPTARG
-            ;;
-         p | patch)
-            patch=$OPTARG
-            ;;
-         \?)
-            echo "Invalid option: -$OPTARG" >&2
-            exit 1
-            ;;
-    esac
+while getopts ":f:g:b:t:" opt; do
+  case "$opt" in
+    f) test="$OPTARG" ;;
+    g) good_commit="$OPTARG" ;;
+    b) bad_commit="$OPTARG" ;;
+    t) timeout_duration_iteration="$OPTARG" ;;
+    \?) die "Invalid option: -$OPTARG" ;;
+    :)  die "Option -$OPTARG requires an argument." ;;
+  esac
 done
 
-if ([ -z "$test" ] || [ -z "$good_commit" ] || [ -z "$bad_commit" ]); then
-    echo "Please specify a test file, good commit and bad commit"
-    exit 1
-fi
+[ -n "$test" ] || die "Please specify -f TEST."
+[ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
+[ -n "$bad_commit" ] || die "Please specify -b BAD_SHA."
 
-# Validate good_commit SHA
-if git cat-file -e "$good_commit" 2>/dev/null; then
-    echo "Good commit SHA is valid: $good_commit"
-else
-    echo "Invalid good commit SHA: $good_commit"
-    exit 1
-fi
+TT_METAL_HOME="${TT_METAL_HOME:-$(pwd)}"
+cd "$TT_METAL_HOME" || die "Cannot cd into TT_METAL_HOME=$TT_METAL_HOME"
+export PYTHONPATH="$TT_METAL_HOME"
 
-# Validate bad_commit SHA
-if git cat-file -e "$bad_commit" 2>/dev/null; then
-    echo "Bad commit SHA is valid: $bad_commit"
-else
-    echo "Invalid bad commit SHA: $bad_commit"
-    exit 1
-fi
+git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"
+git cat-file -e "$bad_commit^{commit}" 2>/dev/null  || die "Invalid bad commit: $bad_commit"
 
-echo "Time to find who broke it :)"
-echo "Good commit:" $good_commit
-echo "Bad commit:" $bad_commit
-if ([ ! -z "$patch" ]); then
-    echo "Cherry-pick commit:" $patch
-fi
+echo "Good: $good_commit"
+echo "Bad : $bad_commit"
+echo "PWD: $(pwd)"
+echo "Branch: $(git rev-parse --abbrev-ref HEAD)"
+echo "Commit: $(git rev-parse HEAD)"
+echo "Status:"
+git status --porcelain=v1
 
+echo "Starting git bisect…"
+git bisect start "$bad_commit" "$good_commit" --
 
-echo "Current location: `pwd`"
-echo "Current branch: `git rev-parse --abbrev-ref HEAD`"
-echo "Current commit: `git rev-parse HEAD`"
-echo "Current status:"
-echo `git status`
-
-echo "git bisect start with good commit $good_commit and bad commit $bad_commit"
-git bisect start $bad_commit $good_commit --
-
-
-
-echo "Environment variables:"
-printenv
+echo "Environment (filtered):"
+env | grep -E '^(TT_|PYTHON|CC|CXX|PATH)=' || true
 
 found=false
-while [[ "$found" = "false" ]]; do
-   echo "::group::Building `git rev-parse HEAD`"
-   if ([ ! -z "$patch" ]); then
-      git cherry-pick $patch
-   fi
-   git submodule update --recursive
+while [[ "$found" == "false" ]]; do
+  rev="$(git rev-parse --short=12 HEAD)"
+  echo "::group::Building $rev"
 
-   rm -rf .cpmcache  build_Release build_Debug build
+  git submodule update --init --recursive --force
+  rm -rf .cpmcache build build_Release build_Debug
 
-   build_rc=0
-   ./build_metal.sh --build-dir build --build-type Release --toolchain-path cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake --build-all --enable-ccache --configure-only || build_rc=$?
-   cmake --build build --target install --verbose || build_rc=$?
-   echo "::endgroup::"
+  build_rc=0
+  ./build_metal.sh \
+    --build-dir build \
+    --build-type Release \
+    --toolchain-path cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake \
+    --build-all \
+    --enable-ccache \
+    --configure-only || build_rc=$?
+  if [ $build_rc -eq 0 ]; then
+    cmake --build build --target install --verbose || build_rc=$?
+  fi
+  echo "::endgroup::"
 
-   if [[ $build_rc -ne 0 ]]; then
-      echo "Build failed; skipping this commit"
-      git bisect skip
-      continue
-   fi
+  if [ $build_rc -ne 0 ]; then
+    echo "Build failed; skipping this commit"
+    git bisect skip
+    continue
+  fi
 
-   venv_rc=0
-   ./create_venv.sh || venv_rc=$?
-   source $PYTHON_ENV_DIR/bin/activate || venv_rc=$?
-   pip install -r models/tt_transformers/requirements.txt || venv_rc=$?
-   echo "::endgroup::"
+  echo "::group::Python env"
+  venv_rc=0
+  if [ -f "./create_venv.sh" ]; then
+    # shellcheck disable=SC1091
+    source ./create_venv.sh || venv_rc=$?
+  fi
+  PYTHON_ENV_DIR="${PYTHON_ENV_DIR:-./.venv}"
+  if [ ! -d "$PYTHON_ENV_DIR" ]; then
+    python3 -m venv "$PYTHON_ENV_DIR" || venv_rc=$?
+  fi
+  # shellcheck disable=SC1091
+  source "$PYTHON_ENV_DIR/bin/activate" || venv_rc=$?
+  python -m pip install -U pip || venv_rc=$?
+  python -m pip install -r models/tt_transformers/requirements.txt || venv_rc=$?
+  echo "::endgroup::"
 
-   if [[ $venv_rc -ne 0 ]]; then
-      echo "Python environment setup failed; skipping this commit"
-      git bisect skip
-      continue
-   fi
+  if [ $venv_rc -ne 0 ]; then
+    echo "Python env failed; skipping this commit"
+    git bisect skip
+    continue
+  fi
 
-   echo "::group::Testing `git rev-parse HEAD`"
-   timeout_rc=1
-   max_retries=3
-   attempt=1
-   while [ $attempt -le $max_retries ]; do
-      echo "Test attempt $attempt for commit $(git rev-parse HEAD)"
-      echo "Running test: $test"
-      timeout "$timeout_duration_iteration" bash -c "$test"
+  echo "::group::Testing $rev"
+  timeout_rc=1
+  max_retries=3
+  attempt=1
+  while [ $attempt -le $max_retries ]; do
+    echo "Attempt $attempt on $(git rev-parse HEAD)"
+    echo "Run: $test"
+    if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test"; then
+      timeout_rc=0
+      break
+    else
       timeout_rc=$?
-      if [ $timeout_rc -eq 0 ]; then
-         break
-      else
-         echo "Test failed (exit code $timeout_rc), retrying..."
-         attempt=$((attempt + 1))
-      fi
-   done
-   echo "Exit code: $timeout_rc"
+      echo "Test failed (code $timeout_rc), retrying…"
+      attempt=$((attempt+1))
+    fi
+  done
+  echo "Exit code: $timeout_rc"
+  echo "::endgroup::"
 
-   if ([ ! -z "$patch" ]); then
-      # Must reset HEAD or git bisect good/bad will retry the merge base and we'll be stuck in a loop
-      git reset --hard HEAD^
-   fi
-   echo "::endgroup::"
+  if [ $timeout_rc -eq 0 ]; then
+    out="$(git bisect good || true)"
+  elif [ $timeout_rc -eq 124 ] || [ $timeout_rc -eq 137 ] || [ $timeout_rc -eq 143 ]; then
+    echo "Timeout/kill detected; skipping this commit"
+    git bisect skip
+    continue
+  else
+    out="$(git bisect bad || true)"
+  fi
 
-   if [ $timeout_rc -eq 0 ]; then
-      echo "Commit is good"
-      increment=$(git bisect good)
-      echo "${increment}"
-      first_line=$(echo "${increment}" | head -n 1)
-   elif [ $timeout_rc -eq 124 ]; then
-      echo "Test has timed out, skipping this commit"
-      git bisect skip
-      continue
-   else
-      echo "Commit is bad"
-      increment=$(git bisect bad)
-      echo "${increment}"
-      first_line=$(echo "${increment}" | head -n 1)
-   fi
-
-   if [[ $first_line == *"is the first bad commit"* ]]; then
-      echo "FOUND IT!: " $first_line
+  first_line="$(printf '%s\n' "$out" | head -n1)"
+  case "$first_line" in
+    *"is the first bad commit"*)
+      echo "FOUND IT: $first_line"
       found=true
-   fi
+      ;;
+    *"There are only 'skip'ped commits left to test."*)
+      echo "Bisect inconclusive: only skipped commits left."
+      break
+      ;;
+    "")
+      echo "git bisect produced no output; stopping to avoid an infinite loop."
+      break
+      ;;
+  esac
 done
 
-
-
-git bisect reset
+git bisect reset || true
