@@ -119,8 +119,8 @@ def run_max_pool(
     out_c = in_c
     ceil_mode_out_shape_adj = False
     if ceil_mode:
-        out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.ceil((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        out_h = math.ceil((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.ceil((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
         if ((out_h - 1) * stride_h) >= (in_h + pad_t):
             ceil_mode_out_shape_adj = True
             out_h -= 1
@@ -128,8 +128,8 @@ def run_max_pool(
             ceil_mode_out_shape_adj = True
             out_w -= 1
     else:
-        out_h = math.floor((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.floor((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        out_h = math.floor((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
 
     torch.manual_seed(0)
     torch_input = randomize_torch_tensor(tensor_map, input_shape)
