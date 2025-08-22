@@ -18,6 +18,8 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
                 (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
                 (a == UINT16 && b == UINT16));
         case SUB:
+        case EQ:
+        case NE:
         case MUL: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
         case DIV:
         case RSUB:
@@ -32,9 +34,7 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
         case GT:
         case LT:
         case GE:
-        case LE:
-        case EQ:
-        case NE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
+        case LE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
         case LCM:
         case GCD: return (a == INT32 && b == INT32);
         case LEFT_SHIFT:
