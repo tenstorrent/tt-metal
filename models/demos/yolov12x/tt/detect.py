@@ -70,6 +70,9 @@ class TtnnDetect:
             device=device,
             is_detect=True,
             activation="silu",
+            enable_weights_double_buffer=False,
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
         )
         self.cv3_0_0_1 = TtYOLOv12xConv2D(
             conv=parameter.cv3[0][0][1].conv,
@@ -120,6 +123,8 @@ class TtnnDetect:
             device=device,
             is_detect=True,
             activation="silu",
+            enable_act_double_buffer=False,
+            enable_split_reader=False,
         )
         self.cv3_1_1_1 = TtYOLOv12xConv2D(
             conv=parameter.cv3[1][1][1].conv,
@@ -220,7 +225,8 @@ class TtnnDetect:
         ya = ttnn.permute(ya, (0, 1, 3, 2))
         ya = ttnn.reshape(ya, (ya.shape[0], 4, 16, ya.shape[-1]))
         ya = ttnn.permute(ya, (0, 2, 1, 3))
-        ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
+        if ya.layout == ttnn.ROW_MAJOR_LAYOUT:
+            ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
         ya = ttnn.softmax(ya, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ya = ttnn.permute(ya, (0, 2, 3, 1))
 
@@ -230,15 +236,18 @@ class TtnnDetect:
         if c.is_sharded():
             c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if c.layout == ttnn.TILE_LAYOUT:
+            c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         c = ttnn.permute(c, (0, 3, 1, 2))
         c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
         c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
         c1, c2 = c[:, :2, :], c[:, 2:4, :]
 
-        c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
-        c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
+        if c1.layout == ttnn.ROW_MAJOR_LAYOUT:
+            c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
+        if c2.layout == ttnn.ROW_MAJOR_LAYOUT:
+            c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
 
         c1 = self.anchors - c1
         c2 = self.anchors + c2

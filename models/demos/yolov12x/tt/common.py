@@ -25,6 +25,9 @@ class TtYOLOv12xConv2D:
         is_dfl=False,
         config_override=None,
         deallocate_activation=False,
+        enable_act_double_buffer=True,
+        enable_split_reader=True,
+        enable_weights_double_buffer=True,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -52,7 +55,7 @@ class TtYOLOv12xConv2D:
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
             packer_l1_acc=False if self.is_detect else True,
             math_approx_mode=True,
@@ -61,10 +64,11 @@ class TtYOLOv12xConv2D:
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
-            enable_split_reader=False,
+            enable_act_double_buffer=enable_act_double_buffer,
+            enable_split_reader=enable_split_reader,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
+            enable_weights_double_buffer=enable_weights_double_buffer,
         )
         if config_override is None and conv.in_channels == 3:
             config_override = {"act_block_h": 64}
@@ -110,7 +114,8 @@ class TtYOLOv12xConv2D:
         )
         hw = output_height * output_width
         if x.shape[2] != hw:
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            if x.is_sharded():
+                x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
             x = x[:, :, :hw, :]
         return x
 
@@ -132,7 +137,8 @@ class TtnnBottleneck:
 
 
 def interleaved_to_sharded(x, num_cores=None):
-    x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+    if x.layout == ttnn.TILE_LAYOUT:
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
     x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
     nhw = x.shape[0] * x.shape[1] * x.shape[2]
     num_cores = determine_num_cores(nhw, x.shape[2])

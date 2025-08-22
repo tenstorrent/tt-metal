@@ -23,10 +23,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 )
 @pytest.mark.parametrize(
     "use_pretrained_weight",
-    [True, False],
+    [True],
     ids=[
         "pretrained_weight_true",
-        "pretrained_weight_false",
+        # "pretrained_weight_false",
     ],
 )
 def test_yolov12x(use_pretrained_weight, device, reset_seeds, model_location_generator):

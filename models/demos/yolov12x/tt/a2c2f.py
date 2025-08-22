@@ -95,7 +95,8 @@ class TtnnA2C2f:
                 y.append(out)
 
         y_concat = concat(-1, False, *y)
-        y_concat = ttnn.sharded_to_interleaved(y_concat, ttnn.L1_MEMORY_CONFIG)
+        if y_concat.is_sharded():
+            y_concat = ttnn.sharded_to_interleaved(y_concat, ttnn.L1_MEMORY_CONFIG)
 
         y = self.cv2(y_concat)
         ttnn.deallocate(y_concat)

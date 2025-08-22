@@ -29,6 +29,8 @@ class TtnnAattn:
             config_override={"act_block_h": 32},
             use_1d_systolic_array=False,
             shard_layout=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            enable_split_reader=True,
+            enable_act_double_buffer=True,
         )
 
     def __call__(self, x, i=0, j=0):
@@ -37,7 +39,8 @@ class TtnnAattn:
         qkv = self.qkv(x)
         if qkv.is_sharded():
             qkv = ttnn.sharded_to_interleaved(qkv, ttnn.L1_MEMORY_CONFIG)
-        qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT)
+        if qkv.layout == ttnn.TILE_LAYOUT:
+            qkv = ttnn.to_layout(qkv, ttnn.ROW_MAJOR_LAYOUT)
 
         if self.area > 1:
             qkv = ttnn.reshape(qkv, (1, batch_size * self.area, qkv_chan * 3, qkv_n // self.area))
@@ -50,10 +53,11 @@ class TtnnAattn:
         ttnn.deallocate(qkv)
 
         q = ttnn.permute(q, (0, 1, 3, 2))
-
-        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
-        k = ttnn.to_layout(k, ttnn.TILE_LAYOUT)
-        attn = ttnn.matmul(q, k)
+        if q.layout == ttnn.ROW_MAJOR_LAYOUT:
+            q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
+        if k.layout == ttnn.ROW_MAJOR_LAYOUT:
+            k = ttnn.to_layout(k, ttnn.TILE_LAYOUT)
+        attn = ttnn.matmul(q, k, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         ttnn.deallocate(q)
         ttnn.deallocate(k)
@@ -62,8 +66,10 @@ class TtnnAattn:
         attn = ttnn.softmax(attn, dim=-1)
         attn = ttnn.permute(attn, (0, 1, 3, 2))
 
-        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT)
-        attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT)
+        if v.layout == ttnn.ROW_MAJOR_LAYOUT:
+            v = ttnn.to_layout(v, ttnn.TILE_LAYOUT)
+        if attn.layout == ttnn.ROW_MAJOR_LAYOUT:
+            attn = ttnn.to_layout(attn, ttnn.TILE_LAYOUT)
         x = ttnn.matmul(v, attn, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(attn)
 
@@ -78,7 +84,8 @@ class TtnnAattn:
         x = ttnn.reshape(x, (batch_size, qkv_height, qkv_width, qkv_chan))
         v = ttnn.reshape(v, (batch_size, qkv_height, qkv_width, qkv_chan))
         y = self.pe(v)
-        y = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
+        if y.is_sharded():
+            y = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
         x = x + ttnn.reshape(y, x.shape)
         ttnn.deallocate(v)
 

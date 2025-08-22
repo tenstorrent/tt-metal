@@ -37,7 +37,9 @@ class TtnnABlock:
     def __call__(self, x, i=0, j=0):
         x = x + self.attn(x, i=i, j=j)
         x_0 = self.mlp_0(x)
-        x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-        x_1 = ttnn.sharded_to_interleaved(self.mlp_1(x_0), ttnn.L1_MEMORY_CONFIG)
+        if x.is_sharded():
+            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+        if x_0.is_sharded():
+            x_1 = ttnn.sharded_to_interleaved(self.mlp_1(x_0), ttnn.L1_MEMORY_CONFIG)
         x = x + x_1
         return x
