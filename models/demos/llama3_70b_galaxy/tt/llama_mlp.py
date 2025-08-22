@@ -228,43 +228,34 @@ class TtLlamaMLP(LightweightModule):
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
 
-        if not self.args.qk_norm:
-            w2_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 1, 2048]
-                w2_out,
-                cluster_axis=0,
-                num_links=self.model_config["GALAXY_NUM_LINKS"],
-                memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-                use_optimal_ccl_for_llama=True,
-            )
-        else:
-            w2_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 1, 2048]
-                w2_out,
-                cluster_axis=0,
-                num_links=self.model_config["GALAXY_NUM_LINKS"],
-                memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-                use_optimal_ccl_for_llama=True,
-            )
-            # w2_out_rs = ttnn.experimental.reduce_scatter_minimal_async(  # [1, 1, 32, 320]
-            #     input_tensor=w2_out,
-            #     persistent_output_buffers=[self.persistent_interim_w2_rs_buffers, self.persistent_output_w2_rs_buffers],
-            #     dim=3,
-            #     multi_device_global_semaphore=self.w1_rs_global_semaphores,
-            #     num_links=1,
-            #     memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-            #     topology=self.model_config["CCL_TOPOLOGY"],
-            #     cluster_axis=1,
-            # )
+        w2_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 1, 2048]
+            w2_out,
+            cluster_axis=0,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
+            memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+            use_optimal_ccl_for_llama=True,
+        )
+        # w2_out_rs = ttnn.experimental.reduce_scatter_minimal_async(  # [1, 1, 32, 320]
+        #     input_tensor=w2_out,
+        #     persistent_output_buffers=[self.persistent_interim_w2_rs_buffers, self.persistent_output_w2_rs_buffers],
+        #     dim=3,
+        #     multi_device_global_semaphore=self.w1_rs_global_semaphores,
+        #     num_links=1,
+        #     memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+        #     topology=self.model_config["CCL_TOPOLOGY"],
+        #     cluster_axis=1,
+        # )
 
-            # w2_out_rs = self.tt_ccl.line_reduce_scatter(w2_out, cluster_axis=0, num_links=1, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"])
-            # breakpoint()
-            # w2_out_reduced = self.tt_ccl.line_all_gather(
-            #     w2_out_rs,
-            #     dim=3,
-            #     cluster_axis=0,
-            #     num_links=self.model_config["GALAXY_NUM_LINKS"],
-            #     memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
-            #     buffer_key="W2_AR",
-            # )
+        # w2_out_rs = self.tt_ccl.line_reduce_scatter(w2_out, cluster_axis=0, num_links=1, memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"])
+        # breakpoint()
+        # w2_out_reduced = self.tt_ccl.line_all_gather(
+        #     w2_out_rs,
+        #     dim=3,
+        #     cluster_axis=0,
+        #     num_links=self.model_config["GALAXY_NUM_LINKS"],
+        #     memory_config=self.model_config["DECODE_RESIDUAL_MEMCFG"],
+        #     buffer_key="W2_AR",
+        # )
         ttnn.deallocate(w2_out)
 
         return w2_out_reduced
