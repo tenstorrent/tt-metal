@@ -101,76 +101,76 @@ jobs:
         run: |
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_eager' | wc -l ) > 10 )); then exit 1; fi
-  # check-interleaved-addr-gen-usage:
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #       with:
-  #         fetch-depth: 0  # Fetch all history for git diff comparison
-  #     - name: Check for new InterleavedAddrGen usages in changed files
-  #       run: |
-  #         set -euo pipefail
-  #         # Get the base branch for comparison
-  #         if [ "${{ github.event_name }}" = "pull_request" ]; then
-  #           BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
-  #         else
-  #           BASE_REF="HEAD^"
-  #         fi
+  check-interleaved-addr-gen-usage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for git diff comparison
+      - name: Check for new InterleavedAddrGen usages in changed files
+        run: |
+          set -euo pipefail
+          # Get the base branch for comparison
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_REF="origin/${{ github.event.pull_request.base.ref }}"
+          else
+            BASE_REF="HEAD^"
+          fi
 
-  #         declare -A OLD_FOR_NEW
-  #         CHANGED=()
+          declare -A OLD_FOR_NEW
+          CHANGED=()
 
-  #         # Collect changed C/C++ files and map renames (old -> new)
-  #         while IFS=$'\t' read -r status path1 path2; do
-  #           case "$status" in
-  #             A|M)
-  #               if [[ "$path1" =~ \.(c|cc|cxx|cpp|h|hh|hpp)$ ]]; then
-  #                 CHANGED+=("$path1")
-  #               fi
-  #               ;;
-  #             R*)
-  #               if [[ "$path2" =~ \.(c|cc|cxx|cpp|h|hh|hpp)$ ]]; then
-  #                 CHANGED+=("$path2")
-  #                 OLD_FOR_NEW["$path2"]="$path1"
-  #               fi
-  #               ;;
-  #           esac
-  #         done < <(git diff --name-status -M "$BASE_REF" HEAD)
+          # Collect changed C/C++ files and map renames (old -> new)
+          while IFS=$'\t' read -r status path1 path2; do
+            case "$status" in
+              A|M)
+                if [[ "$path1" =~ \.(c|cc|cxx|cpp|h|hh|hpp)$ ]]; then
+                  CHANGED+=("$path1")
+                fi
+                ;;
+              R*)
+                if [[ "$path2" =~ \.(c|cc|cxx|cpp|h|hh|hpp)$ ]]; then
+                  CHANGED+=("$path2")
+                  OLD_FOR_NEW["$path2"]="$path1"
+                fi
+                ;;
+            esac
+          done < <(git diff --name-status -M "$BASE_REF" HEAD)
 
-  #         if (( ${#CHANGED[@]} == 0 )); then
-  #           echo "No C/C++ files changed in this PR."
-  #           exit 0
-  #         fi
+          if (( ${#CHANGED[@]} == 0 )); then
+            echo "No C/C++ files changed in this PR."
+            exit 0
+          fi
 
-  #         NEW_USAGE_FOUND=0
-  #         regex='(Interleaved[^[:space:]]*AddrGen|get_interleaved_addr_gen)'
+          NEW_USAGE_FOUND=0
+          regex='(Interleaved[^[:space:]]*AddrGen|get_interleaved_addr_gen)'
 
-  #         for file in "${CHANGED[@]}"; do
-  #           old_path="${OLD_FOR_NEW[$file]:-$file}"
+          for file in "${CHANGED[@]}"; do
+            old_path="${OLD_FOR_NEW[$file]:-$file}"
 
-  #           base_count=$(git show "$BASE_REF:$old_path" 2>/dev/null | grep -E -o "$regex" | wc -l || true)
-  #           if [ -f "$file" ]; then
-  #             head_count=$(grep -E -o "$regex" "$file" 2>/dev/null | wc -l || true)
-  #           else
-  #             head_count=0
-  #           fi
+            base_count=$(git show "$BASE_REF:$old_path" 2>/dev/null | grep -E -o "$regex" | wc -l || true)
+            if [ -f "$file" ]; then
+              head_count=$(grep -E -o "$regex" "$file" 2>/dev/null | wc -l || true)
+            else
+              head_count=0
+            fi
 
-  #           if [ "$head_count" -gt "$base_count" ]; then
-  #             echo "❌ Increased InterleavedAddrGen usage in: $file (base=$base_count → head=$head_count)"
-  #             echo "Added matching lines:"
-  #             git diff "$BASE_REF" HEAD -- "$file" | grep -E '^\+[^+].*(Interleaved[^[:space:]]*AddrGen|get_interleaved_addr_gen)' || true
-  #             NEW_USAGE_FOUND=1
-  #           fi
-  #         done
+            if [ "$head_count" -gt "$base_count" ]; then
+              echo "❌ Increased InterleavedAddrGen usage in: $file (base=$base_count → head=$head_count)"
+              echo "Added matching lines:"
+              git diff "$BASE_REF" HEAD -- "$file" | grep -E '^\+[^+].*(Interleaved[^[:space:]]*AddrGen|get_interleaved_addr_gen)' || true
+              NEW_USAGE_FOUND=1
+            fi
+          done
 
-  #         if [ "$NEW_USAGE_FOUND" -eq 1 ]; then
-  #           echo ""
-  #           echo "❌ New InterleavedAddrGen usages detected!"
-  #           echo "Please use TensorAccessor instead."
-  #           exit 1
-  #         else
-  #           echo "✅ No increase in InterleavedAddrGen usages found in changed files."
-  #         fi
+          if [ "$NEW_USAGE_FOUND" -eq 1 ]; then
+            echo ""
+            echo "❌ New InterleavedAddrGen usages detected!"
+            echo "Please use TensorAccessor instead."
+            exit 1
+          else
+            echo "✅ No increase in InterleavedAddrGen usages found in changed files."
+          fi
   check-sweeps-workflow:
     runs-on: ubuntu-latest
     steps:
