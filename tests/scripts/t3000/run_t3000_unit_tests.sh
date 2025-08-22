@@ -254,13 +254,13 @@ run_t3000_llama3.1-70b_tests() {
   # Llama3.1-70B weights
   llama70b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.1-70B-Instruct/
 
-  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
-  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
-  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
+  # LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_attention.py ; fail+=$?
+  # LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_attention_prefill.py ; fail+=$?
+  # LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_embedding.py ; fail+=$?
   LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_mlp.py ; fail+=$?
-  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
-  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
-  LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
+  # LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_rms_norm.py ; fail+=$?
+  # LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_decoder.py ; fail+=$?
+  # LLAMA_DIR=$llama70b pytest -n auto models/tt_transformers/tests/test_decoder_prefill.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

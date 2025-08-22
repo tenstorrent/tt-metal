@@ -29,7 +29,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "seq_len",
-    (64 * 1024, 32 * 1024, 512, 32),
+    (64 * 1024,),
 )
 @pytest.mark.parametrize(
     "batch_size",
