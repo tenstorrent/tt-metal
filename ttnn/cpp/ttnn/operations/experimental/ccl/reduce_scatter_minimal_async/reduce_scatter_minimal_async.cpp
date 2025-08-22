@@ -136,7 +136,7 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const int32_t dim,
-    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
