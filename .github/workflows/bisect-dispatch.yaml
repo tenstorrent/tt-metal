@@ -110,8 +110,6 @@ jobs:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          git bisect start ${{ inputs.bad-commit }} ${{ inputs.good-commit }} --
-          git submodule update --init --recursive --force
           ./build_metal.sh \
           --build-dir build \
           --build-type Release \
@@ -121,4 +119,3 @@ jobs:
           --configure-only
           cmake --build build --target install --verbose
           ./create_venv.sh
-          git bisect reset
