@@ -66,6 +66,7 @@ def siglip_attention(
     return attn_output, attn_weights
 
 
+# https://github.com/google/gemma_pytorch/blob/main/gemma/siglip_vision/siglip_vision_model.py#L93 as function for easier testing
 def gelu_tanh(x):
     return (
         0.5

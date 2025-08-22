@@ -6,6 +6,7 @@ import os
 
 import pytest
 import torch
+from loguru import logger
 from transformers import AutoConfig
 from transformers.models.siglip.modeling_siglip import SiglipMLP
 
@@ -72,7 +73,7 @@ def test_mlp(mesh_device, mlp_func, model_location_generator):
     result, pcc = comp_pcc(reference_output, result)
 
     if result:
-        print(f"✅ Siglip MLP passes with PCC: {pcc}")
+        logger.info(f"✅ Siglip MLP passes with PCC: {pcc}")
     else:
-        print(f"❌ Siglip MLP fails with PCC: {pcc}")
+        logger.error(f"❌ Siglip MLP fails with PCC: {pcc}")
         assert False
