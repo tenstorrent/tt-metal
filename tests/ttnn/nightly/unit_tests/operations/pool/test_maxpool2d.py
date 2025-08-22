@@ -49,6 +49,10 @@ def run_max_pool(
     output_data_format=None,
     output_layout=None,
 ):
+    # Skip unsupported BFLOAT8_B + ROW_MAJOR combination
+    if output_data_format == ttnn.bfloat8_b and output_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("BFLOAT8_B output data format is not supported with ROW_MAJOR layout")
+
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
     stride_h, stride_w = stride
@@ -661,13 +665,17 @@ def test_run_max_pool_squeeze_net_model(
 
 # Simplified test for new API parameters: output_data_format and output_layout
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("output_data_format", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b])
+@pytest.mark.parametrize("output_data_format", [ttnn.bfloat16, ttnn.bfloat8_b])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_max_pool2d_output_formats_and_layouts(device, tensor_map, output_data_format, output_layout):
     """
     Simplified test that iterates through different output_data_format and output_layout combinations.
     Currently all combinations fallback to default behavior (BF16, ROW_MAJOR) for backward compatibility.
     """
+    # # Skip unsupported BF8_B + ROW_MAJOR combination
+    # if output_data_format == ttnn.bfloat8_b and output_layout == ttnn.ROW_MAJOR_LAYOUT:
+    #     pytest.skip("BFLOAT8_B output data format is not supported with ROW_MAJOR layout")
+
     input_shape = [1, 64, 64, 64]
     kernel_size = (2, 2)
     padding = (0, 0)

@@ -185,7 +185,8 @@ uint32_t calculate_L1_usage(
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
-    const Layout& output_layout) {
+    const Layout& output_layout,
+    const DataType& output_dtype) {
     const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (input_memory.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -238,8 +239,9 @@ uint32_t calculate_L1_usage(
     const bool is_output_tiled = (output_layout == Layout::TILE);
 
     if (is_output_tiled) {
-        // Tiled output: use tile-based allocation
-        out_cb_pagesize = tt::tile_size(params.data_format);
+        // Tiled output: use tile-based allocation with output data format
+        tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output_dtype);
+        out_cb_pagesize = tt::tile_size(output_cb_data_format);
         out_cb_npages = output_memory.shard_spec().value().shape[0] * output_memory.shard_spec().value().shape[1] /
                         tt::constants::TILE_HW;
     } else {
@@ -276,7 +278,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     Pool2DType pool_type,
     bool count_include_pad,
     std::optional<int32_t> divisor_override,
-    const Layout& output_layout) {
+    const Layout& output_layout,
+    const DataType& output_dtype) {
     uint32_t batch_size = sliding_window_config.batch_size;
     auto output_shape = sliding_window_config.get_output_shape();
     auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
@@ -329,7 +332,8 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             pool_type,
             count_include_pad,
             divisor_override,
-            output_layout);
+            output_layout,
+            output_dtype);
 
         return {.l1_usage = l1_usage, .config = input_parallel_config};
     };

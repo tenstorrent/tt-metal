@@ -249,8 +249,17 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     const uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_h, kernel_w, divisor_override);
     const uint32_t bf16_init_value = get_bf16_pool_init_value(pool_type);
     log_info(tt::LogOp, "input data format: {}", input.dtype());
+    log_info(tt::LogOp, "output data format: {}", output.dtype());
+
+    // Get factory parameters from input tensor (for internal processing CBs)
     FactoryParameters params = get_factory_parameters(num_shards_c, input, kernel_h, kernel_w, pool_type);
-    log_info(tt::LogOp, "data format {}", params.data_format);
+    log_info(tt::LogOp, "internal CB data format: {} (nbytes: {})", params.data_format, params.nbytes);
+
+    // Separate output data format for output CB only
+    auto output_dtype = output.dtype();
+    tt::DataFormat output_cb_data_format = datatype_to_dataformat_converter(output_dtype);
+
+    log_info(tt::LogOp, "output CB data format: {}", output_cb_data_format);
     uint32_t pad_h = pad_t + pad_b;
     uint32_t pad_w = pad_l + pad_r;
     const bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
@@ -381,20 +390,22 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t out_cb_npages;
 
     if (is_output_tiled) {
-        // Tiled output: use tile-based allocation (existing logic)
-        out_cb_pagesize = tt::tile_size(params.data_format);
+        // Tiled output: use tile-based allocation with output data format
+        // tile_size() function knows how to handle BF8_B properly (1088 bytes vs 1024 for BF16)
+        out_cb_pagesize = tt::tile_size(output_cb_data_format);
         out_cb_npages =
             output.shard_spec().value().shape[0] * output.shard_spec().value().shape[1] / tt::constants::TILE_HW;
         log_info(tt::LogOp, "Using TILED output CB allocation: PS={}, NP={}", out_cb_pagesize, out_cb_npages);
     } else {
-        // Row-major output: use stick-based allocation
+        // Row-major output: use stick-based allocation with input data format
+        // BF8_B + ROW_MAJOR is not supported, so this should only use BF16
         out_cb_pagesize = std::min(tt::constants::TILE_WIDTH, output.shard_spec().value().shape[1]) * params.nbytes;
         out_cb_npages = output.shard_spec().value().shape[0] * params.in_ntiles_c;
         log_info(tt::LogOp, "Using ROW_MAJOR output CB allocation: PS={}, NP={}", out_cb_pagesize, out_cb_npages);
     }
 
     const auto [out_cb_id, cb_out] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, params.data_format, output.buffer());
+        next_cb_index++, program, all_cores, out_cb_pagesize, out_cb_npages, output_cb_data_format, output.buffer());
     log_info(tt::LogOp, "OUT CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
@@ -548,7 +559,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         pool_type,
         count_include_pad,
         divisor_override,
-        output_layout);
+        output_layout,
+        output.dtype());
     uint32_t output_cb_size = post_allocate_size - memory_used;
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run

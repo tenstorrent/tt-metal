@@ -122,7 +122,8 @@ static Tensor pool2d_invoke(
                     pool_type,
                     count_include_pad,
                     divisor_override,
-                    output_layout);
+                    output_layout,
+                    output_data_format);
             TT_FATAL(
                 sw_parallel_config.has_value(),
                 "autosharding could not determine valid shard scheme, please check tensor dimensions");
@@ -237,8 +238,12 @@ Tensor MaxPool2DOp::invoke(
     bool in_place_halo,
     const DataType output_data_format,
     const Layout output_layout) {
-    TT_FATAL(output_data_format == DataType::BFLOAT16, "Currently only BFLOAT16 output data format is supported");
-    TT_FATAL(output_layout == Layout::ROW_MAJOR || output_layout == Layout::TILE, "Only ROW_MAJOR and TILE output layouts are supported");
+    TT_FATAL(
+        output_data_format == DataType::BFLOAT16 || output_data_format == DataType::BFLOAT8_B,
+        "Currently only BFLOAT16 and BFLOAT8_B output data formats are supported");
+    TT_FATAL(
+        !(output_data_format == DataType::BFLOAT8_B && output_layout == Layout::ROW_MAJOR),
+        "BFLOAT8_B output data format is not supported with ROW_MAJOR layout");
 
     return pool2d_invoke(
         queue_id,
