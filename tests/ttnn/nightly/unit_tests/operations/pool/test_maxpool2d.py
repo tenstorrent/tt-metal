@@ -278,7 +278,7 @@ def run_max_pool(
     "dilation",
     (
         (1, 1),
-        (3, 4),
+        (2, 2),
     ),
 )
 @pytest.mark.parametrize(
@@ -347,7 +347,7 @@ def test_run_max_pool_height_shard(
     "dilation",
     (
         (1, 1),
-        (2, 2),
+        (3, 1),
     ),
 )
 @pytest.mark.parametrize(
@@ -422,7 +422,7 @@ def test_run_max_pool_width_shard(
     "dilation",
     (
         (1, 1),
-        (1, 3),
+        (4, 3),
     ),
 )
 @pytest.mark.parametrize(
