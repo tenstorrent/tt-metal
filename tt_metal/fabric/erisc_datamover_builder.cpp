@@ -112,6 +112,38 @@ static void configure_risc_settings(
     }
 }
 
+static void update_sender_channel_servicing(
+    tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
+    std::vector<FabricRiscConfig>& risc_configs,
+    eth_chan_directions direction,
+    Topology topology) {
+    switch (fabric_tensix_config) {
+        case tt::tt_fabric::FabricTensixConfig::MUX: break;
+        default: TT_FATAL(false, "Error, invalid fabric_tensix_config: {}", static_cast<int>(fabric_tensix_config));
+    }
+
+    // Determine which channel corresponds to the current direction
+    const bool is_2D_routing = FabricContext::is_2D_topology(topology);
+    uint32_t target_channel = is_2D_routing ? direction : 0;
+
+    auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        for (auto& risc_config : risc_configs) {
+            risc_config.reset_sender_channel_serviced();
+            // Set only the channel corresponding to the current direction to true
+            for (size_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+                risc_config.set_sender_channel_serviced(i, i == target_channel);
+            }
+        }
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        risc_configs[0].reset_sender_channel_serviced();
+        // Set only the channel corresponding to the current direction to true
+        for (size_t i = 0; i < FabricEriscDatamoverConfig::num_sender_channels; i++) {
+            risc_configs[0].set_sender_channel_serviced(i, i == target_channel);
+        }
+    }
+}
+
 static size_t get_num_riscv_cores() {
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_is_fabric_2_erisc_mode_enabled()) {
         size_t nriscs = tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
@@ -290,7 +322,14 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
     std::array<size_t, num_sender_channels>& num_sender_buffer_slots,
     std::array<size_t, num_sender_channels>& num_remote_sender_buffer_slots,
     std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
-    std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots) {
+    std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
+    eth_chan_directions direction) {
+    // Architecture-specific buffer slot configurations
+    static const std::vector<std::vector<std::pair<size_t, size_t>>> default_with_tensix_buffer_slot_options = {
+        {{16, 16}, {8, 16}, {8, 8}},  // WORMHOLE_B0: {sender_slots, receiver_slots}
+        {{16, 16}, {8, 16}, {8, 8}}   // BLACKHOLE: {sender_slots, receiver_slots}
+    };
+
     static const std::vector<std::vector<std::pair<size_t, size_t>>> ring_buffer_slot_options = {
         {{8, 8}, {4, 8}}, {{8, 8}, {4, 8}}};
 
@@ -394,6 +433,29 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
         arch_index = 1;
     } else {
         TT_THROW("Unsupported architecture: {}", enchantum::to_string(arch));
+    }
+
+    switch (options.fabric_tensix_config) {
+        case tt::tt_fabric::FabricTensixConfig::MUX: {
+            bool is_2D_routing = FabricContext::is_2D_topology(topology);
+            uint32_t target_channel = is_2D_routing ? direction : 0;
+            size_t default_num_sender_buffer_slots;
+            size_t default_num_receiver_buffer_slots;
+            // get the default buffer slots
+            get_optimal_num_slots(
+                default_with_tensix_buffer_slot_options[arch_index],
+                this->num_sender_channels_with_tensix_config,
+                this->num_used_receiver_channels,
+                default_num_sender_buffer_slots,
+                default_num_receiver_buffer_slots);
+            // set default buffer slots.
+            num_sender_buffer_slots[target_channel] = default_num_sender_buffer_slots;
+            num_remote_sender_buffer_slots[target_channel] = default_num_sender_buffer_slots;
+            num_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
+            num_remote_receiver_buffer_slots.fill(default_num_receiver_buffer_slots);
+            return;
+        }
+        default: break;
     }
 
     if (topology == Topology::Ring) {
@@ -594,6 +656,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     this->sender_txq_id = 0;
     this->receiver_txq_id = 0;
 
+    // Update sender channel servicing based on fabric tensix configuration
+    if (options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        // Use default direction (EAST) for the constructor case since direction isn't available here
+        update_sender_channel_servicing(options.fabric_tensix_config, this->risc_configs, options.direction, topology);
+    }
+
     const bool is_2D_routing = FabricContext::is_2D_topology(topology);
 
     this->channel_buffer_size_bytes = channel_buffer_size_bytes;
@@ -679,6 +747,7 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     bool is_dateline = options.edm_type == FabricEriscDatamoverType::Dateline;
     bool is_dateline_upstream = options.edm_type == FabricEriscDatamoverType::DatelineUpstream;
     bool is_dateline_upstream_adj_dev = options.edm_type == FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice;
+    bool has_mux_config = options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX;
 
     configure_buffer_slots_helper(
         topology,
@@ -686,7 +755,8 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         num_sender_buffer_slots,
         num_remote_sender_buffer_slots,
         num_receiver_buffer_slots,
-        num_remote_receiver_buffer_slots);
+        num_remote_receiver_buffer_slots,
+        options.direction);
 
     log_trace(
         tt::LogOp,
@@ -765,9 +835,12 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     log_trace(tt::LogOp, "Available channel buffering space: {}", this->available_channel_buffering_space);
 
     auto skip_current_sender_channel = [&](uint32_t idx) -> bool {
+        bool is_2D_routing = FabricContext::is_2D_topology(topology);
+        uint32_t target_channel = is_2D_routing ? options.direction : 0;
         return (idx == get_dateline_sender_channel_skip_idx(is_2D_routing) && is_dateline) ||
                (idx == this->dateline_upstream_sender_channel_skip_idx && is_dateline_upstream) ||
-               (idx == this->dateline_upstream_adjcent_sender_channel_skip_idx && is_dateline_upstream_adj_dev);
+               (idx == this->dateline_upstream_adjcent_sender_channel_skip_idx && is_dateline_upstream_adj_dev) ||
+               (idx != target_channel && has_mux_config);
     };
 
     for (uint32_t i = 0; i < this->num_used_sender_channels; i++) {
@@ -1081,11 +1154,17 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     auto local_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
     auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(local_physical_chip_id);
 
-    size_t sender_channel_num_buffers = this->sender_channels_num_buffers[0];
+    const bool is_2D_routing =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
+    auto sender_channel_to_check = is_2D_routing ? direction : 0;
+    size_t sender_channel_num_buffers = this->sender_channels_num_buffers[sender_channel_to_check];
     size_t receiver_channel_num_buffers =
         this->dateline_connection ? this->receiver_channels_num_buffers[1] : this->receiver_channels_num_buffers[0];
 
-    TT_FATAL(sender_channel_num_buffers > 0, "Sender channel num buffers must be greater than 0");
+    TT_FATAL(
+        sender_channel_num_buffers > 0,
+        "Sender channel on direction {} num buffers must be greater than 0",
+        sender_channel_to_check);
     TT_FATAL(receiver_channel_num_buffers > 0, "Receiver channel num buffers must be greater than 0");
 
     const auto& fabric_context = control_plane.get_fabric_context();

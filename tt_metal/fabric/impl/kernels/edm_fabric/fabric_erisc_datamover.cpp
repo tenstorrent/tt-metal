@@ -2377,7 +2377,8 @@ void kernel_main() {
         local_sender_buffer_addresses.data(), channel_buffer_size, sizeof(PACKET_HEADER_TYPE), sender_channel_base_id);
 
     // initialize the local sender channel worker interfaces
-    if constexpr (is_sender_channel_serviced[0]) {
+    constexpr auto sender_channel = is_2d_fabric ? my_direction : 0;
+    if constexpr (is_sender_channel_serviced[sender_channel]) {
         init_local_sender_channel_worker_interfaces(
             local_sender_connection_live_semaphore_addresses,
             local_sender_connection_info_addresses,
