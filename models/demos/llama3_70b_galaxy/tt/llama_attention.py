@@ -5,6 +5,7 @@
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.rmsnorm import RMSNorm
 
 
 class TtLlamaAttention(LightweightModule):
@@ -496,12 +497,14 @@ class TtLlamaAttention(LightweightModule):
                 device=self.mesh_device,
             )
 
-        #     q_heads_pre_rot_1BQD = ttnn.to_layout(
-        #         q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT, memory_config=rm_mem_cfg_qkv
-        #     )
-        #     k_heads_pre_rot_1BKD = ttnn.to_layout(
-        #         k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT, memory_config=rm_mem_cfg_qkv
-        #     )
+            q_heads_pre_rot_1BQD = ttnn.to_layout(
+                q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT, memory_config=rm_mem_cfg_q
+            )
+            k_heads_pre_rot_1BKD = ttnn.to_layout(
+                k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT, memory_config=rm_mem_cfg_k
+            )
+
+            breakpoint()
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
