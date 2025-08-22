@@ -29,7 +29,9 @@ def custom_preprocessor(model, name, mesh_mapper=None):
     return parameters
 
 
-def create_yolov12x_input_tensors(device, batch_size=1, input_channels=3, input_height=640, input_width=640):
+def create_yolov12x_input_tensors(
+    device, batch_size=1, input_channels=3, input_height=640, input_width=640, input_dtype=ttnn.bfloat8_b
+):
     inputs_mesh_mapper, _, _ = get_mesh_mappers(device)
     torch_input_tensor = torch.randn(batch_size, input_channels, input_height, input_width)
     n, c, h, w = torch_input_tensor.shape
@@ -42,15 +44,19 @@ def create_yolov12x_input_tensors(device, batch_size=1, input_channels=3, input_
         ttnn.CoreGrid(x=8, y=8),
         ttnn.ShardStrategy.HEIGHT,
     )
-    ttnn_input_tensor = ttnn.from_torch(
-        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=inputs_mesh_mapper
+    ttnn_input_host = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_mem_config,
+        mesh_mapper=inputs_mesh_mapper,
     )
-    ttnn_input_tensor = ttnn_input_tensor.to(device, input_mem_config)
-    return torch_input_tensor, ttnn_input_tensor
+    return torch_input_tensor, ttnn_input_host
 
 
 def create_yolov12x_input_tensors_submodules(
-    device, batch_size=1, input_channels=3, input_height=640, input_width=640, weights_mesh_mapper=None
+    device, batch_size=1, input_channels=3, input_height=640, input_width=640, input_dtype=ttnn.bfloat8_b
 ):
     torch_input_tensor = torch.randn(batch_size, input_channels, input_height, input_width)
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
@@ -60,7 +66,12 @@ def create_yolov12x_input_tensors_submodules(
         ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
         ttnn_input_tensor.shape[3],
     )
-    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, mesh_mapper=weights_mesh_mapper)
+    ttnn_input_tensor = ttnn.from_torch(
+        ttnn_input_tensor,
+        dtype=input_dtype,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+    )
     return torch_input_tensor, ttnn_input_tensor
 
 

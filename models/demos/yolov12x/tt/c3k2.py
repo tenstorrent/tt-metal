@@ -36,10 +36,8 @@ class TtnnC3k:
         x2 = self.cv2(x)
         k1 = self.k1(x1)
         ttnn.deallocate(x1)
-
         k2 = self.k2(k1)
         ttnn.deallocate(k1)
-
         x = concat(-1, True, k2, x2)
         ttnn.deallocate(x2)
         ttnn.deallocate(k2)
@@ -93,7 +91,7 @@ class TtnnC3k2:
     def __call__(self, x, i=0):
         x = self.cv1(x)
         if x.is_sharded():
-            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
+            x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG, output_dtype=ttnn.bfloat8_b)
 
         y1 = x[:, :, :, : x.shape[-1] // 2]
         y2 = x[:, :, :, x.shape[-1] // 2 : x.shape[-1]]
@@ -109,6 +107,5 @@ class TtnnC3k2:
         ttnn.deallocate(y1)
         ttnn.deallocate(y2)
         ttnn.deallocate(y3)
-
         x = self.cv2(x)
         return x
