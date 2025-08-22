@@ -195,7 +195,6 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
 
     // Get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Compile arguments
@@ -220,29 +219,29 @@ RMSNormBackwardProgramFactory::cached_program_t RMSNormBackwardProgramFactory::c
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto precise_data_format = tt::DataFormat::Float32;
 
-    auto cb_input = create_circular_buffer(
+    [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    auto cb_mask_w = create_circular_buffer(
+    [[maybe_unused]] auto cb_mask_w = create_circular_buffer(
         program, all_cores, kMaskWCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
-    auto cb_scaler = create_circular_buffer(
+    [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
-    auto cb_gamma = create_circular_buffer(
+    [[maybe_unused]] auto cb_gamma = create_circular_buffer(
         program, all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    auto cb_rms_a = create_circular_buffer(
+    [[maybe_unused]] auto cb_rms_a = create_circular_buffer(
         program, all_cores, kRmsACbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRmsATiles);
-    auto cb_dLdout = create_circular_buffer(
+    [[maybe_unused]] auto cb_dLdout = create_circular_buffer(
         program, all_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    auto cb_mat_mul_reduce = create_circular_buffer(
+    [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulReduceCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMatMulReduceTiles);
-    auto cb_dL_da = create_circular_buffer(
+    [[maybe_unused]] auto cb_dL_da = create_circular_buffer(
         program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    auto cb_dL_dgamma_components = create_circular_buffer(
+    [[maybe_unused]] auto cb_dL_dgamma_components = create_circular_buffer(
         program, all_cores, kDLdgammaComponentsCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-    auto cb_recip_rms_a_bcasted = create_circular_buffer(
+    [[maybe_unused]] auto cb_recip_rms_a_bcasted = create_circular_buffer(
         program, all_cores, kRecipRmsACbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRecipRmsATiles);
-    auto cb_scale = create_circular_buffer(
+    [[maybe_unused]] auto cb_scale = create_circular_buffer(
         program, all_cores, kScaleCbIndex, precise_data_format, float32_single_tile_size_bytes, kNumScaleTiles);
-    auto cb_scale_bcasted = create_circular_buffer(
+    [[maybe_unused]] auto cb_scale_bcasted = create_circular_buffer(
         program,
         all_cores,
         kScaleBcastedCbIndex,
@@ -381,10 +380,6 @@ void RMSNormBackwardProgramFactory::override_runtime_arguments(
     auto& shared_variables = cached_program.shared_variables;
     auto& rmsnorm_bw_reader_kernel_id = shared_variables.rmsnorm_bw_reader_kernel_id;
     auto& rmsnorm_bw_writer_kernel_id = shared_variables.rmsnorm_bw_writer_kernel_id;
-    auto& rmsnorm_bw_kernel_group_1_id = shared_variables.rmsnorm_bw_kernel_group_1_id;
-    auto& rmsnorm_bw_kernel_group_2_id = shared_variables.rmsnorm_bw_kernel_group_2_id;
-    auto& core_group_1 = shared_variables.core_group_1;
-    auto& core_group_2 = shared_variables.core_group_2;
 
     uint32_t num_cores = shared_variables.num_cores;
     uint32_t num_cores_y = shared_variables.num_cores_y;
