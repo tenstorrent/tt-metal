@@ -1017,8 +1017,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             uint32_t v_addr = v_buffer->address();
             uint32_t out_addr = out0_buffer->address();
 
-            auto cur_pos_tensor = optional_input_tensors.at(0);
-            auto page_table_tensor = optional_input_tensors.at(1);
+            const auto& cur_pos_tensor = optional_input_tensors.at(0);
+            const auto& page_table_tensor = optional_input_tensors.at(1);
             uint32_t pos_addr = use_cur_pos_tensor ? cur_pos_tensor.value().buffer()->address() : 0;
 
             uint32_t page_table_addr =
