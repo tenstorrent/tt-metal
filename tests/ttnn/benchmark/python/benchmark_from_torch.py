@@ -40,34 +40,43 @@ def test_benchmark_from_torch_two_copy(benchmark):
     benchmark.pedantic(from_torch, iterations=10, rounds=5, warmup_rounds=1)
 
 
+TORCH_BENCH_TYPES = [
+    torch.float16,
+    torch.bfloat16,
+    torch.float32,
+    torch.int32,
+    torch.int64,
+    torch.uint8,
+]
+
+TTNN_BENCH_TYPES = [
+    ttnn.float32,
+    ttnn.bfloat16,
+    ttnn.bfloat8_b,
+    ttnn.bfloat4_b,
+    ttnn.bfloat16,
+    ttnn.uint8,
+    ttnn.int32,
+]
+
+
 @pytest.mark.parametrize("use_device", [True, False])
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize(
-    "torch_dtype",
-    [
-        torch.float16,
-        torch.bfloat16,
-        torch.float32,
-        torch.int32,
-        torch.int64,
-        torch.uint8,
-    ],
-)
-@pytest.mark.parametrize(
-    "ttnn_dtype",
-    [
-        ttnn.float32,
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-        ttnn.bfloat4_b,
-        ttnn.bfloat16,
-        ttnn.uint8,
-        ttnn.int32,
-    ],
-)
+@pytest.mark.parametrize("torch_dtype", TORCH_BENCH_TYPES)
+@pytest.mark.parametrize("ttnn_dtype", TTNN_BENCH_TYPES)
 @pytest.mark.parametrize(
     "size",
-    [32, 64, 128, 256, 512, 1024, 2048, 4096, 8192],
+    [
+        32,
+        64,
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096,
+        8192,
+    ],
 )
 def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout, size, request):
     if ttnn_layout == ttnn.ROW_MAJOR_LAYOUT and ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]:
@@ -95,28 +104,21 @@ def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_d
 
 @pytest.mark.parametrize("use_device", [True, False])
 @pytest.mark.parametrize("ttnn_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize(
-    "torch_dtype",
-    [
-        torch.float16,
-        torch.float32,
-        torch.int32,
-    ],
-)
-@pytest.mark.parametrize(
-    "ttnn_dtype",
-    [
-        ttnn.float32,
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-        ttnn.bfloat16,
-        ttnn.uint8,
-        ttnn.int32,
-    ],
-)
+@pytest.mark.parametrize("torch_dtype", TORCH_BENCH_TYPES)
+@pytest.mark.parametrize("ttnn_dtype", TTNN_BENCH_TYPES)
 @pytest.mark.parametrize(
     "size",
-    [256, 512, 1024, 2048, 4096, 8192],
+    [
+        32,
+        64,
+        128,
+        256,
+        512,
+        1024,
+        2048,
+        4096,
+        8192,
+    ],
 )
 def test_benchmark_to_torch(benchmark, device, use_device, ttnn_dtype, torch_dtype, size, ttnn_layout):
     if ttnn_layout == ttnn.ROW_MAJOR_LAYOUT and ttnn_dtype in [ttnn.bfloat8_b, ttnn.bfloat4_b]:

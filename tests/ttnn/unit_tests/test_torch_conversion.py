@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc, tt_dtype_to_torch_dtype
 import torch
 import ttnn
