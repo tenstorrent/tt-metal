@@ -41,7 +41,10 @@ namespace tt_metal {
 
 void Reduce::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to reduce need to be on device!");
+    TT_FATAL(
+        input_tensor.storage_type() == StorageType::DEVICE,
+        "Operands to reduce need to be on device! Got storage type: {}",
+        input_tensor.storage_type());
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to reduce need to be allocated in buffers on device!");
     TT_FATAL((input_tensor.layout() == Layout::TILE), "Inputs to reduce must be tilized");
 }
@@ -168,7 +171,7 @@ Tensor reduce(
         /*default_fp32_acc=*/true));
 
     if (is_multicore_hw) {
-        IDevice* device;
+        distributed::MeshDevice* device;
         // Get the device
         if (input_tensor.storage_type() != StorageType::DEVICE) {
             device = ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice();

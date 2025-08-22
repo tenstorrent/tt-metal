@@ -42,6 +42,7 @@ enum class BinaryOpType {
     LCM,
     ADDALPHA,
     SUBALPHA,
+    XLOGY,
 };
 
 }  // namespace ttnn::operations::binary

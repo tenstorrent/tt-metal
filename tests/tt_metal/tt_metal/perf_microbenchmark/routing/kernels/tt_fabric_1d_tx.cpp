@@ -12,9 +12,10 @@
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 #ifdef TEST_ENABLE_FABRIC_TRACING
-#include "tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp"
+#include "tt_metal/tools/profiler/fabric_event_profiler.hpp"
 #endif
 
 // clang-format on
@@ -169,7 +170,6 @@ void kernel_main() {
     using namespace tt::tt_fabric;
 
     size_t rt_args_idx = 0;
-    uint32_t packet_header_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t source_l1_buffer_address = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_packets = get_arg_val<uint32_t>(rt_args_idx++);
@@ -213,8 +213,8 @@ void kernel_main() {
     fwd_fabric_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    fwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_address);
-    zero_l1_buf((uint32_t*)packet_header_buffer_address, sizeof(PACKET_HEADER_TYPE));
+    fwd_packet_header = PacketHeaderPool::allocate_header();
+    zero_l1_buf((uint32_t*)fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
 
     setup_connection(fwd_fabric_connection);
 
@@ -243,10 +243,8 @@ void kernel_main() {
         bwd_fabric_connection =
             tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-        bwd_packet_header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(
-            packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE));
-
-        zero_l1_buf((uint32_t*)packet_header_buffer_address + sizeof(PACKET_HEADER_TYPE), sizeof(PACKET_HEADER_TYPE));
+        bwd_packet_header = PacketHeaderPool::allocate_header();
+        zero_l1_buf((uint32_t*)bwd_packet_header, sizeof(PACKET_HEADER_TYPE));
 
         setup_connection(bwd_fabric_connection);
 

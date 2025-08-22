@@ -10,6 +10,8 @@
 #include "fold_device_op.hpp"
 #include "ttnn/operations/math.hpp"
 
+#include <tt-metalium/tensor_accessor_args.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
@@ -28,9 +30,7 @@ Fold::SingleCore::cached_program_t fold_single_core(
     // chunk consists of channel values of stride_w neighboring pixels along the W dimension
     uint32_t width = input.padded_shape()[2];
     uint32_t chunk_size = stride_w * pixel_size;
-    uint32_t row_size = width * pixel_size;
     uint32_t dst_pixel_size = stride_h * chunk_size;
-    uint32_t dst_row_size = stride_h * row_size;
     uint32_t num_dst_rows = num_pixels / (width * stride_h);
     uint32_t cb_pages_per_dst_row = stride_h * width;
 
@@ -39,8 +39,6 @@ Fold::SingleCore::cached_program_t fold_single_core(
 
     tt::tt_metal::Buffer* src_buffer = input.buffer();
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    bool src_is_dram = (src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM);
-    bool dst_is_dram = (dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM);
 
     // Setup CB.
     uint32_t cb_src0_index = tt::CBIndex::c_0;
@@ -64,24 +62,11 @@ Fold::SingleCore::cached_program_t fold_single_core(
     std::shared_ptr<tt::tt_metal::Buffer> scratch_buffer = CreateBuffer(l1_config);
 
     // Setup kernels
-    uint32_t src_unit_size_is_power_of_two = is_power_of_two_at_least_32(aligned_pixel_size);
-    uint32_t src_log2_unit_size = src_unit_size_is_power_of_two ? (std::uint32_t)std::log2(aligned_pixel_size) : 0;
-    std::vector<uint32_t> reader_compile_time_args = {
-        cb_src0_index,
-        src_is_dram,
-        src_unit_size_is_power_of_two,
-        src_log2_unit_size,
-    };
+    std::vector<uint32_t> reader_compile_time_args = {cb_src0_index, aligned_pixel_size};
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
-    uint32_t dst_unit_size_is_power_of_two = is_power_of_two_at_least_32(aligned_dst_pixel_size);
-    uint32_t dst_log2_unit_size = dst_unit_size_is_power_of_two ? (std::uint32_t)std::log2(aligned_dst_pixel_size) : 0;
-
-    std::vector<uint32_t> writer_compile_time_args = {
-        cb_dst0_index,
-        dst_is_dram,
-        dst_unit_size_is_power_of_two,
-        dst_log2_unit_size,
-    };
+    std::vector<uint32_t> writer_compile_time_args = {cb_dst0_index, aligned_dst_pixel_size};
+    TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

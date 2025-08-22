@@ -20,10 +20,9 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/common/constants.hpp"
 #include "ttnn/common/queue_id.hpp"
-#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/ternary/where/where.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "tools/profiler/op_profiler.hpp"
-#include <magic_enum/magic_enum.hpp>
 
 namespace ttnn::operations::binary_backward {
 
@@ -232,7 +231,7 @@ std::vector<ttnn::Tensor> ExecuteBackwardXlogy::invoke(
     const Tensor& other,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
-    Tensor grad1_result = ttnn::log(other, output_mem_config);
+    Tensor grad1_result = ttnn::log(other, true, output_mem_config);
     grad1_result = ttnn::where(
         ttnn::logical_and(
             ttnn::eqz(input, output_mem_config),

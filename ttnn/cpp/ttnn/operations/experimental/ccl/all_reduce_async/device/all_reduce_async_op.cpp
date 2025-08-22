@@ -16,8 +16,6 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& buffer_tensor = input_tensors[1];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
     TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
     TT_FATAL(
@@ -116,13 +114,11 @@ tt::tt_metal::operation::ProgramWithCallbacks AllReduceAsync::create_program_at(
     }
 
     auto input_tensor_shape = input_tensors[0].padded_shape();
-    auto input_tensor_buffer_layout = input_tensors[0].buffer()->buffer_layout();
-    auto input_tensor_page_layout = input_tensors[0].layout();
 
     auto input_tensor_memory_config = input_tensors[0].memory_config();
     auto output_tensor_memory_config = output_tensors[0].memory_config();
-    uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
-    uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
+    [[maybe_unused]] uint32_t input_shard_num_cores = input_tensor_memory_config.shard_spec()->grid.num_cores();
+    [[maybe_unused]] uint32_t output_shard_num_cores = output_tensor_memory_config.shard_spec()->grid.num_cores();
 
     log_debug(tt::LogOp, "input_tensor_shape: {}", input_tensor_shape);
     log_debug(tt::LogOp, "input_tensor_memory_config: {}", input_tensor_memory_config);

@@ -257,12 +257,12 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
              (uint32_t)i,
              (uint32_t)sem_l1_byte_address});
 
-        llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             sender_device->id(),
             sender_device->ethernet_core_from_logical_core(eth_sender_core),
             inputs[i],
             src_eth_l1_byte_address + i * byte_size_per_device);
-        llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             sender_device->id(),
             sender_device->ethernet_core_from_logical_core(eth_sender_core),
             std::vector{INVALID},
@@ -280,12 +280,12 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
             }
         }
 
-        llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             receiver_device->id(),
             receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
             all_zeros,
             dst_eth_l1_byte_address);
-        llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             receiver_device->id(),
             receiver_device->ethernet_core_from_logical_core(eth_receiver_core),
             std::vector{INVALID},
@@ -323,7 +323,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
         const auto& core = std::get<2>(sender_receivers[i]);
-        auto readback_vec = llrt::read_hex_vec_from_core(
+        auto readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device->id(),
             device->ethernet_core_from_logical_core(core),
             src_eth_l1_byte_address,
@@ -382,7 +382,6 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
 
         auto input_buffer = CreateBuffer(
             tt_metal::InterleavedBufferConfig{device, cfg.size_bytes, cfg.page_size_bytes, cfg.input_buffer_type});
-        bool input_is_dram = cfg.input_buffer_type == tt_metal::BufferType::DRAM;
         tt_metal::detail::WriteToBuffer(input_buffer, inputs[i]);
         output_buffers.emplace_back(CreateBuffer(tt_metal::InterleavedBufferConfig{
             device, cfg.size_bytes * sender_receivers.size(), cfg.page_size_bytes, cfg.output_buffer_type}));
@@ -416,13 +415,13 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
              (uint32_t)cfg.num_pages,
              (uint32_t)cfg.page_size_bytes,
              (uint32_t)sem_l1_byte_address});
-        llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device->id(),
             device->ethernet_core_from_logical_core(eth_sender_core),
             std::vector{INVALID},
             sem_l1_byte_address);
 
-        llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device->id(),
             device->ethernet_core_from_logical_core(eth_receiver_core),
             std::vector{INVALID},

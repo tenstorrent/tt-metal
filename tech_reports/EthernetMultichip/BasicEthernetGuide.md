@@ -577,7 +577,7 @@ The implementation of each device kernel is described in further detail in this 
 
 ### Receiver Kernel
 
-Intialization: initialize local data-structures and wait for go signal from setup kernel
+Initialization: initialize local data-structures and wait for go signal from setup kernel
 
 ```c++
 // This address resides in the eth_channel_sync data-structure for the Ethernet

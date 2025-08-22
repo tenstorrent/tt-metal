@@ -11,58 +11,6 @@
 #include <algorithm>
 
 struct alignas(uint64_t) KernelProfilerNocEventMetadata {
-    enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
-    using NocVirtualChannel = int8_t;
-    static constexpr uint32_t PAYLOAD_CHUNK_SIZE = 32;
-
-    // New struct for local NOC events
-    struct LocalNocEvent {
-        int8_t dst_x;
-        int8_t dst_y;
-        int8_t mcast_end_dst_x;
-        int8_t mcast_end_dst_y;
-        NocType noc_type : 4;
-        NocVirtualChannel noc_vc : 4;
-        uint8_t payload_chunks;
-
-        void setNumBytes(uint32_t num_bytes) {
-            uint32_t bytes_rounded_up = (num_bytes + PAYLOAD_CHUNK_SIZE - 1) / PAYLOAD_CHUNK_SIZE;
-            payload_chunks = std::min(uint32_t(std::numeric_limits<uint8_t>::max()), bytes_rounded_up);
-        }
-        uint32_t getNumBytes() const { return payload_chunks * PAYLOAD_CHUNK_SIZE; }
-    };
-
-    // represents a fabric NOC event
-    enum class FabricPacketType : unsigned char { REGULAR, LOW_LATENCY, LOW_LATENCY_MESH };
-    struct FabricNoCEvent {
-        int8_t dst_x;
-        int8_t dst_y;
-        int8_t mcast_end_dst_x;
-        int8_t mcast_end_dst_y;
-        FabricPacketType routing_fields_type;
-    };
-
-    struct FabricNoCScatterEvent {
-        int8_t dst_x;
-        int8_t dst_y;
-        int16_t chunk_size;
-        int8_t num_chunks;
-        FabricPacketType routing_fields_type;
-    };
-
-    // represents a fabric routing fields event; follows a FabricNoCEvent
-    struct FabricRoutingFields {
-        uint32_t routing_fields_value;
-    } __attribute__((packed));
-
-    // Union to hold either local or fabric event data
-    union EventData {
-        LocalNocEvent local_event;
-        FabricNoCEvent fabric_event;
-        FabricNoCScatterEvent fabric_scatter_event;
-        FabricRoutingFields fabric_routing_fields;
-    } data;
-
     // --- Type enum (tag) --- Must be defined before use in constructor
     enum class NocEventType : unsigned char {
         UNDEF = 0,
@@ -109,9 +57,70 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
 
         UNSUPPORTED = 36
     };
-    NocEventType noc_xfer_type;
 
-    KernelProfilerNocEventMetadata() : data{.local_event = {}}, noc_xfer_type(NocEventType::UNDEF) {}
+    enum class NocType : unsigned char { UNDEF = 0, NOC_0 = 1, NOC_1 = 2 };
+    using NocVirtualChannel = int8_t;
+    static constexpr uint32_t PAYLOAD_CHUNK_SIZE = 32;
+
+    // New struct for local NOC events
+    struct LocalNocEvent {
+        NocEventType noc_xfer_type;
+        int8_t dst_x;
+        int8_t dst_y;
+        int8_t mcast_end_dst_x;
+        int8_t mcast_end_dst_y;
+        NocType noc_type : 4;
+        NocVirtualChannel noc_vc : 4;
+        uint8_t payload_chunks;
+
+        void setNumBytes(uint32_t num_bytes) {
+            uint32_t bytes_rounded_up = (num_bytes + PAYLOAD_CHUNK_SIZE - 1) / PAYLOAD_CHUNK_SIZE;
+            payload_chunks = std::min(uint32_t(std::numeric_limits<uint8_t>::max()), bytes_rounded_up);
+        }
+        uint32_t getNumBytes() const { return payload_chunks * PAYLOAD_CHUNK_SIZE; }
+    };
+
+    // represents a fabric NOC event
+    enum class FabricPacketType : unsigned char { REGULAR, LOW_LATENCY, LOW_LATENCY_MESH };
+    struct FabricNoCEvent {
+        NocEventType noc_xfer_type;
+        int8_t dst_x;
+        int8_t dst_y;
+        int8_t mcast_end_dst_x;
+        int8_t mcast_end_dst_y;
+        FabricPacketType routing_fields_type;
+    };
+
+    struct FabricNoCScatterEvent {
+        NocEventType noc_xfer_type;
+        int8_t dst_x;
+        int8_t dst_y;
+        int16_t chunk_size;
+        int8_t num_chunks;
+        FabricPacketType routing_fields_type;
+    };
+
+    // represents a fabric routing fields event; follows a FabricNoCEvent
+    struct FabricRoutingFields {
+        NocEventType noc_xfer_type;
+        uint32_t routing_fields_value;
+    } __attribute__((packed));
+
+    struct RawEvent {
+        NocEventType noc_xfer_type;
+        uint64_t remaining_data : 56;
+    } __attribute__((packed));
+
+    // Union to hold either local or fabric event data
+    union EventData {
+        RawEvent raw_event;
+        LocalNocEvent local_event;
+        FabricNoCEvent fabric_event;
+        FabricNoCScatterEvent fabric_scatter_event;
+        FabricRoutingFields fabric_routing_fields;
+    } data{};
+
+    KernelProfilerNocEventMetadata() : data{.raw_event = {NocEventType::UNDEF}} {}
 
     // for deserialization on host side
     explicit KernelProfilerNocEventMetadata(const uint64_t raw_data) {
@@ -122,7 +131,10 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         return event_type >= NocEventType::FABRIC_UNICAST_WRITE &&
                event_type <= NocEventType::FABRIC_UNICAST_SCATTER_WRITE;
     }
-    bool isFabricRoutingFields() const { return noc_xfer_type == NocEventType::FABRIC_ROUTING_FIELDS; }
+
+    static bool isFabricRoutingFields(NocEventType event_type) {
+        return event_type == NocEventType::FABRIC_ROUTING_FIELDS;
+    }
 
     static bool isFabricUnicastEventType(NocEventType event_type) {
         return event_type >= NocEventType::FABRIC_UNICAST_WRITE &&
@@ -135,13 +147,13 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
 
     // Getter to return the correct variant based on the tag
     std::variant<LocalNocEvent, FabricNoCEvent, FabricNoCScatterEvent, FabricRoutingFields> getContents() const {
-        if (isFabricEventType(noc_xfer_type)) {
-            if (isFabricScatterEventType(noc_xfer_type)) {
+        if (isFabricEventType(data.raw_event.noc_xfer_type)) {
+            if (isFabricScatterEventType(data.raw_event.noc_xfer_type)) {
                 return data.fabric_scatter_event;
             } else {
                 return data.fabric_event;
             }
-        } else if (isFabricRoutingFields()) {
+        } else if (isFabricRoutingFields(data.raw_event.noc_xfer_type)) {
             return data.fabric_routing_fields;
         } else {
             return data.local_event;

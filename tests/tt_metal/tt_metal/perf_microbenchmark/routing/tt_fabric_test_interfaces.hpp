@@ -32,17 +32,18 @@ public:
     virtual FabricNodeId get_fabric_node_id(const MeshCoordinate& device_coord) const = 0;
     virtual FabricNodeId get_fabric_node_id(MeshId mesh_id, const MeshCoordinate& device_coord) const = 0;
     virtual MeshCoordinate get_device_coord(const FabricNodeId& node_id) const = 0;
-    virtual uint32_t get_worker_noc_encoding(const MeshCoordinate& device_coord, CoreCoord logical_core) const = 0;
-    virtual uint32_t get_worker_noc_encoding(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
+    virtual uint32_t get_worker_noc_encoding(CoreCoord logical_core) const = 0;
     virtual CoreCoord get_worker_grid_size() const = 0;
     virtual uint32_t get_worker_id(const FabricNodeId& node_id, CoreCoord logical_core) const = 0;
-    virtual std::vector<FabricNodeId> get_all_node_ids() const = 0;
+    virtual std::vector<FabricNodeId> get_local_node_ids() const = 0;
+    virtual std::vector<FabricNodeId> get_global_node_ids() const = 0;
+    virtual bool is_local_fabric_node_id(const FabricNodeId& id) const = 0;
     virtual uint32_t get_l1_unreserved_base() const = 0;
     virtual uint32_t get_l1_unreserved_size() const = 0;
     virtual uint32_t get_l1_alignment() const = 0;
     virtual uint32_t get_max_payload_size_bytes() const = 0;
-    virtual bool is_2d_fabric() const = 0;
-    virtual bool use_dynamic_routing() const = 0;
+    virtual bool is_2D_routing_enabled() const = 0;
+    virtual bool is_dynamic_routing_enabled() const = 0;
 
     // Data reading helpers
     virtual std::unordered_map<CoreCoord, std::vector<uint32_t>> read_buffer_from_cores(
@@ -100,7 +101,8 @@ public:
         const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
     virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
-
+    virtual FabricNodeId get_mcast_start_node_id(
+        const FabricNodeId& src_node_id, const std::unordered_map<RoutingDirection, uint32_t>& hops) const = 0;
     virtual std::pair<std::unordered_map<RoutingDirection, uint32_t>, uint32_t> get_sync_hops_and_val(
         const FabricNodeId& src_device, const std::vector<FabricNodeId>& devices) const = 0;
     virtual std::vector<uint32_t> get_forwarding_link_indices_in_direction(
@@ -108,6 +110,11 @@ public:
     virtual FabricNodeId get_neighbor_node_id(
         const FabricNodeId& src_node_id, const RoutingDirection& direction) const = 0;
     virtual bool validate_num_links_supported(uint32_t num_links) const = 0;
+};
+
+class IDistributedContextManager {
+    virtual uint32_t get_randomized_master_seed() const = 0;
+    virtual void barrier() const = 0;
 };
 
 }  // namespace fabric_tests

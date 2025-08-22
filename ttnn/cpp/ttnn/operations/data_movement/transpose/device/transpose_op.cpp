@@ -10,6 +10,7 @@
 #include <tt-metalium/hal.hpp>
 
 #include "transpose_program_factory.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -31,7 +32,6 @@ void Transpose::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& shape = input_tensor.padded_shape();
     bool row_major = input_tensor.layout() == Layout::ROW_MAJOR;
     uint32_t W = shape[3], H = shape[2], C = shape[1], N = shape[0];
-    uint32_t HW = H * W;
     if (not row_major) {
         TT_FATAL(
             W % TILE_WIDTH == 0 && H % TILE_HEIGHT == 0,
@@ -235,6 +235,17 @@ operation::ProgramWithCallbacks Transpose::create_program(
             return detail::transpose_cn_multi_core(input_tensor, output_tensor);
         default: TT_THROW("Unsupported parallelization strategy");
     }
+}
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> Transpose::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
 }
 
 TransposeOpParallelizationStrategy Transpose::get_parallelization_strategy(

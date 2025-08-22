@@ -211,10 +211,8 @@ def test_binary_sfpu_pow_bug(device, input_shapes, dtype):
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 def test_binary_sfpu_accuracy(device, dtype):
-    if ttnn.get_arch_name() == "blackhole":
-        pytest.skip("Blackhole implementation of pow is stil legacy and inaccurate")
-
     torch.manual_seed(0)
+
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
     torch_input_tensor_a = torch.tensor([[10.0, 10.0, 9.0, 9.0, 5.0, 100000, 10.0, 10.0, 2.0, 2.0]], dtype=torch_dtype)
@@ -236,11 +234,39 @@ def test_binary_sfpu_accuracy(device, dtype):
 
 
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
-def test_binary_sfpu_accuracy_pos(device, dtype):
-    if ttnn.get_arch_name() == "blackhole":
-        pytest.skip("Blackhole implementation of pow is stil legacy and inaccurate")
-
+def test_pow_determinism(device, dtype):
     torch.manual_seed(0)
+
+    torch_dtype = getattr(torch, dtype)
+    ttnn_dtype = getattr(ttnn, dtype)
+
+    shape = [512, 512]
+
+    torch_a = torch.randn(shape, dtype=torch_dtype)
+    torch_b = torch.randn(shape, dtype=torch_dtype)
+
+    # Run the operations twice, and check that results are the same
+    # This ensures that, by default, ttnn.pow is deterministic (expected behavior from MLIR)
+
+    ttnn_a = ttnn.from_torch(torch_a, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_b = ttnn.from_torch(torch_b, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # First round
+    ttnn_result_1 = ttnn.pow(ttnn_a, ttnn_b)
+    ttnn_result_1_torch = ttnn.to_torch(ttnn_result_1)
+
+    # Second round
+    ttnn_result_2 = ttnn.pow(ttnn_a, ttnn_b)
+    ttnn_result_2_torch = ttnn.to_torch(ttnn_result_2)
+
+    mask = torch.isnan(ttnn_result_1_torch) | torch.isnan(ttnn_result_2_torch)
+    assert torch.equal(ttnn_result_1_torch[~mask], ttnn_result_2_torch[~mask])
+
+
+@pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
+def test_binary_sfpu_accuracy_pos(device, dtype):
+    torch.manual_seed(0)
+
     torch_dtype = getattr(torch, dtype)
     ttnn_dtype = getattr(ttnn, dtype)
 

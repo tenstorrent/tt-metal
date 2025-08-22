@@ -33,8 +33,6 @@ using ::testing::SizeIs;
 using ::tt::tt_metal::distributed::MeshContainer;
 
 TEST(MeshDeviceInitTest, Init1x1Mesh) {
-    auto& sys = SystemMesh::instance();
-
     MeshDeviceConfig config(MeshShape(1, 1));
 
     EXPECT_NO_THROW({
@@ -65,18 +63,20 @@ TEST_F(MeshDevice2x4Test, MemoryAllocationStatistics) {
 }
 
 TEST_F(MeshDevice2x4Test, ViewIs2D) {
-    std::vector<IDevice*> devices = mesh_device_->get_devices();
+    std::vector<IDevice*> devices;
+    std::vector<tt::tt_fabric::FabricNodeId> fabric_node_ids;
+    for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
+        devices.push_back(mesh_device_->get_view().get_device(coord));
+        fabric_node_ids.push_back(mesh_device_->get_view().get_fabric_node_id(coord));
+    }
 
-    MeshContainer<IDevice*> container_1d(MeshShape(8), devices);
-    MeshDeviceView view_1d(container_1d);
+    MeshDeviceView view_1d(MeshShape(8), devices, fabric_node_ids);
     EXPECT_FALSE(view_1d.is_mesh_2d());
 
-    MeshContainer<IDevice*> container_2d(MeshShape(2, 4), devices);
-    MeshDeviceView view_2d(container_2d);
+    MeshDeviceView view_2d(MeshShape(2, 4), devices, fabric_node_ids);
     EXPECT_TRUE(view_2d.is_mesh_2d());
 
-    MeshContainer<IDevice*> container_3d(MeshShape(2, 2, 2), devices);
-    MeshDeviceView view_3d(container_3d);
+    MeshDeviceView view_3d(MeshShape(2, 2, 2), devices, fabric_node_ids);
     EXPECT_FALSE(view_3d.is_mesh_2d());
 }
 
@@ -141,7 +141,7 @@ TEST_F(MeshDeviceTest, CheckFabricNodeIds) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     EXPECT_EQ(mesh_device_->shape().dims(), 2);
     for (const auto& coord : MeshCoordinateRange(mesh_device_->shape())) {
-        tt_fabric::FabricNodeId fabric_node_id = mesh_device_->get_device_fabric_node_id(coord);
+        tt_fabric::FabricNodeId fabric_node_id = mesh_device_->get_fabric_node_id(coord);
         EXPECT_EQ(
             control_plane.get_fabric_node_id_from_physical_chip_id(mesh_device_->get_device(coord)->id()),
             fabric_node_id);

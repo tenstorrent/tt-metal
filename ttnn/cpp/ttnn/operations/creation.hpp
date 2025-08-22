@@ -273,6 +273,25 @@ struct Empty {
     }
 };
 
+struct FromBuffer {
+    template <typename BufferType>
+    static Tensor invoke(
+        const std::vector<BufferType>& buffer,
+        const Shape& shape,
+        const DataType dtype,
+        MeshDevice* device,
+        const std::optional<Layout>& layout = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+        // This is validated from the invoker, but we need to handle it just in case that the user wants to use it
+        TT_ASSERT(dtype != DataType::BFLOAT4_B && dtype != DataType::BFLOAT8_B, "Unsupported DataType!");
+        TensorSpec spec(
+            shape,
+            TensorLayout(
+                dtype, PageConfig(layout.value_or(ttnn::ROW_MAJOR_LAYOUT)), memory_config.value_or(MemoryConfig{})));
+        return Tensor::from_vector<BufferType>(buffer, spec, device);
+    }
+};
+
 struct EmptyLike {
     static Tensor invoke(
         const Tensor& tensor,
@@ -283,9 +302,10 @@ struct EmptyLike {
         Layout layout_value = layout.value_or(tensor.layout());
         DataType dtype_value = dtype.value_or(tensor.dtype());
         MemoryConfig mem_cfg = memory_config.value_or(tensor.memory_config());
+        MeshDevice* device_ptr = device.has_value() ? &device->get() : tensor.mesh_device();
         return allocate_tensor_on_device(
             TensorSpec(tensor.logical_shape(), TensorLayout(dtype_value, PageConfig(layout_value), mem_cfg)),
-            device.has_value() ? &device->get() : tensor.mesh_device());
+            device_ptr);
     }
 };
 
@@ -405,6 +425,8 @@ constexpr auto full = ttnn::decorators::register_operation<"ttnn::full", ttnn::o
 constexpr auto zeros = ttnn::decorators::register_operation<"ttnn::zeros", ttnn::operations::creation::Zeros>();
 constexpr auto ones = ttnn::decorators::register_operation<"ttnn::ones", ttnn::operations::creation::Ones>();
 constexpr auto empty = ttnn::decorators::register_operation<"ttnn::empty", ttnn::operations::creation::Empty>();
+constexpr auto from_buffer =
+    ttnn::decorators::register_operation<"ttnn::from_buffer", ttnn::operations::creation::FromBuffer>();
 
 constexpr auto full_like =
     ttnn::decorators::register_operation<"ttnn::full_like", ttnn::operations::creation::FullLike>();

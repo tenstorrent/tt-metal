@@ -29,16 +29,19 @@ jobs:
         ]
         model-group:
           - name: llm_javelin
+            timeout: 20
             model-list:
               - models/demos/falcon7b_common/tests
               - models/demos/wormhole/mamba/tests
 
           - name: cnn_javelin
+            timeout: 10
             model-list:
               - models/experimental/functional_unet/tests
               - models/demos/wormhole/stable_diffusion/tests
 
           - name: other
+            timeout: 5
             model-list:
               - models/demos/convnet_mnist/tests/
               # This is bad. These should be referencing .../tests directories
@@ -47,30 +50,40 @@ jobs:
               - models/demos/roberta/tests/test_performance.py
 
           - name: other_magic_env
+            timeout: 45
             model-list:
-              - models/demos/yolov10x/tests/
-              # This is bad. This should be referencing .../tests directory
-              - models/demos/sentence_bert/tests/test_sentence_bert_e2e_performant.py
+              - models/demos/yolov10x/tests/perf/
+              - models/demos/sentence_bert/tests/perf/
               # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py
-              # This is bad. This should be referencing .../tests directory
-              - models/demos/yolov11/tests/test_e2e_performant.py
+              - models/demos/yolov11/tests/perf/
               # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/bert_tiny/tests/test_performance.py
               - models/demos/yolov4/tests/perf/
-              - models/demos/yolov7/tests/
+              - models/demos/yolov7/tests/perf/
               # This is bad. This should be referencing .../tests directory
               - models/demos/wormhole/distilbert/tests/test_perf_distilbert.py
-              # This is bad. This should be referencing .../tests directory
-              - models/demos/segformer/tests/test_e2e_performant.py
+              - models/demos/segformer/tests/perf/
               - models/demos/metal_BERT_large_11/tests/
-              - models/demos/yolov8s_world/tests/
-              - models/demos/yolov8s/tests
-              - models/experimental/yolov6l/tests/
 
-          - name: tt_transformers
-            model-list:
-              - models/demos/qwen/tests
+              - models/demos/yolov8s_world/tests/perf/
+              - models/demos/yolov8s/tests/perf/
+              - models/demos/yolov6l/tests/perf/
+              - models/demos/mobilenetv2/tests/perf/
+              - models/demos/vgg_unet/tests/
+              - models/demos/yolov9c/tests/perf/
+              - models/demos/vanilla_unet/tests/perf/
+              - models/demos/yolov8x/tests/perf/
+              # e2e performant test is present in .../vit/demo folder only
+              - models/demos/wormhole/vit/demo/
+              - models/experimental/swin_v2/tests/perf/
+              - models/experimental/swin_s/tests/perf/
+              - models/experimental/yolov5x/tests/perf/
+              - models/experimental/vovnet/tests/perf/
+              - models/demos/yolov12x/tests/perf/
+              - models/demos/ufld_v2/tests/perf/
+              - models/experimental/efficientnetb0/tests/perf/
+
     name: "${{ matrix.model-group.name }} ${{ matrix.test-info.name }}"
     defaults:
       run:
@@ -96,7 +109,7 @@ jobs:
       - name: Enable Performance mode
         run: sudo cpupower frequency-set -g performance
       - name: Run performance regressions
-        timeout-minutes: 35
+        timeout-minutes: ${{ matrix.model-group.timeout }}
         uses: ./.github/actions/docker-run
         env:
           LOGURU_LEVEL: INFO
@@ -112,11 +125,7 @@ jobs:
             -e GITHUB_ACTIONS=true
           install_wheel: true
           run_args: |
-            export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
-            export WH_ARCH_YAML=$MAGIC_ENV
-
             if [[ "${{ matrix.model-group.name }}" == "other" ]]; then
-              unset WH_ARCH_YAML
               echo "No environment variable engineering needed for other models"
             elif [[ "${{ matrix.model-group.name }}" == "tt_transformers" ]]; then
               export QWEN_DIR=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct

@@ -31,6 +31,7 @@ constexpr uint32_t ring_size = get_compile_time_arg_val(10);
 constexpr uint32_t num_batches = get_compile_time_arg_val(11);
 constexpr uint32_t fuse_op = get_compile_time_arg_val(12);
 constexpr bool direction = get_compile_time_arg_val(13);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(14);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -52,7 +53,7 @@ void kernel_main() {
     int32_t start_tiles_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 14;
+    constexpr uint32_t ct_idx = 15;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -114,6 +115,10 @@ void kernel_main() {
     }
 
     constexpr uint32_t batch_num_pages = batch_slice_num_pages * ring_size;
+
+    uint32_t chunk_count = 0;
+    uint32_t sem_target = 0;
+
     for (uint32_t b = 0; b < num_batches; b++) {
         if constexpr (fuse_op) {
             matmul_receiver.wait_for_matmul_batch(b);
@@ -168,14 +173,15 @@ void kernel_main() {
              * forward handles even tiles, backward handles odd tiles
              * after ring_size-1 steps, we've transferred all tiles
              */
-            if (do_reduce) {
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), i);
-                if (i == (ring_size - 1)) {
-                    // Reset the semaphore before the next batch
-                    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
-                }
-            }
+            chunk_count = 0;
             while (tiles_read < tiles_to_read) {
+                if (do_reduce && (chunk_count % chunks_per_sync == 0)) {
+                    noc_semaphore_wait_min(
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), sem_target + 1);
+                    sem_target++;
+                }
+                chunk_count++;
+
                 uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
                 uint32_t tiles_to_read_in_current_direction = 0;
@@ -256,6 +262,12 @@ void kernel_main() {
                 slice_idx--;
             } else {
                 slice_idx++;
+            }
+
+            if (do_reduce && (i == (ring_size - 1))) {
+                // Reset the semaphore before the next batch
+                noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), 0);
+                sem_target = 0;
             }
         }
     }

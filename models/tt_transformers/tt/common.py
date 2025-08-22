@@ -4,9 +4,12 @@
 
 import math
 import re
+from enum import Enum
+from typing import Optional
 
 import torch
 from loguru import logger
+from pydantic import AliasChoices, BaseModel, Field
 
 import ttnn
 
@@ -20,11 +23,79 @@ class HostEmbedding(torch.nn.Module):
         return self.emb(x)
 
 
+class HostScaledEmbedding(HostEmbedding):
+    def __init__(self, model_args):
+        super().__init__(model_args)
+        self.embed_scale = model_args.embed_scale
+
+    def forward(self, x):
+        return self.emb(x) * self.embed_scale
+
+
 # Default configuration for Paged Attention
 class PagedAttentionConfig:
     def __init__(self, block_size=32, max_num_blocks=1024):
         self.block_size = block_size
         self.max_num_blocks = max_num_blocks
+
+
+class RopeScalingType(str, Enum):
+    """Types of RoPE scaling."""
+
+    LINEAR = "linear"
+    # DYNAMIC = "dynamic"
+    YARN = "yarn"
+    LLAMA3 = "llama3"
+    DEFAULT = "default"
+
+
+class RopeScaling(BaseModel):
+    """RoPE scaling configuration."""
+
+    rope_type: RopeScalingType = Field(
+        validation_alias=AliasChoices("rope_type", "type"), exclude=True, description="RoPE scaling type"
+    )
+    factor: float
+    original_max_position_embeddings: Optional[int] = None
+
+
+class RopeScalingLinear(RopeScaling):
+    """RoPE scaling configuration for linear."""
+
+
+class RopeScalingLlama3(RopeScaling):
+    """RoPE scaling configuration for Llama-3.x."""
+
+    # Llama-3.x specific parameters
+    low_freq_factor: Optional[float] = 1.0
+    high_freq_factor: Optional[float] = 4.0
+
+
+class RopeScalingYarn(RopeScaling):
+    """RoPE scaling configuration for Yarn."""
+
+    # Yarn-specific parameters
+    beta_fast: Optional[int] = 32
+    beta_slow: Optional[int] = 1
+    mscale: Optional[float] = 1.0
+    mscale_all_dim: Optional[float] = 0.0
+
+
+def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
+    rope_scaling_type = rope_scaling_params.get("rope_type") or rope_scaling_params.get("type")
+    if rope_scaling_type == RopeScalingType.LINEAR:
+        return RopeScalingLinear(**rope_scaling_params)
+    elif rope_scaling_type == RopeScalingType.LLAMA3:
+        return RopeScalingLlama3(**rope_scaling_params)
+    elif rope_scaling_type == RopeScalingType.YARN:
+        return RopeScalingYarn(**rope_scaling_params)
+    elif rope_scaling_type in ["default", "mrope"]:
+        logger.warning(
+            f"Rope scaling type was set to {rope_scaling_type}, defaulting to no rope scaling as this rope type is not supported yet by TTT"
+        )
+        return None
+    else:
+        raise ValueError(f"Unexpected RoPE scaling type: {rope_scaling_type}")
 
 
 def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):
@@ -330,7 +401,12 @@ def num_to_core_range_set(x):
     )
 
 
-def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
+def copy_host_to_device(
+    host_tensors,
+    device_tensors=None,
+    mesh_device=None,
+    shard_specs=None,
+):
     """
     Helper function which copies host tensors to device tensors.
     If no device_tensors are provided, it creates new device tensors and returns them.
@@ -339,7 +415,10 @@ def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
         assert mesh_device is not None, "mesh_device is required when device_tensors is None"
         ret = []
         for i in range(len(host_tensors)):
-            on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
+            if shard_specs and shard_specs[i] is not None:
+                on_device = host_tensors[i].to(mesh_device, shard_specs[i]) if host_tensors[i] else None
+            else:
+                on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
             ret.append(on_device)
         return ret
     else:
@@ -374,11 +453,20 @@ def get_out_subblock_w(per_core_N, out_subblock_h):
     return out_subblock_w
 
 
-def first_five(tensor, mesh_device):
+def first_five(tensor, mesh_device, start=0, end=5):
     """
-    Helper function to return the first 5 elements of a tensor via torch
+    Helper function to return the first 5 elements of a tensor via torch, or optionally another slice
     """
-    return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[0, 0, 0, :5]
+    return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[
+        0, 0, 0, start:end
+    ]
+
+
+def last_five(tensor, mesh_device):
+    """
+    Helper function to return the last 5 elements of a tensor via torch
+    """
+    return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[0, 0, 0, -5:]
 
 
 # Sample logits from a distribution
@@ -485,7 +573,7 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
     if dim < 0:
         dim = x.dim() + dim
     assert isinstance(x, torch.Tensor), "Input must be a torch.Tensor"
-    assert -x.dim() <= dim < x.dim(), f"Dimension out of range (expected between {-x.dim()} and {x.dim()-1})"
+    assert -x.dim() <= dim < x.dim(), f"Dimension {dim} out of range (expected between {-x.dim()} and {x.dim()-1})"
     dim = x.dim() + dim if dim < 0 else dim
 
     current_size = x.size(dim)

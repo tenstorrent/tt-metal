@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2043 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -632,6 +632,93 @@ void py_module(py::module& module) {
             py::arg("output_tile") = std::nullopt,
             py::arg("optional_output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId,
+        });
+
+    bind_registered_operation(
+        module,
+        ::ttnn::sparse_matmul,
+        R"doc(
+        Performs sparse matrix multiplication on input tensors based on sparsity tensor that has scale factor for each token.
+
+        Args:
+            input_tensor_a (ttnn.Tensor): the first tensor to be multiplied containing the weights of the experts. Needs to be on the device.
+            input_tensor_b (ttnn.Tensor): the second tensor to be multiplied, containing the tokens to be processed. Needs to be on the device.
+        Keyword Args:
+            sparsity (ttnn.Tensor): the sparsity tensor containing the scale factor for each token for each expert. Needs to be on the device.
+            nnz (int): the number of non-zero values in the sparsity tensor.
+            memory_config (ttnn.MemoryConfig, optional): the memory configuration of the output tensor. Defaults to `None`, which will result in using `ttnn.DRAM_MEMORY_CONFIG`.
+            dtype (ttnn.DataType, optional): the data type of the output tensor. Defaults to `None`.
+            program_config (MatmulProgramConfig, optional): the program configuration for the matmul operation. Defaults to `None`.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): the compute kernel configuration for the matmul operation. Defaults to `None`.
+            core_grid (ttnn.CoreGrid, optional): the grid on which to distribute the sharded tensor on (writes to the cores L1s). Defaults to `None`.
+            output_tile (List of [int], optional): Specifies the output tile configuration. Defaults to `None`.
+            optional_output_tensor (ttnn.Tensor, optional): User provided on-device output tensor where the result of sparse_matmul is to be written. Defaults to `None`.
+
+        Returns:
+            ttnn.Tensor: the output tensor with sparse results.
+
+        Example:
+            >>> # Sparse matmul for 64 batch, 128 sequence, 512 hidden dimensions, 8 experts
+            >>> expert_weights = ttnn.ones([1, 8, 512, 512])
+            >>> tokens = ttnn.ones([1, 64, 128, 512])
+            >>> # Create sparsity bitmask
+            >>> sparsity_bitmask = torch.zeros([1, 64, 128, 8])
+            >>> # Set some tokens to be processed by different experts (simplified pattern)
+            >>> sparsity_bitmask[0, 0, 0, 0] = 1.0  # First token goes to expert 0
+            >>> sparsity_bitmask[0, 0, 0, 10] = 1.0  # First token goes to expert 10 as well
+            >>> sparsity_bitmask[0, 0, 1, 2] = 0.7  # Second token goes to expert 2
+            >>> sparsity_bitmask[0, 1, 0, 1] = 0.3  # Another token goes to expert 1
+            >>> # Move sparsity bitmask to device
+            >>> sparsity_bitmask = ttnn.to_device(sparsity_bitmask, device)
+            >>> # Perform sparse matmul
+            >>> output = ttnn.sparse_matmul(expert_weights, tokens, sparsity=sparsity_bitmask, nnz=4)
+            >>> print(output.shape)
+            [64, 128, 8, 512]
+        )doc",
+        ttnn::pybind_overload_t{
+            [](decltype(::ttnn::sparse_matmul)& self,
+               const ttnn::Tensor& input_tensor_a,
+               const ttnn::Tensor& input_tensor_b,
+               const ttnn::Tensor& sparsity,
+               uint32_t nnz,
+               const std::optional<const ttnn::MemoryConfig>& memory_config,
+               const std::optional<const DataType> dtype,
+               const std::optional<const MatmulProgramConfig>& program_config,
+               const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
+               const std::optional<const ttnn::CoreGrid> core_grid,
+               const std::optional<const tt::tt_metal::Tile>& output_tile,
+               std::optional<Tensor>& optional_output_tensor,
+               const std::optional<const GlobalCircularBuffer>& global_cb,
+               const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) -> ttnn::Tensor {
+                return self(
+                    input_tensor_a,
+                    input_tensor_b,
+                    sparsity,
+                    nnz,
+                    memory_config,
+                    dtype,
+                    program_config,
+                    compute_kernel_config,
+                    core_grid,
+                    output_tile,
+                    optional_output_tensor,
+                    global_cb,
+                    sub_device_id);
+            },
+            py::arg("input_tensor_a"),
+            py::arg("input_tensor_b"),
+            py::kw_only(),
+            py::arg("sparsity"),
+            py::arg("nnz"),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("dtype") = std::nullopt,
+            py::arg("program_config") = std::nullopt,
+            py::arg("compute_kernel_config") = std::nullopt,
+            py::arg("core_grid") = std::nullopt,
+            py::arg("output_tile") = std::nullopt,
+            py::arg("optional_output_tensor") = std::nullopt,
+            py::arg("global_cb") = std::nullopt,
+            py::arg("sub_device_id") = std::nullopt,
         });
 }
 

@@ -22,6 +22,7 @@ from models.tt_transformers.tt.common import (
     get_out_subblock_w,
     nearest_multiple,
     num_to_core_range_set,
+    rope_scaling_model_factory,
 )
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
@@ -30,6 +31,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     load_meta_state_dict,
     reverse_permute,
     standardize_hf_keys,
+    standardize_hf_keys_multimodal,
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
@@ -409,7 +411,12 @@ class ModelArgs:
 
     LOCAL_HF_PARAMS = {
         "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
+        "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
+        "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
+        "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
     }
+
+    MAX_QKV_MM_SEQ_LEN = 2048
 
     def __init__(
         self,
@@ -444,6 +451,9 @@ class ModelArgs:
         self.dummy_weights = dummy_weights
         self.cache_hf_flag = cache_hf  # Whether to cache HF model to avoid multiple loads (uses extra memory)
         self.cached_hf_model = None  # Save any HF model object to avoid loading it multiple times for reference methods
+
+        self.rms_norm_add_unit_offset = False
+        self.embed_scale = None
 
         assert not os.getenv(
             "FAKE_DEVICE"
@@ -500,7 +510,7 @@ class ModelArgs:
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.CKPT_DIR.lower():
+        if any(keyword in self.CKPT_DIR.lower() for keyword in ("instruct", "it")):
             self.instruct = True
 
         # Check for supported batches since previous logic that contained the check was removed because it was unused
@@ -549,7 +559,10 @@ class ModelArgs:
                 "Llama-3.2-90B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
-                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128, "P150x4": 128},
+                "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 16, "TG": 128, "P150x4": 128},
+                "Qwen2.5-VL-3B": {"N150": 128, "N300": 128, "T3K": None, "TG": None, "P150x4": None},
+                "Qwen2.5-VL-32B": {"N150": None, "N300": None, "T3K": 64, "TG": None, "P150x4": None},
+                "Qwen2.5-VL-72B": {"N150": None, "N300": None, "T3K": 32, "TG": None, "P150x4": None},
                 "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "QwQ-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
                 "Qwen3-32B": {"N150": None, "N300": None, "T3K": 64, "TG": 128, "P150x4": 128},
@@ -706,8 +719,10 @@ class ModelArgs:
             # All Gather Matmul for Dense Out (DO)
             # TODO: Is there a better way to decide if fused all gather matmul should be used? And is there a better way to use the flag, instead of passing it into model_config?
             # NOTE: Fused all gather matmul only suppports a core grid of size num_devices x 1
+            # TODO: #26657 (self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
             self.model_config["USE_FUSED_ALL_GATHER_MATMUL"] = (
-                self.ccl_topology() == ttnn.Topology.Ring
+                self.num_devices == 8
+                and os.getenv("ACTUAL_DEVICE", "") != "TG"
                 and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
             )
@@ -777,12 +792,15 @@ class ModelArgs:
                 if self.is_galaxy
                 else (self.n_heads * self.head_dim) // self.num_devices
             )
+            # TODO: #26657 (if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG") should be refactored, and investigate if ACTUAL_DEVICE environment variable is still used
             n_dim = (
                 self.dim // self.cluster_shape[1]
                 if self.is_galaxy
                 else (
                     1024
-                    if self.ccl_topology() == ttnn.Topology.Ring and 1024 % (self.dim / self.num_devices) == 0
+                    if self.num_devices == 8
+                    and os.getenv("ACTUAL_DEVICE", "") != "TG"
+                    and 1024 % (self.dim / self.num_devices) == 0
                     else self.dim
                 )
             )
@@ -835,7 +853,6 @@ class ModelArgs:
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
-            self.MAX_QKV_MM_SEQ_LEN = 2048
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
@@ -853,13 +870,7 @@ class ModelArgs:
             )
 
             assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
-            self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
-                (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
-                ttnn.CoreGrid(y=8, x=8),
-                ttnn.ShardStrategy.HEIGHT,
-                ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
+            self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: self.get_xqkv_prefill_mem_cfg(seq_len)
 
             self.model_config["CREATE_QKV_DECODE_SHARD"] = (
                 ttnn.create_sharded_memory_config(
@@ -1264,6 +1275,15 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+    def get_xqkv_prefill_mem_cfg(self, seq_len):
+        return ttnn.create_sharded_memory_config(
+            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
+            ttnn.CoreGrid(y=8, x=8),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
     def is_distributed_norm(self, mode):
         if not self.is_multichip:
             return False
@@ -1274,7 +1294,11 @@ class ModelArgs:
         return False
 
     def ccl_topology(self):
-        if self.num_devices == 8 and os.getenv("ACTUAL_DEVICE", "") != "TG":  # T3K
+        # Use ring on a T3K or 6U galaxy submesh
+        if self.num_devices == 8 and ttnn.cluster.get_cluster_type() in [
+            ttnn.cluster.ClusterType.T3K,
+            ttnn.cluster.ClusterType.GALAXY,
+        ]:
             return ttnn.Topology.Ring
         elif self.num_devices > 1:  # All other multi chip devices
             return ttnn.Topology.Linear
@@ -1380,7 +1404,10 @@ class ModelArgs:
 
     def _set_model_specific_params(self):
         # Gemma3 specific params
-        self.rms_norm_add_unit_offset = "gemma-3" in self.base_model_name.lower()
+        is_gemma3 = "gemma-3" in self.base_model_name.lower()
+        if is_gemma3:
+            self.rms_norm_add_unit_offset = True
+            self.embed_scale = self.dim**0.5
 
     def _set_params_from_dict(self, config, is_hf=False):
         # Try to get text_config, if it doesn't exist everything is text config
@@ -1436,6 +1463,8 @@ class ModelArgs:
         if self.num_devices:
             # Default padding cores for each model, 0 if not set here
             default_padded_cores = {
+                "Qwen2.5-VL-72B": 32,
+                "Qwen2.5-VL-32B": 16,
                 "Qwen2.5-72B": 32,
                 "Qwen2.5-7B": 16,
                 "QwQ-32B": 16,
@@ -1455,18 +1484,14 @@ class ModelArgs:
                     )
                     self.hidden_dim = padded_hidden_dim
 
+        self.layer_types = text_config.get("layer_types", None)
+
         # RoPE params
         self.rope_theta = text_config.get("rope_theta")
-        # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
-        # If it is present and is set to false, do not use scaled rope
-        # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
+        self.rope_theta_local = text_config.get("rope_local_base_freq", None)
+
         rope_scaling_params = text_config.get("rope_scaling", None)
-        if rope_scaling_params:
-            self.rope_scaling_factor = rope_scaling_params.get("factor", None)
-            self.orig_context_len = rope_scaling_params.get("original_max_position_embeddings", self.max_context_len)
-        else:
-            self.rope_scaling_factor = None
-            self.orig_context_len = None
+        self.rope_scaling = rope_scaling_model_factory(rope_scaling_params) if rope_scaling_params else None
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
@@ -1493,12 +1518,13 @@ class ModelArgs:
         self.vision_in_channels = 3
 
         self.state_dict_text_prefix = self._get_text_prefix()
+        self.is_multimodal = "vision_config" in config or self.is_vision()
 
         self._set_model_specific_params()
 
     @property
     def use_scaled_rope(self):
-        return self.rope_scaling_factor is not None
+        return self.rope_scaling is not None
 
     @property
     def base_model_name(self):
@@ -1526,8 +1552,9 @@ class ModelArgs:
             params = json.load(f)
         self._set_params_from_dict(params)
 
-        # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
+        # Meta-style config dicts don't specify model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
+        self.orig_context_len = 8192
         if "3.2-1B" in checkpoint_dir:
             self.model_name = "Llama-3.2-1B" + ("-Instruct" if self.instruct else "")
             self.rope_scaling_factor = 32
@@ -1549,21 +1576,38 @@ class ModelArgs:
             self.rope_scaling_factor = 8
             self.is_90b = True
         else:
+            self.rope_scaling_factor = None
+            self.orig_context_len = None
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
-        self.orig_context_len = 8192
+        self.rope_scaling = (
+            rope_scaling_model_factory(
+                {
+                    "rope_type": "llama3",
+                    "factor": self.rope_scaling_factor,
+                    "original_max_position_embeddings": self.orig_context_len,
+                }
+            )
+            if self.rope_scaling_factor is not None
+            else None
+        )
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
-            from transformers import AutoConfig
+            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+            if "Qwen/Qwen2.5-VL" in self.model_name:
+                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
+            else:
+                from transformers import AutoConfig
 
             if self.dummy_weights:
                 logger.info(
                     f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
                 )
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name]).to_dict()
+                self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
             else:
-                config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
+                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR)
 
+            config = self.hf_config.to_dict()
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
@@ -1582,7 +1626,7 @@ class ModelArgs:
     ffn_dim_multiplier={self.ffn_dim_multiplier},
     norm_eps={self.norm_eps},
     rope_theta={self.rope_theta},
-    rope_scaling_factor={self.rope_scaling_factor},
+    rope_scaling_factor={self.rope_scaling.factor},
     max_batch_size={self.max_batch_size},
     max_seq_len={self.max_seq_len},
     vision_chunk_size={self.vision_chunk_size},
@@ -1640,7 +1684,15 @@ class ModelArgs:
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
-                from transformers import AutoConfig, AutoModelForCausalLM
+                # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+                if "Qwen2.5-VL" in self.model_name:
+                    from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+                        Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
+                    )
+
+                    print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
+                else:
+                    from transformers import AutoModelForCausalLM
 
                 model = AutoModelForCausalLM.from_pretrained(
                     self.CKPT_DIR,
@@ -1656,7 +1708,10 @@ class ModelArgs:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
-            state_dict = standardize_hf_keys(state_dict)
+            if self.is_multimodal:
+                state_dict = standardize_hf_keys_multimodal(state_dict)
+            else:
+                state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
@@ -2108,7 +2163,14 @@ class ModelArgs:
                 model.load_state_dict(self.load_state_dict())
             return model
         else:
-            from transformers import AutoConfig, AutoModelForCausalLM
+            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+            if "Qwen/Qwen2.5-VL" in self.model_name:
+                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
+                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
+                )
+            else:
+                from transformers import AutoConfig, AutoModelForCausalLM
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
@@ -2163,9 +2225,9 @@ class ModelArgs:
 
     def reference_embedding(self, reference_model=None):
         if self.checkpoint_type == CheckpointType.Meta:
-            from models.tt_transformers.tt.common import HostEmbedding
+            from models.tt_transformers.tt.common import HostEmbedding, HostScaledEmbedding
 
-            return HostEmbedding(self)
+            return HostEmbedding(self) if self.embed_scale is None else HostScaledEmbedding(self)
         else:
             if reference_model is None:
                 model = self.reference_transformer(wrap=False)
@@ -2558,6 +2620,7 @@ def determine_device_name(mesh_device):
             1: "P100" if dram_grid_size and dram_grid_size.x == 7 else "P150",  # P100 DRAM grid is 7x1, P150 is 8x1
             2: "P300",
             4: "P150x4",
+            8: "P150x8",
         }
     elif is_wormhole_b0():
         dict_device_names = {

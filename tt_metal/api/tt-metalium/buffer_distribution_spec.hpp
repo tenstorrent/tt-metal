@@ -34,6 +34,8 @@ public:
         ShardOrientation shard_orientation,
         ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D);
 
+    BufferDistributionSpec(Shape tensor_shape_in_pages, Shape shard_shape_in_pages, std::vector<CoreCoord> cores);
+
     const Shape& tensor_shape_in_pages() const { return tensor_shape_in_pages_; }
     const Shape& shard_shape_in_pages() const { return shard_shape_in_pages_; }
 
@@ -76,7 +78,6 @@ private:
 
     Shape tensor_shape_in_pages_;
     Shape shard_shape_in_pages_;
-    ShardOrientation shard_orientation_ = ShardOrientation::ROW_MAJOR;
 
     std::vector<CoreCoord> cores_;
 

@@ -19,7 +19,8 @@ struct ExecuteRMSNormPreAllGather {
         const std::optional<const ttnn::Tensor>& residual_input_tensor = std::nullopt,
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         const std::optional<const LayerNormProgramConfig>& program_config = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<bool>& use_2d_core_grid = std::nullopt);
 };
 
 }  // namespace operations::normalization

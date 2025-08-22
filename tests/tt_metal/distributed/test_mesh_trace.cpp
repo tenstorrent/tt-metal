@@ -91,13 +91,13 @@ protected:
 class MeshTraceTest2x4 : public MeshDeviceFixtureBase {
 protected:
     MeshTraceTest2x4() :
-        MeshDeviceFixtureBase(Config{.system_mesh_shape = MeshShape{2, 4}, .trace_region_size = (64 << 20)}) {}
+        MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{2, 4}, .trace_region_size = (64 << 20)}) {}
 };
 
 class MeshTraceTest4x8 : public MeshDeviceFixtureBase {
 protected:
     MeshTraceTest4x8() :
-        MeshDeviceFixtureBase(Config{.system_mesh_shape = MeshShape{4, 8}, .trace_region_size = (64 << 20)}) {}
+        MeshDeviceFixtureBase(Config{.mesh_shape = MeshShape{4, 8}, .trace_region_size = (64 << 20)}) {}
 };
 
 TEST_F(MeshTraceTestSuite, Sanity) {
@@ -295,21 +295,21 @@ TEST_F(MeshTraceTestSuite, SyncWorkloadsOnSubDeviceTrace) {
 
     // Compile all MeshWorkloads
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_0, false);
-    mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+    mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_0, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_0, false);
     mesh_device_->reset_sub_device_stall_group();
     Finish(mesh_device_->mesh_command_queue());
 
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_1, false);
-    mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+    mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_1, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_1, false);
     mesh_device_->reset_sub_device_stall_group();
     Finish(mesh_device_->mesh_command_queue());
 
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), waiter_2, false);
-    mesh_device_->set_sub_device_stall_group({SubDeviceId{0}});
+    mesh_device_->set_sub_device_stall_group({{SubDeviceId{0}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_2, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), incrementer_2, false);
     mesh_device_->reset_sub_device_stall_group();
@@ -402,7 +402,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(single_tile_size * num_tiles, {{src0_cb_index, DataFormat::UInt32}})
             .set_page_size(src0_cb_index, single_tile_size);
-    CBHandle cb_src0 = CreateCircularBuffer(datacopy_program, datacopy_core, cb_src0_config);
+    CreateCircularBuffer(datacopy_program, datacopy_core, cb_src0_config);
     // Program copies data from DRAM, does addition in RISC once notified
     Program add_program = CreateProgram();
     auto add_kernel = CreateKernel(
@@ -421,7 +421,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         add_core_phys.y,
         1};
     SetRuntimeArgs(add_program, add_kernel, datacopy_core, add_rt_args);
-    CBHandle add_cb = CreateCircularBuffer(add_program, datacopy_core, cb_src0_config);
+    CreateCircularBuffer(add_program, datacopy_core, cb_src0_config);
     // Same program as above, but runs on different SubDevice. Reads from DRAM, once
     // notified by previous program
     Program add_program_2 = CreateProgram();
@@ -433,7 +433,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     std::array<uint32_t, 9> add_rt_args_2 = {
         global_sem.address(), 0, 0, output_buf->address(), output_buf->address(), num_tiles, 0, 0, 2};
     SetRuntimeArgs(add_program_2, add_kernel_2, add_core, add_rt_args_2);
-    CBHandle add_cb_2 = CreateCircularBuffer(add_program_2, add_core, cb_src0_config);
+    CreateCircularBuffer(add_program_2, add_core, cb_src0_config);
 
     uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
     MeshCoordinateRange devices(mesh_device_->shape());
@@ -455,13 +455,14 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
     AddProgramToMeshWorkload(add_mesh_workload, std::move(add_program_2), right_col);
 
     // Compile and load workloads
-    mesh_device_->set_sub_device_stall_group({SubDeviceId{2}});
+    mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), syncer_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), datacopy_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
 
     for (auto device : mesh_device_->get_devices()) {
-        tt::llrt::write_hex_vec_to_core(device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
     }
 
     // Capture Trace
@@ -479,11 +480,11 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         // Block after this write on host, since the global semaphore update starting the
         // program goes through an independent path (UMD) and can go out of order wrt the
         // buffer data
-        mesh_device_->set_sub_device_stall_group({SubDeviceId{2}});
+        mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
         for (auto device : mesh_device_->get_devices()) {
-            tt::llrt::write_hex_vec_to_core(
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();

@@ -24,12 +24,14 @@ struct MaxPool2DOp {
         uint32_t channels,
         std::array<uint32_t, 2> kernel_size,
         std::array<uint32_t, 2> stride,
-        std::array<uint32_t, 2> padding,
+        std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
         std::array<uint32_t, 2> dilation,
         bool ceil_mode = false,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
-        bool in_place_halo = false);
+        bool in_place_halo = false,
+        bool deallocate_input = false,
+        bool reallocate_halo_output = true);
 };
 struct AvgPool2DOp {
     static Tensor invoke(
@@ -41,13 +43,15 @@ struct AvgPool2DOp {
         uint32_t channels,
         std::array<uint32_t, 2> kernel_size,
         std::array<uint32_t, 2> stride,
-        std::array<uint32_t, 2> padding,
+        std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
         bool ceil_mode = false,
         bool count_include_pad = true,
         std::optional<int32_t> divisor_override = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
-        bool in_place_halo = false);
+        bool in_place_halo = false,
+        bool deallocate_input = false,
+        bool reallocate_halo_output = true);
 };
 
 }  // namespace operations::pool

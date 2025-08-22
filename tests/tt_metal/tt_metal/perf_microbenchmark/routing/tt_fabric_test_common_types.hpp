@@ -14,6 +14,7 @@
 #include <tt-metalium/fabric_edm_types.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
+#include "umd/device/types/cluster_descriptor_types.h"
 
 namespace tt::tt_fabric::fabric_tests {
 
@@ -89,18 +90,21 @@ enum class RoutingType {
 };
 
 enum class HighLevelTrafficPattern {
-    AllToAllUnicast,
+    AllToAll,
+    OneToAll,
     FullDeviceRandomPairing,
-    AllToAllMulticast,
-    UnidirectionalLinearMulticast,
-    FullRingMulticast,
-    HalfRingMulticast,
+    UnidirectionalLinear,
+    FullRing,
+    HalfRing,
+    AllDevicesUniformPattern,
 };
 
 struct TestFabricSetup {
-    tt::tt_fabric::Topology topology;
+    tt::tt_fabric::Topology topology{0};
     std::optional<RoutingType> routing_type;
-    uint32_t num_links;
+    std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
+    uint32_t num_links{};
+    std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
 };
 
 struct HighLevelPatternConfig {
@@ -124,7 +128,7 @@ struct ParsedTestConfig {
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
-    uint32_t seed;
+    uint32_t seed{};
 };
 
 struct TestConfig {
@@ -143,7 +147,7 @@ struct TestConfig {
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
-    uint32_t seed;
+    uint32_t seed{};
 };
 
 // ======================================================================================
@@ -229,6 +233,16 @@ struct AllocatorPolicies {
             this->default_payload_chunk_size =
                 detail::DEFAULT_RECEIVER_L1_SIZE / this->receiver_config.max_configs_per_core;
         }
+    }
+};
+
+struct PhysicalMeshConfig {
+    std::string mesh_descriptor_path;
+    std::vector<std::vector<eth_coord_t>> eth_coord_mapping;
+
+    PhysicalMeshConfig() {
+        mesh_descriptor_path = "";  // Default path to the mesh descriptor.
+        eth_coord_mapping = {};
     }
 };
 

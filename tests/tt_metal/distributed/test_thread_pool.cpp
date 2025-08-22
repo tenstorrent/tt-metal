@@ -42,7 +42,6 @@ TEST(ThreadPoolTest, StressDeviceBound) {
 
 // Test that an exception generated in the thread pool is propagated to the main thread
 TEST(ThreadPoolTest, Exception) {
-    uint32_t num_threads = MetalContext::instance().get_cluster().number_of_user_devices();
     auto thread_pool = create_device_bound_thread_pool(MetalContext::instance().get_cluster().number_of_user_devices());
     auto exception_fn = []() { TT_THROW("Failed"); };
     thread_pool->enqueue(exception_fn);

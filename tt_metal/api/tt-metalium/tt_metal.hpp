@@ -15,6 +15,7 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/cluster.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -133,7 +134,7 @@ void LaunchProgram(
     const std::shared_ptr<Program>& program,
     bool wait_until_cores_done = true,
     bool force_slow_dispatch = false);
-void WaitProgramDone(IDevice* device, Program& program, bool dump_device_profile_results = true);
+void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results = true);
 
 /**
  *  Compiles all kernels within the program, and generates binaries that are written to
@@ -198,6 +199,21 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
  * |                          | no       |
  */
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op = false);
+
+/**
+ * Decode per device program ID to get encoded values (base program id, device id, and a flag indicating whether
+ * it's an op run entirely on host).
+ *
+ * Return value: tuple<uint32_t, uint32_t, bool>
+ *
+ * | Argument             | Description                                                                         |  Data
+ * type            | Valid range              | required |
+ * |----------------------|-------------------------------------------------------------------------------------|-----------------------|--------------------------|----------|
+ * | device_program_id    | Encoded device specific id used by the performance profiler  |
+ * uint32_t        | 0 - 2^32 - 1             | yes      |
+ */
+DeviceProgramId DecodePerDeviceProgramID(uint32_t device_program_id);
+
 /**
  * Copies data from a host buffer into a buffer within the device DRAM channel
  *
