@@ -109,12 +109,13 @@ def load_inputs(user_input, batch, instruct):
         user_input = user_input * batch
 
     in_prompt = []
+    all_prompts = []
     cache_dir = Path("models/tt_transformers/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
     # It clips the excerpt to the max length provided to allow testing different long context lengthts
-    for i in range(batch):
+    for i in range(len(user_input)):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
             if "max_length" in user_input[i]:  # Clip the context to the max length provided
@@ -129,8 +130,12 @@ def load_inputs(user_input, batch, instruct):
                 )  # Add the markdown block to the context to comply with the prompt
             else:
                 prompt = context_text
-        in_prompt.append(prompt)
-    return in_prompt
+
+        all_prompts.append(prompt)  # return all the prompts taken from the input file to be used when repeat_batch > 1
+        if i in range(batch):
+            in_prompt.append(prompt)
+
+    return in_prompt, all_prompts
 
 
 def create_tt_page_table(global_batch_size, data_parallel, paged_attention_config: PagedAttentionConfig):
@@ -295,6 +300,54 @@ def prepare_generator_args(
             {"page_block_size": 64, "page_max_num_blocks_per_dp": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
+            False,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+        ),
+        (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
+            "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
+            True,  # instruct mode
+            16,  # repeat_batches
+            8 * 1024,  # max_seq_len
+            1,  # batch_size
+            512,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+        ),
+        (  # evals-32 run (Throughput) - 32 users, smaller prompts, batch repeat 32
+            "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
+            True,  # instruct mode
+            16,  # repeat_batches
+            8 * 1024,  # max_seq_len
+            32,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
+            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # ci_only
+            1,  # data_parallel
+            False,  # token_accuracy
+            False,  # stress_test
+        ),
+        (  # evals-long-prompts run (Throughput) - 1 user, smaller prompts, batch repeat 12
+            "models/tt_transformers/demo/sample_prompts/eval_repeat_prompts_very_long.json",  # input_prompts
+            True,  # instruct mode
+            6,  # repeat_batches
+            64 * 1024,  # max_seq_len
+            1,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            False,  # stop_at_eos
             False,  # ci_only
             1,  # data_parallel
             False,  # token_accuracy
@@ -486,6 +539,9 @@ def prepare_generator_args(
         "long-context-64k",  # 64k context, max_seq_len=128k
         "long-context-32k",  # 32k context, max_seq_len=32k
         "long-context-16k",  # 16k context, max_seq_len=32k
+        "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
+        "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
+        "evals-long-prompts",  # Single user, 12 repeated batches, very long prompts (4K ~ 64K)
         "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
         "ci-32",  # CI batch 32
@@ -638,7 +694,7 @@ def test_demo_text(
     if len(input_prompts) == 1:  # Manual input
         input_prompts = input_prompts * global_batch_size
     else:  # Inputs from file
-        input_prompts = load_inputs(input_prompts, global_batch_size, input_prompts)
+        input_prompts, all_prompts = load_inputs(input_prompts, global_batch_size, input_prompts)
     profiler.end("loading_inputs")
 
     # To simulate a deployment environment, the demo supports repeating batched prompts.
@@ -671,9 +727,13 @@ def test_demo_text(
     if token_accuracy:
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
 
+    # To simulate a deployment environment, the demo supports repeating batched prompts.
+    # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     repeat_batch_prompts = []
     for i in range(repeat_batches):
-        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+        repeat_batch_prompts.append(
+            [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
+        )
 
     num_tokens_generated_decode = []
 
