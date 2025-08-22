@@ -1438,7 +1438,7 @@ template <
 inline __attribute__((always_inline)) void noc_write_with_state(
     uint32_t noc, uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
-        if (posted) {
+        if constexpr (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
         } else {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -1470,7 +1470,7 @@ inline __attribute__((always_inline)) void noc_write_with_state(
     }
 
     if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
-        if (posted) {
+        if constexpr (posted) {
             noc_posted_writes_num_issued[noc] += 1;
         } else {
             noc_nonposted_writes_num_issued[noc] += 1;
