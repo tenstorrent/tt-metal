@@ -184,8 +184,9 @@ private:
         ProfilerDataBufferSource data_source,
         const std::optional<ProfilerOptionalMetadata>& metadata);
 
-    // Read packet data to be displayed
-    void readMarkerData(
+    // Read marker data to be displayed
+    void readDeviceMarkerData(
+        std::set<tracy::TTDeviceMarker>& device_markers,
         uint32_t run_host_id,
         const std::string& op_name,
         chip_id_t device_id,
@@ -277,13 +278,15 @@ public:
 
     bool isLastFDReadDone() const;
 
-    void processDeviceMarkers(std::set<tracy::TTDeviceMarker>& device_markers);
+    void processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers);
 };
 
-std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getDeviceMarkersVector(
+// IMPORTANT: This function creates a vector of references to the TTDeviceMarker objects stored in
+// device_markers_per_core_risc_map. These are direct references to the original objects, not copies of the data.
+// Thread safety warning: device_markers_per_core_risc_map MUST NOT be modified (no insertions, deletions, or rehashing)
+// while these references are in use, as this could invalidate the references and cause undefined behavior.
+std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
     const std::map<CoreCoord, std::map<uint32_t, std::set<tracy::TTDeviceMarker>>>& device_markers_per_core_risc_map);
-
-void sortDeviceMarkers(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers);
 
 bool useFastDispatch(IDevice* device);
 

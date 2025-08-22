@@ -303,8 +303,8 @@ class test_dispatch_cores(default_setup):
         "Tensix CQ Dispatch": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "BRISC", "zone_name": "CQ-DISPATCH"},
-            "end": {"risc": "BRISC", "zone_name": "CQ-DISPATCH"},
+            "start": {"risc": "BRISC", "zone_name": "CQ-DISPATCH*"},
+            "end": {"risc": "BRISC", "zone_name": "CQ-DISPATCH*"},
         },
         "Tensix CQ Prefetch": {
             "across": "core",
@@ -321,8 +321,8 @@ class test_ethernet_dispatch_cores(default_setup):
         "Ethernet CQ Dispatch": {
             "across": "core",
             "type": "adjacent",
-            "start": {"risc": "ERISC", "zone_name": "CQ-DISPATCH"},
-            "end": {"risc": "ERISC", "zone_name": "CQ-DISPATCH"},
+            "start": {"risc": "ERISC", "zone_name": "CQ-DISPATCH*"},
+            "end": {"risc": "ERISC", "zone_name": "CQ-DISPATCH*"},
         },
         "Ethernet CQ Prefetch": {
             "across": "core",

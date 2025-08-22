@@ -145,96 +145,82 @@ std::unordered_map<uint16_t, tracy::MarkerDetails> generateMarkerSourceLocations
     return hash_to_marker_src_locations;
 }
 
-void sortDeviceMarkers(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers) {
-    constexpr uint32_t num_threads = 8;
+void parallelMergeSortedDeviceMarkerChunks(
+    std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
+    const std::vector<uint32_t>& device_markers_chunk_offsets) {
+    ZoneScoped;
 
-    if (device_markers.size() < num_threads) {
-        std::sort(
-            device_markers.begin(),
+    const uint32_t num_chunks = device_markers_chunk_offsets.size() - 1;
+
+    std::vector<std::thread> threads;
+
+    uint32_t num_chunks_to_merge_together = 2;
+    while (num_chunks_to_merge_together <= num_chunks) {
+        uint32_t i = 0;
+        while (i <= num_chunks - num_chunks_to_merge_together) {
+            threads.push_back(
+                std::thread([&device_markers, &device_markers_chunk_offsets, i, num_chunks_to_merge_together]() {
+                    TT_ASSERT(std::is_sorted(
+                        device_markers.begin() + device_markers_chunk_offsets[i],
+                        device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
+                        [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+                           std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
+                    TT_ASSERT(std::is_sorted(
+                        device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
+                        device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
+                        [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+                           std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
+
+                    std::inplace_merge(
+                        device_markers.begin() + device_markers_chunk_offsets[i],
+                        device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
+                        device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
+                        [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+                           std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
+                }));
+            i += num_chunks_to_merge_together;
+        }
+
+        for (auto& thread : threads) {
+            thread.join();
+        }
+        threads.clear();
+
+        TT_ASSERT(std::is_sorted(
+            device_markers.begin() + device_markers_chunk_offsets[i - num_chunks_to_merge_together],
+            device_markers.begin() + device_markers_chunk_offsets[i],
+            [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+               std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
+        TT_ASSERT(std::is_sorted(
+            device_markers.begin() + device_markers_chunk_offsets[i],
+            device_markers.end(),
+            [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+               std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
+
+        std::inplace_merge(
+            device_markers.begin() + device_markers_chunk_offsets[i - num_chunks_to_merge_together],
+            device_markers.begin() + device_markers_chunk_offsets[i],
             device_markers.end(),
             [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
                std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
-        return;
+
+        num_chunks_to_merge_together *= 2;
     }
 
-    std::array<std::thread, num_threads - 1> threads;
-    const uint32_t chunk_size = device_markers.size() / num_threads;
-    for (uint32_t i = 0; i < num_threads - 1; i++) {
-        const uint32_t start_idx = i * chunk_size;
-        const uint32_t end_idx = (i + 1) * chunk_size;
-        threads[i] = std::thread([&device_markers, start_idx, end_idx]() {
-            std::sort(
-                device_markers.begin() + start_idx,
-                device_markers.begin() + end_idx,
-                [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-                   std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
-        });
-    }
+    // if (num_chunks % 2 == 1) {
+    //     TT_ASSERT(std::is_sorted(
+    //         device_markers.begin(),
+    //         device_markers.begin() + device_markers_chunk_offsets[num_chunks - 1],
+    //         [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+    //            std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
 
-    std::sort(
-        device_markers.begin() + (num_threads - 1) * chunk_size,
-        device_markers.end(),
-        [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-           std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
-
-    for (auto& thread : threads) {
-        thread.join();
-    }
-
-    uint32_t chunk_idx = 0;
-    for (uint32_t i = 0; i < (num_threads / 2) - 1; ++i) {
-        threads[i] = std::thread([&device_markers, chunk_size, chunk_idx]() {
-            std::inplace_merge(
-                device_markers.begin() + chunk_idx * chunk_size,
-                device_markers.begin() + (chunk_idx + 1) * chunk_size,
-                device_markers.begin() + (chunk_idx + 2) * chunk_size,
-                [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-                   std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
-        });
-        chunk_idx += 2;
-    }
-
-    std::inplace_merge(
-        device_markers.begin() + chunk_idx * chunk_size,
-        device_markers.begin() + (chunk_idx + 1) * chunk_size,
-        device_markers.end(),
-        [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-           std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
-
-    for (uint32_t i = 0; i < (num_threads / 2) - 1; ++i) {
-        threads[i].join();
-    }
-
-    chunk_idx = 0;
-    for (uint32_t i = 0; i < (num_threads / 4) - 1; ++i) {
-        threads[i] = std::thread([&device_markers, chunk_size, chunk_idx]() {
-            std::inplace_merge(
-                device_markers.begin() + chunk_idx * chunk_size,
-                device_markers.begin() + (chunk_idx + 2) * chunk_size,
-                device_markers.begin() + (chunk_idx + 4) * chunk_size,
-                [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-                   std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
-        });
-        chunk_idx += 4;
-    }
-
-    std::inplace_merge(
-        device_markers.begin() + chunk_idx * chunk_size,
-        device_markers.begin() + (chunk_idx + 2) * chunk_size,
-        device_markers.end(),
-        [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-           std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
-
-    for (uint32_t i = 0; i < (num_threads / 4) - 1; ++i) {
-        threads[i].join();
-    }
-
-    std::inplace_merge(
-        device_markers.begin(),
-        device_markers.begin() + 4 * chunk_size,
-        device_markers.end(),
-        [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-           std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
+    //     std::inplace_merge(
+    //         device_markers.begin(),
+    //         device_markers.begin() + device_markers_chunk_offsets[num_chunks - 1],
+    //         device_markers.end(),
+    //         [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+    //            std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
+    // }
 
     TT_ASSERT(std::is_sorted(
         device_markers.begin(),
@@ -243,14 +229,19 @@ void sortDeviceMarkers(std::vector<std::reference_wrapper<const tracy::TTDeviceM
            std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
 }
 
-std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getDeviceMarkersVector(
+std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
     const std::map<CoreCoord, std::map<uint32_t, std::set<tracy::TTDeviceMarker>>>& device_markers_per_core_risc_map) {
+    ZoneScoped;
+
     uint32_t total_num_markers = 0;
+    std::vector<uint32_t> device_markers_chunk_offsets;
     for (const auto& [core, risc_map] : device_markers_per_core_risc_map) {
         for (const auto& [risc, markers] : risc_map) {
+            device_markers_chunk_offsets.push_back(total_num_markers);
             total_num_markers += markers.size();
         }
     }
+    device_markers_chunk_offsets.push_back(total_num_markers);
 
     tracy::TTDeviceMarker dummy_marker;
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec(
@@ -284,6 +275,7 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getDeviceMarker
     }
 
     // t.join();
+    parallelMergeSortedDeviceMarkerChunks(device_markers_vec, device_markers_chunk_offsets);
 
     return device_markers_vec;
 }
@@ -1142,7 +1134,7 @@ void DeviceProfiler::readRiscProfilerResults(
     const uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
 
     // translate worker core virtual coord to phys coordinates
-    auto phys_coord = getPhysicalAddressFromVirtual(device_id, worker_core);
+    const CoreCoord phys_coord = getPhysicalAddressFromVirtual(device_id, worker_core);
 
     // helper function to lookup opname from runtime id if metadata is available
     auto getOpNameIfAvailable = [&metadata](auto device_id, auto runtime_id) {
@@ -1155,6 +1147,9 @@ void DeviceProfiler::readRiscProfilerResults(
     if (!rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
         riscCount = 5;
     }
+
+    std::map<uint32_t, std::set<tracy::TTDeviceMarker>>& device_markers_for_core =
+        device_markers_per_core_risc_map[phys_coord];
 
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
@@ -1202,6 +1197,8 @@ void DeviceProfiler::readRiscProfilerResults(
             uint32_t opTime_L = 0;
             std::string opname;
             // this->device_markers.clear();
+
+            std::set<tracy::TTDeviceMarker>& device_markers_for_core_risc = device_markers_for_core[riscType];
 
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
@@ -1261,7 +1258,8 @@ void DeviceProfiler::readRiscProfilerResults(
                                     runHostCounterRead,
                                     index);
 
-                                readMarkerData(
+                                readDeviceMarkerData(
+                                    device_markers_for_core_risc,
                                     runHostCounterRead,
                                     opname,
                                     device_id,
@@ -1277,7 +1275,8 @@ void DeviceProfiler::readRiscProfilerResults(
 
                             uint32_t time_H = opTime_H;
                             uint32_t time_L = opTime_L;
-                            readMarkerData(
+                            readDeviceMarkerData(
+                                device_markers_for_core_risc,
                                 runHostCounterRead,
                                 opname,
                                 device_id,
@@ -1294,7 +1293,8 @@ void DeviceProfiler::readRiscProfilerResults(
                             index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
                             uint32_t data_H = data_buffer.at(index);
                             uint32_t data_L = data_buffer.at(index + 1);
-                            readMarkerData(
+                            readDeviceMarkerData(
+                                device_markers_for_core_risc,
                                 runHostCounterRead,
                                 opname,
                                 device_id,
@@ -1308,7 +1308,8 @@ void DeviceProfiler::readRiscProfilerResults(
                         case kernel_profiler::TS_EVENT: {
                             uint32_t time_H = data_buffer.at(index) & 0xFFF;
                             uint32_t time_L = data_buffer.at(index + 1);
-                            readMarkerData(
+                            readDeviceMarkerData(
+                                device_markers_for_core_risc,
                                 runHostCounterRead,
                                 opname,
                                 device_id,
@@ -1384,7 +1385,8 @@ tracy::MarkerDetails DeviceProfiler::getMarkerDetails(uint16_t timer_id) const {
     }
 }
 
-void DeviceProfiler::readMarkerData(
+void DeviceProfiler::readDeviceMarkerData(
+    std::set<tracy::TTDeviceMarker>& device_markers,
     uint32_t run_host_id,
     const std::string& op_name,
     chip_id_t device_id,
@@ -1398,25 +1400,8 @@ void DeviceProfiler::readMarkerData(
     counter++;
 
     nlohmann::json meta_data;
-    tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
+    const tracy::MarkerDetails marker_details = getMarkerDetails(timer_id);
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
-
-    // uint32_t new_marker_runtime_host_id = run_host_id;
-    // chip_id_t new_marker_device_id = device_id;
-    // uint32_t new_marker_core_x = physical_core.x;
-    // uint32_t new_marker_core_y = physical_core.y;
-    // int new_marker_risc_num = risc_num;
-    // uint64_t new_marker_data = data;
-    // const std::string& new_marker_op_name = op_name;
-    // uint32_t new_marker_timer_id = timer_id;
-    // uint64_t new_marker_timestamp = timestamp;
-    // uint32_t new_marker_line = marker_details.source_line_num;
-    // std::string& new_marker_file = marker_details.source_file;
-    // std::string new_marker_name = marker_details.marker_name;
-    // tracy::TTDeviceMarkerType new_marker_type = get_marker_type_from_packet_type(packet_type);
-    // std::array<bool, static_cast<uint16_t>(tracy::MarkerDetails::MarkerNameKeyword::COUNT)>&
-    //     new_marker_name_keyword_flags = marker_details.marker_name_keyword_flags;
-    // nlohmann::json new_marker_meta_data;
 
     // add marker to device_markers first
     // if it is a start zone, push to stack
@@ -1425,40 +1410,22 @@ void DeviceProfiler::readMarkerData(
     // if it is an end zone, make sure that the start zone matches the end zone, and
     // if so, pop the start zone from the stack, and update end zone name and push to device_events
 
-    const auto& [new_marker_it, new_marker_inserted] =
-        device_markers_per_core_risc_map[physical_core][risc_num].emplace(
-            run_host_id,
-            device_id,
-            physical_core.x,
-            physical_core.y,
-            risc_num,
-            timer_id,
-            timestamp,
-            data,
-            op_name,
-            marker_details.source_line_num,
-            marker_details.source_file,
-            marker_details.marker_name,
-            get_marker_type_from_packet_type(packet_type),
-            marker_details.marker_name_keyword_flags,
-            meta_data);
-
-    // auto [new_marker_it, new_marker_inserted] = device_markers.emplace(
-    //     run_host_id,
-    //     device_id,
-    //     physical_core.x,
-    //     physical_core.y,
-    //     risc_num,
-    //     timer_id,
-    //     timestamp,
-    //     data,
-    //     op_name,
-    //     marker_details.source_line_num,
-    //     marker_details.source_file,
-    //     marker_details.marker_name,
-    //     get_marker_type_from_packet_type(packet_type),
-    //     marker_details.marker_name_keyword_flags,
-    //     meta_data);
+    const auto& [new_marker_it, new_marker_inserted] = device_markers.emplace(
+        run_host_id,
+        device_id,
+        physical_core.x,
+        physical_core.y,
+        risc_num,
+        timer_id,
+        timestamp,
+        data,
+        op_name,
+        marker_details.source_line_num,
+        marker_details.source_file,
+        marker_details.marker_name,
+        get_marker_type_from_packet_type(packet_type),
+        marker_details.marker_name_keyword_flags,
+        meta_data);
 
     if (!new_marker_inserted) {
         return;
@@ -1723,7 +1690,9 @@ void DeviceProfiler::readMarkerData(
 
 // unordered_map<core> -> unordered_map<risc> -> set<tracy::TTDeviceMarker>
 
-void DeviceProfiler::processDeviceMarkers(std::set<tracy::TTDeviceMarker>& device_markers) {
+void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers) {
+    ZoneScoped;
+
     std::set<tracy::TTDeviceMarker> device_markers_copy = device_markers;
 
     std::stack<std::set<tracy::TTDeviceMarker>::iterator> start_marker_stack;
@@ -1731,8 +1700,34 @@ void DeviceProfiler::processDeviceMarkers(std::set<tracy::TTDeviceMarker>& devic
     for (const tracy::TTDeviceMarker& marker : device_markers_copy) {
         tracy::MarkerDetails marker_details = getMarkerDetails(marker.marker_id);
         const kernel_profiler::PacketTypes marker_type = get_packet_type(marker.marker_id);
+
+        // log_info(
+        //     tt::LogMetal,
+        //     "marker {} timestamp: {} core: {},{} risc: {}, zone name: {} type: {}",
+        //     marker.marker_id & 0xFFFF,
+        //     marker.timestamp,
+        //     marker.core_x,
+        //     marker.core_y,
+        //     marker.risc,
+        //     marker.marker_name,
+        //     enchantum::to_string(marker_type));
+
+        // log_info(tt::LogMetal, "start marker stack size: {}", start_marker_stack.size());
+        // std::stack<std::set<tracy::TTDeviceMarker>::iterator> temp_stack = start_marker_stack;
+        // while (!temp_stack.empty()) {
+        //     const auto& marker_it = temp_stack.top();
+        //     log_info(
+        //         tt::LogMetal,
+        //         "start marker stack top timestamp: {}, core: {},{} risc: {}, zone name: {}, type: {}, start marker
+        //         stack top: {}", marker_it->timestamp, marker_it->core_x, marker_it->core_y, marker_it->risc,
+        //         marker_it->marker_name,
+        //         enchantum::to_string(marker_it->marker_type),
+        //         marker_it->marker_id & 0xFFFF);
+        //     temp_stack.pop();
+        // }
+
         // log_info(tt::LogMetal, "marker: {}", marker.marker_id & 0xFFFF);
-        if (marker_type == kernel_profiler::ZONE_START || marker_type == kernel_profiler::ZONE_END) {
+        if (isMarkerAZoneEndpoint(marker)) {
             // trace and dispatch profiling are incompatible
             // replace the zone name with TRACE-FW or TRACE-KERNEL if the zone is a trace zone, do not append
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only() &&
@@ -1818,7 +1813,7 @@ void DeviceProfiler::processDeviceMarkers(std::set<tracy::TTDeviceMarker>& devic
                 }
                 start_marker_stack.pop();
             }
-        } else if (marker_type == kernel_profiler::TS_DATA) {
+        } else if (isMarkerTimestampedData(marker)) {
             if (!start_marker_stack.empty()) {
                 auto curr_zone_start_marker_it = start_marker_stack.top();
                 TT_ASSERT(curr_zone_start_marker_it->marker_type == tracy::TTDeviceMarkerType::START);
@@ -1846,7 +1841,7 @@ void DeviceProfiler::processDeviceMarkers(std::set<tracy::TTDeviceMarker>& devic
                                    tracy::MarkerDetails::MarkerNameKeyword::PACKED_DATA_DISPATCH)]) {
                         this->current_dispatch_meta_data.cmd_subtype = fmt::format(
                             "{}{}",
-                            marker.data & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST ? "MCAST," : "",
+                            marker.data & CQ_DISPATCH_CMD_PACKED_WRITE_FLAG_MCAST ? "MCAST;" : "",
                             enchantum::to_string(static_cast<CQDispatchCmdPackedWriteType>(
                                 (marker.data >> 1) << CQ_DISPATCH_CMD_PACKED_WRITE_TYPE_SHIFT)));
                         new_marker.meta_data["dispatch_command_subtype"] = this->current_dispatch_meta_data.cmd_subtype;
@@ -1929,10 +1924,10 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
     this->is_last_fd_read_done = false;
     // this->prev_marker_it = this->device_markers.begin();
 
-    const uint32_t approximate_num_device_profiler_markers =
-        (MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * device->compute_with_storage_grid_size().x *
-         device->compute_with_storage_grid_size().y) /
-        kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
+    // const uint32_t approximate_num_device_profiler_markers =
+    //     (MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC * device->compute_with_storage_grid_size().x *
+    //      device->compute_with_storage_grid_size().y) /
+    //     kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
     // this->device_markers.reserve(approximate_num_device_profiler_markers);
 
     this->device_cores.reserve(device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y);
@@ -1943,32 +1938,14 @@ DeviceProfiler::~DeviceProfiler() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    // IMPORTANT: This function creates a vector of references to the TTDeviceMarker objects stored in the
-    // device_markers unordered set. These are direct references to the original objects, not copies of the data. Thread
-    // safety warning: The device_markers set MUST NOT be modified (no insertions, deletions, or rehashing) while these
-    // references are in use, as this could invalidate the references and cause undefined behavior.
-    // std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
-    //     getDeviceMarkersVector(device_markers);
-    // sortDeviceMarkers(device_markers_vec);
-
-    log_info(tt::LogMetal, "readMarkerData counter: {}", counter);
-    // print size of all device markers in device_markers_per_core_risc_map
-    uint32_t total_num_markers = 0;
-    for (const auto& [core, risc_map] : this->device_markers_per_core_risc_map) {
-        for (const auto& [risc, device_markers] : risc_map) {
-            total_num_markers += device_markers.size();
-        }
-    }
-    log_info(tt::LogMetal, "total num markers: {}", total_num_markers);
-
     for (auto& [physical_core, device_markers_per_risc_map] : this->device_markers_per_core_risc_map) {
         for (auto& [risc_num, device_markers] : device_markers_per_risc_map) {
-            processDeviceMarkers(device_markers);
+            processDeviceMarkerData(device_markers);
         }
     }
 
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
-        getDeviceMarkersVector(this->device_markers_per_core_risc_map);
+        getSortedDeviceMarkersVector(this->device_markers_per_core_risc_map);
 
     auto t = std::thread([this, device_markers_vec]() mutable { dumpDeviceResults(device_markers_vec); });
     pushTracyDeviceResults(device_markers_vec);
