@@ -230,8 +230,7 @@ class TransformerBlock(LightweightModule):
                     dtype=self.args.ccl_dtype,
                 )
 
-                if mode == "prefill":
-                    hidden_states = ttnn.div(hidden_states, self.num_devices)
+                hidden_states = ttnn.div(hidden_states, self.num_devices)
             hidden_states = ttnn.add(
                 residual, hidden_states, memory_config=skip_mem_cfg, dtype=ttnn.bfloat16 if TG else None
             )
@@ -266,8 +265,7 @@ class TransformerBlock(LightweightModule):
                     dtype=self.args.ccl_dtype,
                 )
 
-                if mode == "prefill":
-                    hidden_states = ttnn.div(hidden_states, self.num_devices)
+                hidden_states = ttnn.div(hidden_states, self.num_devices)
 
         out = ttnn.add(
             residual,
