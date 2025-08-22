@@ -4,7 +4,7 @@
             "op_name": "AllGatherAsync_Binary_Mult",
             "kernel_duration": 9380.868055555555,
             "op_to_op": 906.2979797979798,
-            "first_to_last_start": 175.77777777777777,
+            "first_to_last_start": 425.6666666666667,
             "non-overlapped-dispatch-time": 4273.311111111111,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.3,
@@ -15,7 +15,7 @@
             "op_name": "AllGatherConcat",
             "kernel_duration": 10079.010416666666 ,
             "op_to_op": 723.1111111111111,
-            "first_to_last_start": 262.77777777777777,
+            "first_to_last_start": 130.44444444444446,
             "non-overlapped-dispatch-time": 12462.644444444442,
             "kernel_duration_relative_margin": 0.05,
             "op_to_op_duration_relative_margin": 0.2,
@@ -125,7 +125,7 @@
             "op_name": "PagedUpdateCache",
             "kernel_duration": 5097.290088383838,
             "op_to_op": 853.2727272727273,
-            "first_to_last_start": 140.82323232323233,
+            "first_to_last_start": 300.8888888888889,
             "non-overlapped-dispatch-time": 4601.383333333333,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
@@ -180,7 +180,7 @@
     "model_tail": {
         "AllGatherAsync_0": {
             "op_name": "AllGatherAsync_0",
-            "kernel_duration": 18323.4375,
+            "kernel_duration": 23719.34375,
             "op_to_op": 715.7727272727273,
             "non-overlapped-dispatch-time": 4722.0,
             "kernel_duration_relative_margin": 0.25,
@@ -289,7 +289,7 @@
         },
         "ReshardDeviceOperation_0": {
             "op_name": "Reshard_0",
-            "kernel_duration": 1348.8394886363637,
+            "kernel_duration": 1078.125,
             "op_to_op": 841.6818181818181,
             "non-overlapped-dispatch-time": 10707.5,
             "kernel_duration_relative_margin": 0.2,
@@ -308,7 +308,7 @@
         "Sampling_0": {
             "op_name": "Sampling_0",
             "kernel_duration": 76003.5625,
-            "op_to_op": 61393.90909090909,
+            "op_to_op": 48704.0,
             "non-overlapped-dispatch-time": 90340.2,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.2,
