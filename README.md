@@ -56,7 +56,7 @@ The Models team is focused on developing the following models to a customer-read
 > - Reported LLM Performance: Based on an input sequence length of 128 tokens for all models.
 > - Performance Data Source: Metrics were collected using the tt-metal model demos (linked above). Results may vary when using other runtimes such as the vLLM inference server.
 
-### [Llama 3.1 70B (TP=8)](./models/demos/llama3_70b_galaxy)
+### [Llama 3.1 70B (TP=32)](./models/demos/llama3_70b_galaxy)
 | Batch | Hardware                                                     | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                     | vLLM Tenstorrent Repo Release                                                                         |
 |-------|--------------------------------------------------------------|-----------|-------|-----------------|--------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
 | 32    | [Galaxy (Wormhole)](https://tenstorrent.com/hardware/galaxy) | 53        | 72.5  | 80              | 2268.8 | [v0.62.0-rc9](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-rc9) | [c348d08](https://github.com/tenstorrent/vllm/tree/c348d085a463340a66194bbee9cd4bfc5f9c697a/tt_metal) |
