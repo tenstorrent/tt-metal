@@ -70,6 +70,9 @@ void gelu_derivative_init() {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_gelu() {
 // chebychev gelu approximation
+if (APPROXIMATION_MODE) {
+    _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
+} else {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat in = sfpi::dst_reg[0];
@@ -81,7 +84,7 @@ inline void calculate_gelu() {
     }
     // _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
 }
-
+}
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_gelu_derivative() {
     _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>();
