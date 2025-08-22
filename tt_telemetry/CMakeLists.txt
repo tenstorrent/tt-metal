@@ -40,7 +40,7 @@ target_sources(
         telemetry/ethernet/print_helpers.cpp
         telemetry/ethernet/ethernet_metrics.cpp
         telemetry/arc/arc_telemetry_reader.cpp
-        telemetry/arc/arc_uint_metric.cpp
+        telemetry/arc/arc_metrics.cpp
 )
 target_include_directories(
     tt_telemetry_server

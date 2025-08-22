@@ -34,6 +34,9 @@ private:
     std::unordered_map<size_t, std::string> uint_metric_name_by_id_;
     std::unordered_map<size_t, uint16_t> uint_metric_units_by_id_;
     std::unordered_map<size_t, uint64_t> uint_metric_value_by_id_;
+    std::unordered_map<size_t, std::string> double_metric_name_by_id_;
+    std::unordered_map<size_t, uint16_t> double_metric_units_by_id_;
+    std::unordered_map<size_t, double> double_metric_value_by_id_;
     std::unordered_map<uint16_t, std::string> metric_unit_display_label_by_code_;
     std::unordered_map<uint16_t, std::string> metric_unit_full_label_by_code_;
     std::mutex snapshot_mutex_;
@@ -59,6 +62,12 @@ private:
             full_snapshot.uint_metric_names.push_back(name);
             full_snapshot.uint_metric_units.push_back(uint_metric_units_by_id_[id]);
             full_snapshot.uint_metric_values.push_back(uint_metric_value_by_id_[id]);
+        }
+        for (const auto& [id, name] : double_metric_name_by_id_) {
+            full_snapshot.double_metric_ids.push_back(id);
+            full_snapshot.double_metric_names.push_back(name);
+            full_snapshot.double_metric_units.push_back(double_metric_units_by_id_[id]);
+            full_snapshot.double_metric_values.push_back(double_metric_value_by_id_[id]);
         }
 
         // Include cached unit label maps
@@ -103,8 +112,15 @@ private:
         if (snapshot->uint_metric_names.size() > 0) {
             TT_ASSERT(snapshot->uint_metric_ids.size() == snapshot->uint_metric_names.size());
             TT_ASSERT(snapshot->uint_metric_ids.size() == snapshot->uint_metric_units.size());
+        }
+        TT_ASSERT(snapshot->double_metric_ids.size() == snapshot->double_metric_values.size());
+        if (snapshot->double_metric_names.size() > 0) {
+            TT_ASSERT(snapshot->double_metric_ids.size() == snapshot->double_metric_names.size());
+            TT_ASSERT(snapshot->double_metric_ids.size() == snapshot->double_metric_units.size());
+        }
 
-            // Cache unit label maps when names are populated
+        // Cache unit label maps when any names are populated
+        if (snapshot->uint_metric_names.size() > 0 || snapshot->double_metric_names.size() > 0) {
             metric_unit_display_label_by_code_ = snapshot->metric_unit_display_label_by_code;
             metric_unit_full_label_by_code_ = snapshot->metric_unit_full_label_by_code;
         }
@@ -126,6 +142,16 @@ private:
                 uint_metric_units_by_id_[idx] = snapshot->uint_metric_units[i];
             }
             uint_metric_value_by_id_[idx] = snapshot->uint_metric_values[i];
+        }
+
+        for (size_t i = 0; i < snapshot->double_metric_ids.size(); i++) {
+            size_t idx = snapshot->double_metric_ids[i];
+            if (snapshot->double_metric_names.size() > 0) {
+                // Names were included, which indicates new metrics added!
+                double_metric_name_by_id_[idx] = snapshot->double_metric_names[i];
+                double_metric_units_by_id_[idx] = snapshot->double_metric_units[i];
+            }
+            double_metric_value_by_id_[idx] = snapshot->double_metric_values[i];
         }
     }
 

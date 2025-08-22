@@ -188,6 +188,54 @@ export class TelemetryDashboard extends LitElement {
                             didUpdate = true;
                         }
                     }
+
+                    const doubleMetricIds = data["double_metric_ids"];
+                    const doubleMetricNames = data["double_metric_names"];    // optional, and indicates new telemetry metrics if present
+                    const doubleMetricUnits = data["double_metric_units"] || [];
+                    const doubleMetricValues = data["double_metric_values"];
+                    const doubleMetricTimestamps = data["double_metric_timestamps"] || [];
+
+                    if (doubleMetricIds.length != doubleMetricValues.length) {
+                        console.log(`SSE error: Received differing id and value counts (${doubleMetricIds.length} vs. ${doubleMetricValues.length})`);
+                        return;
+                    }
+
+                    if (doubleMetricTimestamps.length > 0 && doubleMetricTimestamps.length != doubleMetricIds.length) {
+                        console.log(`SSE error: Received differing id and timestamp counts (${doubleMetricIds.length} vs. ${doubleMetricTimestamps.length})`);
+                        return;
+                    }
+
+                    if (doubleMetricNames.length > 0 && doubleMetricNames.length != doubleMetricIds.length) {
+                        console.log(`SSE error: Received differing name and id counts (${doubleMetricNames.length} vs. ${doubleMetricIds.length})`);
+                        return;
+                    }
+
+                    if (doubleMetricUnits.length > 0 && doubleMetricUnits.length != doubleMetricIds.length) {
+                        console.log(`SSE error: Received differing units and id counts (${doubleMetricUnits.length} vs. ${doubleMetricIds.length})`);
+                        return;
+                    }
+
+                    if (doubleMetricNames.length > 0) {
+                        // Adding new metrics with unit information
+                        for (let i = 0; i < doubleMetricIds.length; i++) {
+                            const path = doubleMetricNames[i];
+                            const id = doubleMetricIds[i];
+                            const value = doubleMetricValues[i];
+                            const timestamp = doubleMetricTimestamps.length > 0 ? doubleMetricTimestamps[i] : null;
+                            const unitCode = doubleMetricUnits.length > 0 ? doubleMetricUnits[i] : null;
+                            this._telemetryStore.addPath(path, id, value, false, timestamp, unitCode);
+                            didUpdate = true;
+                        }
+                    } else {
+                        // Delta updates
+                        for (let i = 0; i < doubleMetricIds.length; i++) {
+                            const id = doubleMetricIds[i];
+                            const value = doubleMetricValues[i];
+                            const timestamp = doubleMetricTimestamps.length > 0 ? doubleMetricTimestamps[i] : null;
+                            this._telemetryStore.updateDoubleValue(id, value, timestamp);
+                            didUpdate = true;
+                        }
+                    }
                 } catch (error) {
                     // If it's not JSON, append as-is
                     console.error(`SSE error: Error processing data: ${error}`);
