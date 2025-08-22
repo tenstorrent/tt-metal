@@ -76,17 +76,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
 
     const auto src_buffer = device_input_tensor.buffer();
     const auto dst_buffer = device_output_tensor.buffer();
-    const bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const auto inner_dim_units = output_last_dim;
     const auto outer_dim_units = input_tensor.logical_volume() / inner_dim_units / red_dim_units;
 
-    const KernelDescriptor::CompileTimeArgs compile_time_args = {
+    KernelDescriptor::CompileTimeArgs compile_time_args = {
         (uint32_t)src_cb_idx,
         (uint32_t)dst_cb_idx,
-        src_is_dram,
-        dst_is_dram,
         src_page_size,
         dst_page_size,
         outer_dim_units,
@@ -94,6 +90,9 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpArgmaxSingleCore) {
         red_dim_units,
         (uint32_t)(reduce_all),
     };
+    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
+    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
+
     const KernelDescriptor::CoreRuntimeArgs runtime_args = {
         src_buffer->address(),
         dst_buffer->address(),
