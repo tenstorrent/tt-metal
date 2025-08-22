@@ -325,6 +325,7 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
+        this->semaphore.has_value(),
         this->do_sync,
         this->chunks_per_sync,
         this->num_workers_per_link,
