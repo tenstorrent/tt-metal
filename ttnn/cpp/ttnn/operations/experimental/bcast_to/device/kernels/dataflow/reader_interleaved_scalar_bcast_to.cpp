@@ -22,14 +22,12 @@ void kernel_main() {
     uint32_t Ht = get_arg_val<uint32_t>(arg_index++);
     uint32_t Wt = get_arg_val<uint32_t>(arg_index++);
 
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr auto cb_id_src = get_compile_time_arg_val(1);
+    constexpr auto cb_id_src = get_compile_time_arg_val(0);
+    constexpr auto src_args = TensorAccessorArgs<1>();
     constexpr uint32_t onetile = 1;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const DataFormat src_data_format = get_dataformat(cb_id_src);
-    const InterleavedAddrGenFast<src_is_dram> src = {
-        .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
+    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 
     uint32_t HtWt = Ht * Wt;
     // this is the INPUT tile offset
