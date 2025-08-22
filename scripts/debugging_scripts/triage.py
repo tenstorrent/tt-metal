@@ -41,6 +41,16 @@ except ImportError as e:
     print(f"  {utils.GREEN}{install_script}{utils.RST}")
     exit(1)
 
+# Check if requirements are installed
+try:
+    import capnp
+except ImportError as e:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    requirements_path = os.path.join(script_dir, "requirements.txt")
+    print(f"Module '{e}' not found. Please install requirements.txt:")
+    print(f"  {utils.GREEN}pip install -r {requirements_path}{utils.RST}")
+    exit(1)
+
 # Import necessary libraries
 from copy import deepcopy
 from dataclasses import dataclass, field

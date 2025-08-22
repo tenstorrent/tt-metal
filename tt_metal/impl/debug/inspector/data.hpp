@@ -25,7 +25,7 @@ private:
     static rpc::BinaryStatus convert_binary_status(ProgramBinaryStatus status);
 
     inspector::Logger logger;
-    std::unique_ptr<RpcServerController> rpc_server_controller;
+    RpcServerController rpc_server_controller;
     std::mutex programs_mutex;
     std::mutex mesh_devices_mutex;
     std::mutex mesh_workloads_mutex;

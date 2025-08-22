@@ -14,22 +14,24 @@ namespace tt::tt_metal::inspector {
 
 class RpcServerController {
 public:
-    RpcServerController(const std::string& host, uint16_t port);
     ~RpcServerController();
 
-    void start();
+    void start(const std::string& host, uint16_t port);
     void stop();
-    bool is_running() const { return server_thread.joinable(); }
+    bool is_running() const { return rpc_server != nullptr; }
 
     RpcServer& get_rpc_server();
 
 private:
-    std::string host;
-    uint16_t port;
     std::thread server_thread;
     std::unique_ptr<::capnp::EzRpcServer> rpc_server;
     RpcServer* rpc_server_implementation;
     bool should_stop;
+
+    // temp data used in background thread as initialization
+    std::string host;
+    uint16_t port;
+    ::kj::Own<RpcServer> temp_rpc_server_implementation;
 
     void run_server();
 };

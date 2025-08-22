@@ -20,9 +20,7 @@ Data::Data()
         try {
             auto host = rtoptions.get_inspector_rpc_server_host();
             auto port = rtoptions.get_inspector_rpc_server_port();
-            rpc_server_controller = std::make_unique<RpcServerController>(host, port);
-            rpc_server_controller->start();
-            log_info(tt::LogInspector, "Inspector RPC server enabled at {}:{}", host, port);
+            rpc_server_controller.start(host, port);
 
             // Connect callbacks that we want to respond to
             get_rpc_server().setGetProgramsCallback([this](auto result) { this->rpc_get_programs(result); });
@@ -36,13 +34,11 @@ Data::Data()
 }
 
 Data::~Data() { 
-    if (rpc_server_controller) {
-        rpc_server_controller->stop();
-    }
+    rpc_server_controller.stop();
 }
 
 RpcServer& Data::get_rpc_server() {
-    return rpc_server_controller->get_rpc_server();
+    return rpc_server_controller.get_rpc_server();
 }
 
 void Data::rpc_get_programs(rpc::Inspector::GetProgramsResults::Builder& results) {
