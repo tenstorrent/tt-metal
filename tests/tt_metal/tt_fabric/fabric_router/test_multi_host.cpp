@@ -85,5 +85,19 @@ TEST(MultiHost, TestDualGalaxyControlPlaneAPIs) {
     }
 }
 
+TEST(MultiHost, TestExaboxControlPlaneInit) {
+    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() != tt::tt_metal::ClusterType::GALAXY) {
+        log_info(tt::LogTest, "This test is only for GALAXY");
+        GTEST_SKIP();
+    }
+    const std::filesystem::path exabox_mesh_graph_desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/wh_exabox_8x4_mesh_graph_descriptor.yaml";
+    auto control_plane = std::make_unique<ControlPlane>(exabox_mesh_graph_desc_path.string());
+
+    control_plane->configure_routing_tables_for_fabric_ethernet_channels(
+        tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC,
+        tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+}
 }  // namespace multi_host_tests
 }  // namespace tt::tt_fabric
