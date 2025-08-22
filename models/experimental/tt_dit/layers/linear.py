@@ -88,7 +88,7 @@ class ColParallelLinear:
         self.activation_fn = activation_fn
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
-        self.shard_dim = shard_dim  # Store shard_dim as instance variable
+        self.shard_dim = shard_dim
         if init:
             self.weight = bf16_tensor(
                 torch.randn(in_features, out_features),
@@ -223,16 +223,10 @@ class RowParallelLinear:
         Expects x to be column fractured.
         Return output fractured on columns.
         """
-        # DEBUG: Add context for ff2 debugging
         import traceback
 
         call_stack = traceback.extract_stack()
         is_ff2_call = any("ff2" in str(frame) for frame in call_stack)
-        if is_ff2_call:
-            print(f"DEBUG RowParallelLinear (ff2) __call__:")
-            print(f"  input x.shape: {x.shape}")
-            print(f"  mesh_axis: {self.mesh_axis}")
-            print(f"  mesh_device.shape: {self.mesh_device.shape}")
 
         output = ttnn.linear(
             x,
@@ -241,9 +235,6 @@ class RowParallelLinear:
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
-
-        if is_ff2_call:
-            print(f"  output.shape after linear: {output.shape}")
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
             needs_reshape = len(output.shape) <= 3

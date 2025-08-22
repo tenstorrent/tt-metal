@@ -87,11 +87,6 @@ class CCLManager:
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] //= self.mesh_device.shape[mesh_axis]
 
-            print(f"output_buffer_shape: {output_buffer_shape}")
-            print(f"self.mesh_device.shape: {self.mesh_device.shape}")
-            print(f"self.mesh_device.shape[mesh_axis]: {self.mesh_device.shape[mesh_axis]}")
-            # breakpoint()
-
             intermediate_buffer_shape = list(shape)
             intermediate_buffer_shape = [2] + intermediate_buffer_shape
             for _ in range(2):
