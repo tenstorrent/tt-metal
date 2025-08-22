@@ -125,7 +125,7 @@ DeviceData::DeviceData(
     this->amt_written = 0;
 
     const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    pcie_core = soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0)[0];
+    auto pcie_core = soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0)[0];
     CoreCoord core = {pcie_core.x, pcie_core.y};
     // TODO: make this all work w/ phys coords
     // this is really annoying
