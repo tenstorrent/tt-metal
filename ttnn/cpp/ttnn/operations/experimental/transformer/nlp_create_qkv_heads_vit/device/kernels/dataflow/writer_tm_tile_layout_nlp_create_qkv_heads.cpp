@@ -22,9 +22,9 @@ void kernel_main() {
     constexpr uint32_t q_out_w_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t q_out_HtWt = get_compile_time_arg_val(2);
     constexpr uint32_t q_out_c = get_compile_time_arg_val(3);
-    constexpr auto q_args = TensorAccessorArgs<4>();
-    constexpr uint32_t kv_out_c = get_compile_time_arg_val(5);
-    constexpr auto k_args = TensorAccessorArgs<6>();
+    constexpr uint32_t kv_out_c = get_compile_time_arg_val(4);
+    constexpr auto q_args = TensorAccessorArgs<5>();
+    constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_qv = 1;  // cb for Q, V heads tiles
