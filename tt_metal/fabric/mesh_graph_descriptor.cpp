@@ -19,10 +19,10 @@ namespace tt::tt_fabric {
 
 namespace {
 
-std::string ReadFileToString(const std::string &file_path) {
+std::string read_file_to_string(const std::filesystem::path &file_path) {
     std::ifstream input(file_path);
     if (!input.is_open()) {
-        throw std::runtime_error("Failed to open file: " + file_path);
+        throw std::runtime_error("Failed to open file: " + file_path.string());
     }
     std::ostringstream buffer;
     buffer << input.rdbuf();
@@ -41,7 +41,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string &text_proto) {
 }
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path &text_proto_file_path) {
-    const std::string content = ReadFileToString(text_proto_file_path.string());
+    const std::string content = read_file_to_string(text_proto_file_path.string());
     tt::tt_fabric::mesh_graph_descriptor_proto::MeshGraphDescriptor proto;
     if (!google::protobuf::TextFormat::ParseFromString(content, &proto)) {
         throw std::runtime_error("Failed to parse MeshGraphDescriptor textproto file: " + text_proto_file_path.string());
