@@ -27,9 +27,9 @@ def is_watcher_enabled():
 
 
 def fa_rand(*shape):
-    # normal_1 = torch.randn(shape)
+    normal_1 = torch.randn(shape)
     # normal_2 = torch.randn(shape) * 10
-    normal_1 = torch.ones(shape) * 2
+    # normal_1 = torch.ones(shape) * 2
     normal_2 = torch.randn(shape) * 10
     bernoulli = torch.bernoulli(torch.full(shape, 0.001))
     return normal_1 + normal_2 * bernoulli
@@ -179,7 +179,7 @@ def run_sdpa_noncausal(
     gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False, attn_mask=mask)
 
     torch.set_printoptions(linewidth=500)
-    torch.set_printoptions(threshold=float("inf"), precision=3)
+    torch.set_printoptions(threshold=float("inf"), precision=3, sci_mode=False)
 
     # print("RES_TENSOR first 10:")
     # print((tt_back.flatten()[0:10]))
