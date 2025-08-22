@@ -7,7 +7,7 @@ Definition of the pydantic models used for data production.
 """
 
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Union, Tuple
 
 from enum import Enum
 from pydantic import BaseModel, Field, model_validator
@@ -373,3 +373,181 @@ class CompleteBenchmarkRun(BaseModel):
     )
     training: Optional[bool] = Field(None, description="ML model benchmarks for training or inference.")
     measurements: List[BenchmarkMeasurement] = Field(description="List of benchmark measurements.")
+
+
+class TensorDesc(BaseModel):
+    """
+    Contains descriptions of tensors used as inputs or outputs of the operation in a ML
+    kernel operation test.
+    """
+
+    shape: List[int] = Field(description="Shape of the tensor.")
+    data_type: str = Field(description="Data type of the tensor, e.g. Float32, " "BFloat16, etc.")
+    buffer_type: str = Field(description="Memory space of the tensor, e.g. Dram, L1, " "System.")
+    layout: str = Field(description="Layout of the tensor, e.g. Interleaved, " "SingleBank, HeightSharded.")
+    grid_shape: List[int] = Field(
+        description="The grid shape describes a 2D region of cores which are used to "
+        "store the tensor in memory. E.g. You have a tensor with shape "
+        "128x128, you might decide to put this on a 2x2 grid of cores, "
+        "meaning each core has a 64x64 slice."
+    )
+
+
+class TestStatus(Enum):
+    """
+    Status of the test execution.
+    """
+
+    # This includes the statuses from both the TTNN (Steven) and Forge (Collin) side.
+    compile_failed = "compile_failed"
+    run_failed = "run_failed"
+    golden_failed = "golden_failed"
+    success = "success"
+    passed = "pass"
+    fail_assert_exception = "fail_assert_exception"
+    fail_l1_out_of_mem = "fail_l1_out_of_mem"
+    fail_watcher = "fail_watcher"
+    fail_crash_hang = "fail_crash_hang"
+    fail_unsupported_device_perf = "fail_unsupported_device_perf"
+    skipped = "skipped"
+    error = "error"
+
+
+class RunStatus(Enum):
+    """
+    Status of the run execution.
+    """
+
+    passed = "pass"
+    fail = "fail"
+    did_not_finish = "did_not_finish"
+    exception = "exception"
+
+
+class PerfMetric(BaseModel):
+    """
+    Metric name and its value.
+    """
+
+    metric_name: str = Field(description="Metric name.")
+    metric_value: float = Field(description="Metric value.")
+
+    class Config:
+        frozen = True
+
+
+class OpParam(BaseModel):
+    """
+    Test parameter (i.e. test vector) and its value.
+    """
+
+    param_name: str = Field(description="Test parameter name.")
+
+    # Test parameter values can be a single str/int/float value or a list of values,
+    # e.g. dtype="int8", shape=[1, 2, 3].
+    param_value_numeric: Optional[float] = Field(default=None, description="Test parameter value in float.")
+    param_value_text: Optional[str] = Field(default=None, description="Test parameter value in text.")
+    # JSON value holder for complex params: can be a JSON object (dict) or JSON array (list).
+    param_value_json: Optional[Union[dict, list]] = Field(
+        default=None, description="Test parameter value as JSON (object or array)."
+    )
+
+    class Config:
+        frozen = True
+
+
+class OpTest(BaseModel):
+    """
+    Contains information about ML kernel operation tests, such as test execution,
+    results, configuration.
+    """
+
+    # Made this optional since TTNN (Steven) or Forge (Collin) side may have tests that
+    # are not executed by CI runners.
+    github_job_id: Optional[int] = Field(
+        description="Identifier for the Github Actions CI job, which ran the test.",
+    )
+    full_test_name: str = Field(description="Test name plus config.")
+    test_start_ts: datetime = Field(description="Timestamp with timezone when the test execution started.")
+    test_end_ts: datetime = Field(description="Timestamp with timezone when the test execution ended.")
+    # test_case_name will be suite_name for the TTNN (Steven) side.
+    test_case_name: Optional[str] = Field(description="Name of the pytest function.")
+    filepath: str = Field(description="Test file path and name.")
+    success: bool = Field(description="Test execution success.")
+    skipped: bool = Field(description="Some tests in a job can be skipped.")
+    error_message: Optional[str] = Field(None, description="Succinct error string, such as exception type.")
+    config: Optional[dict] = Field(default=None, description="Test configuration, as key/value pairs.")
+    frontend: str = Field(description="ML frontend or framework used to run the test.")
+    model_name: str = Field(description="Name of the ML model in which this operation is used.")
+    op_kind: str = Field(description="Kind of operation, e.g. Eltwise.")
+    op_name: str = Field(description="Name of the operation, e.g. ttnn.conv2d")
+    framework_op_name: str = Field(description="Name of the operation within the framework, e.g. torch.conv2d")
+    # Made these optional since TTNN (Steven) side doesn't have these fields.
+    inputs: Optional[List[TensorDesc]] = Field(description="List of input tensors.")
+    outputs: Optional[List[TensorDesc]] = Field(description="List of output tensors.")
+    op_params: Optional[dict] = Field(
+        default=None,
+        description="Parametrization criteria for the operation, based on its kind, "
+        "as key/value pairs, e.g. stride, padding, etc.",
+    )
+
+    # Fields added for Forge (Collin) side.
+    git_sha: Optional[str] = Field(description="Git commit SHA of the op test.")
+    status: Optional[TestStatus] = Field(
+        description="Status of the op test, e.g. success, " "run_failed, skipped, error."
+    )
+    card_type: Optional[str] = Field(description="Type of hardware card used for testing, e.g. N150, N300.")
+    backend: Optional[str] = Field(description="Backend used for the op test.")
+
+    # Fields added for TTNN (Steven) side.
+    data_source: Optional[str] = Field(
+        None,
+        description="Source of the data for the op test, indicating the data producer.",
+    )
+    input_hash: Optional[str] = Field(None, description="Hash of the input vector for deduplication and traceability.")
+    message: Optional[str] = Field(None, description="Optional informational message about the execution outcome.")
+    exception: Optional[str] = Field(None, description="Exception text when a failure occurred, if any.")
+    # Performance metrics (optional)
+    metrics: Optional[set[PerfMetric]] = Field(
+        None,
+        description="Set of performance metrics for the test, including both end-to-end performance "
+        "metric and device-level performance measurements, when device profiling is enabled.",
+    )
+    # Note that the op_params_set field is very similar to the op_params field above.
+    # op_params will be kept as a JSONB column in the ml_kernel_op_test table,
+    # while op_params_set will be popped out and normalized into a vertical table,
+    # i.e. op_param table.
+    # We have both implementations to avoid the impact on the data production/consumption
+    # of the primary data producer (Forge: Vladimir, James).
+    op_params_set: Optional[List[OpParam]] = Field(
+        description="Original test vector contents captured for traceability, normalized for JSON compatibility.",
+    )
+
+
+# This model is only adopted by TTNN (Steven) side.
+class OpRun(BaseModel):
+    """
+    High-level metadata describing a sweep run session or unit
+    test run.
+    """
+
+    initiated_by: str = Field(description="User or CI pipeline that initiated the run.")
+    host: str = Field(description="Hostname of the machine executing the run.")
+    card_type: str = Field(description="Target device/architecture identifier, if available.")
+    run_type: str = Field(description="Type of op test run (e.g., sweeps, unit_test).")
+    run_contents: str = Field(
+        description="Human-readable description of run contents (e.g., module/suite selection).",
+    )
+
+    git_author: str = Field(description="Git author configured in the environment.")
+    git_branch_name: str = Field(description="Current git branch name.")
+    git_sha: str = Field(description="Short git commit hash for the run.")
+    github_pipeline_id: Optional[int] = Field(
+        None,
+        description="Identifier for the GitHub Actions pipeline run (GITHUB_RUN_ID) or analogous CI pipeline id.",
+    )
+
+    run_start_ts: datetime = Field(description="Timestamp with timezone when the sweeps run started.")
+    run_end_ts: datetime = Field(description="Timestamp with timezone when the sweeps run ended.")
+    status: RunStatus = Field(description="Overall run status aggregated from testcases.")
+    tests: List[OpTest] = Field(description="List of tests executed in the run.")

@@ -7,6 +7,8 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include <cmath>
 
 namespace {
@@ -24,6 +26,7 @@ void set_or_update_runtime_arguments(
     const WhereDeviceOperation::operation_attributes_t& operation_attributes,
     const WhereDeviceOperation::tensor_args_t& tensor_args,
     WhereDeviceOperation::tensor_return_value_t& output,
+    WhereBroadcastType broadcast_type,
     F handle_args) {
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
 
@@ -40,12 +43,11 @@ void set_or_update_runtime_arguments(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
+    constexpr size_t num_reader_args = 27;
     constexpr size_t num_writer_args = 3;
-    constexpr size_t num_kernel_args = 1;
+    constexpr size_t num_kernel_args = 3;
 
-    // Reader args count depends on variant
-    constexpr size_t num_reader_args = 5;
-    uint32_t dummy_arg = 0;
+    // Reader args: 5 for simple variants, 27 for column broadcast
 
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
@@ -56,54 +58,242 @@ void set_or_update_runtime_arguments(
         } else if (core_group_2.contains(core)) {
             num_tiles_per_core = num_tiles_per_core_group_2;
         } else {
+            // Handle cores with zero tiles - need to determine correct array size based on variant
+            // if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+            //     std::array<uint32_t, 27> zero_reader_args{};
+            //     handle_args(program, reader_kernel_id, core, zero_reader_args);
+            // } else {
+            //     std::array<uint32_t, 5> zero_reader_args{};
+            //     handle_args(program, reader_kernel_id, core, zero_reader_args);
+            // }
             handle_args(program, reader_kernel_id, core, std::array<uint32_t, num_reader_args>{0});
             handle_args(program, writer_kernel_id, core, std::array<uint32_t, num_writer_args>{0});
             handle_args(program, compute_kernel_id, core, std::array<uint32_t, num_kernel_args>{0});
             continue;
         }
 
-        // Set reader runtime arguments based on variant
+        // Declare variables for TTT column broadcast case that will be used by both reader and writer
+        uint32_t aD = 1, aN = 1, aC = 1, aHt = 1, aWt = 1, aND = 1;
+        uint32_t bD = 1, bN = 1, bC = 1, bHt = 1, bWt = 1, bND = 1, b_num_tiles = 0;  // Initialize to 0 like binary_ng
+        uint32_t fD = 1, fN = 1, fC = 1, fHt = 1, fWt = 1, fND = 1, f_num_tiles = 0;  // false tensor vars
+        uint32_t cD = 1, cN = 1, cC = 1, cHt = 1, cWt = 1, cND = 1,
+                 c_current_shard_width = 0;  // Initialize to 0 like binary_ng
+        uint32_t a_num_tiles = 0;            // Initialize to 0 like binary_ng
+
+        // Define has_sharding at higher scope so it's accessible in both variable init and reader args blocks
+        bool has_sharding = false;
+        if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+            // For TTT column broadcast, calculate has_sharding
+            has_sharding = predicate_tensor.memory_config().is_sharded() ||
+                           value_true_tensor.value().memory_config().is_sharded() ||
+                           value_false_tensor.value().memory_config().is_sharded() ||
+                           output.memory_config().is_sharded();
+        }
+
+        if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+            // Initialize binary_ng style variables for TTT column broadcast
+
+            const auto out_rank = output.logical_shape().rank();
+            aND = 1;  // predicate nD (simplified for now)
+            bND = 1;  // value_true nD (simplified for now)
+            fND = 1;  // value_false nD (simplified for now)
+            cND = 1;  // output nD (simplified for now)
+
+            // Extract shape dimensions using binary_ng approach
+            const auto predicate_shape = predicate_tensor.padded_shape();
+            const auto value_true_shape = value_true_tensor.value().padded_shape();
+            const auto value_false_shape = value_false_tensor.value().padded_shape();
+            const auto& output_shape = output.padded_shape();
+            const auto& tile = output.tensor_spec().tile();
+
+            // Get shape dims (D, N, C, Ht, Wt) for predicate (a)
+            aD = predicate_shape.rank() >= 5 ? predicate_shape[-5] : 1;
+            aN = predicate_shape[-4];
+            aC = predicate_shape[-3];
+            aHt = predicate_shape[-2] / tile.get_height();
+            aWt = predicate_shape[-1] / tile.get_width();
+
+            // Get shape dims for value_true (b) - broadcast tensor
+            bD = value_true_shape.rank() >= 5 ? value_true_shape[-5] : 1;
+            bN = value_true_shape[-4];
+            bC = value_true_shape[-3];
+            bHt = value_true_shape[-2] / tile.get_height();
+            bWt = value_true_shape[-1] / tile.get_width();
+
+            // Get shape dims for value_false (f) - using actual false tensor shape
+            fD = value_false_shape.rank() >= 5 ? value_false_shape[-5] : 1;
+            fN = value_false_shape[-4];
+            fC = value_false_shape[-3];
+            fHt = value_false_shape[-2] / tile.get_height();
+            fWt = value_false_shape[-1] / tile.get_width();
+
+            // Get shape dims for output (c)
+            cD = output_shape.rank() >= 5 ? output_shape[-5] : 1;
+            cN = output_shape[-4];
+            cC = output_shape[-3];
+            cHt = output_shape[-2] / tile.get_height();
+            cWt = output_shape[-1] / tile.get_width();
+
+            // Match binary_ng logic: only set tile counts if sharding is enabled
+            // For non-sharded (interleaved) mode, these remain 0 like binary_ng
+            if (has_sharding) {
+                a_num_tiles = aHt * aWt;  // predicate tiles per core
+                b_num_tiles = bHt * bWt;  // value_true tiles per core
+                f_num_tiles = fHt * fWt;  // value_false tiles per core
+                c_current_shard_width = cWt;
+            }
+            // If not sharded, a_num_tiles, b_num_tiles, f_num_tiles, c_current_shard_width remain 0 (like binary_ng)
+        }
+
+        // Set reader runtime arguments based on variant (use appropriate array sizes)
         if (variant == WhereVariant::TTS) {
-            // TTS: predicate (arg 0) + value_true tensor (arg 1)
-            std::array reader_runtime_args = {
-                predicate_tensor.buffer()->address(),
-                value_true_tensor.value().buffer()->address(),
-                dummy_arg,
-                num_tiles_per_core,
-                start_tile_id,
+            // TTS: predicate (arg 0) + value_true tensor (arg 1) - only 5 args needed
+            std::array<uint32_t, 27> reader_runtime_args = {
+                predicate_tensor.buffer()->address(),           // 0: predicate address
+                value_true_tensor.value().buffer()->address(),  // 1: true tensor address
+                0u,                                             // 2: unused (but expected by kernel)
+                num_tiles_per_core,                             // 3: num_tiles_per_core
+                start_tile_id,                                  // 4: start_tile_id
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,  // 5-14: zeros
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,  // 15-24: zeros
+                0u,
+                0u  // 25-26: zeros
             };
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else if (variant == WhereVariant::TST) {
-            // TST: predicate (arg 0) + value_false tensor (arg 1, maps to c_1)
-            std::array reader_runtime_args = {
-                predicate_tensor.buffer()->address(),
-                value_false_tensor.value().buffer()->address(),
-                dummy_arg,
-                num_tiles_per_core,
-                start_tile_id,
+            // TST: predicate (arg 0) + value_false tensor (arg 1, maps to c_1) - only 5 args needed
+            std::array<uint32_t, 27> reader_runtime_args = {
+                predicate_tensor.buffer()->address(),            // 0: predicate address
+                value_false_tensor.value().buffer()->address(),  // 1: false tensor address (goes to c_1)
+                0u,                                              // 2: unused (but expected by kernel)
+                num_tiles_per_core,                              // 3: num_tiles_per_core
+                start_tile_id,                                   // 4: start_tile_id
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,  // 5-14: zeros
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,
+                0u,  // 15-24: zeros
+                0u,
+                0u  // 25-26: zeros
             };
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
+        } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+            // TTT with column broadcast: use exact binary_ng format for predicate (a) and value_true (b)
+            uint32_t c_start_id = 0;
+            if (has_sharding) {
+                // Match binary_ng sharding logic for c_start_id calculation
+                // NOTE: This requires shard shape info that may need to be implemented
+                c_start_id = start_tile_id;  // For now, fallback to start_tile_id until shard logic is implemented
+            } else {
+                c_start_id = start_tile_id;
+            }
+
+            // Standard first 5 args + extended args for column broadcast
+            std::array<uint32_t, 27> reader_runtime_args = {
+                // Standard first 5 arguments (same as nobcast kernels)
+                predicate_tensor.buffer()->address(),            // 0: src0_addr (predicate)
+                value_true_tensor.value().buffer()->address(),   // 1: src1_addr (true tensor)
+                value_false_tensor.value().buffer()->address(),  // 2: src2_addr (false tensor)
+                num_tiles_per_core,                              // 3: num_tiles (per core)
+                c_start_id,                                      // 4: start_id
+                // Additional column broadcast arguments (args 5-26)
+                aHt * aWt * aC * aN * aD * (aND > 1),  // 5: nD_stride
+                aHt * aWt * aC * aN * (aD > 1),        // 6: d_stride
+                aHt * aWt * aC * (aN > 1),             // 7: n_stride
+                aHt * aWt * (aC > 1),                  // 8: c_stride
+                cD,                                    // 9: D
+                cN,                                    // 10: N
+                cC,                                    // 11: C
+                cHt,                                   // 12: Ht
+                cWt,                                   // 13: Wt
+                cND,                                   // 14: cND
+                bHt * bWt * bC * bN * bD * (bND > 1),  // 15: true_nD_stride
+                bHt * bWt * bC * bN * (bD > 1),        // 16: true_d_stride
+                bHt * bWt * bC * (bN > 1),             // 17: true_n_stride
+                bHt * bWt * (bC > 1),                  // 18: true_c_stride
+                b_num_tiles,                           // 19: true_num_tiles
+                fHt * fWt * fC * fN * fD * (fND > 1),  // 20: false_nD_stride
+                fHt * fWt * fC * fN * (fD > 1),        // 21: false_d_stride
+                fHt * fWt * fC * (fN > 1),             // 22: false_n_stride
+                fHt * fWt * (fC > 1),                  // 23: false_c_stride
+                f_num_tiles,                           // 24: false_num_tiles
+                c_current_shard_width,                 // 25: dst_shard_width
+                a_num_tiles,                           // 26: src_num_tiles (predicate)
+            };
+
+            // TODO: value_false_tensor needs to be handled separately (maybe through a different CB or as scalar)
+            handle_args(program, reader_kernel_id, core, reader_runtime_args);
         } else {
-            // TTT: predicate (arg 0) + value_true (arg 1) + value_false (arg 2)
-            std::array reader_runtime_args = {
-                predicate_tensor.buffer()->address(),
-                value_true_tensor.value().buffer()->address(),
-                value_false_tensor.value().buffer()->address(),
-                num_tiles_per_core,
-                start_tile_id,
+            // TTT (non-broadcast): predicate (arg 0) + value_true (arg 1) + value_false (arg 2) - only 5 args needed
+            std::array<uint32_t, 5> reader_runtime_args = {
+                predicate_tensor.buffer()->address(),            // 0: predicate address
+                value_true_tensor.value().buffer()->address(),   // 1: true tensor address
+                value_false_tensor.value().buffer()->address(),  // 2: false tensor address
+                num_tiles_per_core,                              // 3: num_tiles_per_core
+                start_tile_id                                    // 4: start_tile_id
             };
             handle_args(program, reader_kernel_id, core, reader_runtime_args);
         }
 
+        // Writer runtime args - use simple unary format (3 args: dst_addr, num_tiles, start_id)
         std::array writer_runtime_args = {
-            output.buffer()->address(),
-            num_tiles_per_core,
-            start_tile_id,
+            output.buffer()->address(),  // dst_addr
+            num_tiles_per_core,          // num_tiles
+            start_tile_id                // start_id
         };
         handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
-        // All variants use same compute runtime args now
-        if (variant == WhereVariant::TTS) {
+        // Compute runtime args - binary_ng style for TTT column broadcast
+        if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+            // Get output shape dimensions for freq/counter calculation
+            const auto& output_shape = output.padded_shape();
+            const auto& tile = output.tensor_spec().tile();
+            uint32_t output_Ht = output_shape[-2] / tile.get_height();
+            uint32_t output_Wt = output_shape[-1] / tile.get_width();
+
+            // Calculate freq and counter like binary_ng for column broadcast
+            uint32_t start_t = start_tile_id % (output_Ht * output_Wt);
+            uint32_t start_tw = start_t % output_Wt;
+            uint32_t freq = output_Wt;              // Column broadcast frequency
+            uint32_t counter = start_tw;            // Column broadcast counter
+
+            std::array compute_runtime_args = {num_tiles_per_core, freq, counter};
+
+            handle_args(program, compute_kernel_id, core, compute_runtime_args);
+        } else if (variant == WhereVariant::TTS) {
             auto bit_cast_scalar =
                 pack_scalar_runtime_arg(operation_attributes.value_false_scalar.value(), output.dtype());
             std::array compute_runtime_args = {num_tiles_per_core, bit_cast_scalar};
@@ -136,9 +326,10 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
 
     WhereVariant variant = operation_attributes.where_variant;
+    WhereBroadcastType broadcast_type = operation_attributes.broadcast_type;
 
     // Use WhereKernelConfig to get the appropriate kernel names
-    WhereKernelConfig kernel_config(variant);
+    WhereKernelConfig kernel_config(variant, broadcast_type);
 
     auto program = CreateProgram();
 
@@ -257,16 +448,80 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         value_false_tensor_cb_handle = cb2_handle;
     }
 
-    // Output buffer
+    // Output buffer - use c_3 for all cases now
+    auto output_cb_index = tt::CBIndex::c_3;
     auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_3,
+        output_cb_index,
         program,
         all_device_cores,
         output_single_tile_size,
         num_tiles_per_cb,
         output_data_format);  // output
 
+    auto predicate_is_dram =
+        static_cast<uint32_t>(predicate_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+
+    // Handle DRAM flags based on variant and tensor availability
+    uint32_t value_true_is_dram = 0, value_false_is_dram = 0;
+    if (variant == WhereVariant::TTS) {
+        value_true_is_dram =
+            static_cast<uint32_t>(value_true_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    } else if (variant == WhereVariant::TST) {
+        value_false_is_dram =
+            static_cast<uint32_t>(value_false_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    } else {
+        value_true_is_dram =
+            static_cast<uint32_t>(value_true_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+        value_false_is_dram =
+            static_cast<uint32_t>(value_false_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+    }
+
+    auto output_is_dram = static_cast<uint32_t>(output.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
+
+    // BROADCAST DETECTION - Common for both reader and compute kernels
+    bool pred_is_bcast = false, true_is_bcast = false, false_is_bcast = false;
+    if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+        // Determine which tensor is actually broadcast based on logical shapes (not padded)
+        auto pred_shape = predicate_tensor.logical_shape();
+        auto true_shape = value_true_tensor.value().logical_shape();
+        auto false_shape = value_false_tensor.value().logical_shape();
+
+        auto pred_w = pred_shape[pred_shape.rank() - 1];  // last dim ? [-1] ?
+        auto true_w = true_shape[true_shape.rank() - 1];
+        auto false_w = false_shape[false_shape.rank() - 1];
+
+        pred_is_bcast = (pred_w == 1 && (true_w > 1 || false_w > 1));
+        true_is_bcast = (true_w == 1 && (pred_w > 1 || false_w > 1));
+        false_is_bcast = (false_w == 1 && (pred_w > 1 || true_w > 1));
+    }
+
     // READER KERNEL - Use kernel path from utils
+    // Create dataflow defines for column broadcast kernels like binary_ng
+    std::map<std::string, std::string> reader_defines;
+    if (broadcast_type == WhereBroadcastType::COL_BCAST) {
+        // Use binary_ng style dataflow defines with predicate and value_true dtypes
+        reader_defines = make_dataflow_defines(
+            predicate_tensor.dtype(),
+            value_true_tensor.value().dtype(),
+            value_false_tensor.value().dtype());  // For predicate (a) and value_true (b)
+
+        // Add binary_ng style sharding defines
+        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+        bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
+        bool value_false_sharded = value_true_sharded;  // Using same as value_true for now
+        reader_defines["SRC_SHARDED_PREDICATE"] = predicate_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_TRUE"] = value_true_sharded ? "1" : "0";
+        reader_defines["SRC_SHARDED_FALSE"] = value_false_sharded ? "1" : "0";
+
+        // Set broadcast defines based on actual detection
+        reader_defines["SRC_BCAST_PREDICATE"] = pred_is_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_TRUE"] = true_is_bcast ? "1" : "0";
+        reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+
+        // Add BCAST_LLK define (set to 0 for now, can be optimized later)
+        reader_defines["BCAST_LLK"] = "0";
+    }
+
     tt_metal::ReaderDataMovementConfig reader_config;
     if (variant == WhereVariant::TTS) {
         // TTS: c_0 = predicate, c_1 = value_true tensor
@@ -283,7 +538,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
         reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
-
     } else {
         // TTT: c_0 = predicate, c_1 = value_true, c_2 = value_false
         std::vector<uint32_t> reader_compile_time_args = {
@@ -293,20 +547,19 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         TensorAccessorArgs(*predicate_tensor.buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_true_tensor.value().buffer()).append_to(reader_compile_time_args);
         TensorAccessorArgs(*value_false_tensor.value().buffer()).append_to(reader_compile_time_args);
-        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args);
+        reader_config = tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines);
     }
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program, get_kernel_file_path(kernel_config.reader_kernel), all_device_cores, reader_config);
 
-    // WRITER KERNEL - Use kernel path from utils
+    // Use unary writer config for all cases (consistent with other writer variants)
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_tensor_cb};
     tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
+    tt_metal::WriterDataMovementConfig writer_config = tt_metal::WriterDataMovementConfig(writer_compile_time_args);
+
     auto writer_kernel_id = tt_metal::CreateKernel(
-        program,
-        get_kernel_file_path(kernel_config.writer_kernel),
-        all_device_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+        program, get_kernel_file_path(kernel_config.writer_kernel), all_device_cores, writer_config);
 
     // COMPUTE KERNEL - Use kernel path from utils
     bool fp32_dest_acc_en = output_data_format == tt::DataFormat::UInt32 ||
@@ -332,7 +585,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
                                                     ? UnpackToDestMode::UnpackToDestFp32
                                                     : UnpackToDestMode::Default;
     } else {
-        // TTT: c_1 = value_true tensor, c_2 = value_false tensor
+        // TTT: c_1 = value_true tensor, c_2 = value_false tensor (including column broadcast)
         unpack_to_dest_mode[tt::CBIndex::c_1] = (value_true_tensor.value().dtype() == DataType::FLOAT32)
                                                     ? UnpackToDestMode::UnpackToDestFp32
                                                     : UnpackToDestMode::Default;
@@ -341,8 +594,8 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
                                                     : UnpackToDestMode::Default;
     }
 
-    // c_3 is always output
-    unpack_to_dest_mode[tt::CBIndex::c_3] =
+    // Output CB depends on variant: c_2 for binary_ng compatibility (TTT col bcast), c_3 for other cases
+    unpack_to_dest_mode[output_cb_index] =
         (output.dtype() == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
 
     constexpr uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
@@ -360,8 +613,19 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
     }
 
     std::map<std::string, std::string> kernel_defines;
+
+    // Add binary_ng style defines for TTT column broadcast case
+    if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
+        // 3-tensor broadcast configuration - set defines for each tensor independently
+        kernel_defines["BCAST_PRED"] = pred_is_bcast ? "1" : "0";
+        kernel_defines["BCAST_TRUE"] = true_is_bcast ? "1" : "0";
+        kernel_defines["BCAST_FALSE"] = false_is_bcast ? "1" : "0";
+    }
+
     kernel_defines["WHERE_LLK"] = "where_tile";
     kernel_defines["FILL_LLK"] = "fill_tile";
+
+    // Data type specific defines (common for all variants)
     if (predicate_tensor.dtype() == DataType::FLOAT32) {
         kernel_defines["WHERE_LLK"] = "where_fp32_tile";
     }
@@ -396,6 +660,7 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         operation_attributes,
         tensor_args,
         output,
+        broadcast_type,
         set_runtime_args);
 
     return {
@@ -414,6 +679,16 @@ void WhereDeviceOperation::WhereProgramFactory::override_runtime_arguments(
             std::copy(args.begin(), args.end(), core_args.data());
         };
 
+    // Detect broadcast type for the cached program
+    const auto& [predicate_tensor, value_true_tensor, value_false_tensor, optional_output_tensor] = tensor_args;
+    WhereBroadcastType broadcast_type = WhereBroadcastType::NONE;
+    if (operation_attributes.where_variant == WhereVariant::TTT) {
+        broadcast_type = get_broadcast_type(
+            predicate_tensor.logical_shape(),
+            value_true_tensor.value().logical_shape(),
+            value_false_tensor.value().logical_shape());
+    }
+
     CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
         cached_program.program,
         cached_program.shared_variables.reader_kernel_id,
@@ -423,6 +698,7 @@ void WhereDeviceOperation::WhereProgramFactory::override_runtime_arguments(
         operation_attributes,
         tensor_args,
         output,
+        broadcast_type,
         update_args);
 }
 

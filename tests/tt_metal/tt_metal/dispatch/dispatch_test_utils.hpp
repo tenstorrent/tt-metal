@@ -140,7 +140,7 @@ inline void verify_kernel_coordinates(
             const auto& virtual_coord = mesh_device->virtual_core_from_logical_core(logical_coord, core_type);
             CoreCoord relative_coord{logical_coord.x - sub_device_origin.x, logical_coord.y - sub_device_origin.y};
             for (const auto& device : mesh_device->get_devices()) {
-                auto read_coords_raw = tt::llrt::read_hex_vec_from_core(
+                auto read_coords_raw = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                     device->id(), virtual_coord, cb_addr, sizeof(tt::tt_metal::CoreCoordsL1));
                 auto read_coords = reinterpret_cast<volatile tt::tt_metal::CoreCoordsL1*>(read_coords_raw.data());
 
