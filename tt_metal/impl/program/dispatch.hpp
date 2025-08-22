@@ -42,15 +42,15 @@ namespace program_dispatch {
 
 struct ProgramDispatchMetadata {
     std::vector<ConfigBufferEntry> kernel_config_addrs;
-    uint32_t sync_count;
-    uint32_t stall_first;
-    uint32_t stall_before_program;
+    uint32_t sync_count{};
+    uint32_t stall_first{};
+    uint32_t stall_before_program{};
 
     struct {
         uint32_t mesh_max_program_kernels_sizeB;
         bool is_cached;
         uint32_t offset;
-    } prefetcher_cache_info;
+    } prefetcher_cache_info{};
 };
 
 struct ExpectedNumWorkerUpdates {

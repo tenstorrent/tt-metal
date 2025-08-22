@@ -48,8 +48,8 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
     const bool tiled = input.layout() == Layout::TILE;
     bool on_device = input.storage_type() == StorageType::DEVICE;
 
-    std::array<uint32_t, 4> actual_shape_vec;
-    std::array<uint32_t, 4> padded_shape_vec;
+    std::array<uint32_t, 4> actual_shape_vec{};
+    std::array<uint32_t, 4> padded_shape_vec{};
     const std::array<uint32_t, 4> padded_ends =
         tiled ? std::array<uint32_t, 4>(
                     {ends[0],

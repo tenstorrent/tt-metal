@@ -67,13 +67,13 @@ extern const char* RunTimeDebugClassNames[RunTimeDebugClassCount];
 struct TargetSelection {
     std::map<CoreType, std::vector<CoreCoord>> cores;
     std::map<CoreType, int> all_cores;
-    bool enabled;
+    bool enabled{};
     std::vector<int> chip_ids;
     bool all_chips = false;
     uint32_t riscv_mask = 0;
     std::string file_name;  // File name to write output to.
     bool one_file_per_risc = false;
-    bool prepend_device_core_risc;
+    bool prepend_device_core_risc{};
 };
 
 struct WatcherSettings {

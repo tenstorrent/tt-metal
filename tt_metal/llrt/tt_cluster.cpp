@@ -106,7 +106,8 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             break;
         }
     }
-    TT_ASSERT(cluster_desc->get_all_chips().size() > 0, "No chips detected in the cluster");
+    const auto num_chips = cluster_desc->get_all_chips().size();
+    TT_ASSERT(num_chips > 0, "No chips detected in the cluster");
     const auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
     bool all_same_board = true;
     for (const auto& chip_id : cluster_desc->get_all_chips()) {
@@ -118,7 +119,6 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
 
     if (all_same_board) {
         if (board_type == BoardType::N300) {
-            const auto num_chips = cluster_desc->get_all_chips().size();
             if (num_chips == 8) {
                 cluster_type = tt::tt_metal::ClusterType::T3K;
                 // Basic check to determine if the cluster is a T3K cluster
@@ -161,19 +161,23 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         } else if (board_type == BoardType::N150) {
             cluster_type = tt::tt_metal::ClusterType::N150;
         } else if (board_type == BoardType::P100) {
-            if (cluster_desc->get_all_chips().size() == 1) {
-                cluster_type = tt::tt_metal::ClusterType::P100;
-            }
+            TT_FATAL(num_chips == 1, "Unknown cluster type for P100 board with {}", num_chips);
+            cluster_type = tt::tt_metal::ClusterType::P100;
         } else if (board_type == BoardType::P150) {
-            if (cluster_desc->get_all_chips().size() == 1) {
+            if (num_chips == 1) {
                 cluster_type = tt::tt_metal::ClusterType::P150;
-            } else if (cluster_desc->get_all_chips().size() == 2) {
+            } else if (num_chips == 2) {
                 cluster_type = tt::tt_metal::ClusterType::P150_X2;
-            } else if (cluster_desc->get_all_chips().size() == 4) {
+            } else if (num_chips == 4) {
                 cluster_type = tt::tt_metal::ClusterType::P150_X4;
-            } else if (cluster_desc->get_all_chips().size() == 8) {
+            } else if (num_chips == 8) {
                 cluster_type = tt::tt_metal::ClusterType::P150_X8;
+            } else {
+                TT_THROW("Unknown cluster type for P150 board with {} chips", num_chips);
             }
+        } else if (board_type == BoardType::P300) {
+            TT_FATAL(num_chips == 2, "Unknown cluster type for P300 board with {}", num_chips);
+            cluster_type = tt::tt_metal::ClusterType::P300;
         } else if (board_type == BoardType::UBB) {
             cluster_type = tt::tt_metal::ClusterType::GALAXY;
         }
@@ -663,7 +667,6 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
     if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
-        // log_info(tt::LogMetal, "Writing to device {} using DMA", core.chip);
         this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
@@ -692,10 +695,33 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
     if (this->supports_dma_operations(chip_id, size_in_bytes)) {
-        // log_info(tt::LogMetal, "Reading from device {} using DMA", core.chip);
         this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
+    }
+}
+
+void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    const chip_id_t chip_id = core.chip;
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
+
+    if (rtoptions_.get_watcher_enabled()) {
+        tt::watcher_sanitize_host_noc_write(
+            soc_desc,
+            this->virtual_worker_cores_.at(chip_id),
+            this->virtual_eth_cores_.at(chip_id),
+            this->virtual_pcie_cores_.at(chip_id),
+            this->virtual_dram_cores_.at(chip_id),
+            {core.x, core.y},
+            addr,
+            sz_in_bytes);
+    }
+
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+
+    if (this->cluster_desc_->is_chip_remote(chip_id)) {
+        this->driver_->wait_for_non_mmio_flush(chip_id);
     }
 }
 
