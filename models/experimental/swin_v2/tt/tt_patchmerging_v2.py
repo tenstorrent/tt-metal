@@ -36,6 +36,41 @@ class TtPatchMergingV2:
         self.parameters = parameters
 
     def __call__(self, x):
+        # B,H,W,C = x.shape
+        # # print("BHWC", B, " ", H, " ", W, " ", C)
+        # print("x: ", x.shape, x.memory_config(), x.memory_config)
+
+        # num_cores_x = 8
+        # num_cores_y = 8
+        # shard_h = (B * H * W + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
+        # grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+        # grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+        # shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+        # shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, C), ttnn.ShardOrientation.ROW_MAJOR)
+        # sharded_mem_config = ttnn.MemoryConfig(
+        #     ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        # )
+        # x = ttnn.to_memory_config(x, sharded_mem_config)
+        # print("Sharded x: ", x.shape, x.memory_config(), x.memory_config)
+
+        # shard_h = (B * H * W + (num_cores_x * num_cores_y) - 1) // (num_cores_x * num_cores_y)
+        # grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
+        # grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+        # shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+        # shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, C), ttnn.ShardOrientation.ROW_MAJOR)
+        # output_mem_config = ttnn.MemoryConfig(
+        #     ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+        # )
+
+        # x0 = ttnn.slice(x, slice_start=[0, 0, 0, 0], slice_end=[B, H, W, C], slice_step=[1, 2, 2, 1], memory_config=output_mem_config) # x0 = x[..., 0::2, 0::2, :]  # ... H/2 W/2 C
+        # print("x0: ", x0.shape)
+        # x1 = ttnn.slice(x, slice_start=[0, 1, 0, 0], slice_end=[B, H, W, C], slice_step=[1, 2, 2, 1], memory_config=output_mem_config) #x1 = x[..., 1::2, 0::2, :]  # ... H/2 W/2 C
+        # print("x1: ", x1.shape)
+        # x2 = ttnn.slice(x, slice_start=[0, 0, 1, 0], slice_end=[B, H, W, C], slice_step=[1, 2, 2, 1], memory_config=output_mem_config) #x2 = x[..., 0::2, 1::2, :]  # ... H/2 W/2 C
+        # print("x2: ", x2.shape)
+        # x3 = ttnn.slice(x, slice_start=[0, 1, 1, 0], slice_end=[B, H, W, C], slice_step=[1, 2, 2, 1], memory_config=output_mem_config) #x3 = x[..., 1::2, 1::2, :]  # ... H/2 W/2 C
+        # print("x3: ", x3.shape)
+
         x0 = x[..., 0::2, 0::2, :]  # ... H/2 W/2 C
         x1 = x[..., 1::2, 0::2, :]  # ... H/2 W/2 C
         x2 = x[..., 0::2, 1::2, :]  # ... H/2 W/2 C
