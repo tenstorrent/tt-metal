@@ -12,15 +12,34 @@ class TtnnResnet34:
         self.maxpool_args = conv_args.maxpool
         self.device = device
         self.conv1 = TtnnUFLDV2Conv2D(
-            conv_args.conv1, conv_pth.conv1, device=self.device, activation="relu", dealloc_act=True
+            conv_args.conv1,
+            conv_pth.conv1,
+            device=self.device,
+            activation="relu",
+            dealloc_act=True,
+            activation_dtype=ttnn.bfloat8_b,
         )
-        self.layer1_0 = TtnnBasicBlock(conv_args.layer1[0], conv_pth.layer1_0, device=self.device, is_downsample=False)
-        self.layer1_1 = TtnnBasicBlock(conv_args.layer1[1], conv_pth.layer1_1, device=self.device, is_downsample=False)
-        self.layer1_2 = TtnnBasicBlock(conv_args.layer1[2], conv_pth.layer1_2, device=self.device, is_downsample=False)
-        self.layer2_0 = TtnnBasicBlock(conv_args.layer2[0], conv_pth.layer2_0, device=self.device, is_downsample=True)
-        self.layer2_1 = TtnnBasicBlock(conv_args.layer2[1], conv_pth.layer2_1, device=self.device, is_downsample=False)
-        self.layer2_2 = TtnnBasicBlock(conv_args.layer2[2], conv_pth.layer2_2, device=self.device, is_downsample=False)
-        self.layer2_3 = TtnnBasicBlock(conv_args.layer2[3], conv_pth.layer2_3, device=self.device, is_downsample=False)
+        self.layer1_0 = TtnnBasicBlock(
+            conv_args.layer1[0], conv_pth.layer1_0, device=self.device, is_downsample=False, precision=ttnn.bfloat8_b
+        )
+        self.layer1_1 = TtnnBasicBlock(
+            conv_args.layer1[1], conv_pth.layer1_1, device=self.device, is_downsample=False, precision=ttnn.bfloat8_b
+        )
+        self.layer1_2 = TtnnBasicBlock(
+            conv_args.layer1[2], conv_pth.layer1_2, device=self.device, is_downsample=False, precision=ttnn.bfloat8_b
+        )
+        self.layer2_0 = TtnnBasicBlock(
+            conv_args.layer2[0], conv_pth.layer2_0, device=self.device, is_downsample=True, precision=ttnn.bfloat8_b
+        )
+        self.layer2_1 = TtnnBasicBlock(
+            conv_args.layer2[1], conv_pth.layer2_1, device=self.device, is_downsample=False, precision=ttnn.bfloat8_b
+        )
+        self.layer2_2 = TtnnBasicBlock(
+            conv_args.layer2[2], conv_pth.layer2_2, device=self.device, is_downsample=False, precision=ttnn.bfloat8_b
+        )
+        self.layer2_3 = TtnnBasicBlock(
+            conv_args.layer2[3], conv_pth.layer2_3, device=self.device, is_downsample=False, precision=ttnn.bfloat8_b
+        )
         self.layer3_0 = TtnnBasicBlock(
             conv_args.layer3[0], conv_pth.layer3_0, device=self.device, is_downsample=True, blk_sharded=True
         )
@@ -57,6 +76,8 @@ class TtnnResnet34:
         x = ttnn.permute(x, (0, 2, 3, 1))
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         x1, out_ht, out_wdth = self.conv1(x)
+        print("conv out dtype is", x1.dtype)
+        ttnn.deallocate(x)
         x1 = ttnn.max_pool2d(
             x1,
             batch_size=batch_size,
@@ -68,11 +89,13 @@ class TtnnResnet34:
             padding=[self.maxpool_args.padding, self.maxpool_args.padding],
             dilation=[self.maxpool_args.dilation, self.maxpool_args.dilation],
         )
+        print("output of pool", x1.shape, x1.dtype)
         x = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(x1)
         x = ttnn.reallocate(x)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         x = self.layer1_0(x)
+        # ss # check perf till layer1_0
         x = self.layer1_1(x)
         x = self.layer1_2(x)
         x = self.layer2_0(x)
