@@ -76,6 +76,9 @@ def run_demo_inference(
     if is_galaxy():
         logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
         os.environ["TT_MM_THROTTLE_PERF"] = "5"
+    elif is_ci_env and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.T3K:
+        logger.info("Setting TT_MM_THROTTLE_PERF for CI on T3K")
+        os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
     profiler.start("load_tt_componenets")
     with ttnn.distribute(ttnn.ReplicateTensorToMesh(ttnn_device)):
