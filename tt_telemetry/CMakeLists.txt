@@ -31,6 +31,7 @@ target_sources(
         server/main.cpp
         server/sysfs.cpp
         telemetry/telemetry_provider.cpp
+        telemetry/metric.cpp
         server/web_server.cpp
         telemetry/ethernet/chip_identifier.cpp
         telemetry/ethernet/ethernet_endpoint.cpp

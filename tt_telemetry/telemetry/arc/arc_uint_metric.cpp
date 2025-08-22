@@ -12,8 +12,9 @@ ARCUintMetric::ARCUintMetric(
     std::shared_ptr<ARCTelemetryReader> reader,
     tt::umd::wormhole::TelemetryTag tag,
     const std::string& metric_name,
-    uint32_t mask) :
-    UIntMetric(chip_id),
+    uint32_t mask,
+    MetricUnit units) :
+    UIntMetric(chip_id, units),
     reader_(reader),
     wormhole_tag_(tag),
     blackhole_tag_(),  // just some dummy tag we will never use
@@ -32,8 +33,14 @@ ARCUintMetric::ARCUintMetric(
     std::shared_ptr<ARCTelemetryReader> reader,
     tt::umd::blackhole::TelemetryTag tag,
     const std::string& metric_name,
-    uint32_t mask) :
-    UIntMetric(chip_id), reader_(reader), wormhole_tag_(), blackhole_tag_(tag), metric_name_(metric_name), mask_(mask) {
+    uint32_t mask,
+    MetricUnit units) :
+    UIntMetric(chip_id, units),
+    reader_(reader),
+    wormhole_tag_(),
+    blackhole_tag_(tag),
+    metric_name_(metric_name),
+    mask_(mask) {
     TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
     TT_ASSERT(
         reader_->get_arch() == tt::ARCH::BLACKHOLE,
@@ -42,9 +49,29 @@ ARCUintMetric::ARCUintMetric(
     value_ = 0;
 }
 
+// Helper function to determine units for CommonTelemetryTag
+static MetricUnit get_units_for_common_tag(ARCUintMetric::CommonTelemetryTag common_metric) {
+    switch (common_metric) {
+        case ARCUintMetric::CommonTelemetryTag::AICLK:
+        case ARCUintMetric::CommonTelemetryTag::AXICLK:
+        case ARCUintMetric::CommonTelemetryTag::ARCCLK: return MetricUnit::MEGAHERTZ;
+        case ARCUintMetric::CommonTelemetryTag::FAN_SPEED: return MetricUnit::REVOLUTIONS_PER_MINUTE;
+        case ARCUintMetric::CommonTelemetryTag::TDP: return MetricUnit::WATTS;
+        case ARCUintMetric::CommonTelemetryTag::TDC: return MetricUnit::AMPERES;
+        case ARCUintMetric::CommonTelemetryTag::VCORE: return MetricUnit::MILLIVOLTS;
+        case ARCUintMetric::CommonTelemetryTag::ASIC_TEMPERATURE:
+        case ARCUintMetric::CommonTelemetryTag::BOARD_TEMPERATURE: return MetricUnit::UNITLESS;  // raw uint32
+        default: return MetricUnit::UNITLESS;
+    }
+}
+
 ARCUintMetric::ARCUintMetric(
     size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader, CommonTelemetryTag common_metric) :
-    UIntMetric(chip_id), reader_(reader), wormhole_tag_(), blackhole_tag_(), mask_(0xffffffff) {
+    UIntMetric(chip_id, get_units_for_common_tag(common_metric)),
+    reader_(reader),
+    wormhole_tag_(),
+    blackhole_tag_(),
+    mask_(0xffffffff) {
     TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
 
     // Set metric name and tags based on common metric type

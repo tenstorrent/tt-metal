@@ -32,6 +32,7 @@ private:
     std::vector<size_t> bool_metric_ids_;
     std::vector<bool> bool_metric_values_;
     const std::vector<std::string> uint_metric_names_ = {"foo/bar/baz4int", "ints/intermediate/intvalue"};
+    const std::vector<MetricUnit> uint_metric_units_ = {MetricUnit::WATTS, MetricUnit::REVOLUTIONS_PER_MINUTE};
     std::vector<size_t> uint_metric_ids_;
     std::vector<uint64_t> uint_metric_values_;
 
@@ -152,12 +153,17 @@ private:
                 size_t id = uint_metric_ids_[i];
                 snapshot->uint_metric_ids.push_back(id);
                 snapshot->uint_metric_names.push_back(uint_metric_names_[i]);
+                snapshot->uint_metric_units.push_back(static_cast<uint16_t>(uint_metric_units_[i]));
                 snapshot->uint_metric_values.push_back(uint_metric_values_[i]);
                 // Add current timestamp for initial snapshot
                 uint64_t timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::system_clock::now().time_since_epoch()).count();
                 snapshot->uint_metric_timestamps.push_back(timestamp);
             }
+
+            // Populate unit label maps when names are populated
+            snapshot->metric_unit_display_label_by_code = create_metric_unit_display_label_map();
+            snapshot->metric_unit_full_label_by_code = create_metric_unit_full_label_map();
 
             for (auto& subscriber : subscribers_) {
                 subscriber->on_telemetry_ready(snapshot);
