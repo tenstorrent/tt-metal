@@ -12,7 +12,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_common import (
     precompute_freqs,
     PagedAttentionConfig,
 )
-from models.tt_transformers.tt.model_config import ModelArgs
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -81,21 +81,15 @@ def test_qwen_attention_inference(
     state_dict = model_args.load_state_dict()
     logger.info(f"Qwen3 Model Loaded")
 
-    # Note that the Llama3 tests use a reference Llama model, here we call Attention from tt_transformers
-    model_args_ref = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
-    model_args_ref.n_layers = 1  # For the unit test, just run a single layer
-
-    state_dict_ref = model_args_ref.load_state_dict()
-
-    first_layer_prefix = model_args_ref.get_state_dict_prefix("Attention", 0) + "."
+    first_layer_prefix = model_args.get_state_dict_prefix("TtLlamaAttention", 0) + "."
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    partial_state_dict_ref = {
-        k[len(first_layer_prefix) :]: v for k, v in state_dict_ref.items() if (k.startswith(first_layer_prefix))
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if k.startswith(first_layer_prefix)
     }
 
-    reference_model = model_args_ref.reference_attention()
-    reference_model.load_state_dict(partial_state_dict_ref)
-    logger.info(f"Reference Model Loaded")
+    reference_model = Attention(args=model_args, llama3=False)  # Enable QK norm with llama3=True
+    reference_model.load_state_dict(partial_state_dict)
+    logger.info(f"Reference Model Loaded with QK norm support")
 
     seq_len = 1
 
@@ -224,6 +218,7 @@ def test_qwen_attention_inference(
             mode="decode",
             page_table=page_table_tt,
         )
+
         # multi-device attention module returns replicated output
         tt_out = ttnn.to_torch(
             tt_out,
@@ -234,10 +229,7 @@ def test_qwen_attention_inference(
         # In this test all users have the same position (if using batch > 1)
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
-        reference_output = reference_model(
-            pt_attention_input.to(torch.bfloat16), current_pos[0].to(torch.bfloat16), freqs_cis_i, mask=None
-        )
-        breakpoint()
+        reference_output = reference_model(pt_attention_input, current_pos[0], freqs_cis_i, mask=None)
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 

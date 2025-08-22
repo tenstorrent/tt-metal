@@ -222,7 +222,7 @@ class TtLlamaAttention(LightweightModule):
             self.qk_norm = True
 
             # Memory configurations for QK norm
-            self.reshape_intermediate_mem_cfg = ttnn.create_sharded_memory_config(
+            self.reshape_intermediate_q_mem_cfg = ttnn.create_sharded_memory_config(
                 shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
                 core_grid=ttnn.CoreRangeSet(
                     [
@@ -233,11 +233,32 @@ class TtLlamaAttention(LightweightModule):
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
+            self.reshape_intermediate_k_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
+                core_grid=ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0))
+                    ]  # This captures the fact that we are using 1 core (height sharded)
+                ),  # resharding tensor to 1 core
+                strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform height sharding
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
 
-            self.reshape_output_mem_cfg = ttnn.create_sharded_memory_config(
+            self.reshape_output_q_mem_cfg = ttnn.create_sharded_memory_config(
                 shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
                 core_grid=ttnn.CoreRangeSet(
                     [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))]
+                ),  # resharding tensor to cores
+                strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+
+            self.reshape_output_k_mem_cfg = ttnn.create_sharded_memory_config(
+                shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
+                core_grid=ttnn.CoreRangeSet(
+                    [ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 3))]
                 ),  # resharding tensor to cores
                 strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -269,7 +290,7 @@ class TtLlamaAttention(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key=q_norm_str,
                 sharded_program_config=self.norm_program_cfg,
-                sharded_output_config=self.reshape_output_mem_cfg,
+                sharded_output_config=self.reshape_output_q_mem_cfg,
             )
 
             # Create K norm
@@ -281,7 +302,7 @@ class TtLlamaAttention(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key=k_norm_str,
                 sharded_program_config=self.norm_program_cfg,
-                sharded_output_config=self.reshape_output_mem_cfg,
+                sharded_output_config=self.reshape_output_k_mem_cfg,
             )
         else:
             self.qk_norm = False
@@ -393,18 +414,16 @@ class TtLlamaAttention(LightweightModule):
             use_optimal_ccl_for_llama=True,
         )
 
-        breakpoint()
-
         if self.qk_norm:
             rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
             rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
 
             # Reshape and prepare tensors for QK norm
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(
-                q_heads_pre_rot_1BQD, memory_config=self.reshape_intermediate_mem_cfg
+                q_heads_pre_rot_1BQD, memory_config=self.reshape_intermediate_q_mem_cfg
             )
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(
-                k_heads_pre_rot_1BKD, memory_config=self.reshape_intermediate_mem_cfg
+                k_heads_pre_rot_1BKD, memory_config=self.reshape_intermediate_k_mem_cfg
             )
 
             q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 1, 64, 128])
@@ -414,28 +433,24 @@ class TtLlamaAttention(LightweightModule):
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
 
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(
-                q_heads_pre_rot_1BQD, memory_config=self.reshape_output_mem_cfg
+                q_heads_pre_rot_1BQD, memory_config=self.reshape_output_q_mem_cfg
             )
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(
-                k_heads_pre_rot_1BKD, memory_config=self.reshape_output_mem_cfg
+                k_heads_pre_rot_1BKD, memory_config=self.reshape_output_k_mem_cfg
             )
 
             # Apply QK norm
             q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
             k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
 
-            # Convert back to row major layout with original memory config
+            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
+            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
+
             q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
             k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 8, 8, 128])
 
-            q_heads_pre_rot_1BQD = ttnn.to_layout(
-                q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT, memory_config=rm_mem_cfg_q
-            )
-            k_heads_pre_rot_1BKD = ttnn.to_layout(
-                k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT, memory_config=rm_mem_cfg_k
-            )
-
-            breakpoint()
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
