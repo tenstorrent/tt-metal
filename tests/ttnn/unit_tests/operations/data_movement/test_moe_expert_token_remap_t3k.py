@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import itertools
 from math import prod, ceil
 import random
 
@@ -213,3 +214,132 @@ def test_gen_tensors(mesh_device, mesh_shape, experts_per_device, batches_per_de
     assert topk_tensor.shape == (devices, batch, seq, experts)
     assert output.shape == (devices, batch, seq, experts_per_device)
     assert reduced_output.shape == (devices, 1, ceil(batch * seq / REDUCTION_SIZE), experts_per_device)
+
+
+@pytest.mark.parametrize(
+    "mesh_shape, mesh_device", [pytest.param((2, 4), (2, 4), id="2x4_grid")], indirect=["mesh_device"]
+)
+@pytest.mark.parametrize("batches_per_device", [4])
+@pytest.mark.parametrize("seq", [1, 2])
+@pytest.mark.parametrize("experts_per_device", [8])
+@pytest.mark.parametrize("selected_experts_k", [8])
+@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
+@pytest.mark.parametrize("scheme", ["sequential", "random"])
+@pytest.mark.parametrize("kn", [(128, 512), (7 * 1024, 2 * 1024)])
+@pytest.mark.parametrize("tile_h", [REDUCTION_SIZE])
+@pytest.mark.parametrize("tile_w", [32])
+@pytest.mark.parametrize("in1_dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("reduction_size", [REDUCTION_SIZE])
+def test_moe_expert_token_remap_matmul(
+    mesh_device,
+    mesh_shape,
+    experts_per_device,
+    batches_per_device,
+    seq,
+    selected_experts_k,
+    input_memory_config,
+    scheme,
+    kn,
+    tile_h,
+    tile_w,
+    in1_dtype,
+    reduction_size,
+):
+    devices = prod(mesh_shape)
+    batch = devices * batches_per_device
+    experts = devices * experts_per_device
+
+    expert_mapping, metadata_tensor, topk_tensor, _output_mapping, _output_reduced = gen_tensors(
+        devices, experts, batch, seq, selected_experts_k, mesh_shape, reduction_size, scheme
+    )
+
+    tt_topk = ttnn.from_torch(
+        topk_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    tt_expert_mapping = ttnn.from_torch(
+        expert_mapping,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    tt_metadata = ttnn.from_torch(
+        metadata_tensor,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.uint16,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    m, (k, n) = reduction_size, kn
+    b, s = batch, seq
+    in0 = torch.randn((1, b * s // reduction_size, m, k), dtype=torch.bfloat16)
+    in1 = torch.randn(
+        (1, experts_per_device, k, n), dtype=torch.float32 if in1_dtype == ttnn.float32 else torch.bfloat16
+    )
+
+    in0_t = ttnn.from_torch(
+        in0,
+        tile=ttnn.Tile((tile_h, tile_w)),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    in1_t = ttnn.from_torch(
+        in1,
+        dtype=in1_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    _, sparsity_t = ttnn.moe_expert_token_remap(tt_topk, tt_expert_mapping, tt_metadata)
+
+    sparsity_t_torch = ttnn.to_torch(sparsity_t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+
+    sparsity_t = ttnn.from_torch(
+        sparsity_t_torch,
+        dtype=ttnn.uint16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=input_memory_config,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    output_tile = ttnn.Tile([tile_h, tile_w])
+    matmul_out = ttnn.sparse_matmul(
+        in0_t,
+        in1_t,
+        sparsity=sparsity_t,
+        memory_config=input_memory_config,
+        output_tile=output_tile,
+    )
+
+    matmul_out_torch = ttnn.to_torch(matmul_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+
+    # Compute matmul using torch for each batch and concatenate the results
+    for dev, b, e in itertools.product(
+        range(prod(mesh_shape)), range(b * s // reduction_size), range(experts_per_device)
+    ):
+        if sparsity_t_torch[dev, 0, b, e] == 0.0:
+            continue
+        in0_batch = in0[0, b, :, :]
+        in1_batch = in1[0, e, :, :]
+        pt_out = torch.matmul(in0_batch, in1_batch)
+
+        # Compare with output tensor
+        expected_pcc = 0.999
+        assert_with_pcc(pt_out, matmul_out_torch[dev, b, 0, e, :, :], expected_pcc)
