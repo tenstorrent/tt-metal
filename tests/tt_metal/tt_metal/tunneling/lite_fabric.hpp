@@ -520,7 +520,7 @@ static_assert(offsetof(LiteFabricMemoryMap, host_interface) % 16 == 0);
 
 #if (defined(KERNEL_BUILD) || defined(FW_BUILD))
 
-void service_lite_fabric_channels() {
+inline void service_lite_fabric_channels() {
 #if defined(LITE_FABRIC_CONFIG_START) && LITE_FABRIC_CONFIG_START != 0 && defined(COMPILE_FOR_ERISC)
     auto config = reinterpret_cast<volatile lite_fabric::LiteFabricMemoryMap*>(LITE_FABRIC_CONFIG_START);
     void (*service_routing)() = (void (*)())((uint32_t*)config->service_lite_fabric_addr);

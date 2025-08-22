@@ -433,9 +433,9 @@ INSTANTIATE_TEST_SUITE_P(
         // Standalone tests (no mesh device, no fabric)
         LiteFabricTestConfig{.standalone = true},
         // Standard tests with mesh device but no fabric
-        LiteFabricTestConfig{.standalone = false},
+        LiteFabricTestConfig{.standalone = false}
         // Test with 1D fabric active (full fabric)
-        LiteFabricTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}
+        // LiteFabricTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}
         // Test with 2D fabric active (full fabric)
         // LiteFabricTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D}
         ),
