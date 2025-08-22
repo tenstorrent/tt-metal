@@ -123,23 +123,21 @@ DeviceData::DeviceData(
     this->base_result_data_addr[static_cast<int>(CoreType::DRAM)] = dram_data_addr;
 
     const metal_SocDescriptor& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device->id());
-    const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0);
-    for (const CoreCoord& core_coord : pcie_cores) {
-        CoreCoord core = {core_coord.x, core_coord.y};
-        // TODO: make this all work w/ phys coords
-        // this is really annoying
-        // the PCIE phys core conflicts w/ worker logical cores
-        // so we hack the physical core for tracking, blech
-        // no simple way to handle this, need to use phys cores
-        core = {100, 100};
-        this->all_data[core][0] = one_core_data_t();
-        this->all_data[core][0].logical_core = core;
-        this->all_data[core][0].phys_core = core;
-        this->all_data[core][0].core_type = CoreType::PCIE;
-        this->all_data[core][0].bank_id = 20;
-        this->all_data[core][0].bank_offset = 0;
-        this->host_core = core;
-    }
+    pcie_core = soc_d.get_cores(CoreType::PCIE, tt::umd::CoordSystem::NOC0)[0];
+    CoreCoord core = {pcie_core.x, pcie_core.y};
+    // TODO: make this all work w/ phys coords
+    // this is really annoying
+    // the PCIE phys core conflicts w/ worker logical cores
+    // so we hack the physical core for tracking, blech
+    // no simple way to handle this, need to use phys cores
+    core = {100, 100};
+    this->all_data[core][0] = one_core_data_t();
+    this->all_data[core][0].logical_core = core;
+    this->all_data[core][0].phys_core = core;
+    this->all_data[core][0].core_type = CoreType::PCIE;
+    this->all_data[core][0].bank_id = 20;
+    this->all_data[core][0].bank_offset = 0;
+    this->host_core = core;
 
     // Always populate DRAM
     auto num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
