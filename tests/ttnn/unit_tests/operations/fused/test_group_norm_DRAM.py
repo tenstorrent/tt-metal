@@ -38,14 +38,14 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
             4,
             4,
         ),  # test all groups on core fit in less than one tile, so need to reduce col core count
-        # # SDXL 1024x1024 resoultion
+        # SDXL 1024x1024 resoultion
         (1, 640, 128, 128, 32, 3, 4, 4),
         (1, 960, 128, 128, 32, 6, 2, 2),
         # VAE
         # tensor is too large, but good example
         (1, 256, 1024, 1024, 32, 128, 8, 4),
         (1, 256, 515, 512, 32, 32, 4, 4),
-        (1, 512, 128, 128, 32, 4, 1, 4),
+        (1, 512, 128, 128, 32, 4, 4, 1),
         (1, 512, 256, 256, 32, 16, 4, 4),
         (1, 512, 512, 512, 32, 32, 4, 4),
         (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
@@ -54,8 +54,8 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
         (1, 256, 256, 256, 32, 8, 8, 8),  # SD 1.4 VAE
         (1, 256, 512, 512, 32, 16, 8, 8),  # SD 1.4 VAE
         (1, 128, 512, 512, 32, 22, 4, 4),  # SD 1.4 VAE
-        # sd35
-        # //4 indicats the number of device. Default number of blocks used is (w*h)/(128*128)
+        # sd35. 4 indicates the number of device.
+        (1, 256 // 4, 256, 256, 32 // 4, 1, 8, 8),
         (1, 512 // 4, 128, 128, 32 // 4, 1, 8, 8),
         (1, 512 // 4, 256, 256, 32 // 4, 2, 8, 8),
         (1, 512 // 4, 512, 512, 32 // 4, 8, 8, 8),

@@ -6,6 +6,8 @@ import torch
 import ttnn
 
 from ..utils.tensor import bf16_tensor
+from loguru import logger
+import math
 
 
 class RMSNorm:
@@ -190,8 +192,8 @@ Set mesh_axis to None to disable data parallelism.
 # TODO: Add helper to assert torch reference
 class GroupNorm:
     default_num_out_blocks = {
-        (1, 128, 128, 512): 1
-    }  # used to overrride the num_out_blocks computed based on the input shape. Entry here is an example
+        # (Batch, Height, Width, Channels): num_out_blocks
+    }  # used to overrride the num_out_blocks computed based on the input shape.
 
     def __init__(
         self,
@@ -214,19 +216,13 @@ class GroupNorm:
         self.weight = None
         self.bias = None
         self.mask = None
+        self.core_grid = core_grid or self.mesh_device.core_grid
+        self.num_block_devisor = 256 * 256 * (self.core_grid.x * self.core_grid.y)
 
         # Assert group norm parameters
         assert (
             self.num_channels % 32 == 0 == self.num_channels % self.num_groups
         ), f"num_channels must be divisible by 32 and num_groups"
-        self.core_grid = core_grid
-
-        if self.core_grid is None:
-            grid_y = self.mesh_device.core_grid.y
-            while self.num_channels % (32 * grid_y) != 0:
-                grid_y -= 1
-
-            self.core_grid = ttnn.CoreGrid(y=grid_y, x=mesh_device.core_grid.x)
 
         if torch_ref is not None:
             self.load_state_dict(torch_ref.state_dict())
@@ -257,34 +253,27 @@ class GroupNorm:
         return tensor_to_shard, shard_dim
 
     def load_state_dict(self, state_dict):
-        torch_weight, shard_dim_weight = self.group_norm_weight_bias_rm_sharded(state_dict["weight"])
-        torch_bias, shard_dim_bias = self.group_norm_weight_bias_rm_sharded(state_dict["bias"])
-        torch_mask = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.core_grid.y)
-
-        self.weight = bf16_tensor(
-            torch_weight,
+        [self.weight, self.bias], self.mask = ttnn.group_norm_params_from_torch(
+            torch_params=[state_dict["weight"], state_dict["bias"]],
+            channels_per_device=self.num_channels,
+            groups_per_device=self.num_groups,
             device=self.mesh_device,
             mesh_axis=self.mesh_axis,
-            shard_dim=shard_dim_weight,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        self.bias = bf16_tensor(
-            torch_bias,
-            device=self.mesh_device,
-            mesh_axis=self.mesh_axis,
-            shard_dim=shard_dim_bias,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        self.mask = bf16_tensor(
-            torch_mask, device=self.mesh_device, mesh_axis=None, shard_dim=None, layout=ttnn.TILE_LAYOUT
+            return_mask=True,
         )
 
-    @classmethod
-    def get_num_out_blocks(cls, x_shape):
-        return cls.default_num_out_blocks.setdefault(x_shape, x_shape[1] * x_shape[2] // (128 * 128))
+    # @classmethod
+    def get_num_out_blocks(self, x_shape):
+        logger.info(
+            f"x_shape: {x_shape}, product: {x_shape[1] * x_shape[2] * x_shape[3]}, num_block_devisor: {self.num_block_devisor}, div: {((x_shape[1] * x_shape[2] * x_shape[3]) // self.num_block_devisor)}"
+        )
+        req = ((x_shape[1] * x_shape[2] * x_shape[3]) // self.num_block_devisor) or 1
+        num_blocks = 2 ** (math.ceil(math.log2(req)))
+        return self.default_num_out_blocks.setdefault(x_shape, num_blocks)
 
     def __call__(self, x):
-        num_out_blocks = self.num_out_blocks or self.get_num_out_blocks(tuple(x.shape))
+        # num_out_blocks = -1 #min(256, self.num_out_blocks or self.get_num_out_blocks(tuple(x.shape)))
+        # logger.info(f"shape: {x.shape} , num_out_blocks: {num_out_blocks}")
 
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
@@ -297,7 +286,7 @@ class GroupNorm:
             epsilon=self.eps,
             core_grid=self.core_grid,
             inplace=False,
-            num_out_blocks=num_out_blocks,
+            num_out_blocks=-1,
             output_layout=ttnn.TILE_LAYOUT,
         )
         x = x.reshape([batch_size, height, width, channels])

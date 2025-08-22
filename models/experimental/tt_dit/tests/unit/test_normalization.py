@@ -263,6 +263,7 @@ def test_group_norm(
         torch_ref=torch_model,
         mesh_device=mesh_device,
         mesh_axis=mesh_axis,
+        core_grid=ttnn.CoreGrid(x=2, y=2),
     )
 
     with torch.no_grad():
