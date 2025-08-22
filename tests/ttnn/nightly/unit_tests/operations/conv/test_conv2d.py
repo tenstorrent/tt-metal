@@ -4229,7 +4229,7 @@ def test_conv_sharded_rm_input(
         ( 1,  3,    45, 512,    60, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (5, 5), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
         ( 1,  7,    32, 1024,   140, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (4, 4), (1, 1), [2, 2, 2, 2], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
         ( 4,  32,   32,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 0, True, ttnn.MathFidelity.LoFi, False, False),
-        (16,  48,   56,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 32*32, True, ttnn.MathFidelity.LoFi, False, False),
+        (16,  48,   56,  256,   32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 1, (3, 3), (1, 1), [1, 1, 1, 1], (1, 1), True, 32*4, True, ttnn.MathFidelity.LoFi, False, False),
     ),
 )
  #fmt: on
@@ -4261,9 +4261,6 @@ def test_conv2d_activation_reuse(
     enable_split_reader,
     enable_activation_reuse,
 ):
-    if is_blackhole() and kernel == (4, 4):
-        pytest.skip("#8113: Hangs on Blackhole, to be investigated")
-
     config_override = {}
     config_override["act_block_h"] = act_block_h_override
 
