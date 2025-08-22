@@ -102,7 +102,6 @@ TEST_F(LinearRegressionDDPTest, Full) {
     auto sgd_config = ttml::optimizers::SGDConfig{.lr = learning_rate, .momentum = 0.0F};
     auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
 
-    int training_step = 0;
     const int num_epochs = 1;
     for (int epoch = 0; epoch < num_epochs; ++epoch) {
         for (const auto& [data, targets] : train_dataloader) {
