@@ -697,7 +697,7 @@ class TtQwenModelArgs(TtModelArgs):
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
             self.model_config["XQKV_PREFILL_PROGCFG"] = (
                 lambda seq_len: self.matmul_1d_config(
-                    seq_len, 2048, 1280, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=16
+                    seq_len, 1280, 1280, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=10
                 )
                 if seq_len == 128
                 else (
