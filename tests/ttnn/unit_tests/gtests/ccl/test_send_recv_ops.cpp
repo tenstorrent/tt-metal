@@ -21,8 +21,8 @@
 
 namespace tt::tt_metal {
 
-class T3K2DFabricSendRecvFixture : public T3000MeshDevice2DFabricFixture,
-                                   public testing::WithParamInterface<SocketTestArgs> {};
+class FabricSendRecv2x4Fixture : public MeshDevice2x4Fabric2DFixture,
+                                 public testing::WithParamInterface<SocketTestArgs> {};
 
 template <typename T>
 void test_send_recv_async_(
@@ -109,7 +109,7 @@ void test_send_recv_async(
     }
 }
 
-TEST_P(T3K2DFabricSendRecvFixture, SendRecvAsync) {
+TEST_P(FabricSendRecv2x4Fixture, SendRecvAsync) {
     auto [tensor_spec, socket_buffer_type] = GetParam();
     auto mesh_device = get_mesh_device();
     auto mesh_shape = distributed::MeshShape(2, 2);
@@ -120,7 +120,6 @@ TEST_P(T3K2DFabricSendRecvFixture, SendRecvAsync) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    T3K2DFabricSendRecvTests, T3K2DFabricSendRecvFixture, ::testing::ValuesIn(get_socket_test_args()));
+INSTANTIATE_TEST_SUITE_P(FabricSendRecv2x4Tests, FabricSendRecv2x4Fixture, ::testing::ValuesIn(get_socket_test_args()));
 
 }  // namespace tt::tt_metal

@@ -49,6 +49,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
         ),
     ],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_chunked_prefill_single_user(
     seq_len,
     prefill_chunk_size,
@@ -72,7 +73,9 @@ def test_chunked_prefill_single_user(
         assert "performance" in test_id
         pcc = 0.869  # TODO Look on improving PCC
 
-    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
+    model_args = ModelArgs(
+        mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len, cache_hf=True
+    )
     model_args.max_prefill_chunk_size = prefill_chunk_size
 
     logger.info("Loading weights...")

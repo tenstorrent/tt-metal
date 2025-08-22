@@ -4,7 +4,7 @@
 
 #include <benchmark/benchmark.h>
 #include "ttnn/operations/experimental/where/where.hpp"
-#include "ttnn/operations/eltwise/ternary/where.hpp"
+#include "ttnn/operations/eltwise/ternary/where/where.hpp"
 #include "ttnn/device.hpp"
 
 #include "ttnn/operations/functions.hpp"
@@ -46,7 +46,6 @@ void BM_where_experimental_bf16_ttt(benchmark::State& state) {
     using namespace ttnn::types;
 
     auto shape = ttnn::Shape({state.range(0), state.range(0)});
-    auto dtype = DataType::BFLOAT16;
     auto layout = Layout::TILE;
     auto device_id = 0;
 
@@ -77,7 +76,6 @@ void BM_where_bf16_ttt(benchmark::State& state) {
     using namespace ttnn::types;
 
     auto shape = ttnn::Shape({state.range(0), state.range(0)});
-    auto dtype = DataType::BFLOAT16;
     auto layout = Layout::TILE;
     auto device_id = 0;
 

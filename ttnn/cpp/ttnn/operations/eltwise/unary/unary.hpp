@@ -64,6 +64,17 @@ struct ExecuteUnaryWithFloatParameter {
 };
 
 template <UnaryOpType unary_op_type>
+struct ExecuteUnaryWithTwoFloatParameter {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        float parameter_a,
+        float parameter_b,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithVariantFloatIntParameter {
     template <typename T>
     static Tensor invoke(
@@ -152,6 +163,14 @@ struct Floor {
 };
 
 struct Trunc {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Frac {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
@@ -255,6 +274,25 @@ struct Hardshrink {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Hardtanh {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        float min_val = -1.0f,
+        float max_val = 1.0f,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Softshrink {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        float lambda = 0.5f,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Deg2Rad {
     static Tensor invoke(
         QueueId queue_id,
@@ -304,6 +342,12 @@ struct Tanh {
     constexpr auto operation_name = ttnn::register_operation<                         \
         "ttnn::" #operation_name,                                                     \
         ttnn::operations::unary::ExecuteUnaryWithFloatParameter<                      \
+            ttnn::operations::unary::UnaryOpType::operation_type>>();
+
+#define REGISTER_UNARY_OPERATION_WITH_TWO_FLOAT_PARAMETER(operation_name, operation_type) \
+    constexpr auto operation_name = ttnn::register_operation<                             \
+        "ttnn::" #operation_name,                                                         \
+        ttnn::operations::unary::ExecuteUnaryWithTwoFloatParameter<                       \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
 
 #define REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(operation_name, operation_type, data_type) \
@@ -363,6 +407,10 @@ REGISTER_UNARY_OPERATION(alt_complex_rotate90, ALT_COMPLEX_ROTATE90);
 REGISTER_UNARY_OPERATION(floor, FLOOR);
 REGISTER_UNARY_OPERATION(ceil, CEIL);
 REGISTER_UNARY_OPERATION(trunc, TRUNC);
+REGISTER_UNARY_OPERATION(frac, FRAC);
+REGISTER_UNARY_OPERATION(hardsigmoid, HARDSIGMOID);
+REGISTER_UNARY_OPERATION(hardswish, HARDSWISH);
+REGISTER_UNARY_OPERATION(softsign, SOFTSIGN);
 
 // Unaries with fast_and_approximate_mode
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP);
@@ -388,6 +436,10 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ne_unary, UNARY_NE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(eq_unary, UNARY_EQ);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ge_unary, UNARY_GE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(le_unary, UNARY_LE);
+REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(celu, CELU);
+
+// Unaries with two float parameter
+REGISTER_UNARY_OPERATION_WITH_TWO_FLOAT_PARAMETER(threshold, THRESHOLD);
 
 // Unaries with integer parameter
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);
@@ -402,6 +454,8 @@ constexpr auto eqz = ttnn::register_operation<"ttnn::eqz", ttnn::operations::una
 constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::unary::Mish>();
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto hardshrink = ttnn::register_operation<"ttnn::hardshrink", ttnn::operations::unary::Hardshrink>();
+constexpr auto hardtanh = ttnn::register_operation<"ttnn::hardtanh", ttnn::operations::unary::Hardtanh>();
+constexpr auto softshrink = ttnn::register_operation<"ttnn::softshrink", ttnn::operations::unary::Softshrink>();
 constexpr auto deg2rad = ttnn::register_operation<"ttnn::deg2rad", ttnn::operations::unary::Deg2Rad>();
 constexpr auto rad2deg = ttnn::register_operation<"ttnn::rad2deg", ttnn::operations::unary::Rad2Deg>();
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();

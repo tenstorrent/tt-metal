@@ -21,6 +21,7 @@
 #include "ttnn/operations/data_movement/fill_rm/fill_rm_pybind.hpp"
 #include "ttnn/operations/data_movement/fold/fold_pybind.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
+#include "ttnn/operations/data_movement/moe_expert_token_remap/moe_expert_token_remap_pybind.hpp"
 #include "ttnn/operations/data_movement/move/move_pybind.hpp"
 #include "ttnn/operations/data_movement/non_zero_indices/non_zero_indices_pybind.hpp"
 #include "ttnn/operations/data_movement/pad/pad_pybind.hpp"
@@ -31,6 +32,8 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape_pybind.hpp"
 #include "ttnn/operations/data_movement/roll/roll_pybind.hpp"
 #include "ttnn/operations/data_movement/view/view_pybind.hpp"
+#include "ttnn/operations/data_movement/scatter/scatter_pybind.hpp"
+#include "ttnn/operations/data_movement/scatter/tosa_scatter_pybind.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial_pybind.hpp"
 #include "ttnn/operations/data_movement/sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial_pybind.hpp"
 #include "ttnn/operations/data_movement/slice/slice_pybind.hpp"
@@ -68,9 +71,12 @@ void py_module(py::module& module) {
     detail::bind_transpose(module);
     detail::bind_untilize(module);
     detail::bind_untilize_with_unpadding(module);
+    detail::bind_scatter(module);
+    detail::bind_tosa_scatter(module);
     detail::py_bind_assign(module);
     detail::py_bind_bcast(module);
     detail::py_bind_copy(module);
+    detail::py_bind_moe_expert_token_remap(module);
     detail::py_bind_move(module);
     py_bind_chunk(module);
     py_bind_expand(module);

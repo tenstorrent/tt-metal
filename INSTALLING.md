@@ -188,7 +188,7 @@ Download the latest Docker release from our [Docker registry](https://github.com
 
 ```sh
 docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc
-docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc bash
+docker run -it --rm --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-22.04-release-amd64:latest-rc bash
 ```
 
 - For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-22.04-release-amd64).
@@ -238,9 +238,6 @@ ninja install # Installs to build directory by default, required for Python envi
 source python_env/bin/activate
 ```
 
-- (optional) Software dependencies for profiling use:
-  - Download and install [Doxygen](https://www.doxygen.nl/download.html), (v1.9 or higher, but less than v1.10)
-
 - Continue to [You Are All Set!](#you-are-all-set)
 
 ---
@@ -281,3 +278,28 @@ All binaries support only Linux and distros with glibc 2.34 or newer.
 
 ### Interested in Contributing?
 - For more information on development and contributing, visit Tenstorrent's [CONTRIBUTING.md page](https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md).
+
+---
+
+## Virtual Machine Requirements
+
+> [!IMPORTANT]
+>
+> If you are running this software in a virtual machine, additional configuration is required.
+
+### Overview
+This software requires an IOMMU (Input-Output Memory Management Unit) to be enabled at the host level to ensure proper memory isolation and device passthrough support. On virtual machines, this translates to enabling the virtual IOMMU (vIOMMU) feature in the hypervisor.
+
+### Why It Matters
+- Enables secure and efficient DMA operations
+- Required for PCIe passthrough to guest VMs (e.g., for hardware accelerators)
+- Prevents host memory corruption by restricting device access
+
+### Requirements for VMs
+To run this software reliably in a VM:
+
+- The host machine must have IOMMU support enabled (e.g., `intel_iommu=on` or `amd_iommu=on` in kernel parameters)
+
+- The virtual machine must be provisioned with a vIOMMU
+
+- The vIOMMU must support DMA remapping (Intel VT-d, AMD-Vi)

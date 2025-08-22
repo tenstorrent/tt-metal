@@ -233,7 +233,6 @@ install_vllm() {
 deploy_server() {
     print_step "Deploying Llama server"
     source python_env/bin/activate
-    export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
     python vllm/examples/server_example_tt.py
     echo "✅ Deployment complete! Interact via http://localhost:8000."
 }

@@ -161,7 +161,7 @@ void ElfFile::ReleaseImpl() {
 
 void ElfFile::ReadImage(std::string_view path) {
     int fd = open(path.data(), O_RDONLY | O_CLOEXEC);
-    struct stat st;
+    struct stat st{};
     void* buffer = MAP_FAILED;
     if (fd >= 0 && fstat(fd, &st) >= 0) {
         buffer = mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
@@ -544,7 +544,9 @@ void ElfFile::Impl::XIPify() {
         Elf32_Rela const* sub_reloc = nullptr;  // Active sub reloc.
         for (auto ix = relocs.size(); ix--;) {
             auto& reloc = relocs[ix];
-            if (reloc.r_offset & 3 || reloc.r_offset - section.sh_addr >= section.sh_size) {
+            // We can get a RISCV_NONE right at the end (!)
+            if (reloc.r_offset & 3 ||
+                reloc.r_offset - section.sh_addr >= section.sh_size + int(ELF32_R_TYPE(reloc.r_info) == R_RISCV_NONE)) {
                 TT_THROW(
                     "{}: relocation @ {} is {} section {}",
                     path_,

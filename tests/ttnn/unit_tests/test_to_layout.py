@@ -435,12 +435,82 @@ def test_to_layout_wh2(shape, input_layout, output_layout, device):
     assert_with_pcc(input_a, output_tensor)
 
 
-@pytest.mark.parametrize("shape", [[32, 128], [2, 4, 96, 256], [1, 160, 64]])
-def test_untilize_with_unpad_int32(shape, device):
+@pytest.mark.parametrize("shape", [[32, 128], [2, 4, 96, 256], [1, 160, 64], [64, 512], [10, 1024, 2048]])
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32])
+def test_untilize_with_unpad_int32(shape, dtype, device):
     torch.manual_seed(2005)
     end_shape = [x - 1 for x in shape]
     input_a = torch.randint(1, 64, shape, dtype=torch.int32)
-    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.int32)
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
     output_tensor = ttnn.untilize_with_unpadding(input_tensor, end_shape)
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(input_a, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[3072, 1024], [2, 2048, 512]])
+@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.int32])
+def test_untilize_int32_t(shape, dtype, device):
+    torch.manual_seed(2005)
+    input_a = torch.randint(1, 64, shape, dtype=torch.int32)
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    output_tensor = ttnn.untilize(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)
+
+
+def run_unary_with_aprox_mode_fruit_test(
+    device, h, w, memory_type, shard_shape, ttnn_function, vector_mode, approx_mode, pcc=0.9999
+):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((1, 1, h, w), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn_function)
+    torch_output_tensor = golden_function(torch_input_tensor, device=device)
+    if memory_type == "L1":
+        core_grid = device.compute_with_storage_grid_size()
+        num_cores = 64
+
+        shard_spec = ttnn.ShardSpec(
+            grid=ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size()),
+            shard_shape=shard_shape,
+            shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED, buffer_type=ttnn.BufferType.L1, shard_spec=shard_spec
+        )
+    else:  # memory_type == "DRAM":
+        memory_config = ttnn.MemoryConfig(
+            memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type=ttnn.BufferType.DRAM
+        )
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config
+    )
+    print(
+        f"shape: {input_tensor.shape}, dtype: {input_tensor.dtype}, layout: {input_tensor.layout}, memory_config: {input_tensor.memory_config()}"
+    )
+    output_tensor = ttnn_function(input_tensor, vector_mode=vector_mode, fast_and_approximate_mode=approx_mode)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
+@pytest.mark.parametrize("h", [1024 * 128])
+@pytest.mark.parametrize("w", [1])
+@pytest.mark.parametrize("memory_type", ["L1", "DRAM"])
+@pytest.mark.parametrize("shard_shape", [(2048, 32)])
+@pytest.mark.parametrize("approx_mode", [True, False])
+@pytest.mark.parametrize("vector_mode", [4])
+def test_sigmoid_fruit(device, h, w, memory_type, shard_shape, vector_mode, approx_mode):
+    run_unary_with_aprox_mode_fruit_test(
+        device,
+        h,
+        w,
+        memory_type,
+        shard_shape,
+        ttnn.sigmoid,
+        vector_mode=vector_mode,
+        approx_mode=approx_mode,
+        pcc=0.999,
+    )

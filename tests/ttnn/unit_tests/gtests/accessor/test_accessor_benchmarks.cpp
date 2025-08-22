@@ -15,7 +15,7 @@
 #include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 
-#include <ttnn/tensor/tensor_accessor_args.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace accessor_benchmarks {
 
@@ -42,7 +42,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_replicated_input_m
     const auto host_size_in_bytes = inputs.physical_tensor_shape.volume() * inputs.bytes_per_element;
     const auto page_size = inputs.page_shape.height() * inputs.page_shape.width() * inputs.bytes_per_element;
 
-    // Mirrors allocate_mesh_buffer_on_device in ttnn
+    // Mirrors allocate_device_buffer in ttnn
     const tt::tt_metal::distributed::ReplicatedBufferConfig mesh_buffer_config{.size = host_size_in_bytes};
 
     // Create input mesh buffer
@@ -127,7 +127,7 @@ void benchmark_all_args_combinations_single_core(
         Finish(mesh_device_->mesh_command_queue());
         log_info(tt::LogTest, "Program finished!");
     }
-    tt::tt_metal::detail::DumpDeviceProfileResults(local_device);
+    tt::tt_metal::detail::ReadDeviceProfilerResults(local_device);
 }
 
 TEST_P(AccessorBenchmarks, GetNocAddr) {

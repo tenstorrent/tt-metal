@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include <vector>
-
 /******************************************************************************
  *                                                                             *
  *                   Common Functions for Dataflow Kernels                     *
@@ -23,19 +22,28 @@ constexpr uint32_t get_barrier_read_threshold() {
 /******************************************************************************
  *                   Page Cache Functions            *
  ******************************************************************************/
-template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
+template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, volatile tt_l1_ptr const uint32_t* const page_table_ptr) {
+    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
     // Given some index in the sequence tiles in range [0, max_seq_len_t]
     // Return the physical tile id for that tile row
     constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
     const uint32_t head_offset = cur_head * block_size_t * Wt;
 
     const uint32_t virtual_block = seq_tile_idx / block_size_t;
-    const uint32_t physical_block = page_table_ptr[virtual_block];
+
+    const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;
     const uint32_t block_offset = block_row_offset * Wt;
     return physical_block * block_stride + head_offset + block_offset;
+}
+
+// Backward-compatible overload (defaults to uint32_t page table entries)
+template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
+uint32_t virtual_seq_tile_id_to_physical_tile_id(
+    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr uint32_t* const page_table_ptr) {
+    return virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_heads, block_size_t, Wt>(
+        seq_tile_idx, cur_head, page_table_ptr);
 }
 
 /******************************************************************************
@@ -382,7 +390,6 @@ void read_kv_mask_chunks(
     uint32_t k_chunk_start,
     uint32_t k_chunk_end,
     uint32_t k_start_tile_id,
-    uint32_t v_start_tile_id,
     uint32_t mask_start_tile_id,
     uint32_t Sk_chunk_t,
     uint32_t k_chunk_tiles,
@@ -415,14 +422,13 @@ void read_kv_mask_chunks(
         }
         noc_async_read_barrier();
         cb_push_back(cb_k_in, k_chunk_tiles);
-        k_start_tile_id += k_chunk_tiles;
 
         if constexpr (use_attention_mask) {
             mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
                 PSt, Sk_chunk_t, mask_chunk_tiles, mask_start_tile_id, mask_reader);
         }
 
-        // Read V chunk (tranpose of K)
+        // Read V chunk (tranpose of K), from K's L1 buffer
         if constexpr (reuse_k) {
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
@@ -437,14 +443,11 @@ void read_kv_mask_chunks(
                     k_read_ptr += Sk_chunk_t * k_tile_bytes;  // Strid across K's width
                 }
             }
-
-            noc_async_read_barrier();
-            cb_push_back(cb_v_in, v_chunk_tiles);
         } else {
             cb_reserve_back(cb_v_in, v_chunk_tiles);
             uint32_t v_write_ptr = get_write_ptr(cb_v_in);
             barrier_count = 0;
-            uint32_t v_tile_id = v_start_tile_id;
+            uint32_t v_tile_id = k_start_tile_id;
             for (uint32_t row = 0; row < Sk_chunk_t; ++row) {
                 for (uint32_t col = 0; col < vDHt; ++col) {
                     noc_async_read_tile(v_tile_id, v_reader, v_write_ptr);
@@ -457,9 +460,11 @@ void read_kv_mask_chunks(
                 }
                 v_tile_id += (DHt - vDHt);  // Skip the padding!
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_v_in, v_chunk_tiles);
-            v_start_tile_id += v_chunk_tiles;
         }
+        noc_async_read_barrier();
+        cb_push_back(cb_v_in, v_chunk_tiles);
+
+        // Update the starting tile id for next iteration
+        k_start_tile_id += k_chunk_tiles;
     }
 }

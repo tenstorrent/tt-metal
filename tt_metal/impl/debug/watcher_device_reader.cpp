@@ -84,8 +84,7 @@ CoreType core_type_from_virtual_core(chip_id_t device_id, const CoreCoord& virtu
         return CoreType::DRAM;
     }
 
-    CoreType core_type =
-        soc_desc.translate_coord_to(virtual_coord, CoordSystem::PHYSICAL, CoordSystem::PHYSICAL).core_type;
+    CoreType core_type = soc_desc.translate_coord_to(virtual_coord, CoordSystem::NOC0, CoordSystem::NOC0).core_type;
     if (core_type == CoreType::TENSIX) {
         core_type = CoreType::WORKER;
     }
@@ -188,7 +187,7 @@ WatcherDeviceReader::WatcherDeviceReader(FILE* f, chip_id_t device_id, const std
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, eth_core, CoreType::ETH);
-            read_data = tt::llrt::read_hex_vec_from_core(
+            read_data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                 device_id,
                 virtual_core,
                 MetalContext::instance().hal().get_dev_addr(
@@ -209,7 +208,7 @@ WatcherDeviceReader::~WatcherDeviceReader() {
             CoreCoord virtual_core =
                 tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
                     device_id, eth_core, CoreType::ETH);
-            read_data = tt::llrt::read_hex_vec_from_core(
+            read_data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
                 device_id,
                 virtual_core,
                 MetalContext::instance().hal().get_dev_addr(
@@ -361,11 +360,11 @@ void WatcherDeviceReader::Dump(FILE* file) {
                             offsetof(watcher_msg_t, pause_status);
 
             // Clear only the one flag that we saved, in case another one was raised on device
-            auto pause_data =
-                tt::llrt::read_hex_vec_from_core(device_id, virtual_core, addr, sizeof(debug_pause_msg_t));
+            auto pause_data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                device_id, virtual_core, addr, sizeof(debug_pause_msg_t));
             auto pause_msg = reinterpret_cast<debug_pause_msg_t*>(&(pause_data[0]));
             pause_msg->flags[risc_id] = 0;
-            tt::llrt::write_hex_vec_to_core(device_id, virtual_core, pause_data, addr);
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(device_id, virtual_core, pause_data, addr);
         }
     }
     fflush(f);
@@ -413,7 +412,8 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
 
     constexpr uint32_t mailbox_read_size = offsetof(mailboxes_t, watcher) + sizeof(watcher_msg_t);
     std::vector<uint32_t> data;
-    data = tt::llrt::read_hex_vec_from_core(device_id, virtual_core.coord, mailbox_addr, mailbox_read_size);
+    data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, virtual_core.coord, mailbox_addr, mailbox_read_size);
     mailboxes_t* mbox_data = (mailboxes_t*)(&data[0]);
     // Get the launch message buffer read pointer.
     // For more accurate reporting of launch messages and running kernel ids, dump data from the previous valid
@@ -433,6 +433,14 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     ValidateKernelIDs(virtual_core, &(mbox_data->launch[launch_msg_read_ptr]));
 
     // Whether or not watcher data is available depends on a flag set on the device.
+    if (mbox_data->watcher.enable != WatcherEnabled and mbox_data->watcher.enable != WatcherDisabled) {
+        TT_THROW(
+            "Watcher read invalid watcher.enable on {}. Read {}, valid values are {} and {}.",
+            core_str,
+            mbox_data->watcher.enable,
+            WatcherEnabled,
+            WatcherDisabled);
+    }
     bool enabled = (mbox_data->watcher.enable == WatcherEnabled);
 
     if (enabled) {
@@ -520,7 +528,8 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
 void WatcherDeviceReader::DumpL1Status(CoreDescriptor& core, const launch_msg_t* launch_msg) {
     // Read L1 address 0, looking for memory corruption
     std::vector<uint32_t> data;
-    data = tt::llrt::read_hex_vec_from_core(device_id, core.coord, HAL_MEM_L1_BASE, sizeof(uint32_t));
+    data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, core.coord, HAL_MEM_L1_BASE, sizeof(uint32_t));
     TT_ASSERT(core.type == CoreType::WORKER);
     uint32_t core_type_idx =
         MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
@@ -595,6 +604,10 @@ void WatcherDeviceReader::DumpNocSanitizeStatus(
         case DebugSanitizeNocAddrMailbox:
             error_msg = get_noc_target_str(device_id, core, noc, san);
             error_msg += string(san->is_target ? " (NOC target" : " (Local L1") + " overwrites mailboxes).";
+            break;
+        case DebugSanitizeNocLinkedTransactionViolation:
+            error_msg = get_noc_target_str(device_id, core, noc, san);
+            error_msg += fmt::format(" (submitting a non-mcast transaction when there's a linked transaction).");
             break;
         default:
             error_msg = fmt::format(
@@ -829,7 +842,16 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
             core.coord.str(),
             launch_msg->kernel_config.brisc_noc_id);
     }
-    DumpRunState(core, launch_msg, mbox_data->go_message.signal);
+    if (mbox_data->go_message_index < go_message_num_entries) {
+        DumpRunState(core, launch_msg, mbox_data->go_messages[mbox_data->go_message_index].signal);
+    } else {
+        LogRunningKernels(core, launch_msg);
+        TT_THROW(
+            "Watcher data corruption, unexpected go message index on core {}: {} (expected < {})",
+            core.coord.str(),
+            mbox_data->go_message_index,
+            go_message_num_entries);
+    }
 
     fprintf(f, "|");
     if (launch_msg->kernel_config.enables &
@@ -942,11 +964,13 @@ void WatcherDeviceReader::DumpSyncRegs(CoreDescriptor& core) {
         uint32_t base = NOC_OVERLAY_START_ADDR + (OPERAND_START_STREAM + operand) * NOC_STREAM_REG_SPACE_SIZE;
 
         uint32_t rcvd_addr = base + STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t);
-        data = tt::llrt::read_hex_vec_from_core(device_id, core.coord, rcvd_addr, sizeof(uint32_t));
+        data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            device_id, core.coord, rcvd_addr, sizeof(uint32_t));
         uint32_t rcvd = data[0];
 
         uint32_t ackd_addr = base + STREAM_REMOTE_DEST_BUF_START_REG_INDEX * sizeof(uint32_t);
-        data = tt::llrt::read_hex_vec_from_core(device_id, core.coord, ackd_addr, sizeof(uint32_t));
+        data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            device_id, core.coord, ackd_addr, sizeof(uint32_t));
         uint32_t ackd = data[0];
 
         if (rcvd != ackd) {

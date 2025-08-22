@@ -164,18 +164,23 @@ The matrix multiplication is performed by a pipeline of three specialized kernel
 .. code-block:: cpp
 
     // Reader kernel - reads tiles from DRAM into circular buffers
+    std::vector<uint32_t> reader_args;
+    TensorAccessorArgs(*src0_dram_buffer).append_to(reader_args);
+    TensorAccessorArgs(*src1_dram_buffer).append_to(reader_args);
     auto reader_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_single_core/kernels/dataflow/reader_single_core_mm.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_args});
 
     // Writer kernel - writes result tiles from circular buffer to DRAM
+    std::vector<uint32_t> writer_args;
+    TensorAccessorArgs(*dst_dram_buffer).append_to(writer_args);
     auto writer_id = tt_metal::CreateKernel(
         program,
         "tt_metal/programming_examples/matmul_single_core/kernels/dataflow/writer_single_core_mm.cpp",
         core,
-        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = writer_args});
 
     // Compute kernel - performs matrix multiplication using the matrix engine
     MathFidelity math_fidelity = MathFidelity::HiFi4;
@@ -214,14 +219,10 @@ maps tiles in the row-major order of the matrices in DRAM to read into the circu
 
         // Declare address in which we stored the source matrices. We have set the exact same format between CBs and DRAM
         // buffers in the host code, so we can use the same address for both DRAM and CBs.
-        const InterleavedAddrGenFast<true> s0 = {
-            .bank_base_address = src0_addr,
-            .page_size = get_tile_size(cb_id_in0),
-            .data_format = get_dataformat(cb_id_in0)};
-        const InterleavedAddrGenFast<true> s1 = {
-            .bank_base_address = src1_addr,
-            .page_size = get_tile_size(cb_id_in1),
-            .data_format = get_dataformat(cb_id_in1)};
+        constexpr auto s0_args = TensorAccessorArgs<0>();
+        const auto s0 = TensorAccessor(s0_args, src0_addr, get_tile_size(cb_id_in0));
+        constexpr auto s1_args = TensorAccessorArgs<s0_args.next_compile_time_args_offset()>();
+        const auto s1 = TensorAccessor(s1_args, src1_addr, get_tile_size(cb_id_in1));
 
         // Loop through the dimensions of the matrices. Read them and push to the circular buffers.
         // Dimension names are called M, N and K. `t` in `mt` means tile.
@@ -259,9 +260,10 @@ Key operations include:
 
 *   ``mm_init(cb_in0, cb_in1, cb_out)``: Initializes the FPU for matrix multiplication, specifying the input CBs (``cb_in0`` for A, ``cb_in1`` for B) and the output CB (``cb_out``).
 *   The outer loops iterate ``Mt`` times (for rows of C) and ``Nt`` times (for columns of C) to compute each output tile.
-*   ``acquire_dst()``: Called before the inner accumulation loop (over ``Kt``). This prepares the FPU's destination/accumulator registers, typically by zeroing them, for the upcoming sum of products.
+*   ``tile_regs_acquire()``: Called before the inner accumulation loop (over ``Kt``). This prepares the FPU's destination/accumulator registers, typically by zeroing them, for the upcoming sum of products.
 *   The inner loop iterates ``Kt`` times, performing the dot-product-like accumulation for a single output tile.
 *   ``matmul_tiles(cb_in0, cb_in1, 0, 0, 0, false)``: Executes the core FPU instruction: multiplies a tile from ``cb_in0`` with a tile from ``cb_in1`` and adds the result to the accumulator.
+*   ``tile_regs_commit()`` and ``tile_regs_wait()``: After the inner loop, these functions ensure that the FPU has finished computation and result available in the destination registers.
 *   ``cb_pop_front(cb_in0, 1); cb_pop_front(cb_in1, 1);``: After the tiles are used by ``matmul_tiles``, they are marked as consumed by popping them from the input CBs.
 *   ``pack_tile(0, cb_out); cb_push_back(cb_out, 1);``: Once the ``Kt`` loop completes for an output tile, the accumulated result in the FPU registers is packed and pushed to the output circular buffer ``cb_out``.
 
@@ -284,7 +286,7 @@ The dimensions ``Mt``, ``Kt``, ``Nt`` are passed as compile-time arguments, enab
         for (uint32_t mt = 0; mt < Mt; ++mt) {
             for (uint32_t nt = 0; nt < Nt; ++nt) {
                 // Make sure registers can be used for the output tile. This also sets the registers to zero.
-                acquire_dst();
+                tile_regs_acquire();
                 for (uint32_t kt = 0; kt < Kt; kt++) {
                     // Wait for the input tiles to be available in the input circular buffers.
                     cb_wait_front(cb_in0, 1);
@@ -297,12 +299,15 @@ The dimensions ``Mt``, ``Kt``, ``Nt`` are passed as compile-time arguments, enab
                     cb_pop_front(cb_in1,1);
                 }
 
+                tile_regs_commit();
+                tile_regs_wait();
+
                 // store the result tile in the output circular buffer.
                 cb_reserve_back(cb_out, 1);
                 pack_tile(0, cb_out);
                 cb_push_back(cb_out, 1);
 
-                release_dst();
+                tile_regs_release();
             }
         }
     }
@@ -325,11 +330,8 @@ The writer kernel consumes tiles from the output circular buffer ``cb_id_out0`` 
 
         constexpr uint32_t cb_id_out0 = 16;
 
-
-        const InterleavedAddrGenFast<true> s = {
-            .bank_base_address = dst_addr,
-            .page_size = get_tile_size(cb_id_out0),
-            .data_format = get_dataformat(cb_id_out0)};
+        constexpr auto s_args = TensorAccessorArgs<0>();
+        const auto s = TensorAccessor(s_args, dst_addr, get_tile_size(cb_id_out0));
 
         for (uint32_t mt = 0; mt < Mt; ++mt) {
             for (uint32_t nt = 0; nt < Nt; ++nt) {

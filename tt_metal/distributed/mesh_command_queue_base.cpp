@@ -167,6 +167,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     const MeshCoordinateRange& device_range,
     bool blocking,
     std::optional<BufferRegion> region) {
+    auto lock = lock_api_function_();
     if (buffer.global_layout() == MeshBufferLayout::REPLICATED) {
         // Multi-Threaded writes supported for Replicated buffers.
         // Currently not supported when doing TT-Mesh Native sharding, since we
@@ -175,8 +176,10 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
             this->write_shard_to_device(buffer, coord, host_data, region);
         };
         for (const auto& coord : device_range) {
-            dispatch_thread_pool_->enqueue(
-                [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
+            if (mesh_device_->is_local(coord)) {
+                dispatch_thread_pool_->enqueue(
+                    [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
+            }
         }
         dispatch_thread_pool_->wait();
     } else {
@@ -184,7 +187,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     }
 
     if (blocking) {
-        this->finish();
+        this->finish_nolock();
     }
 }
 
@@ -196,6 +199,7 @@ void MeshCommandQueueBase::enqueue_write_mesh_buffer(
 
 void MeshCommandQueueBase::enqueue_read_mesh_buffer(
     void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
+    auto lock = lock_api_function_();
     TT_FATAL(
         buffer->global_layout() == MeshBufferLayout::SHARDED, "Can only read a Sharded MeshBuffer from a MeshDevice.");
     TT_FATAL(
@@ -203,7 +207,7 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(
     this->read_sharded_buffer(*buffer, host_data);
 }
 
-void MeshCommandQueueBase::enqueue_write_shards(
+void MeshCommandQueueBase::enqueue_write_shards_nolock(
     const std::shared_ptr<MeshBuffer>& buffer,
     const std::vector<ShardDataTransfer>& shard_data_transfers,
     bool blocking) {
@@ -216,19 +220,31 @@ void MeshCommandQueueBase::enqueue_write_shards(
     };
 
     for (std::size_t shard_idx = 0; shard_idx < shard_data_transfers.size(); shard_idx++) {
-        dispatch_thread_pool_->enqueue(
-            [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
-            mesh_device_->get_device(shard_data_transfers[shard_idx].shard_coord)->id());
+        auto shard_coord = shard_data_transfers[shard_idx].shard_coord;
+        if (mesh_device_->is_local(shard_coord)) {
+            dispatch_thread_pool_->enqueue(
+                [&dispatch_lambda, shard_idx]() { dispatch_lambda(shard_idx); },
+                mesh_device_->get_device(shard_coord)->id());
+        }
     }
     dispatch_thread_pool_->wait();
 
     if (blocking) {
-        this->finish();
+        this->finish_nolock();
     }
+}
+
+void MeshCommandQueueBase::enqueue_write_shards(
+    const std::shared_ptr<MeshBuffer>& mesh_buffer,
+    const std::vector<ShardDataTransfer>& shard_data_transfers,
+    bool blocking) {
+    auto lock = lock_api_function_();
+    this->enqueue_write_shards_nolock(mesh_buffer, shard_data_transfers, blocking);
 }
 
 void MeshCommandQueueBase::enqueue_write(
     const std::shared_ptr<MeshBuffer>& mesh_buffer, const DistributedHostBuffer& host_buffer, bool blocking) {
+    auto lock = lock_api_function_();
     // Iterate over global coordinates; skip host-remote coordinates, as per `host_buffer` configuration.
     std::vector<ShardDataTransfer> shard_data_transfers;
     for (const auto& host_buffer_coord : host_buffer.shard_coords()) {
@@ -241,10 +257,10 @@ void MeshCommandQueueBase::enqueue_write(
         }
     }
 
-    this->enqueue_write_shards(mesh_buffer, shard_data_transfers, blocking);
+    this->enqueue_write_shards_nolock(mesh_buffer, shard_data_transfers, blocking);
 }
 
-void MeshCommandQueueBase::enqueue_read_shards(
+void MeshCommandQueueBase::enqueue_read_shards_nolock(
     const std::vector<ShardDataTransfer>& shard_data_transfers,
     const std::shared_ptr<MeshBuffer>& buffer,
     bool blocking) {
@@ -252,14 +268,24 @@ void MeshCommandQueueBase::enqueue_read_shards(
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     std::unordered_map<IDevice*, uint32_t> num_txns_per_device = {};
     for (const auto& shard_data_transfer : shard_data_transfers) {
-        this->read_shard_from_device(
-            *buffer,
-            shard_data_transfer.shard_coord,
-            shard_data_transfer.host_data,
-            shard_data_transfer.region,
-            num_txns_per_device);
+        if (mesh_device_->is_local(shard_data_transfer.shard_coord)) {
+            this->read_shard_from_device(
+                *buffer,
+                shard_data_transfer.shard_coord,
+                shard_data_transfer.host_data,
+                shard_data_transfer.region,
+                num_txns_per_device);
+        }
     }
     this->submit_memcpy_request(num_txns_per_device, blocking);
+}
+
+void MeshCommandQueueBase::enqueue_read_shards(
+    const std::vector<ShardDataTransfer>& shard_data_transfers,
+    const std::shared_ptr<MeshBuffer>& mesh_buffer,
+    bool blocking) {
+    auto lock = lock_api_function_();
+    this->enqueue_read_shards_nolock(shard_data_transfers, mesh_buffer, blocking);
 }
 
 void MeshCommandQueueBase::enqueue_read(
@@ -267,6 +293,7 @@ void MeshCommandQueueBase::enqueue_read(
     DistributedHostBuffer& host_buffer,
     const std::optional<std::unordered_set<MeshCoordinate>>& shards,
     bool blocking) {
+    auto lock = lock_api_function_();
     std::vector<ShardDataTransfer> shard_data_transfers;
     for (const auto& coord : MeshCoordinateRange(buffer->device()->shape())) {
         if (shards.has_value() && !shards->contains(coord)) {
@@ -282,7 +309,7 @@ void MeshCommandQueueBase::enqueue_read(
         }
     }
 
-    this->enqueue_read_shards(shard_data_transfers, buffer, blocking);
+    this->enqueue_read_shards_nolock(shard_data_transfers, buffer, blocking);
 }
 
 }  // namespace tt::tt_metal::distributed

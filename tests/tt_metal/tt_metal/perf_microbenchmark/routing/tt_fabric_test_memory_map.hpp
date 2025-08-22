@@ -28,25 +28,52 @@ struct BaseMemoryRegion {
 struct CommonMemoryMap {
     // Constants for memory region sizes
     static constexpr uint32_t RESULT_BUFFER_SIZE = 0x1000;  // 4KB
+    static constexpr uint32_t LOCAL_ARGS_BUFFER_SIZE = 0x1000;  // 4KB
+    static constexpr uint32_t KERNEL_CONFIG_BUFFER_SIZE = 0x1000;  // 4KB
 
     // Memory regions
     BaseMemoryRegion result_buffer;
+    BaseMemoryRegion local_args_buffer;
+    BaseMemoryRegion kernel_config_buffer;
 
     // Default constructor
-    CommonMemoryMap() : result_buffer(0, 0) {}
+    CommonMemoryMap() : result_buffer(0, 0), local_args_buffer(0, 0), kernel_config_buffer(0, 0) {}
 
     // Host-side construction
-    CommonMemoryMap(uint32_t result_buffer_base, uint32_t result_buffer_size) :
-        result_buffer(result_buffer_base, result_buffer_size) {}
+    CommonMemoryMap(
+        uint32_t result_buffer_base,
+        uint32_t result_buffer_size,
+        uint32_t local_args_base,
+        uint32_t local_args_size,
+        uint32_t kernel_config_base,
+        uint32_t kernel_config_size) :
+        result_buffer(result_buffer_base, result_buffer_size),
+        local_args_buffer(local_args_base, local_args_size),
+        kernel_config_buffer(kernel_config_base, kernel_config_size) {}
 
-    bool is_valid() const { return result_buffer.is_valid(); }
+    bool is_valid() const {
+        return result_buffer.is_valid() && local_args_buffer.is_valid() && kernel_config_buffer.is_valid();
+    }
 
-    // Returns common kernel arguments: [result_buffer_base, result_buffer_size]
-    std::vector<uint32_t> get_kernel_args() const { return {result_buffer.start, result_buffer.size}; }
+    // Returns common kernel arguments: [local_args_base, local_args_size, result_buffer_base, result_buffer_size,
+    // kernel_config_base, kernel_config_size]
+    std::vector<uint32_t> get_kernel_args() const {
+        return {
+            local_args_buffer.start,
+            local_args_buffer.size,
+            result_buffer.start,
+            result_buffer.size,
+            kernel_config_buffer.start,
+            kernel_config_buffer.size};
+    }
 
     // Convenience methods for reading results
     uint32_t get_result_buffer_address() const { return result_buffer.start; }
     uint32_t get_result_buffer_size() const { return result_buffer.size; }
+    uint32_t get_local_args_address() const { return local_args_buffer.start; }
+    uint32_t get_local_args_size() const { return local_args_buffer.size; }
+    uint32_t get_kernel_config_address() const { return kernel_config_buffer.start; }
+    uint32_t get_kernel_config_size() const { return kernel_config_buffer.size; }
 };
 
 /**
@@ -76,17 +103,32 @@ struct SenderMemoryMap {
 
     SenderMemoryMap(
         uint32_t l1_unreserved_base, uint32_t l1_unreserved_size, uint32_t l1_alignment, uint32_t num_configs) :
-        common(0, 0),           // Will be set below
-        packet_headers(0, 0),   // Will be set below
-        payload_buffers(0, 0),  // Will be set below
+        common(0, 0, 0, 0, 0, 0),  // Will be set below
+        packet_headers(0, 0),      // Will be set below
+        payload_buffers(0, 0),     // Will be set below
         highest_usable_address(l1_unreserved_base + l1_unreserved_size) {
-        // Layout: [result_buffer][packet_headers][payload_buffers]
+        // Layout: [local_args_buffer][result_buffer][kernel_config_buffer][packet_headers][payload_buffers]
         uint32_t current_addr = l1_unreserved_base;
+
+        // Local args buffer (at top of memory)
+        uint32_t local_args_base = current_addr;
+        current_addr += CommonMemoryMap::LOCAL_ARGS_BUFFER_SIZE;
 
         // Result buffer
         uint32_t result_buffer_base = current_addr;
         current_addr += CommonMemoryMap::RESULT_BUFFER_SIZE;
-        common = CommonMemoryMap(result_buffer_base, CommonMemoryMap::RESULT_BUFFER_SIZE);
+
+        // Kernel config buffer
+        uint32_t kernel_config_base = current_addr;
+        current_addr += CommonMemoryMap::KERNEL_CONFIG_BUFFER_SIZE;
+
+        common = CommonMemoryMap(
+            result_buffer_base,
+            CommonMemoryMap::RESULT_BUFFER_SIZE,
+            local_args_base,
+            CommonMemoryMap::LOCAL_ARGS_BUFFER_SIZE,
+            kernel_config_base,
+            CommonMemoryMap::KERNEL_CONFIG_BUFFER_SIZE);
 
         // Packet headers
         uint32_t packet_header_base = current_addr;
@@ -139,6 +181,10 @@ struct SenderMemoryMap {
     // Convenience methods for reading results
     uint32_t get_result_buffer_address() const { return common.get_result_buffer_address(); }
     uint32_t get_result_buffer_size() const { return common.get_result_buffer_size(); }
+    uint32_t get_local_args_address() const { return common.get_local_args_address(); }
+    uint32_t get_local_args_size() const { return common.get_local_args_size(); }
+    uint32_t get_kernel_config_address() const { return common.get_kernel_config_address(); }
+    uint32_t get_kernel_config_size() const { return common.get_kernel_config_size(); }
 };
 
 /**
@@ -167,17 +213,32 @@ struct ReceiverMemoryMap {
         uint32_t l1_alignment,
         uint32_t payload_chunk_size,
         uint32_t num_configs) :
-        common(0, 0),           // Will be set below
-        payload_chunks(0, 0),   // Will be set below
-        atomic_counters(0, 0),  // Will be set below
+        common(0, 0, 0, 0, 0, 0),  // Will be set below
+        payload_chunks(0, 0),      // Will be set below
+        atomic_counters(0, 0),     // Will be set below
         payload_chunk_size_(payload_chunk_size) {
-        // Layout: [result_buffer][atomic_counters][payload_chunks]
+        // Layout: [local_args_buffer][result_buffer][kernel_config_buffer][atomic_counters][payload_chunks]
         uint32_t current_addr = l1_unreserved_base;
+
+        // Local args buffer (at top of memory)
+        uint32_t local_args_base = current_addr;
+        current_addr += CommonMemoryMap::LOCAL_ARGS_BUFFER_SIZE;
 
         // Result buffer
         uint32_t result_buffer_base = current_addr;
         current_addr += CommonMemoryMap::RESULT_BUFFER_SIZE;
-        common = CommonMemoryMap(result_buffer_base, CommonMemoryMap::RESULT_BUFFER_SIZE);
+
+        // Kernel config buffer
+        uint32_t kernel_config_base = current_addr;
+        current_addr += CommonMemoryMap::KERNEL_CONFIG_BUFFER_SIZE;
+
+        common = CommonMemoryMap(
+            result_buffer_base,
+            CommonMemoryMap::RESULT_BUFFER_SIZE,
+            local_args_base,
+            CommonMemoryMap::LOCAL_ARGS_BUFFER_SIZE,
+            kernel_config_base,
+            CommonMemoryMap::KERNEL_CONFIG_BUFFER_SIZE);
 
         // Atomic counters
         uint32_t atomic_counter_base = current_addr;
@@ -204,6 +265,10 @@ struct ReceiverMemoryMap {
     // Convenience methods for reading results
     uint32_t get_result_buffer_address() const { return common.get_result_buffer_address(); }
     uint32_t get_result_buffer_size() const { return common.get_result_buffer_size(); }
+    uint32_t get_local_args_address() const { return common.get_local_args_address(); }
+    uint32_t get_local_args_size() const { return common.get_local_args_size(); }
+    uint32_t get_kernel_config_address() const { return common.get_kernel_config_address(); }
+    uint32_t get_kernel_config_size() const { return common.get_kernel_config_size(); }
 
     // Getter for payload chunk size used in this memory map
     uint32_t get_payload_chunk_size() const { return payload_chunk_size_; }

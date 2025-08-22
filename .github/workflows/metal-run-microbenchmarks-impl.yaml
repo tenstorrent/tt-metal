@@ -47,15 +47,9 @@ jobs:
           }, # Sean Nijjar
           {
             arch: wormhole_b0,
-            runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
-            name: "N300 tunneler",
-            cmd: "TT_METAL_SLOW_DISPATCH_MODE=1 ./tests/scripts/run_tunneler_tests.sh --machine-type N300",
-          },  # Miaorong Wang
-          {
-            arch: wormhole_b0,
             runs-on: ["arch-wormhole_b0", "pipeline-perf", "config-t3000", "in-service"],
             name: "T3K ubench - Fabric BW",
-            cmd: "pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py",
+            cmd: "TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml",
           }, # Sean Nijjar
           {
             arch: wormhole_b0,
@@ -73,13 +67,13 @@ jobs:
             arch: wormhole_b0,
             runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"],
             name: "WH Data Movement Regressions",
-            cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement --gtest-filter Directed --verbose-log",
+            cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter Directed --verbose-log",
           }, # Ata Tuzuner
           {
             arch: blackhole,
             runs-on: ["BH", "pipeline-perf", "in-service"],
             name: "BH Data Movement Regressions",
-            cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement --gtest-filter Directed --verbose-log",
+            cmd: "pytest -svv tests/tt_metal/tt_metal/data_movement/python/test_data_movement.py --gtest-filter Directed --verbose-log",
           } # Ata Tuzuner
         ]
     container:

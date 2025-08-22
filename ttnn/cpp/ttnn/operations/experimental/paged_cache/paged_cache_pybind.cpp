@@ -31,7 +31,8 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                const std::optional<bool> share_cache,
                const std::optional<const ttnn::Tensor>& page_table,
                const uint32_t batch_offset,
-               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+               std::optional<const std::set<ttnn::MeshCoordinate>> mesh_coords) {
                 return self(
                     cache_tensor,
                     input_tensor,
@@ -40,7 +41,8 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                     share_cache,
                     page_table,
                     batch_offset,
-                    compute_kernel_config);
+                    compute_kernel_config,
+                    mesh_coords);
             },
             py::arg("cache_tensor").noconvert(),
             py::arg("input_tensor").noconvert(),
@@ -51,6 +53,7 @@ void bind_experimental_paged_cache_operations(py::module& module) {
             py::arg("page_table").noconvert() = std::nullopt,
             py::arg("batch_offset") = 0,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("mesh_coords").noconvert() = std::nullopt,
         });
 
     auto paged_fused_update_cache_doc =
@@ -71,6 +74,7 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                 page_table (ttnn.Tensor, optional): The page table for managing memory regions during updates. Defaults to None.
                 batch_offset (int): Offset for batching updates. Defaults to 0.
                 compute_kernel_config (DeviceComputeKernelConfig, Optional): Optional configuration for the device compute kernel. Defaults to None.
+                mesh_coords (Set[MeshCoordinate], optional): Set of mesh coordinates to execute on.
 
             Returns:
                 ttnn.Tensor, ttnn.Tensor: Tensors representing the updated cache states.
@@ -92,7 +96,8 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                const std::optional<bool> share_cache,
                const std::optional<const ttnn::Tensor>& page_table,
                const uint32_t batch_offset,
-               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+               std::optional<const std::set<ttnn::MeshCoordinate>> mesh_coords) {
                 return self(
                     cache_tensor1,
                     input_tensor1,
@@ -103,7 +108,8 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                     share_cache,
                     page_table,
                     batch_offset,
-                    compute_kernel_config);
+                    compute_kernel_config,
+                    mesh_coords);
             },
             py::arg("cache_tensor1").noconvert(),
             py::arg("input_tensor1").noconvert(),
@@ -116,6 +122,7 @@ void bind_experimental_paged_cache_operations(py::module& module) {
             py::arg("page_table").noconvert() = std::nullopt,
             py::arg("batch_offset") = 0,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("mesh_coords").noconvert() = std::nullopt,
         });
 
     auto paged_fill_cache_doc =
@@ -127,6 +134,7 @@ void bind_experimental_paged_cache_operations(py::module& module) {
         page_table shape: [batch_size, max_num_blocks_per_seq]
         batch_idx_tensor (optional) shape: [1] (scalar uint32 tensor)
         batch_idx (scalar, defaults to 0) is used if batch_idx_tensor is not provided.
+        mesh_coords (optional) is a set of MeshCoordinate objects that specify the mesh coordinates to execute on.
         )doc";
 
     using PagedFillCacheType = decltype(ttnn::experimental::paged_fill_cache);
@@ -141,8 +149,16 @@ void bind_experimental_paged_cache_operations(py::module& module) {
                const ttnn::Tensor& page_table,
                std::optional<const ttnn::Tensor> batch_idx_tensor,
                const uint32_t batch_idx,
-               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-                return self(cache_tensor, input_tensor, page_table, batch_idx_tensor, batch_idx, compute_kernel_config);
+               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+               std::optional<const std::set<ttnn::MeshCoordinate>> mesh_coords) {
+                return self(
+                    cache_tensor,
+                    input_tensor,
+                    page_table,
+                    batch_idx_tensor,
+                    batch_idx,
+                    compute_kernel_config,
+                    mesh_coords);
             },
             py::arg("cache_tensor").noconvert(),
             py::arg("input_tensor").noconvert(),
@@ -151,6 +167,7 @@ void bind_experimental_paged_cache_operations(py::module& module) {
             py::arg("batch_idx_tensor").noconvert() = std::nullopt,
             py::arg("batch_idx") = 0,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
+            py::arg("mesh_coords").noconvert() = std::nullopt,
         });
 }
 

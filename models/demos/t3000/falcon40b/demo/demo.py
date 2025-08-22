@@ -12,9 +12,9 @@ import torch.nn.functional as F
 from loguru import logger
 from tqdm import tqdm
 from transformers import AutoTokenizer
-from transformers.generation.utils import top_k_top_p_filtering
 
 import ttnn
+from models.common.utils import top_k_top_p_filtering
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import FalconConfig, FalconForCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_causallm import TtFalconCausalLM
 from models.demos.t3000.falcon40b.tt.falcon_common import PytorchFalconCausalLM
@@ -571,6 +571,7 @@ def run_falcon_demo_kv(
 @pytest.mark.parametrize("perf_mode", (False,))  # Option to measure perf using max seq length (with invalid outputs)
 @pytest.mark.parametrize("greedy_sampling", (False,))
 @pytest.mark.parametrize("max_seq_len", (128,))
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_demo(
     perf_mode,
     greedy_sampling,

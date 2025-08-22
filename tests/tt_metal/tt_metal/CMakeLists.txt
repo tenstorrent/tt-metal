@@ -72,6 +72,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/sfpi)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/misc)
 
 add_custom_target(
     metal_tests
@@ -89,6 +90,7 @@ add_custom_target(
         unit_tests_noc
         unit_tests_lightmetal
         unit_tests_sfpi
+        unit_tests_misc
 )
 
 add_library(metalium_test_files INTERFACE)
@@ -101,7 +103,11 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels test_kernels/*)
+file(
+    GLOB_RECURSE kernels
+    test_kernels/*
+    perf_microbenchmark/routing/kernels/*
+)
 target_sources(
     metalium_test_files
     PUBLIC
@@ -109,7 +115,10 @@ target_sources(
         TYPE HEADERS
         BASE_DIRS
             ${CMAKE_CURRENT_SOURCE_DIR}/../../.. # FIXME
-        FILES ${kernels}
+        FILES
+            ${kernels}
+            perf_microbenchmark/common/kernel_utils.hpp
+            perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp
 )
 
 install(

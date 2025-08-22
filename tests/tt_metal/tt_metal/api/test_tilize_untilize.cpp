@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
 #include <vector>
-#include <random>
+#include <type_traits>
 #include <sys/types.h>
 
 #include <gtest/gtest.h>
@@ -305,31 +306,31 @@ std::vector<T> convert_layout(
 
 }  // namespace reference
 
+namespace {
 template <typename T>
-std::vector<T>& get_test_data() {
-    constexpr size_t MAX_BATCH = 1;
-    constexpr size_t MAX_ROWS = 128;
-    constexpr size_t MAX_COLS = 128;
-
+std::vector<T>& get_test_data(size_t n_elements = 128 * 128) {
     static std::vector<T> data;
-    if (!data.empty()) {
-        return data;
-    }
+    static size_t current_size = 0;
 
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
+    if (n_elements > current_size) {
+        data.resize(n_elements);
 
-    size_t n_elements = MAX_BATCH * MAX_ROWS * MAX_COLS;
-    data.resize(n_elements);
+        for (size_t i = 0; i < n_elements; ++i) {
+            if constexpr (std::is_floating_point_v<T>) {
+                data[i] = static_cast<T>(i);
+            } else if constexpr (std::is_integral_v<T>) {
+                data[i] = static_cast<T>(i % (static_cast<size_t>(std::numeric_limits<T>::max()) + 1));
+            } else {
+                data[i] = static_cast<T>(static_cast<float>(i));
+            }
+        }
 
-    for (size_t i = 0; i < n_elements; i++) {
-        float val = dist(gen);
-        data[i] = static_cast<T>(val);
+        current_size = n_elements;
     }
 
     return data;
 }
+}  // namespace
 
 // Note: tuple is used for ::testing::Combine
 using TilizeUntilizeParams = std::tuple<
@@ -480,10 +481,6 @@ TEST_P(ThrowableTilizeUntilizeFixture, TilizeUntilize) {
     if (from_layout == to_layout) {
         return;
     }
-
-    uint32_t n_rows = shape[0];
-    uint32_t n_cols = shape[1];
-    size_t n_elements = n_rows * n_cols;
 
     auto run_for_type = [&](auto type) {
         using Type = decltype(type);

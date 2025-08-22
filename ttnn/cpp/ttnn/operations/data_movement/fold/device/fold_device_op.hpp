@@ -16,9 +16,9 @@ namespace ttnn::operations::data_movement {
 
 struct Fold {
     struct operation_attributes_t {
-        uint32_t stride_h;
-        uint32_t stride_w;
-        bool is_sharded;
+        uint32_t stride_h{};
+        uint32_t stride_w{};
+        bool is_sharded{};
         bool is_dram_interleaved = false;
     };
 
@@ -72,8 +72,8 @@ struct Fold {
 
     struct MultiCoreDRAMFold {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle writer_kernel_id;
-            tt::tt_metal::KernelHandle reader_kernel_id;
+            tt::tt_metal::KernelHandle writer_kernel_id{};
+            tt::tt_metal::KernelHandle reader_kernel_id{};
             std::vector<CoreCoord> cores_with_rtargs;
         };
 

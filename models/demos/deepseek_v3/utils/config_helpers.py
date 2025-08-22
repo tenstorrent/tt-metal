@@ -3,16 +3,18 @@
 
 import math
 from itertools import takewhile
-from typing import Sequence
+from typing import Any, Sequence
 
 import torch
 
 import ttnn
+from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 MAX_BATCH_SIZE = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
+TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 
 
 # Compute kernel configurations
@@ -492,13 +494,95 @@ def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Seque
     return tensor
 
 
-def sub_state_dict(state_dict, prefix):
+def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
+    dequantized_state_dict = {}
+
+    for name, tensor in state_dict.items():
+        if name.endswith("_scale_inv"):
+            continue
+
+        if tensor is not None:
+            # Look for corresponding scale tensor
+            scale_name = name + "_scale_inv"
+            if scale_name in state_dict:
+                scale_tensor = state_dict[scale_name]
+                # Dequantize using the scale
+                dequantized_tensor = dequantize(
+                    tensor, scale_tensor, hf_config.quantization_config["weight_block_size"]
+                )
+                dequantized_state_dict[name] = dequantized_tensor.to(dtype)
+            else:
+                dequantized_state_dict[name] = tensor.to(dtype)
+
+    return dequantized_state_dict
+
+
+def get_state_dicts(
+    dicts: Sequence[dict[str, torch.Tensor] | None],
+    key: Any,
+    shape: Sequence[int] | None = None,
+    dtype: torch.dtype | None = None,
+    concat_dim: int = 0,
+    concat: bool = False,
+) -> torch.Tensor:
+    """Get a weight from a list of state dictionaries and combine them into a single tensor.
+
+    Args:
+        key (str): The key to look for in the dictionaries.
+        dicts (Sequence[dict[str, torch.Tensor]]): A sequence of state dicts
+        dim (int, optional): The dimension along which to combine the tensors. Defaults to 0.
+        concat (bool, optional): Whether to concatenate the tensors or stack them. Defaults to False.
+    Returns:
+        torch.Tensor: The combined tensor.
+    """
+    if not dicts:
+        return torch.empty()
+
+    expected_shape = (
+        next(map(lambda d: d[key].shape, filter(lambda d: d is not None, dicts)), None) if shape is None else shape
+    )
+    assert expected_shape is not None, "At least one dictionary must be non-empty, or a shape must be provided"
+
+    expected_dtype = (
+        next(map(lambda d: d[key].dtype, filter(lambda d: d is not None, dicts)), None) if dtype is None else dtype
+    )
+    assert expected_dtype is not None, "At least one dictionary must be non-empty, or a dtype must be provided"
+
+    assert all(key in d for d in dicts if d is not None), f"Key {key} not found in all dictionaries"
+    assert all(
+        d[key].shape == expected_shape for d in dicts if d is not None
+    ), f"Key {key} must have the value shaped as {expected_shape} in all dictionaries; instead got {[d[key].shape if d is not None else None for d in dicts]}"
+    assert all(
+        d[key].dtype == expected_dtype for d in dicts if d is not None
+    ), f"Key {key} must have the dtype as {expected_dtype} in all dictionaries; instead got {[d[key].dtype if d is not None else None for d in dicts]}"
+
+    tensors = [torch.zeros(expected_shape).to(dtype) if d is None else d[key] for d in dicts]
+
+    if concat:
+        return torch.concat(tensors, dim=concat_dim)
+    return torch.stack(tensors, dim=concat_dim)
+
+
+def sub_state_dict(state_dict: dict[str, torch.Tensor], prefix: str):
     """Get a subset of the state dict with a given prefix."""
     return {k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)}
 
 
+def sub_state_dicts(
+    state_dicts: Sequence[dict[str, torch.Tensor] | None], prefix: str
+) -> tuple[dict[str, torch.Tensor] | None, ...]:
+    """Get a subset of the state dict with a given prefix."""
+    return tuple(None if d is None else sub_state_dict(d, prefix) for d in state_dicts)
+
+
 def save_and_get_path(path, tensor):
     """Save a tensor to a file and return the path."""
-    ttnn.dump_tensor(path, tensor)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        logger.warning(f"Overwriting existing cache file: {path}")
+    memory_config = tensor.memory_config()
+    ttnn.dump_tensor(path, tensor, enable_multihost_format=True)
     ttnn.deallocate(tensor)
-    return str(path)
+    return SavedWeight(
+        path=path, memory_config=memory_config
+    )  # TODO: bring regular tensor saving back once Issue #26763 is resolved

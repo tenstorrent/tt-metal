@@ -145,7 +145,7 @@ def test_transformer(
     #     )
     # profiler.end(f"run")
     # devices = mesh_device.get_devices()
-    # ttnn.DumpDeviceProfiler(devices[0])
+    # ttnn.ReadDeviceProfiler(devices[0])
     # total_time = profiler.get("run")
     # avg_time = total_time / num_measurement_iterations
     # print(f" TOTAL TIME: {total_time} AVG TIME: {avg_time}\n")

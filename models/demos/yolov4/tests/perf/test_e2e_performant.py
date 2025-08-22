@@ -9,7 +9,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.yolov4.common import get_mesh_mappers
+from models.demos.utils.common_demo_utils import get_mesh_mappers
+from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE
 from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
 from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import run_for_wormhole_b0
@@ -32,7 +33,7 @@ def run_perf_e2e_yolov4(
         act_dtype,
         weight_dtype,
         resolution=resolution,
-        model_location_generator=None,
+        model_location_generator=model_location_generator,
         mesh_mapper=inputs_mesh_mapper,
         mesh_composer=output_mesh_composer,
     )
@@ -74,7 +75,9 @@ def run_perf_e2e_yolov4(
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV4_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, act_dtype, weight_dtype",
@@ -107,7 +110,9 @@ def test_e2e_performant(
 @run_for_wormhole_b0()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 40960, "trace_region_size": 6434816, "num_command_queues": 2}], indirect=True
+    "device_params",
+    [{"l1_small_size": YOLOV4_L1_SMALL_SIZE, "trace_region_size": 6434816, "num_command_queues": 2}],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, act_dtype, weight_dtype",

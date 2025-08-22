@@ -35,6 +35,7 @@
 #include <tt_stl/span.hpp>
 #include "test_gold_impls.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/distributed.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -50,10 +51,6 @@ using namespace tt::tt_metal;
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 int main(int argc, char** argv) {
-    if (getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr) {
-        TT_THROW("Test not supported w/ slow dispatch, exiting");
-    }
-
     bool pass = true;
     bool multibank = true;
 
@@ -65,12 +62,12 @@ int main(int argc, char** argv) {
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
-    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+    auto mesh_device = distributed::MeshDevice::create_unit_mesh(device_id);
 
-    CommandQueue& cq = device->command_queue();
+    auto& cq = mesh_device->mesh_command_queue();
 
-    Program programs[] = {tt_metal::CreateProgram(), tt_metal::CreateProgram(), tt_metal::CreateProgram()};
-
+    distributed::MeshWorkload mesh_workloads[] = {
+        distributed::CreateMeshWorkload(), distributed::CreateMeshWorkload(), distributed::CreateMeshWorkload()};
     auto ops = EltwiseOp::all();
     for (auto eltwise_op : ops) {
         log_info(LogTest, "====================================================================");
@@ -80,9 +77,8 @@ int main(int argc, char** argv) {
             ////////////////////////////////////////////////////////////////////////////
             //                      Application Setup
             ////////////////////////////////////////////////////////////////////////////
-            // tt_metal::Program program = tt_metal::CreateProgram();
-            tt_metal::Program& program = programs[eltwise_op];
-
+            tt_metal::Program program = tt_metal::CreateProgram();
+            auto& mesh_workload = mesh_workloads[eltwise_op];
             CoreCoord core = {0, 0};
 
             uint32_t single_tile_size = 2 * 1024;
@@ -93,18 +89,23 @@ int main(int argc, char** argv) {
             if (not multibank) {
                 page_size = dram_buffer_size;
             }
-            tt_metal::InterleavedBufferConfig dram_config{
-                .device = device,
-                .size = dram_buffer_size,
+
+            distributed::DeviceLocalBufferConfig device_local_config{
                 .page_size = page_size,
-                .buffer_type = tt_metal::BufferType::DRAM};
+                .buffer_type = tt_metal::BufferType::DRAM,
+            };
 
-            auto src0_dram_buffer = CreateBuffer(dram_config);
+            distributed::ReplicatedBufferConfig buffer_config{
+                .size = dram_buffer_size,
+            };
+            auto src0_dram_buffer =
+                distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
             uint32_t dram_buffer_src0_addr = src0_dram_buffer->address();
-            auto src1_dram_buffer = CreateBuffer(dram_config);
+            auto src1_dram_buffer =
+                distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
             uint32_t dram_buffer_src1_addr = src1_dram_buffer->address();
-            auto dst_dram_buffer = CreateBuffer(dram_config);
-
+            auto dst_dram_buffer =
+                distributed::MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
             uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
 
             uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -113,14 +114,14 @@ int main(int argc, char** argv) {
                 tt_metal::CircularBufferConfig(
                     num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(src0_cb_index, single_tile_size);
-            auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+            tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
             uint32_t src1_cb_index = tt::CBIndex::c_1;
             tt_metal::CircularBufferConfig cb_src1_config =
                 tt_metal::CircularBufferConfig(
                     num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(src1_cb_index, single_tile_size);
-            auto cb_src1 = tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
+            tt_metal::CreateCircularBuffer(program, core, cb_src1_config);
 
             uint32_t ouput_cb_index = tt::CBIndex::c_16;
             uint32_t num_output_tiles = 2;
@@ -128,7 +129,7 @@ int main(int argc, char** argv) {
                 tt_metal::CircularBufferConfig(
                     num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
                     .set_page_size(ouput_cb_index, single_tile_size);
-            auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+            tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
             auto binary_reader_kernel = tt_metal::CreateKernel(
                 program,
@@ -148,8 +149,6 @@ int main(int argc, char** argv) {
 
             vector<uint32_t> compute_kernel_args = {};
 
-            bool fp32_dest_acc_en = false;
-            bool math_approx_mode = false;
             std::map<std::string, std::string> binary_defines = {
                 {"ELTWISE_OP", op_id_to_op_define[eltwise_op]},
                 {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};
@@ -161,6 +160,16 @@ int main(int argc, char** argv) {
 
             SetRuntimeArgs(program, eltwise_binary_kernel, core, {2048, 1});
 
+            const std::array<uint32_t, 7> reader_args = {
+                dram_buffer_src0_addr, 0, num_tiles, dram_buffer_src1_addr, 0, num_tiles, 0};
+
+            const std::array<uint32_t, 3> writer_args = {dram_buffer_dst_addr, 0, num_tiles};
+
+            SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
+            SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
+
+            distributed::AddProgramToMeshWorkload(
+                mesh_workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
             ////////////////////////////////////////////////////////////////////////////
             //                      Compile Application
             ////////////////////////////////////////////////////////////////////////////
@@ -170,8 +179,7 @@ int main(int argc, char** argv) {
             ////////////////////////////////////////////////////////////////////////////
             std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
                 dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-
-            EnqueueWriteBuffer(cq, std::ref(src0_dram_buffer), src0_vec, false);
+            distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
 
             std::vector<uint32_t> src1_vec;
             if (eltwise_op == EltwiseOp::MUL) {
@@ -181,27 +189,11 @@ int main(int argc, char** argv) {
             } else {
                 src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 0.0f);
             }
+            distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
 
-            EnqueueWriteBuffer(cq, std::ref(src1_dram_buffer), src1_vec, false);
-
-            const std::array<uint32_t, 7> reader_args = {
-                dram_buffer_src0_addr,
-                0,
-                num_tiles,
-                dram_buffer_src1_addr,
-                0,
-                num_tiles,
-                0};
-
-            const std::array<uint32_t, 3> writer_args = {
-                dram_buffer_dst_addr, 0, num_tiles};
-
-            SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
-            SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
-
-            EnqueueProgram(cq, program, false);
+            distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             std::vector<uint32_t> result_vec;
-            EnqueueReadBuffer(cq, dst_dram_buffer, result_vec, true);
+            distributed::ReadShard(cq, result_vec, dst_dram_buffer, distributed::MeshCoordinate(0, 0));
 
             ////////////////////////////////////////////////////////////////////////////
             //                      Validation & Teardown
@@ -217,8 +209,7 @@ int main(int argc, char** argv) {
             log_error(LogTest, "System error message: {}", std::strerror(errno));
         }
     }  // for EltwiseOp::all()
-
-    pass &= tt_metal::CloseDevice(device);
+    mesh_device->close();
 
     if (pass) {
         log_info(LogTest, "Test Passed");

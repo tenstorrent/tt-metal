@@ -15,7 +15,7 @@ void kernel_main() {
     constexpr uint32_t shard_factor = get_compile_time_arg_val(1);
     constexpr uint32_t num_cores_to_be_used = get_compile_time_arg_val(2);
     constexpr uint32_t outer_id_increment = shard_factor * num_cores_to_be_used;
-    constexpr auto tensor_args = make_tensor_accessor_args<3>();
+    constexpr auto tensor_args = TensorAccessorArgs<3>();
 
     // runtime args
     const auto input_addr = get_arg_val<uint32_t>(0);
@@ -36,7 +36,7 @@ void kernel_main() {
     uint32_t l1_write_addr_in0;
     constexpr uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
 
-    auto tensor_accessor = make_tensor_accessor_from_args(tensor_args, input_addr, input_tile_bytes);
+    auto tensor_accessor = TensorAccessor(tensor_args, input_addr, input_tile_bytes);
     uint32_t input_granularity_index = 0;
 
     // For each shard, start at the index of the first shard to be reduced (same
@@ -62,7 +62,7 @@ void kernel_main() {
                     cb_reserve_back(cb_id_in0, input_granularity);
                     l1_write_addr_in0 = get_write_ptr(cb_id_in0);
                 }
-                noc_async_read_tile(read_tile_id, tensor_accessor, l1_write_addr_in0);
+                noc_async_read_page(read_tile_id, tensor_accessor, l1_write_addr_in0);
                 l1_write_addr_in0 += input_tile_bytes;
                 read_tile_id += inner_tile_size;
                 input_granularity_index++;

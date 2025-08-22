@@ -134,11 +134,11 @@ def get_from_precompiled_dir():
 
 
 @dataclass(frozen=True)
-class MetalliumBuildConfig:
+class MetaliumBuildConfig:
     from_precompiled_dir = get_from_precompiled_dir()
 
 
-metal_build_config = MetalliumBuildConfig()
+metal_build_config = MetaliumBuildConfig()
 
 
 class CMakeBuild(build_ext):
@@ -191,8 +191,8 @@ class CMakeBuild(build_ext):
                     "Ninja",
                     "-DCMAKE_BUILD_TYPE=Release",
                     "-DCMAKE_INSTALL_PREFIX=build_Release",
-                    "-DBUILD_SHARED_LIBS=OFF",
-                    "-DTT_INSTALL=OFF",
+                    "-DBUILD_SHARED_LIBS=ON",
+                    "-DTT_INSTALL=ON",
                     "-DTT_UNITY_BUILDS=ON",
                     "-DTT_ENABLE_LIGHT_METAL_TRACE=ON",
                     "-DWITH_PYTHON_BINDINGS=ON",
@@ -205,6 +205,12 @@ class CMakeBuild(build_ext):
                     cmake_args.extend(
                         [
                             "-DENABLE_TRACY=ON",
+                        ]
+                    )
+                else:
+                    cmake_args.extend(
+                        [
+                            "-DENABLE_TRACY=OFF",
                         ]
                     )
 
@@ -234,12 +240,7 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        lib_patterns = [
-            "_ttnn.so",
-            "_ttnncpp.so",
-            "libtt_metal.so",
-            "libdevice.so",
-        ]
+        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libdevice.so", "libtt_stl.so"]
         runtime_patterns = [
             "hw/**/*",
         ]
@@ -287,7 +288,6 @@ class CMakeBuild(build_ext):
             "api/tt-metalium/circular_buffer_constants.h",
             "api/tt-metalium/constants.hpp",
             "api/tt-metalium/dev_msgs.h",
-            "api/tt-metalium/fabric_host_interface.h",
             "api/tt-metalium/fabric_edm_types.hpp",
             "api/tt-metalium/fabric_edm_packet_header.hpp",
             "api/tt-metalium/edm_fabric_counters.hpp",
@@ -302,7 +302,7 @@ class CMakeBuild(build_ext):
             "include/**/*",
             "kernels/**/*",
             "third_party/tt_llk/**/*",
-            "tools/profiler/*",
+            "tools/profiler/**/*",
             "soc_descriptors/*.yaml",
         ]
         copy_tree_with_patterns(build_dir / get_lib_dir(), self.build_lib + f"/ttnn/build/lib", lib_patterns)

@@ -1,45 +1,40 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-import pathlib
+import subprocess
+from pathlib import Path
+
+from models.utility_functions import skip_for_blackhole
 import nbformat
-import os
-from loguru import logger
-from nbconvert.preprocessors import ExecutePreprocessor, CellExecutionError
-
-from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
-
-import ttnn
-
-TUTORIALS_PATH = pathlib.Path(ttnn.__path__[0]).parent / "tutorials"
+import pytest
+from nbconvert.preprocessors import ExecutePreprocessor
 
 
-@pytest.fixture(scope="function")
-def clear_wh_arch_yaml_var():
-    yield
-    if "WH_ARCH_YAML" in os.environ:
-        logger.info("Unsetting set WH_ARCH_YAML")
-        del os.environ["WH_ARCH_YAML"]
+TUTORIALS_NOTEBOOK_PATH = Path("ttnn/tutorials/2025_dx_rework")
+TUTORIALS_PYTHON_PATH = Path("ttnn/tutorials/basic_python")
 
 
-def collect_tutorials():
-    for file_name in TUTORIALS_PATH.glob("*.ipynb"):
-        if (
-            "tutorials/001.ipynb" in str(file_name)
-            or "tutorials/002.ipynb" in str(file_name)
-            or "tutorials/003.ipynb" in str(file_name)
-            or "tutorials/004.ipynb" in str(file_name)
-        ):
-            yield file_name
+def collect_ttnn_tutorials(path: Path, extension: str = "*.py"):
+    for file_name in path.glob(extension):
+        yield file_name
 
 
-@skip_for_blackhole("Fails on BH. Issue #19644")
-@pytest.mark.requires_fast_runtime_mode_off
-@pytest.mark.parametrize("notebook_path", collect_tutorials())
-def test_tutorials(notebook_path, clear_wh_arch_yaml_var):
+@skip_for_blackhole("Fails on BH. Issue #25579")
+@pytest.mark.parametrize("notebook_path", collect_ttnn_tutorials(path=TUTORIALS_NOTEBOOK_PATH, extension="*.ipynb"))
+def test_ttnn_notebook_tutorials(notebook_path):
     with open(notebook_path) as f:
         notebook = nbformat.read(f, as_version=4)
         ep = ExecutePreprocessor(timeout=180, kernel_name="python3")
         ep.preprocess(notebook)
+
+
+@skip_for_blackhole("Fails on BH. Issue #25579")
+@pytest.mark.parametrize("python_path", collect_ttnn_tutorials(path=TUTORIALS_PYTHON_PATH, extension="*.py"))
+def test_ttnn_python_tutorials(python_path):
+    result = subprocess.run(
+        ["python3", str(python_path)],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, f"Failed to run {python_path}:\n{result.stderr}"

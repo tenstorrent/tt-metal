@@ -136,7 +136,7 @@ bool validate_optional_output_tensors_for_early_exit(
     return output_tensor_0.logical_shape() == original_lshape && output_tensor_1.logical_shape() == original_lshape;
 }
 
-void convert_tensor_dtype(Tensor& tensor, const DataType& target_dtype, IDevice* device) {
+void convert_tensor_dtype(Tensor& tensor, const DataType& target_dtype, MeshDevice* device) {
     if (tensor.dtype() == target_dtype) {
         // No need to change the dtype
         return;

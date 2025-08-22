@@ -16,6 +16,7 @@
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/allocator.hpp>
 
 namespace ttnn::graph {
 
@@ -27,6 +28,9 @@ namespace detail {
 
 // most ops just return a tensor
 inline Tensor extract_output_tensor(const Tensor& result) { return result; }
+
+// multi-output ops like sort
+inline Tensor extract_output_tensor(const std::vector<Tensor>& result) { return result[0]; }
 
 // conv2d output
 template <typename... Args1, typename... Args2>
@@ -71,7 +75,7 @@ struct ConstraintQueryResponse {
  *         - On failure: ExecutionStatus::Error, zeroed resource usage, and an error message.
  */
 template <typename Op, typename... Args>
-auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
+auto query_op_constraints(Op op, tt::tt_metal::distributed::MeshDevice* device, Args&&... args) {
     nlohmann::json op_trace;
     Tensor output;
     // outer graph capture is to avoid dispatching/allocating dummy input tensors

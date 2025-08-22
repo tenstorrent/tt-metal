@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -53,6 +53,7 @@ def get_batch(data_loader, res):
         )
 
         img = transform(img)
+        img = img.unsqueeze(0)  # Add batch dimension: (3, H, W) -> (1, 3, H, W)
 
         if images is None:
             images = img

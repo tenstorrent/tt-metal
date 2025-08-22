@@ -80,6 +80,7 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
     TT_FATAL(num_tiles % block_size_tiles == 0, "Error");
 
     std::vector<CoreCoord> cores;
+    cores.reserve(num_cores);
     for (uint32_t i = 0; i < num_cores; i++) {
         cores.push_back({i, 0});
     }
@@ -110,7 +111,7 @@ void create_and_run_row_pipeline(tt_metal::IDevice* device, const PipelineRowCon
         tt_metal::CircularBufferConfig cb_config =
             tt_metal::CircularBufferConfig(cb_size_bytes, {{cb_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_index, single_tile_size);
-        auto cb = tt_metal::CreateCircularBuffer(program, core, cb_config);
+        tt_metal::CreateCircularBuffer(program, core, cb_config);
     }
 
     uint32_t src_address;
@@ -266,7 +267,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
         GTEST_SKIP();
     }
 
-    unit_tests::create_pipeline::PipelineRowConfig test_config;
+    unit_tests::create_pipeline::PipelineRowConfig test_config{};
 
     // // saturate DRAM
     test_config.num_cores = this->device_->compute_with_storage_grid_size().x - 1;

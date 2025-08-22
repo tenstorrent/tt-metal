@@ -27,7 +27,7 @@
 
 #include "control_plane.hpp"
 #include "device_pool.hpp"
-#include "fabric_host_interface.h"
+#include "hostdevcommon/fabric_common.h"
 #include "fabric_types.hpp"
 #include "fmt/base.h"
 #include "fmt/ranges.h"
@@ -83,30 +83,31 @@ inline std::string get_soc_description_file(
 }  // namespace
 namespace tt {
 
-ClusterType Cluster::get_cluster_type_from_cluster_desc(
+tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
     const llrt::RunTimeOptions& rtoptions, const tt_ClusterDescriptor* cluster_desc) {
     if (rtoptions.get_simulator_enabled()) {
         tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
         auto arch = init.get_arch_name();
         if (arch == tt::ARCH::WORMHOLE_B0) {
-            return ClusterType::SIMULATOR_WORMHOLE_B0;
+            return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
         } else if (arch == tt::ARCH::BLACKHOLE) {
-            return ClusterType::SIMULATOR_BLACKHOLE;
+            return tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE;
         }
-        return ClusterType::INVALID;
+        return tt::tt_metal::ClusterType::INVALID;
     }
     if (cluster_desc == nullptr) {
         return Cluster::get_cluster_type_from_cluster_desc(
             rtoptions, tt::umd::Cluster::create_cluster_descriptor().get());
     }
-    ClusterType cluster_type = ClusterType::INVALID;
+    tt::tt_metal::ClusterType cluster_type = tt::tt_metal::ClusterType::INVALID;
     for (const auto& chip_id : cluster_desc->get_all_chips()) {
         if (cluster_desc->get_board_type(chip_id) == BoardType::GALAXY) {
-            cluster_type = ClusterType::TG;
+            cluster_type = tt::tt_metal::ClusterType::TG;
             break;
         }
     }
-    TT_ASSERT(cluster_desc->get_all_chips().size() > 0, "No chips detected in the cluster");
+    const auto num_chips = cluster_desc->get_all_chips().size();
+    TT_ASSERT(num_chips > 0, "No chips detected in the cluster");
     const auto board_type = cluster_desc->get_board_type(*cluster_desc->get_all_chips().begin());
     bool all_same_board = true;
     for (const auto& chip_id : cluster_desc->get_all_chips()) {
@@ -118,9 +119,8 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
 
     if (all_same_board) {
         if (board_type == BoardType::N300) {
-            const auto num_chips = cluster_desc->get_all_chips().size();
             if (num_chips == 8) {
-                cluster_type = ClusterType::T3K;
+                cluster_type = tt::tt_metal::ClusterType::T3K;
                 // Basic check to determine if the cluster is a T3K cluster
                 // MMIO chips should have 3 connections to other chips, remote chips should have 2 connections to other
                 // chips
@@ -131,18 +131,18 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
                     }
                     if (cluster_desc->is_chip_mmio_capable(chip_id)) {
                         if (remote_chips.size() != 3) {
-                            cluster_type = ClusterType::N300;
+                            cluster_type = tt::tt_metal::ClusterType::N300;
                             break;
                         }
                     } else {
                         if (remote_chips.size() != 2) {
-                            cluster_type = ClusterType::N300;
+                            cluster_type = tt::tt_metal::ClusterType::N300;
                             break;
                         }
                     }
                 }
             } else if (num_chips == 4) {
-                cluster_type = ClusterType::N300_2x2;
+                cluster_type = tt::tt_metal::ClusterType::N300_2x2;
 
                 // Expect every chip to have exactly two remote connections
                 for (const auto& [chip_id, connections] : cluster_desc->get_ethernet_connections()) {
@@ -151,39 +151,46 @@ ClusterType Cluster::get_cluster_type_from_cluster_desc(
                         remote_chips.insert(std::get<0>(remote_chip_and_channel));
                     }
                     if (remote_chips.size() != 2) {
-                        cluster_type = ClusterType::N300;
+                        cluster_type = tt::tt_metal::ClusterType::N300;
                         break;
                     }
                 }
             } else {
-                cluster_type = ClusterType::N300;
+                cluster_type = tt::tt_metal::ClusterType::N300;
             }
         } else if (board_type == BoardType::N150) {
-            cluster_type = ClusterType::N150;
+            cluster_type = tt::tt_metal::ClusterType::N150;
         } else if (board_type == BoardType::P100) {
-            if (cluster_desc->get_all_chips().size() == 1) {
-                cluster_type = ClusterType::P100;
-            }
+            TT_FATAL(num_chips == 1, "Unknown cluster type for P100 board with {}", num_chips);
+            cluster_type = tt::tt_metal::ClusterType::P100;
         } else if (board_type == BoardType::P150) {
-            if (cluster_desc->get_all_chips().size() == 1) {
-                cluster_type = ClusterType::P150;
-            } else if (cluster_desc->get_all_chips().size() == 2) {
-                cluster_type = ClusterType::P150_X2;
-            } else if (cluster_desc->get_all_chips().size() == 4) {
-                cluster_type = ClusterType::P150_X4;
+            if (num_chips == 1) {
+                cluster_type = tt::tt_metal::ClusterType::P150;
+            } else if (num_chips == 2) {
+                cluster_type = tt::tt_metal::ClusterType::P150_X2;
+            } else if (num_chips == 4) {
+                cluster_type = tt::tt_metal::ClusterType::P150_X4;
+            } else if (num_chips == 8) {
+                cluster_type = tt::tt_metal::ClusterType::P150_X8;
+            } else {
+                TT_THROW("Unknown cluster type for P150 board with {} chips", num_chips);
             }
+        } else if (board_type == BoardType::P300) {
+            TT_FATAL(num_chips == 2, "Unknown cluster type for P300 board with {}", num_chips);
+            cluster_type = tt::tt_metal::ClusterType::P300;
         } else if (board_type == BoardType::UBB) {
-            cluster_type = ClusterType::GALAXY;
+            cluster_type = tt::tt_metal::ClusterType::GALAXY;
         }
     }
     return cluster_type;
 }
 
-bool Cluster::is_base_routing_fw_enabled(ClusterType cluster_type) {
+bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type) {
     // Ideally we should get the routing enabled/disabled from a config in L1
     return (
-        cluster_type == ClusterType::INVALID || cluster_type == ClusterType::N150 ||
-        cluster_type == ClusterType::N300 || cluster_type == ClusterType::T3K || cluster_type == ClusterType::TG);
+        cluster_type == tt::tt_metal::ClusterType::INVALID || cluster_type == tt::tt_metal::ClusterType::N150 ||
+        cluster_type == tt::tt_metal::ClusterType::N300 || cluster_type == tt::tt_metal::ClusterType::T3K ||
+        cluster_type == tt::tt_metal::ClusterType::TG);
 }
 
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rtoptions_(rtoptions), hal_(hal) {
@@ -197,11 +204,9 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rt
 
     this->initialize_device_drivers();
 
-    rtoptions.set_fd_fabric(true);
-
     this->disable_ethernet_cores_with_retrain();
 
-    this->reserve_ethernet_cores_for_tunneling();
+    this->initialize_ethernet_cores_router_mode();
 
     this->initialize_ethernet_sockets();
 
@@ -222,10 +227,9 @@ void Cluster::detect_arch_and_target() {
 }
 
 // TODO: remove this when we deprecate TG
-bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == ClusterType::TG; }
+bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == tt::tt_metal::ClusterType::TG; }
 
-ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
-
+tt::tt_metal::ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
 BoardType Cluster::get_board_type(chip_id_t chip_id) const {
   return this->cluster_desc_->get_board_type(chip_id);
@@ -244,29 +248,6 @@ void Cluster::generate_cluster_descriptor() {
         TT_FATAL(
             this->cluster_desc_->get_noc_translation_table_en().at(0),
             "Running Metal on Blackhole requires FW >= 80.18.0.0");
-    }
-
-    uint32_t total_num_hugepages = tt::umd::get_num_hugepages();
-    if (this->cluster_type_ == ClusterType::TG) {
-        // TODO: don't think this check is correct, we want to have total num hugepages == num chips even for Galaxy
-        TT_FATAL(
-            this->arch_ == tt::ARCH::BLACKHOLE or
-                total_num_hugepages >= this->driver_->get_target_device_ids().size() / 4,
-            "Machine setup error: Insufficient number of hugepages available, expected >= {} for {} devices but have "
-            "{}. "
-            "Increase number of hugepages!",
-            this->driver_->get_target_device_ids().size() / 4,
-            this->driver_->get_target_device_ids().size(),
-            total_num_hugepages);
-    } else {
-        // TODO (abhullar): ignore hugepage set up for BH bringup
-        TT_FATAL(
-            this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->driver_->get_target_device_ids().size(),
-            "Machine setup error: Insufficient number of hugepages available, expected one per device ({}) but have "
-            "{}. "
-            "Increase number of hugepages!",
-            this->driver_->get_target_device_ids().size(),
-            total_num_hugepages);
     }
 }
 
@@ -440,7 +421,7 @@ chip_id_t Cluster::get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_co
 }
 
 size_t Cluster::number_of_user_devices() const {
-    if (this->cluster_type_ == ClusterType::TG) {
+    if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
         const auto& chips = this->driver_->get_target_device_ids();
         return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
             return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
@@ -451,7 +432,7 @@ size_t Cluster::number_of_user_devices() const {
 }
 
 std::set<chip_id_t> Cluster::user_exposed_chip_ids() const {
-    if (this->cluster_type_ == ClusterType::TG) {
+    if (this->cluster_type_ == tt::tt_metal::ClusterType::TG) {
         std::set<chip_id_t> galaxy_boards;
         const auto& chips = this->driver_->get_target_device_ids();
         for (const auto& id : chips) {
@@ -579,7 +560,7 @@ tt_cxy_pair Cluster::get_virtual_coordinate_from_logical_coordinates(tt_cxy_pair
 CoreCoord Cluster::get_virtual_coordinate_from_physical_coordinates(chip_id_t chip_id, CoreCoord physical_coord) const {
     auto& soc_desc = this->get_soc_desc(chip_id);
     tt::umd::CoreCoord translated_coord =
-        soc_desc.translate_coord_to(physical_coord, CoordSystem::PHYSICAL, CoordSystem::TRANSLATED);
+        soc_desc.translate_coord_to(physical_coord, CoordSystem::NOC0, CoordSystem::TRANSLATED);
     return {translated_coord.x, translated_coord.y};
 }
 
@@ -697,7 +678,6 @@ void Cluster::write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair 
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
     if (this->supports_dma_operations(chip_id, sz_in_bytes)) {
-        // log_info(tt::LogMetal, "Writing to device {} using DMA", core.chip);
         this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
@@ -726,10 +706,33 @@ void Cluster::read_core(void* mem_ptr, uint32_t size_in_bytes, tt_cxy_pair core,
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
     if (this->supports_dma_operations(chip_id, size_in_bytes)) {
-        // log_info(tt::LogMetal, "Reading from device {} using DMA", core.chip);
         this->driver_->dma_read_from_device(mem_ptr, size_in_bytes, core.chip, core_coord, addr);
     } else {
         this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes);
+    }
+}
+
+void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const {
+    const chip_id_t chip_id = core.chip;
+    const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
+
+    if (rtoptions_.get_watcher_enabled()) {
+        tt::watcher_sanitize_host_noc_write(
+            soc_desc,
+            this->virtual_worker_cores_.at(chip_id),
+            this->virtual_eth_cores_.at(chip_id),
+            this->virtual_pcie_cores_.at(chip_id),
+            this->virtual_dram_cores_.at(chip_id),
+            {core.x, core.y},
+            addr,
+            sz_in_bytes);
+    }
+
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+
+    if (this->cluster_desc_->is_chip_remote(chip_id)) {
+        this->driver_->wait_for_non_mmio_flush(chip_id);
     }
 }
 
@@ -1034,8 +1037,7 @@ void Cluster::disable_ethernet_cores_with_retrain() {
     }
 }
 
-void Cluster::reserve_ethernet_cores_for_tunneling() {
-    const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
+void Cluster::initialize_ethernet_cores_router_mode() {
     for (const auto& [assoc_mmio_device, devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
         for (const auto &chip_id : devices) {
             if (this->device_eth_routing_info_.find(chip_id) == this->device_eth_routing_info_.end()) {
@@ -1044,63 +1046,14 @@ void Cluster::reserve_ethernet_cores_for_tunneling() {
         }
         std::map<std::tuple<chip_id_t, chip_id_t>, bool> reserved_chip_connections = {};
         for (const auto &chip_id : devices) {
-            if (!TT_METAL_SLOW_DISPATCH_MODE && arch_ == ARCH::WORMHOLE_B0 && !rtoptions_.get_fd_fabric()) {
-                for (const auto &[connected_chip_id, active_eth_cores] :
-                     this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
-                    for (const auto &eth_core : active_eth_cores) {
-                        const auto connected_eth_core =
-                            std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));
-                        if (this->device_eth_routing_info_.at(chip_id).find(eth_core) ==
-                            this->device_eth_routing_info_.at(chip_id).end()) {
-                            if (devices.find(connected_chip_id) != devices.end() &&
-                                reserved_chip_connections.find(std::make_tuple(chip_id, connected_chip_id)) ==
-                                    reserved_chip_connections.end() &&
-                                this->cluster_desc_->get_ethernet_link_distance(chip_id, assoc_mmio_device) !=
-                                    this->cluster_desc_->get_ethernet_link_distance(
-                                        connected_chip_id, assoc_mmio_device)) {
-                                // only setup fd tunneling for devices grouped with same mmio device and if no bi dir
-                                // tunnel found between the two chips and if link distance between both chips to mmio
-                                // chip is not the same
-                                log_debug(
-                                    LogDevice,
-                                    "Reserving {} for tunneling",
-                                    tt_cxy_pair(chip_id, ethernet_core_from_logical_core(chip_id, eth_core)).str());
-                                log_debug(
-                                    LogDevice,
-                                    "Reserving {} for tunneling",
-                                    tt_cxy_pair(
-                                        connected_chip_id,
-                                        ethernet_core_from_logical_core(connected_chip_id, connected_eth_core))
-                                        .str());
-                                this->device_eth_routing_info_.at(chip_id).insert(
-                                    {eth_core, EthRouterMode::BI_DIR_TUNNELING});
-                                this->device_eth_routing_info_.at(connected_chip_id)
-                                    .insert({connected_eth_core, EthRouterMode::BI_DIR_TUNNELING});
-                                reserved_chip_connections.insert({std::make_tuple(chip_id, connected_chip_id), true});
-                                reserved_chip_connections.insert({std::make_tuple(connected_chip_id, chip_id), true});
-                            } else {
-                                this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
-                            }
-                        }
-                    }
-                }
-                // We want to also add the eth cores that are connected to other chips possibly outside the opened
-                // cluster.
-                const auto& soc_desc = get_soc_desc(chip_id);
-                for (const auto& eth_channel : cluster_desc_->get_active_eth_channels(chip_id)) {
-                    auto eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
-                    if (this->device_eth_routing_info_.at(chip_id).find(eth_core) ==
-                        this->device_eth_routing_info_.at(chip_id).end()) {
-                        this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
-                    }
-                }
-            } else {
-                // Slow dispatch mode
-                for (const auto &[connected_chip_id, active_eth_cores] :
-                     this->get_ethernet_cores_grouped_by_connected_chips(chip_id)) {
-                    for (const auto &eth_core : active_eth_cores) {
-                        this->device_eth_routing_info_.at(chip_id).insert({eth_core, EthRouterMode::IDLE});
-                    }
+            // Mark all remaining ethernet cores as idle to be used by fabric
+            const auto& soc_desc = get_soc_desc(chip_id);
+            for (const auto& eth_channel : cluster_desc_->get_active_eth_channels(chip_id)) {
+                auto eth_core = soc_desc.get_eth_core_for_channel(eth_channel, CoordSystem::LOGICAL);
+                // Chip ID is guaranteed to be present in device_eth_routing_info_, since it was populated above
+                auto& routing_info = this->device_eth_routing_info_[chip_id];
+                if (routing_info.find(eth_core) == routing_info.end()) {
+                    routing_info.insert({eth_core, EthRouterMode::IDLE});
                 }
             }
         }
@@ -1111,10 +1064,8 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
     std::unordered_set<chip_id_t> device_ids;
     const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
     for (const auto &[other_chip_id, eth_cores] : connected_chips) {
-        for (const auto &eth_core : eth_cores) {
-            if (this->device_eth_routing_info_.at(chip_id).at(eth_core) != EthRouterMode::BI_DIR_TUNNELING) {
-                device_ids.insert(other_chip_id);
-            }
+        for ([[maybe_unused]] const auto& eth_core : eth_cores) {
+            device_ids.insert(other_chip_id);
         }
     }
     return device_ids;
@@ -1171,16 +1122,14 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
                     break;
                 }
 
-                if (rtoptions_.get_fd_fabric()) {
-                    // Last link reserved for dispatch
-                    // Only need fabric routers in the same tunnel
-                    // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
-                    const auto is_mmio_device = [&](int id) { return cluster_desc_->is_chip_mmio_capable(id); };
-                    const auto is_last_link = [&]() { return num_reserved_cores == num_cores_to_reserve - 1; };
-                    if (is_last_link() && is_mmio_device(chip_id) && is_mmio_device(connected_chip_id)) {
-                        num_reserved_cores++;
-                        break;
-                    }
+                // Last link reserved for dispatch
+                // Only need fabric routers in the same tunnel
+                // TODO: https://github.com/tenstorrent/tt-metal/issues/24413
+                const auto is_mmio_device = [&](int id) { return cluster_desc_->is_chip_mmio_capable(id); };
+                const auto is_last_link = [&]() { return num_reserved_cores == num_cores_to_reserve - 1; };
+                if (is_last_link() && is_mmio_device(chip_id) && is_mmio_device(connected_chip_id)) {
+                    num_reserved_cores++;
+                    break;
                 }
 
                 const auto eth_core = cores[i];
@@ -1338,39 +1287,6 @@ CoreCoord Cluster::get_virtual_eth_core_from_channel(chip_id_t chip_id, int chan
         chip_id, {logical_coord.x, logical_coord.y}, CoreType::ETH);
 }
 
-tt_cxy_pair Cluster::get_eth_core_for_dispatch_core(
-    tt_cxy_pair logical_dispatch_core, EthRouterMode mode, chip_id_t connected_chip_id) const {
-    const auto &local_chip_id = logical_dispatch_core.chip;
-    for (const auto &[eth_core, router_mode] : this->device_eth_routing_info_.at(local_chip_id)) {
-        // Check for connected chip id since one chip can be bi directional tunneling to multiple chips
-        const auto connected_tunnel_chip_id =
-            std::get<0>(this->get_connected_ethernet_core(std::make_tuple(local_chip_id, eth_core)));
-        if (router_mode == mode and connected_tunnel_chip_id == connected_chip_id) {
-            return tt_cxy_pair(local_chip_id, eth_core);
-        }
-    }
-    TT_ASSERT(false, "Cluster does not contain requested eth routing core");
-    return {};
-}
-
-std::tuple<tt_cxy_pair, tt_cxy_pair> Cluster::get_eth_tunnel_core(
-    chip_id_t upstream_chip_id, chip_id_t downstream_chip_id, EthRouterMode mode) const {
-    for (const auto &[eth_core, router_mode] : this->device_eth_routing_info_.at(downstream_chip_id)) {
-        if (router_mode != mode) {
-            // Skip cores that are not in the requested mode. We might not even have info for some cores going outside
-            // of the cluster.
-            continue;
-        }
-      // Check for connected chip id since one chip can be bi directional tunneling to multiple chips
-        const auto [tunnel_chip_id, tunnel_eth_core] = this->get_connected_ethernet_core(std::make_tuple(downstream_chip_id, eth_core));
-        if (tunnel_chip_id == upstream_chip_id) {
-            return std::make_tuple(tt_cxy_pair(tunnel_chip_id, tunnel_eth_core), tt_cxy_pair(downstream_chip_id, eth_core));
-        }
-    }
-    TT_ASSERT(false, "Cluster does not contain requested eth routing core");
-    return {};
-}
-
 // TODO: ALLAN Can change to write one bit
 void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_routing, const std::vector<chip_id_t> &target_mmio_devices) const {
     log_debug(tt::LogDevice, "Set internal routing bit {}", enable_internal_routing);
@@ -1431,39 +1347,6 @@ void Cluster::set_internal_routing_info_for_ethernet_cores(bool enable_internal_
         }
     }
 }
-
-uint32_t Cluster::get_mmio_device_max_tunnel_depth(chip_id_t mmio_device) const {
-    // Assume that tunnel depth for multiple tunnels are the same
-    TT_ASSERT(
-        (this->get_associated_mmio_device(mmio_device) == mmio_device), "Called mmio device api on non-mmio device");
-    uint32_t depth = 0;
-    for (const auto& [assoc_mmio_device, devices] : this->cluster_desc_->get_chips_grouped_by_closest_mmio()) {
-        for (const auto &chip_id : devices) {
-            if (chip_id == assoc_mmio_device) {
-                continue;
-            }
-            depth =
-                std::max(depth, uint32_t(this->cluster_desc_->get_ethernet_link_distance(chip_id, assoc_mmio_device)));
-        }
-    }
-    return depth;
-}
-
-uint32_t Cluster::get_mmio_device_tunnel_count(chip_id_t mmio_device) const {
-    TT_ASSERT(
-        (this->get_associated_mmio_device(mmio_device) == mmio_device), "Called mmio device api on non-mmio device");
-    const auto &chip_eth_core_modes = this->device_eth_routing_info_.at(mmio_device);
-    uint32_t tunnel_count = std::count_if(chip_eth_core_modes.begin(), chip_eth_core_modes.end(), [](const auto &e) {
-        return e.second == EthRouterMode::BI_DIR_TUNNELING;
-    });
-    return tunnel_count;
-}
-
-uint32_t Cluster::get_device_tunnel_depth(chip_id_t chip_id) const {
-    chip_id_t mmio_device_id = this->get_associated_mmio_device(chip_id);
-    return (mmio_device_id == chip_id) ? 0 : this->cluster_desc_->get_ethernet_link_distance(chip_id, mmio_device_id);
-}
-
 
 std::uint32_t Cluster::get_ubb_asic_id(chip_id_t physical_chip_id) const {
     auto unique_chip_id = this->get_unique_chip_ids().at(physical_chip_id);

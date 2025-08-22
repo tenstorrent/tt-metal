@@ -98,19 +98,15 @@ void issue_trace_commands(
         dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
     }
 
-    go_msg_t reset_launch_message_read_ptr_go_signal;
+    go_msg_t reset_launch_message_read_ptr_go_signal{};
     reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
     reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)dispatch_core.x;
     reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)dispatch_core.y;
 
     for (const auto& [id, desc] : dispatch_md.trace_worker_descriptors) {
-        const auto& noc_data_start_idx = device->noc_data_start_index(
-            id,
-            desc.num_traced_programs_needing_go_signal_multicast,
-            desc.num_traced_programs_needing_go_signal_unicast);
+        const auto& noc_data_start_idx =
+            device->noc_data_start_index(id, desc.num_traced_programs_needing_go_signal_unicast);
 
-        const auto& num_noc_mcast_txns =
-            desc.num_traced_programs_needing_go_signal_multicast ? device->num_noc_mcast_txns(id) : 0;
         const auto& num_noc_unicast_txns =
             desc.num_traced_programs_needing_go_signal_unicast ? device->num_virtual_eth_cores(id) : 0;
         auto index = *id;
@@ -122,7 +118,9 @@ void issue_trace_commands(
             expected_num_workers_completed[index],
             *reinterpret_cast<uint32_t*>(&reset_launch_message_read_ptr_go_signal),
             MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(index),
-            num_noc_mcast_txns,
+            desc.num_traced_programs_needing_go_signal_multicast && device->has_noc_mcast_txns(id)
+                ? index
+                : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
             num_noc_unicast_txns,
             noc_data_start_idx,
             dispatcher_for_go_signal);

@@ -4,11 +4,12 @@
 
 #include "reshard_op.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 #include "reshard_program_factory.hpp"
 #include "nd_reshard_program_factory.hpp"
@@ -50,6 +51,7 @@ bool is_valid_for_legacy_reshard(const Tensor& input_tensor, const MemoryConfig&
                    out_mem_config.shard_spec().value().shape[1];
         }
     }
+    return true;
 }
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 
@@ -71,8 +73,8 @@ void ReshardDeviceOperation::validate_with_output_tensors(
         has_output_tensor ? output_tensors[0].value().memory_config() : this->output_mem_config;
     TT_FATAL(out_mem_config.is_sharded(), "output must be sharded");
 
-    if (!CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, out_mem_config)) {
-        auto output_tensor_spec = compute_output_specs(input_tensors, output_tensors).front();
+    auto output_tensor_spec = compute_output_specs(input_tensors, output_tensors).front();
+    if (!CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor_spec.memory_config())) {
         auto out_distribution_spec = output_tensor_spec.compute_buffer_sharding_args().buffer_distribution_spec();
         auto input_distribution_spec = input_tensor.buffer()->buffer_distribution_spec();
 
@@ -95,8 +97,8 @@ void ReshardDeviceOperation::validate_with_output_tensors(
         TT_FATAL(
             input_tensor.layout() == output_tensor_spec.tensor_layout().get_layout(),
             "Input and output tensors must have the same layout. Input layout: {}, Output layout: {}",
-            magic_enum::enum_name(input_tensor.layout()),
-            magic_enum::enum_name(output_tensor_spec.tensor_layout().get_layout()));
+            enchantum::to_string(input_tensor.layout()),
+            enchantum::to_string(output_tensor_spec.tensor_layout().get_layout()));
     }
 }
 
@@ -117,10 +119,24 @@ std::vector<ttnn::TensorSpec> ReshardDeviceOperation::compute_output_specs(
             input_tensor.padded_shape()))};
 }
 
+tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>>
+ReshardDeviceOperation::create_op_performance_model(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+    std::vector<Tensor>& output_tensors) const {
+    const auto& input_tensor = input_tensors.at(0);
+    const auto& output_tensor = output_tensors.at(0);
+    int ideal_dev_clock_cycles = common_tm_bw_model(input_tensor, output_tensor);
+    tt::tt_metal::operation::OpPerformanceModelGeneral<std::vector<Tensor>> result(
+        input_tensors, output_tensors, ideal_dev_clock_cycles);
+    return result;
+}
+
 operation::ProgramWithCallbacks ReshardDeviceOperation::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
+
     if (CMAKE_UNIQUE_NAMESPACE::is_valid_for_legacy_reshard(input_tensor, output_tensor.memory_config())) {
         return detail::reshard_multi_core(input_tensor, output_tensor);
     } else {

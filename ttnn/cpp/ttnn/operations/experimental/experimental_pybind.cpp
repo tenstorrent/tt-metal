@@ -21,11 +21,13 @@
 #include "ttnn/operations/experimental/transformer/create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads/nlp_concat_heads_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_concat_heads_decode/nlp_concat_heads_decode_pybind.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_concat_heads_boltz/nlp_concat_heads_boltz_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/nlp_create_qkv_heads_decode_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_falcon7b/nlp_create_qkv_heads_falcon7b_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_vit/nlp_create_qkv_heads_vit_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_segformer/nlp_create_qkv_heads_segformer_pybind.hpp"
+#include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_boltz/nlp_create_qkv_heads_boltz_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_kv_cache_load_slice/nlp_kv_cache_load_slice_pybind.hpp"
 #include "ttnn/operations/experimental/paged_cache/paged_cache_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_pybind.hpp"
@@ -43,8 +45,6 @@
 #include "ttnn/operations/experimental/reshape/view_pybind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_pybind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_pybind.hpp"
-#include "ttnn/operations/experimental/scatter/scatter_pybind.hpp"
-#include "ttnn/operations/experimental/scatter/tosa_scatter_pybind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_pybind.hpp"
 #include "ttnn/operations/experimental/where/where_pybind.hpp"
 
@@ -63,10 +63,12 @@ void py_module(py::module& module) {
     transformer::detail::bind_create_qkv_heads_from_separate_tensors(module);
     transformer::detail::bind_nlp_concat_heads(module);
     transformer::detail::bind_nlp_concat_heads_decode(module);
+    transformer::detail::bind_nlp_concat_heads_boltz(module);
     transformer::detail::bind_nlp_create_qkv_heads_decode(module);
     transformer::detail::bind_nlp_create_qkv_heads_falcon7b(module);
     transformer::detail::bind_nlp_create_qkv_heads_vit(module);
     transformer::detail::bind_nlp_create_qkv_heads_segformer(module);
+    transformer::detail::bind_nlp_create_qkv_heads_boltz(module);
     transformer::detail::bind_nlp_kv_cache_load_slice(module);
     transformer::detail::py_bind_all_reduce_create_qkv_heads(module);
 
@@ -100,9 +102,6 @@ void py_module(py::module& module) {
     reshape::detail::py_bind_view(module);
 
     gelu_backward::detail::bind_experimental_gelu_backward_operation(module);
-
-    scatter::detail::bind_scatter_operation(module);
-    tosa_scatter::detail::bind_tosa_scatter_operation(module);
 
     // CCL ops
     auto m_experimental_ccl =

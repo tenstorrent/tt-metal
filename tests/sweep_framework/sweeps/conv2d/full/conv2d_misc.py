@@ -39,7 +39,6 @@ TIMEOUT = 30
 # has_bias
 # enable_act_double_buffer
 # enable_split_reader
-# enable_subblock_padding
 # groups
 # override_sharding_config
 # core_grid
@@ -71,7 +70,6 @@ TIMEOUT = 30
 # has_bias
 # enable_act_double_buffer
 # enable_split_reader
-# enable_subblock_padding
 # enable_auto_formatting
 # activations_dtype
 # weights_dtype
@@ -107,7 +105,6 @@ parameters = {
         "has_bias": [True],
         "enable_act_double_buffer": [False],
         "enable_split_reader": [False],
-        "enable_subblock_padding": [False],
         # Parameters-to-check starts
         "activations_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "weights_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
@@ -145,7 +142,6 @@ parameters = {
         "has_bias": [True],
         "enable_act_double_buffer": [False],
         "enable_split_reader": [False],
-        "enable_subblock_padding": [False],
         "activations_dtype": [ttnn.bfloat16],
         "weights_dtype": [ttnn.bfloat16],
         "math_fidelity": [ttnn.MathFidelity.HiFi4],
@@ -188,7 +184,6 @@ parameters = {
         "has_bias": [True],
         "enable_act_double_buffer": [True, False],
         "enable_split_reader": [True, False],
-        "enable_subblock_padding": [True, False],
         "activations_dtype": [ttnn.bfloat16],
         "weights_dtype": [ttnn.bfloat16],
         "math_fidelity": [ttnn.MathFidelity.HiFi4],
@@ -221,7 +216,6 @@ def run(
     has_bias,
     enable_act_double_buffer,
     enable_split_reader,
-    enable_subblock_padding,
     activations_dtype,
     weights_dtype,
     math_fidelity,
@@ -245,7 +239,6 @@ def run(
         has_bias,
         enable_act_double_buffer,
         enable_split_reader,
-        enable_subblock_padding,
         activations_dtype,
         weights_dtype,
         math_fidelity,

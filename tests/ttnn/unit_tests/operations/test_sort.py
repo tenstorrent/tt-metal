@@ -98,7 +98,8 @@ def test_sort_prealocated_output(shape, dim, descending, device):
         ([1, 1, 1, 8192 * TILE_WIDTH], -1, False),
         ([1, 1, 32, 96 * TILE_WIDTH], -1, False),
         ([1, 1, 32, 256 * TILE_WIDTH], -1, False),
-        ([1, 4748 * TILE_WIDTH], -1, False),
+        ([1, 151936], -1, False),
+        ([1, 128256], -1, False),
     ],
 )
 def test_sort_long_tensor(shape, dim, descending, device):

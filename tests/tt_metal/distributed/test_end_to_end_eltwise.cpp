@@ -51,13 +51,13 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
     CircularBufferConfig cb_src0_config =
         CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = CreateCircularBuffer(*program, cores_for_program, cb_src0_config);
+    CreateCircularBuffer(*program, cores_for_program, cb_src0_config);
 
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     CircularBufferConfig cb_src1_config =
         CircularBufferConfig(num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src1_cb_index, single_tile_size);
-    auto cb_src1 = CreateCircularBuffer(*program, cores_for_program, cb_src1_config);
+    CreateCircularBuffer(*program, cores_for_program, cb_src1_config);
 
     uint32_t output_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 2;
@@ -65,7 +65,7 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
         CircularBufferConfig(
             num_output_tiles * single_tile_size, {{output_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(output_cb_index, single_tile_size);
-    auto cb_output = CreateCircularBuffer(*program, cores_for_program, cb_output_config);
+    CreateCircularBuffer(*program, cores_for_program, cb_output_config);
 
     auto binary_reader_kernel = CreateKernel(
         *program,
@@ -83,8 +83,6 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
 
     std::vector<uint32_t> compute_kernel_args = {};
 
-    bool fp32_dest_acc_en = false;
-    bool math_approx_mode = false;
     std::map<std::string, std::string> binary_defines = {
         {"ELTWISE_OP", op_id_to_op_define[eltwise_op_index]},
         {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op_index]}};
@@ -110,14 +108,13 @@ std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
 
 namespace tt::tt_metal::distributed::test {
 
-using MeshEndToEndT3kTests = T3000MeshDeviceFixture;
+using MeshEndToEnd2x4Tests = MeshDevice2x4Fixture;
 using ::testing::Each;
 using ::testing::Eq;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 
-TEST_F(MeshEndToEndT3kTests, ProgramDispatchTest) {
-
+TEST_F(MeshEndToEnd2x4Tests, ProgramDispatchTest) {
     auto& cq = mesh_device_->mesh_command_queue();
 
     uint8_t cq_id = cq.id();
@@ -155,7 +152,7 @@ TEST_F(MeshEndToEndT3kTests, ProgramDispatchTest) {
     Finish(cq);
 }
 
-TEST_F(MeshEndToEndT3kTests, BufferRoundtripTest) {
+TEST_F(MeshEndToEnd2x4Tests, BufferRoundtripTest) {
     using tt::tt_metal::distributed::ShardedBufferConfig;
 
     auto& cq = mesh_device_->mesh_command_queue();
@@ -190,7 +187,7 @@ TEST_F(MeshEndToEndT3kTests, BufferRoundtripTest) {
     EXPECT_THAT(read_back_data, Pointwise(Eq(), src_data));
 }
 
-TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
+TEST_F(MeshEndToEnd2x4Tests, UntracedEltwiseAddTest) {
     constexpr uint8_t kAddOpId = 0;
 
     auto shard_shape = Shape2D{32, 32};
@@ -243,17 +240,17 @@ TEST_F(MeshEndToEndT3kTests, UntracedEltwiseAddTest) {
     }
 }
 
-class MeshEndToEndT3kTraceTests : public MeshDeviceFixtureBase {
+class MeshEndToEnd2x4TraceTests : public MeshDeviceFixtureBase {
 protected:
-    MeshEndToEndT3kTraceTests() :
+    MeshEndToEnd2x4TraceTests() :
         MeshDeviceFixtureBase(Config{
-            .mesh_device_types = {MeshDeviceFixtureBase::MeshDeviceType::T3000},
+            .mesh_shape = MeshShape{2, 4},
             .num_cqs = 2,
             .trace_region_size = 3072,  // 1024 per workload necessary
         }) {}
 };
 
-TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
+TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
     constexpr uint8_t kAddOpId = 0;
 
     auto shard_shape = Shape2D{32, 32};
@@ -317,7 +314,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseAddTest) {
     }
 }
 
-TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
+TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
     constexpr uint8_t kMulOpId = 1;
 
     auto shard_shape = Shape2D{32, 32};
@@ -382,7 +379,7 @@ TEST_F(MeshEndToEndT3kTraceTests, EltwiseMulTest) {
 
 MATCHER_P(Bfloat16Eq, calculated, "") { return arg.to_float() == calculated; }
 
-TEST_F(MeshEndToEndT3kTraceTests, SimulEltwiseTest) {
+TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
 

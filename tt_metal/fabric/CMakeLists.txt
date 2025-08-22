@@ -30,6 +30,7 @@ target_sources(
             hw/inc/edm_fabric/fabric_edm_packet_transmission.hpp
             hw/inc/edm_fabric/fabric_txq_setup.h
             hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
+            hw/inc/fabric_routing_table_interface.h
     PRIVATE
         control_plane.cpp
         routing_table_generator.cpp
@@ -38,7 +39,12 @@ target_sources(
         fabric.cpp
         fabric_host_utils.cpp
         fabric_context.cpp
+        fabric_mux_config.cpp
+        fabric_tensix_builder.cpp
+        compressed_routing_table.cpp
         serialization/intermesh_link_table.cpp
+        erisc_datamover_builder_helper.cpp
+        ccl/ccl_common.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
@@ -68,7 +74,7 @@ target_link_libraries(
         Metalium::Metal::LLRT
         umd::device
         metal_common_libs
-        magic_enum::magic_enum
+        enchantum::enchantum
         fmt::fmt-header-only
         yaml-cpp::yaml-cpp
         Metalium::Metal::Impl

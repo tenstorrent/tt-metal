@@ -128,13 +128,14 @@ void validate_remote_desc(const SocketPeerDescriptor& local_desc, const SocketPe
         "Mismatch in number of chip IDs during handshake.");
 }
 
-Tag generate_descriptor_exchange_tag() {
+Tag generate_descriptor_exchange_tag(Rank peer_rank, std::optional<DistributedContextId> context_id) {
     // Generate a unique id to tag the exchange of socket peer
     // descriptors between the sender and receiver.
     // This is used to ensure that the sender and receiver are
     // exchanging the correct descriptors.
-    static uint32_t exchange_tag = 0;
-    return Tag{++exchange_tag};
+    static std::unordered_map<DistributedContextId, std::unordered_map<Rank, uint32_t>> exchange_tags;
+    DistributedContextId unique_context_id = context_id.value_or(DistributedContext::get_current_world()->id());
+    return Tag{exchange_tags[unique_context_id][peer_rank]++};
 }
 }  // namespace
 
@@ -238,13 +239,12 @@ void write_socket_configs(
 
     if (is_sender) {
         std::vector<sender_socket_md> config_data(config_buffer->size() / sizeof(sender_socket_md), sender_socket_md());
-
         for (const auto& [device_coord, indexed_connections] : grouped_connections) {
             for (const auto& [conn_idx, connection] : indexed_connections) {
                 const auto& [sender_core, recv_core] = connection;
                 TT_FATAL(sender_core.device_coord == device_coord, "Internal Error: Sender cores incorrectly grouped.");
                 auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
-                    mesh_device->get_device_fabric_node_id(sender_core.device_coord),
+                    mesh_device->get_fabric_node_id(sender_core.device_coord),
                     tt_fabric::FabricNodeId(
                         tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
                     fabric_config,
@@ -253,7 +253,9 @@ void write_socket_configs(
 
                 uint32_t idx = core_to_core_id.at(sender_core.core_coord);
                 auto& md = config_data[idx];
+                md.bytes_acked = 0;
                 md.write_ptr = peer_descriptor.data_buffer_address;
+                md.bytes_sent = 0;
                 md.downstream_fifo_addr = peer_descriptor.data_buffer_address;
                 md.downstream_fifo_total_size = config.socket_mem_config.fifo_size;
                 md.downstream_mesh_id = *downstream_mesh_id;
@@ -276,13 +278,15 @@ void write_socket_configs(
                 auto [upstream_mesh_id, upstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
                     tt_fabric::FabricNodeId(
                         tt_fabric::MeshId{peer_descriptor.mesh_ids[conn_idx]}, peer_descriptor.chip_ids[conn_idx]),
-                    mesh_device->get_device_fabric_node_id(recv_core.device_coord),
+                    mesh_device->get_fabric_node_id(recv_core.device_coord),
                     fabric_config,
                     SocketEndpoint::RECEIVER);
                 auto sender_virtual_core = mesh_device->worker_core_from_logical_core(sender_core.core_coord);
 
                 uint32_t idx = core_to_core_id.at(recv_core.core_coord);
                 auto& md = config_data[idx];
+                md.bytes_sent = 0;
+                md.bytes_acked = 0;
                 md.read_ptr = local_descriptor.data_buffer_address;
                 md.fifo_addr = local_descriptor.data_buffer_address;
                 md.fifo_total_size = config.socket_mem_config.fifo_size;
@@ -298,19 +302,22 @@ void write_socket_configs(
     }
 }
 
-SocketPeerDescriptor generate_local_endpoint_descriptor(const MeshSocket& socket_endpoint) {
+SocketPeerDescriptor generate_local_endpoint_descriptor(
+    const MeshSocket& socket_endpoint, std::optional<DistributedContextId> context_id) {
     const auto& config = socket_endpoint.get_config();
     bool is_sender = socket_endpoint.get_socket_endpoint_type() == SocketEndpoint::SENDER;
+
+    auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
     SocketPeerDescriptor local_endpoint_desc = {
         .config = config,
         .config_buffer_address = socket_endpoint.get_config_buffer()->address(),
         .data_buffer_address = is_sender ? 0 : socket_endpoint.get_data_buffer()->address(),
-        .exchange_tag = generate_descriptor_exchange_tag()  // Unique tag for this exchange
+        .exchange_tag = generate_descriptor_exchange_tag(peer_rank, context_id)  // Unique tag for this exchange
     };
     auto device = socket_endpoint.get_config_buffer()->device();
     for (const auto& [sender_core, recv_core] : config.socket_connection_config) {
         const auto& device_coord = is_sender ? sender_core.device_coord : recv_core.device_coord;
-        auto fabric_node_id = device->get_device_fabric_node_id(device_coord);
+        auto fabric_node_id = device->get_fabric_node_id(device_coord);
         local_endpoint_desc.mesh_ids.push_back(*fabric_node_id.mesh_id);
         local_endpoint_desc.chip_ids.push_back(fabric_node_id.chip_id);
     }

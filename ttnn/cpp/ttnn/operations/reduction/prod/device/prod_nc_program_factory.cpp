@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 
 namespace tt {
@@ -31,11 +32,10 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     const auto cb_data_format = datatype_to_dataformat_converter(output.dtype());
-    const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
     const auto& input_shape = input.padded_shape();
 
-    const auto N = input_shape[0];
+    [[maybe_unused]] const auto N = input_shape[0];
     const auto C = input_shape[1];
     const auto Ht = input_shape[2] / TILE_HEIGHT;
     const auto Wt = input_shape[3] / TILE_WIDTH;
@@ -94,10 +94,9 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     bool input_is_dram = input_buffer_type->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_is_dram, static_cast<uint32_t>(dim)};
 
-    tt_metal::Buffer* output_buffer_type = output.buffer();
     constexpr uint32_t cb_id_out = CBIndex::c_3;
-    bool output_is_dram = output_buffer_type->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out, (std::uint32_t)output_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out};
+    tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
     const auto reader_kernel_file =
         "ttnn/cpp/ttnn/operations/reduction/prod/device/kernels/dataflow/reader_prod_nc.cpp";

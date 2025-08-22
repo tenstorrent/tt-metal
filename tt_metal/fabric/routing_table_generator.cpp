@@ -4,7 +4,7 @@
 
 #include "routing_table_generator.hpp"
 
-#include <magic_enum/magic_enum.hpp>
+#include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <limits>
 #include <memory>
@@ -154,7 +154,7 @@ void RoutingTableGenerator::generate_intramesh_routing_table(const IntraMeshConn
 // Shortest Path
 // TODO: Put into mesh algorithms?
 std::vector<std::vector<std::vector<std::pair<chip_id_t, MeshId>>>> RoutingTableGenerator::get_paths_to_all_meshes(
-    MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) {
+    MeshId src, const InterMeshConnectivity& inter_mesh_connectivity) const {
     // TODO: add more tests for this
     std::uint32_t num_meshes = inter_mesh_connectivity.size();
     // avoid vector<bool> specialization
@@ -299,6 +299,7 @@ void RoutingTableGenerator::generate_intermesh_routing_table(
                     //    }
                     //  }
                 }
+                mesh_to_exit_nodes_[dst_mesh_id].push_back(FabricNodeId(MeshId{src_mesh_id}, exit_chip_id));
             }
         }
     }
@@ -315,7 +316,7 @@ void RoutingTableGenerator::print_routing_tables() const {
                  dst_chip_or_mesh_id < this->intra_mesh_table_[mesh_id_val][src_chip_id].size();
                  dst_chip_or_mesh_id++) {
                 auto direction = this->intra_mesh_table_[mesh_id_val][src_chip_id][dst_chip_or_mesh_id];
-                ss << dst_chip_or_mesh_id << "(" << magic_enum::enum_name(direction) << ") ";
+                ss << dst_chip_or_mesh_id << "(" << enchantum::to_string(direction) << ") ";
             }
             ss << std::endl;
         }
@@ -331,11 +332,19 @@ void RoutingTableGenerator::print_routing_tables() const {
                  dst_chip_or_mesh_id < this->inter_mesh_table_[mesh_id_val][src_chip_id].size();
                  dst_chip_or_mesh_id++) {
                 auto direction = this->inter_mesh_table_[mesh_id_val][src_chip_id][dst_chip_or_mesh_id];
-                ss << dst_chip_or_mesh_id << "(" << magic_enum::enum_name(direction) << ") ";
+                ss << dst_chip_or_mesh_id << "(" << enchantum::to_string(direction) << ") ";
             }
             ss << std::endl;
         }
     }
     log_debug(tt::LogFabric, "{}", ss.str());
+}
+
+const std::vector<FabricNodeId>& RoutingTableGenerator::get_exit_nodes_routing_to_mesh(MeshId mesh_id) const {
+    auto it = this->mesh_to_exit_nodes_.find(mesh_id);
+    if (it != this->mesh_to_exit_nodes_.end()) {
+        return it->second;
+    }
+    TT_THROW("No exit nodes found for mesh_id {}", *mesh_id);
 }
 }  // namespace tt::tt_fabric

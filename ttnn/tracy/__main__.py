@@ -71,6 +71,13 @@ def main():
         default=False,
     )
     parser.add_option(
+        "--device-trace-profiler",
+        dest="device_trace_profiler",
+        action="store_true",
+        help="Profile device side trace durations",
+        default=[],
+    )
+    parser.add_option(
         "--push-device-data-mid-run",
         dest="mid_run_device_data",
         action="store_true",
@@ -99,6 +106,9 @@ def main():
         help="List of device analysis types",
         default=[],
     )
+    parser.add_option(
+        "--tracy-tools-folder", dest="binary_folder", action="store", help="Tracy tools folder", type="string"
+    )
 
     if not sys.argv[1:]:
         parser.print_usage()
@@ -117,14 +127,30 @@ def main():
         os.environ["TT_METAL_PROFILER_DIR"] = options.output_folder
         outputFolder = Path(options.output_folder)
 
+    binaryFolder = PROFILER_BIN_DIR
+    if options.binary_folder:
+        logger.info(f"Setting tracy tool folder to {options.binary_folder}")
+        binaryFolder = Path(options.binary_folder)
+        if not binaryFolder.exists():
+            logger.error(f"Tracy tools folder {options.binary_folder} does not exist")
+            sys.exit(1)
+
     if options.processLogsOnly:
-        generate_report(generate_logs_folder(outputFolder), "", None, options.collect_noc_traces)
+        generate_report(generate_logs_folder(outputFolder), binaryFolder, "", None, options.collect_noc_traces)
         sys.exit(0)
 
     if options.port:
         port = options.port
     else:
         port = get_available_port()
+
+    if options.mid_run_device_data:
+        if options.device_trace_profiler:
+            logger.error("Cannot use --push-device-data-mid-run and --device-trace-profiler together")
+            sys.exit(1)
+        if options.profile_dispatch_cores:
+            logger.error("Cannot use --push-device-data-mid-run and --profile-dispatch-cores together")
+            sys.exit(1)
 
     opInfoCacheStr = "TT_METAL_PROFILER_NO_CACHE_OP_INFO"
     if options.opInfoCache:
@@ -142,6 +168,9 @@ def main():
     if options.sync_host_device:
         os.environ["TT_METAL_PROFILER_SYNC"] = "1"
 
+    if options.device_trace_profiler:
+        os.environ["TT_METAL_TRACE_PROFILER"] = "1"
+
     if options.collect_noc_traces:
         os.environ["TT_METAL_DEVICE_PROFILER_NOC_EVENTS"] = "1"
         os.environ["TT_METAL_DEVICE_PROFILER_NOC_EVENTS_RPT_PATH"] = str(
@@ -155,7 +184,7 @@ def main():
                 logger.error("No available port found")
                 sys.exit(1)
             logger.info(f"Using port {port}")
-            doReport, captureProcess = run_report_setup(options.verbose, outputFolder, port)
+            doReport, captureProcess = run_report_setup(options.verbose, outputFolder, binaryFolder, port)
 
         if not doReport:
             code = None
@@ -237,6 +266,7 @@ def main():
                 captureProcess.communicate(timeout=15)
                 generate_report(
                     outputFolder,
+                    binaryFolder,
                     options.name_append,
                     options.child_functions,
                     options.collect_noc_traces,

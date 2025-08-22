@@ -6,8 +6,6 @@
 
 #include "dataflow_api.h"
 
-// #include "debug/dprint.h"
-
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
 
@@ -24,17 +22,19 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* stick = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_addr);
 
     for (uint32_t h = 0; h < H; h++) {
-        noc_async_read_page(h, s0, cb_addr);
-        noc_async_read_barrier();
+        if (src0_is_dram) {
+            noc_async_read_page(h, s0, cb_addr);
+            noc_async_read_barrier();
+        }
         for (uint32_t i = 0; i < W; i++) {
             uint32_t val = stick[i];
             stick[i] = val + 1;
             // DPRINT << "val: " << val << ENDL();
         }
-
-        uint64_t dst_noc_addr = get_noc_addr(h, s0);
-
-        noc_async_write(cb_addr, dst_noc_addr, stick_size);
-        noc_async_write_barrier();
+        if (src0_is_dram) {
+            uint64_t dst_noc_addr = get_noc_addr(h, s0);
+            noc_async_write(cb_addr, dst_noc_addr, stick_size);
+            noc_async_write_barrier();
+        }
     }
 }

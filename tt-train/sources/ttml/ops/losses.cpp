@@ -5,6 +5,7 @@
 #include "losses.hpp"
 
 #include <core/ttnn_all_includes.hpp>
+#include <stdexcept>
 #include <ttnn/types.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -32,6 +33,33 @@ autograd::TensorPtr mse_loss(
 
 autograd::TensorPtr cross_entropy_loss(
     const autograd::TensorPtr& prediction, const autograd::TensorPtr& target, ReduceType reduce) {
+    auto prediction_shape = prediction->get_shape();
+    auto target_shape = target->get_shape();
+
+    if (prediction_shape.rank() != 4U || target_shape.rank() != 2U) {
+        throw std::logic_error(fmt::format(
+            "Cross entropy loss expects: prediction rank = 4, target rank = 2.\n"
+            "Got: prediction shape {}, target shape {}",
+            prediction_shape,
+            target_shape));
+    }
+
+    if (prediction_shape[0] != target_shape[0]) {
+        throw std::logic_error(fmt::format(
+            "Cross entropy loss: batch dimension (dim 0) must match.\n"
+            "Got: prediction shape {}, target shape {}",
+            prediction_shape,
+            target_shape));
+    }
+
+    if (prediction_shape[-2] != target_shape[-1]) {
+        throw std::logic_error(fmt::format(
+            "Cross entropy loss: prediction dim -2 must equal target dim -1.\n"
+            "Got: prediction shape {}, target shape {}",
+            prediction_shape,
+            target_shape));
+    }
+
     auto loss = ttml::metal::cross_entropy_fw(prediction->get_value(), target->get_value());
     auto shape = ttnn::Shape({1, 1, 1, 1});
     autograd::TensorPtr out = autograd::create_tensor(core::from_vector({0.F}, shape, &autograd::ctx().get_device()));

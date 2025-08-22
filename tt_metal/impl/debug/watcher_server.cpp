@@ -82,7 +82,7 @@ private:
     inline static std::chrono::time_point start_time = std::chrono::system_clock::now();
     std::mutex watch_mutex_;  // Guards server internal state + logfile + device watcher mailbox
 
-    std::thread* server_thread_;
+    std::thread* server_thread_{};
 
     FILE* logfile_ = nullptr;
     FILE* kernel_file_ = nullptr;
@@ -145,6 +145,14 @@ void WatcherServer::Impl::detach_devices() {
     }
 
     if (server_thread_) {
+        // Let one full watcher dump happen so we can catch anything between the last scheduled dump and teardown.
+        // Don't do this in test mode, to keep the tests running quickly.
+        if (!MetalContext::instance().rtoptions().get_test_mode_enabled() and !server_killed_due_to_error_) {
+            int target_count = dump_count() + 1;
+            while (dump_count() < target_count) {
+                ;
+            }
+        }
         // Signal the server thread to finish
         stop_server_ = true;
         stop_server_cv_.notify_all();
@@ -484,7 +492,7 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
             } else {
                 data->debug_insert_delays = debug_delays_val_zero;
             }
-            tt::llrt::write_hex_vec_to_core(
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device_id,
                 worker_core,
                 tt::stl::Span<const uint32_t>(watcher_init_val.data(), watcher_init_val.size()),
@@ -502,7 +510,7 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
         } else {
             data->debug_insert_delays = debug_delays_val_zero;
         }
-        tt::llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device_id,
             virtual_core,
             watcher_init_val,

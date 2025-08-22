@@ -31,11 +31,15 @@ using namespace tt::tt_metal;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 const std::string golden_output =
-R"(Test Debug Print: ERISC
+    R"(Test Debug Print: ERISC
 Basic Types:
 101-1.618@0.122559
 e5551234569123456789
 -17-343-44444-5123456789
+Pointer:
+123
+456
+789
 SETPRECISION/FIXED/DEFAULTFLOAT:
 3.1416
 3.14159012
@@ -52,7 +56,6 @@ void RunTest(
     bool active,
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0) {
     // Try printing on all ethernet cores on this device
-    int count = 0;
     std::unordered_set<CoreCoord> test_cores;
     tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0, .processor = processor};
     if (active) {
@@ -67,37 +70,21 @@ void RunTest(
         Program program = Program();
 
         // Create the kernel
-        KernelHandle erisc_kernel_id = CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp",
-            core,
-            config);
+        CreateKernel(program, "tests/tt_metal/tt_metal/test_kernels/misc/erisc_print.cpp", core, config);
 
         // Run the program
-        log_info(
-            tt::LogTest,
-            "Running print test on eth core {}:({},{}), {}",
-            device->id(),
-            core.x,
-            core.y,
-            processor
-        );
+        log_info(tt::LogTest, "Running print test on eth core {}:({},{}), {}", device->id(), core.x, core.y, processor);
         fixture->RunProgram(device, program);
 
         // Check the print log against golden output.
-        EXPECT_TRUE(
-            FilesMatchesString(
-                DPrintFixture::dprint_file_name,
-                golden_output
-            )
-        );
+        EXPECT_TRUE(FilesMatchesString(DPrintFixture::dprint_file_name, golden_output));
 
         // Clear the log file for the next core's test
         MetalContext::instance().dprint_server()->clear_log_file();
     }
 }
-}
-}
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 TEST_F(DPrintFixture, ActiveEthTestPrint) {
     for (IDevice* device : this->devices_) {
@@ -107,11 +94,8 @@ TEST_F(DPrintFixture, ActiveEthTestPrint) {
             continue;
         }
         this->RunTestOnDevice(
-            [](DPrintFixture *fixture, IDevice* device){
-                CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true);
-            },
-            device
-        );
+            [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device, true); },
+            device);
     }
 }
 TEST_F(DPrintFixture, IdleEthTestPrint) {

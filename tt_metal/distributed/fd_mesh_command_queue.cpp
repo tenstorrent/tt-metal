@@ -1,8 +1,10 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fd_mesh_command_queue.hpp"
+
+#include <tracy/Tracy.hpp>
 
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
@@ -44,6 +46,8 @@
 #include "tt_metal/impl/program/program_command_sequence.hpp"
 #include "tt_metal/impl/device/dispatch.hpp"
 #include <umd/device/types/xy_pair.h>
+#include <tt-metalium/graph_tracking.hpp>
+#include <tt_stl/overloaded.hpp>
 
 namespace tt {
 namespace tt_metal {
@@ -52,6 +56,29 @@ struct ProgramCommandSequence;
 }  // namespace tt
 
 namespace tt::tt_metal::distributed {
+
+namespace {
+
+template <typename Container, typename Func>
+void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& func) {
+    for (auto it = container.begin(); it != container.end(); ++it) {
+        const auto& coord = *it;
+        if (mesh_device->is_local(coord)) {
+            func(coord);
+        }
+    }
+}
+
+MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
+    for (const auto& coord : range) {
+        if (mesh_device->is_local(coord)) {
+            return coord;
+        }
+    }
+    TT_THROW("No local device found for range");
+}
+
+}  // namespace
 
 struct MeshReadEventDescriptor {
     ReadEventDescriptor single_device_descriptor;
@@ -72,8 +99,9 @@ FDMeshCommandQueue::FDMeshCommandQueue(
     uint32_t id,
     std::shared_ptr<ThreadPool>& dispatch_thread_pool,
     std::shared_ptr<ThreadPool>& reader_thread_pool,
-    std::shared_ptr<CQSharedState>& cq_shared_state) :
-    MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool),
+    std::shared_ptr<CQSharedState>& cq_shared_state,
+    std::function<std::lock_guard<std::mutex>()> lock_api_function) :
+    MeshCommandQueueBase(mesh_device, id, dispatch_thread_pool, lock_api_function),
     reader_thread_pool_(reader_thread_pool),
     cq_shared_state_(cq_shared_state),
     dispatch_core_type_(MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_type()),
@@ -134,7 +162,7 @@ void FDMeshCommandQueue::populate_read_descriptor_queue() {
 
 void FDMeshCommandQueue::populate_virtual_program_dispatch_core() {
     int device_idx = 0;
-    for (auto device : this->mesh_device_->get_devices()) {
+    for (auto device : mesh_device_->get_devices()) {
         if (device_idx) {
             TT_FATAL(
                 this->dispatch_core_ == device->virtual_program_dispatch_core(this->id_),
@@ -183,12 +211,13 @@ void FDMeshCommandQueue::clear_expected_num_workers_completed() {
 }
 
 void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking) {
+    auto lock = lock_api_function_();
     in_use_ = true;
     uint64_t command_hash = *mesh_device_->get_active_sub_device_manager_id();
     std::unordered_set<SubDeviceId> sub_device_ids = mesh_workload.impl().determine_sub_device_ids(mesh_device_);
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
     SubDeviceId sub_device_id = *(sub_device_ids.begin());
-    auto mesh_device_id = this->mesh_device_->id();
+    auto mesh_device_id = mesh_device_->id();
     auto& sysmem_manager = this->reference_sysmem_manager();
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
@@ -217,7 +246,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
         // in the dispatch infra. This support should eventually be deprecated.
         // This function currently assumes a uniform number of ethernet cores across all physical devices in the mesh
         // through the num_virtual_eth_cores() function.
-        // The physical device itself may have less etherent cores than what is queried here and will dispatch
+        // The physical device itself may have less ethernet cores than what is queried here and will dispatch
         // accordingly.
         num_virtual_eth_cores = mesh_device_->num_virtual_eth_cores(sub_device_id);
         num_workers += num_virtual_eth_cores;
@@ -370,7 +399,7 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
     mesh_workload.set_last_used_command_queue_for_testing(this);
 
     if (blocking) {
-        this->finish({sub_device_id});
+        this->finish_nolock({{sub_device_id}});
     }
 }
 
@@ -380,6 +409,12 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
+    auto lock = lock_api_function_();
+    if (!mesh_device_->is_local(address.device_coord)) {
+        return;
+    }
+
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
 
@@ -399,7 +434,7 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
         sub_device_ids);
 
     if (blocking) {
-        this->finish(sub_device_ids);
+        this->finish_nolock(sub_device_ids);
     }
 }
 
@@ -409,6 +444,12 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
     uint32_t size_bytes,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
+    auto lock = lock_api_function_();
+    if (!mesh_device_->is_local(address.device_coord)) {
+        return;
+    }
+
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
@@ -437,8 +478,9 @@ void FDMeshCommandQueue::enqueue_read_shard_from_core(
         ReadCoreDataDescriptor(dst, size_bytes), address.device_coord, blocking, sub_device_ids);
 }
 
-void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
-    auto event = this->enqueue_record_event_to_host(sub_device_ids);
+void FDMeshCommandQueue::finish_nolock(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScopedN("FDMeshCommandQueue::finish_nolock");
+    auto event = this->enqueue_record_event_to_host_nolock(sub_device_ids);
 
     std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
     reads_processed_cv_.wait(lock, [this] { return num_outstanding_reads_.load() == 0; });
@@ -448,14 +490,28 @@ void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids)
     }
 }
 
+void FDMeshCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    auto lock = lock_api_function_();
+    this->finish_nolock(sub_device_ids);
+}
+
 void FDMeshCommandQueue::write_shard_to_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,
     const void* src,
     const std::optional<BufferRegion>& region,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
+    if (!mesh_device_->is_local(device_coord)) {
+        return;
+    }
+
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture. trace id: {}", trace_id_.value());
+
+    if (tt::tt_metal::GraphTracker::instance().hook_write_to_device(&buffer)) {
+        return;
+    }
 
     auto device_buffer = buffer.get_device_buffer(device_coord);
     auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
@@ -472,11 +528,20 @@ void FDMeshCommandQueue::read_shard_from_device(
     const std::optional<BufferRegion>& region,
     std::unordered_map<IDevice*, uint32_t>& num_txns_per_device,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
+    if (!mesh_device_->is_local(device_coord)) {
+        return;
+    }
+
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Reads are not supported during trace capture.");
 
+    if (tt::tt_metal::GraphTracker::instance().hook_read_from_device(&buffer)) {
+        return;
+    }
+
     auto device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view = device_buffer->view(BufferRegion(0, device_buffer->size()));
+    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
 
     auto device = shard_view->device();
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
@@ -537,7 +602,7 @@ void FDMeshCommandQueue::submit_memcpy_request(
     this->increment_num_entries_in_completion_queue();
 
     if (blocking) {
-        this->finish();
+        this->finish_nolock();
     }
 }
 
@@ -551,7 +616,7 @@ void FDMeshCommandQueue::submit_core_data_memcpy_request(
     this->increment_num_entries_in_completion_queue();
 
     if (blocking) {
-        this->finish(sub_device_ids);
+        this->finish_nolock(sub_device_ids);
     }
 }
 
@@ -581,20 +646,35 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event_helper(
             notify_host);
     };
 
-    for (const auto& coord : event.device_range()) {
+    for_each_local(mesh_device_, event.device_range(), [&](const auto& coord) {
         dispatch_thread_pool_->enqueue(
             [&dispatch_lambda, coord]() { dispatch_lambda(coord); }, mesh_device_->get_device(coord)->id());
-    }
+    });
     dispatch_thread_pool_->wait();
     return event;
 }
 
 MeshEvent FDMeshCommandQueue::enqueue_record_event(
     tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
+    auto lock = lock_api_function_();
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
 
     MeshEvent event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/false, device_range);
-    for (const auto& sub_device_id : sub_device_ids) {
+    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
+        auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
+        sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
+    }
+    return event;
+}
+
+MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host_nolock(
+    tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
+    auto event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/true, device_range);
+    completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
+        std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
+    this->increment_num_entries_in_completion_queue();
+    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
+    for (const auto& sub_device_id : buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids)) {
         auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
         sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
     }
@@ -603,25 +683,18 @@ MeshEvent FDMeshCommandQueue::enqueue_record_event(
 
 MeshEvent FDMeshCommandQueue::enqueue_record_event_to_host(
     tt::stl::Span<const SubDeviceId> sub_device_ids, const std::optional<MeshCoordinateRange>& device_range) {
-    auto event = this->enqueue_record_event_helper(sub_device_ids, /*notify_host=*/true, device_range);
-    completion_queue_reads_.push(std::make_shared<MeshCompletionReaderVariant>(
-        std::in_place_type<MeshReadEventDescriptor>, ReadEventDescriptor(event.id()), event.device_range()));
-    this->increment_num_entries_in_completion_queue();
-    auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
-    for (const auto& sub_device_id : sub_device_ids) {
-        auto& sub_device_entry = sub_device_cq_owner[*sub_device_id];
-        sub_device_entry.recorded_event(event.id(), event.mesh_cq_id());
-    }
-    return event;
+    auto lock = lock_api_function_();
+    return this->enqueue_record_event_to_host_nolock(sub_device_ids, device_range);
 }
 
 void FDMeshCommandQueue::enqueue_wait_for_event(const MeshEvent& sync_event) {
+    auto lock = lock_api_function_();
     in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Event Synchronization is not supported during trace capture.");
-    for (const auto& coord : sync_event.device_range()) {
+    for_each_local(mesh_device_, sync_event.device_range(), [&](const auto& coord) {
         event_dispatch::issue_wait_for_event_commands(
             id_, sync_event.mesh_cq_id(), mesh_device_->get_device(coord)->sysmem_manager(), sync_event.id());
-    }
+    });
     auto& sub_device_cq_owner = cq_shared_state_->sub_device_cq_owner;
     for (auto& sub_device_entry : sub_device_cq_owner) {
         sub_device_entry.waited_for_event(sync_event.id(), sync_event.mesh_cq_id(), this->id_);
@@ -639,19 +712,19 @@ void FDMeshCommandQueue::read_completion_queue() {
         } else {
             uint32_t num_reads = num_outstanding_reads_.load();
             for (uint32_t i = 0; i < num_reads; i++) {
-                auto mesh_read_descriptor = *(completion_queue_reads_.pop());
                 std::visit(
-                    [&](auto&& mesh_read_descriptor) {
-                        using T = std::decay_t<decltype(mesh_read_descriptor)>;
-                        if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
-                            this->copy_buffer_data_to_user_space(mesh_read_descriptor);
-                        } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
-                            this->read_completion_queue_event(mesh_read_descriptor);
-                        } else {
-                            this->read_l1_data_from_completion_queue(mesh_read_descriptor);
-                        }
+                    ttsl::overloaded{
+                        [this](MeshBufferReadDescriptor& mesh_read_descriptor) {
+                            copy_buffer_data_to_user_space(mesh_read_descriptor);
+                        },
+                        [this](MeshReadEventDescriptor& mesh_read_descriptor) {
+                            read_completion_queue_event(mesh_read_descriptor);
+                        },
+                        [this](MeshCoreDataReadDescriptor& mesh_read_descriptor) {
+                            read_l1_data_from_completion_queue(mesh_read_descriptor);
+                        },
                     },
-                    mesh_read_descriptor);
+                    *completion_queue_reads_.pop());
             }
             std::unique_lock<std::mutex> lock(reads_processed_cv_mutex_);
             num_outstanding_reads_.fetch_sub(num_reads);
@@ -669,6 +742,7 @@ MultiProducerSingleConsumerQueue<CompletionReaderVariant>& FDMeshCommandQueue::g
 
 void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor& read_buffer_descriptor) {
     auto reader_lambda = [this](IDevice* device, uint32_t num_reads) {
+        ZoneScopedN("copy_buffer_data_to_user_space lambda");
         auto& read_descriptor_queue = this->get_read_descriptor_queue(device);
         chip_id_t mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
@@ -708,7 +782,7 @@ void FDMeshCommandQueue::copy_buffer_data_to_user_space(MeshBufferReadDescriptor
 
 void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& read_event_descriptor) {
     auto& device_range = read_event_descriptor.device_range;
-    for (const auto& coord : device_range) {
+    for_each_local(mesh_device_, device_range, [&](const auto& coord) {
         auto device = mesh_device_->get_device(coord);
         chip_id_t mmio_device_id =
             tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
@@ -718,10 +792,13 @@ void FDMeshCommandQueue::read_completion_queue_event(MeshReadEventDescriptor& re
 
         event_dispatch::read_events_from_completion_queue(
             read_event_descriptor.single_device_descriptor, mmio_device_id, channel, id_, device->sysmem_manager());
-    }
+    });
 }
 
 void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDescriptor& read_l1_data_descriptor) {
+    if (!mesh_device_->is_local(read_l1_data_descriptor.device_coord)) {
+        return;
+    }
     IDevice* device = mesh_device_->get_device(read_l1_data_descriptor.device_coord);
     const chip_id_t mmio_device_id =
         tt::tt_metal::MetalContext::instance().get_cluster().get_associated_mmio_device(device->id());
@@ -737,7 +814,13 @@ void FDMeshCommandQueue::read_l1_data_from_completion_queue(MeshCoreDataReadDesc
 }
 
 void FDMeshCommandQueue::reset_worker_state(
-    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
+    bool reset_launch_msg_state,
+    uint32_t num_sub_devices,
+    const vector_aligned<uint32_t>& go_signal_noc_data,
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) {
+    for (auto device : mesh_device_->get_devices()) {
+        TT_FATAL(!device->sysmem_manager().get_bypass_mode(), "Cannot reset worker state during trace capture");
+    }
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
     in_use_ = true;
@@ -752,6 +835,10 @@ void FDMeshCommandQueue::reset_worker_state(
         program_dispatch::set_num_worker_sems_on_dispatch(mesh_device_, device->sysmem_manager(), id_, num_sub_devices);
         program_dispatch::set_go_signal_noc_data_on_dispatch(
             mesh_device_, go_signal_noc_data, device->sysmem_manager(), id_);
+        if (reset_launch_msg_state) {
+            program_dispatch::set_core_go_message_mapping_on_device(
+                device, core_go_message_mapping, device->sysmem_manager(), id_);
+        }
     }
     program_dispatch::reset_config_buf_mgrs_and_expected_workers(
         config_buffer_mgr_,
@@ -775,13 +862,13 @@ void FDMeshCommandQueue::write_program_cmds_to_subgrid(
     uint32_t program_runtime_id) {
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-    for (const auto& coord : sub_grid) {
-        auto device = this->mesh_device_->get_device(coord);
+    for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
+        auto device = mesh_device_->get_device(coord);
         this->update_launch_messages_for_device_profiler(program_cmd_seq, program_runtime_id, device);
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, device->sysmem_manager(), id_, dispatch_core_type, stall_first, stall_before_program);
         chip_ids_in_workload.insert(device->id());
-    }
+    });
 }
 
 void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
@@ -791,7 +878,7 @@ void FDMeshCommandQueue::write_go_signal_to_unused_sub_grids(
     bool mcast_go_signals,
     bool unicast_go_signals,
     const program_dispatch::ProgramDispatchMetadata& dispatch_md) {
-    for (auto& device : this->mesh_device_->get_devices()) {
+    for (auto& device : mesh_device_->get_devices()) {
         if (chip_ids_in_workload.find(device->id()) == chip_ids_in_workload.end()) {
             write_go_signal(
                 id_,
@@ -820,11 +907,11 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
     // Host Memory Intensive Path (when profiler is enabled): The launch messages across devices are unique, since
     // the host_assigned_field in the launch_msg contains the physical device id (required by the performance profiler).
     // Hence the trace per device must be uniquely captured.
-    for (const auto& coord : sub_grid) {
+    for_each_local(mesh_device_, sub_grid, [&](const auto& coord) {
         auto& sysmem_manager_for_trace = mesh_device_->get_device(coord)->sysmem_manager();
         uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
 
-        auto device = this->mesh_device_->get_device(coord);
+        auto device = mesh_device_->get_device(coord);
         this->update_launch_messages_for_device_profiler(program_cmd_seq, program_runtime_id, device);
         program_dispatch::write_program_command_sequence(
             program_cmd_seq, sysmem_manager_for_trace, id_, dispatch_core_type, stall_first, stall_before_program);
@@ -834,11 +921,12 @@ void FDMeshCommandQueue::capture_program_trace_on_subgrid(
             sysmem_manager_offset,
             sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
         ordered_mesh_trace_md_.push_back(mesh_trace_md);
-    }
+    });
 #else
     // Optimized Path (generic use-cases): Program dispatch commands across the entire sub-grid are identical.
     // Capture once.
-    auto& sysmem_manager_for_trace = mesh_device_->get_device(sub_grid.start_coord())->sysmem_manager();
+    auto local_start_coord = get_local_start_coord(mesh_device_, sub_grid);
+    auto& sysmem_manager_for_trace = mesh_device_->get_device(local_start_coord)->sysmem_manager();
     uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
 
     program_dispatch::write_program_command_sequence(
@@ -862,6 +950,9 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
     MeshCoordinateRange full_grid(mesh_device_->shape());
     MeshCoordinateRangeSet unused_grids = subtract(full_grid, active_grid);
     for (const auto& unused_grid : unused_grids.ranges()) {
+        if (!mesh_device_->is_local(unused_grid.start_coord())) {
+            continue;
+        }
         auto& sysmem_manager_for_trace = mesh_device_->get_device(unused_grid.start_coord())->sysmem_manager();
         uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
         write_go_signal(
@@ -884,6 +975,7 @@ void FDMeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
 }
 
 void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blocking) {
+    auto lock = lock_api_function_();
     in_use_ = true;
     auto trace_inst = mesh_device_->get_mesh_trace(trace_id);
     auto descriptor = trace_inst->desc;
@@ -921,11 +1013,12 @@ void FDMeshCommandQueue::enqueue_trace(const MeshTraceId& trace_id, bool blockin
         expected_num_workers_completed_);
 
     if (blocking) {
-        this->finish();
+        this->finish_nolock();
     }
 }
 
 void FDMeshCommandQueue::record_begin(const MeshTraceId& trace_id, const std::shared_ptr<MeshTraceDescriptor>& ctx) {
+    auto lock = lock_api_function_();
     trace_dispatch::reset_host_dispatch_state_for_trace(
         mesh_device_->num_sub_devices(),
         cq_shared_state_->worker_launch_message_buffer_state,
@@ -970,7 +1063,8 @@ void FDMeshCommandQueue::record_end() {
 }
 
 SystemMemoryManager& FDMeshCommandQueue::reference_sysmem_manager() {
-    return mesh_device_->get_device(0, 0)->sysmem_manager();
+    auto local_devices = mesh_device_->get_devices();
+    return local_devices.at(0)->sysmem_manager();
 }
 
 void FDMeshCommandQueue::update_launch_messages_for_device_profiler(

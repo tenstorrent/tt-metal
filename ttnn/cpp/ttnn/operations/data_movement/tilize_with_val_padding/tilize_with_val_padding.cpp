@@ -30,9 +30,6 @@ MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
-            const auto tile = output.tensor_spec().tile();
-            uint32_t tile_height = tile.get_height();
-            uint32_t tile_width = tile.get_width();
             auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
             return unsqueezed_tensor;
         },
@@ -41,7 +38,7 @@ MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
 
 ttnn::Shape squeeze_output_shape(const ttnn::Shape& output_shape) {
     if (output_shape.rank() > 4) {
-        std::array<uint32_t, 4> output_shape_4d;
+        std::array<uint32_t, 4> output_shape_4d{};
         output_shape_4d[0] = 1;
         int extra_rank = output_shape.rank() - 4;
         for (int i = extra_rank; i >= 0; i--) {

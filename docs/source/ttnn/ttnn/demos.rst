@@ -6,7 +6,7 @@ allowing the freedom to try new ideas and improve performance using Tenstorrent 
 to be showcased, we have a few important questions to answer before it is moved to our ``models/demos`` folder.
 What you see below highlights the expectations for all our models that successfully migrate into the ``models/demos`` folder.
 
-1. Does your model have good documenation?
+1. Does your model have good documentation?
     - We expect a ``README.md`` file within your model's folder that describes what the model is doing and how to run the model. This documentation should also include:
         - The origin of the model and credit to the originating authors, as appropriate.
         - Examples of how to use the model, including any necessary installation steps or dependencies.
@@ -28,7 +28,7 @@ What you see below highlights the expectations for all our models that successfu
     - End-to-end performance metrics should include the time from input preparation to output readiness and any other relevant metrics that apply to the model's use case.
     - Provide clear instructions or scripts to measure these end-to-end metrics within the ``README.md``. These should also be incorporated into the CI pipeline for automated testing.
     - Discuss any external dependencies or services required for the full operation of your model and how they impact the end-to-end performance.
-    - Please add your tests to either ``run_perf_models_other()``, ``run_perf_models_llm_javelin()``, or ``run_perf_models_cnn_javelin()`` within ``run_performance.sh``. Only tests marked with ``@pytest.mark.models_performance_bare_metal`` will be included.
+    - Please add your single-card performance tests to `.github/workflows/perf-models-impl.yaml`. Only tests marked with ``@pytest.mark.models_performance_bare_metal`` will be included.
 
 5. Does your model have an end-to-end demo test demonstrating working output generation on real inputs and has this been integrated on our CI pipeline?
     - Include a test that demonstrates the model's functionality and performance on real inputs, such as images or text, to ensure the model is producing the expected output.
