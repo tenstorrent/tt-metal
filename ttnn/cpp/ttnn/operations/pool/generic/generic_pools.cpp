@@ -206,6 +206,12 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
     // create the index tensor if needed
     Tensor index_tensor_sharded;
     if (return_indices) {
+        TT_FATAL(
+            input_h * input_w <= std::numeric_limits<uint16_t>::max(),
+            "Input HW {} will overflow uint16 indices max {}",
+            input_h * input_w,
+            std::numeric_limits<uint16_t>::max());
+
         Shape spatial_shape({1, input_h, input_w, 1});
 
         printf("input_h: %u, input_w: %u, batch_size: %u, channels: %u\n", input_h, input_w, batch_size, channels);
@@ -253,6 +259,14 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
         input_tensor_sharded.memory_config(),
         is_out_tiled,
         in_place_halo);
+
+    if (deallocate_input || is_input_tensor_in_dram) {
+        input_tensor_sharded.deallocate(/*force*/ true);
+    }
+
+    if (reallocate_halo_output) {
+        haloed_tensor = ttnn::move(haloed_tensor);
+    }
     haloed_tensors.push_back(std::move(haloed_tensor));
 
     if (return_indices) {
@@ -266,15 +280,15 @@ static std::variant<Tensor, std::pair<Tensor, Tensor>> pool2d_invoke(
             index_tensor_sharded.memory_config(),
             is_out_tiled,
             in_place_halo);
+
+        if (deallocate_input || is_input_tensor_in_dram) {
+            index_tensor_sharded.deallocate(/*force*/ true);
+        }
+
+        if (reallocate_halo_output) {
+            haloed_index = ttnn::move(haloed_index);
+        }
         haloed_tensors.push_back(std::move(haloed_index));
-    }
-
-    if (deallocate_input || is_input_tensor_in_dram) {
-        input_tensor_sharded.deallocate(/*force*/ true);
-    }
-
-    if (reallocate_halo_output) {
-        haloed_tensor = ttnn::move(haloed_tensor);
     }
 
     const uint32_t pre_allocate_size =

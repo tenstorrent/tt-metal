@@ -4,20 +4,45 @@ import math
 
 device = ttnn.CreateDevice(0, l1_small_size=8192)
 
-in_n = 1
+in_n = 2
 in_h = 159
 in_w = 159
-in_c = 1
-kernel_size = [3, 3]
-stride = [1, 1]
+in_c = 32
+kernel_size = [3, 5]
+stride = [4, 2]
 padding = [1, 1]
-dilation = [1, 1]
+dilation = [5, 4]
 shard_scheme = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-ceil_mode = False
+ceil_mode = True
 ttnn_dtype = ttnn.bfloat16
 # ttnn_dtype = ttnn.bfloat8_b
 
 tensor_shape = (in_n, in_c, in_h, in_w)  # NCHW format
+
+pad_h = padding[0] * 2  # padding is [top/bottom, left/right] but we need total padding
+pad_w = padding[1] * 2
+dilation_h = dilation[0]
+dilation_w = dilation[1]
+kernel_h = kernel_size[0]
+kernel_w = kernel_size[1]
+stride_h = stride[0]
+stride_w = stride[1]
+
+if ceil_mode:
+    out_h = math.ceil((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+    out_w = math.ceil((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
+    if ((out_h - 1) * stride_h) >= (in_h + padding[0]):
+        ceil_mode_out_shape_adj = True
+        out_h -= 1
+    if ((out_w - 1) * stride_w) >= (in_w + padding[1]):
+        ceil_mode_out_shape_adj = True
+        out_w -= 1
+else:
+    out_h = math.floor((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+    out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
+
+print("out_h:", out_h)
+print("out_w:", out_w)
 
 # Create tensor filled with height and width coordinates
 torch.manual_seed(0)
@@ -55,8 +80,11 @@ ttnn_output, indices = ttnn.max_pool2d(
     padding=padding,
     dilation=dilation,
     applied_shard_scheme=shard_scheme,
-    return_indices=True,
     ceil_mode=ceil_mode,
+    in_place_halo=False,
+    deallocate_input=False,
+    reallocate_halo_output=True,
+    return_indices=True,
 )
 ttnn_outputs_exactly_equal = True
 
@@ -79,6 +107,9 @@ ttnn_output_base = ttnn.max_pool2d(
     dilation=dilation,
     applied_shard_scheme=shard_scheme,
     ceil_mode=ceil_mode,
+    in_place_halo=False,
+    deallocate_input=False,
+    reallocate_halo_output=True,
     return_indices=False,
 )
 ttnn_outputs_exactly_equal = torch.equal(ttnn.to_torch(ttnn_output_base), ttnn.to_torch(ttnn_output))
@@ -112,28 +143,6 @@ ttnn_indices_torch = ttnn.to_torch(indices)
 # Reshape TTNN outputs to match PyTorch shape for comparison
 # TTNN output is in shape (1, 1, out_h*out_w, channels)
 # Calculate output dimensions using the pooling formula
-pad_h = padding[0] * 2  # padding is [top/bottom, left/right] but we need total padding
-pad_w = padding[1] * 2
-dilation_h = dilation[0]
-dilation_w = dilation[1]
-kernel_h = kernel_size[0]
-kernel_w = kernel_size[1]
-stride_h = stride[0]
-stride_w = stride[1]
-
-if ceil_mode:
-    out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-    out_w = math.ceil((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
-    if ((out_h - 1) * stride_h) >= (in_h + padding[0]):
-        ceil_mode_out_shape_adj = True
-        out_h -= 1
-    if ((out_w - 1) * stride_w) >= (in_w + padding[1]):
-        ceil_mode_out_shape_adj = True
-        out_w -= 1
-else:
-    out_h = math.floor((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-    out_w = math.floor((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
-
 ttnn_output_reshaped = ttnn_output_torch.reshape(in_n, out_h, out_w, in_c)
 ttnn_indices_reshaped = ttnn_indices_torch.reshape(in_n, out_h, out_w, in_c)
 
@@ -234,23 +243,32 @@ if not indices_match:
             kernel_top_left_h = h * stride_h - padding[0]  # padding[0] is top padding
             kernel_top_left_w = w * stride_w - padding[1]  # padding[1] is left padding
 
-            # Check if both indices are within the same kernel window
-            kernel_bottom_right_h = kernel_top_left_h + kernel_h - 1
-            kernel_bottom_right_w = kernel_top_left_w + kernel_w - 1
+            # Check if both indices are within the same dilated kernel window
+            # With dilation, the kernel doesn't cover a contiguous rectangle but specific positions
+            def is_in_dilated_kernel_window(
+                input_h, input_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
+            ):
+                """Check if a position (input_h, input_w) is within the dilated kernel window"""
+                # Check if the position aligns with the dilated kernel pattern
+                for kh in range(kernel_h):
+                    for kw in range(kernel_w):
+                        kernel_pos_h = kernel_top_left_h + kh * dilation_h
+                        kernel_pos_w = kernel_top_left_w + kw * dilation_w
+                        if kernel_pos_h == input_h and kernel_pos_w == input_w:
+                            return True
+                return False
 
-            torch_in_window = (
-                kernel_top_left_h <= torch_h <= kernel_bottom_right_h
-                and kernel_top_left_w <= torch_w <= kernel_bottom_right_w
+            torch_in_window = is_in_dilated_kernel_window(
+                torch_h, torch_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
             )
-            ttnn_in_window = (
-                kernel_top_left_h <= ttnn_h <= kernel_bottom_right_h
-                and kernel_top_left_w <= ttnn_w <= kernel_bottom_right_w
+            ttnn_in_window = is_in_dilated_kernel_window(
+                ttnn_h, ttnn_w, kernel_top_left_h, kernel_top_left_w, kernel_h, kernel_w, dilation_h, dilation_w
             )
 
             same_kernel_window = torch_in_window and ttnn_in_window
 
             print(
-                f"    Kernel window: top_left=({kernel_top_left_h},{kernel_top_left_w}), bottom_right=({kernel_bottom_right_h},{kernel_bottom_right_w})"
+                f"    Dilated kernel window: top_left=({kernel_top_left_h},{kernel_top_left_w}), kernel_size=({kernel_h},{kernel_w}), dilation=({dilation_h},{dilation_w})"
             )
             print(f"    Torch index in window: {torch_in_window}, TTNN index in window: {ttnn_in_window}")
 
