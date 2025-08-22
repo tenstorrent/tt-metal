@@ -133,6 +133,11 @@ void AllGatherAsync::validate_with_output_tensors(
                 "We don't support input DRAM block sharding");
         }
     }
+
+    if (!this->do_sync) {
+        TT_FATAL(output_tensors.size() > 0, "Persistent buffers are required when not synchronizing");
+        TT_FATAL(this->semaphore.has_value(), "Persistent semaphores are required when not synchronizing");
+    }
 }
 
 std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
