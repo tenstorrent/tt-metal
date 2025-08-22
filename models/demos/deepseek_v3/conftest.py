@@ -103,3 +103,11 @@ def set_deterministic_env():
     """
     torch.manual_seed(5)
     torch.use_deterministic_algorithms(True)
+
+
+@pytest.fixture(scope="session")
+def deepseek_cache_path():
+    """
+    Fixture to set the cache path for DeepSeek tests.
+    """
+    return Path(os.getenv("DEEPSEEK_V3_CACHE", "/proj_sw/user_dev/deepseek-v3-cache"))
