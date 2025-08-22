@@ -18,5 +18,5 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
-    noc_semaphore_wait(sem_addr, expected_value);
+    noc_semaphore_wait(sem_ptr, expected_value);
 }
