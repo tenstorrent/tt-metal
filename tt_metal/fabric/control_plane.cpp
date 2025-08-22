@@ -2349,7 +2349,8 @@ void ControlPlane::populate_fabric_connection_info(
     const auto& edm_config = fabric_context.get_fabric_router_config(
         tt::tt_fabric::FabricEriscDatamoverType::Default,
         tt::tt_fabric::FabricEriscDatamoverAxis::Short,
-        fabric_tensix_config);
+        fabric_tensix_config,
+        static_cast<eth_chan_directions>(sender_channel));
     CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
     worker_connection_info.edm_noc_x = static_cast<uint8_t>(fabric_router_virtual_core.x);
     worker_connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
@@ -2373,8 +2374,23 @@ void ControlPlane::populate_fabric_connection_info(
     if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
         // dispatcher uses different fabric router, which still has the default buffer size.
         const auto& default_edm_config = fabric_context.get_fabric_router_config();
+        dispatcher_connection_info.edm_noc_x = static_cast<uint8_t>(fabric_router_virtual_core.x);
+        dispatcher_connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
+        dispatcher_connection_info.edm_buffer_base_addr =
+            default_edm_config.sender_channels_base_address[sender_channel];
         dispatcher_connection_info.num_buffers_per_channel =
             default_edm_config.sender_channels_num_buffers[sender_channel];
+        dispatcher_connection_info.edm_l1_sem_addr =
+            default_edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel];
+        dispatcher_connection_info.edm_connection_handshake_addr =
+            default_edm_config.sender_channels_connection_semaphore_address[sender_channel];
+        dispatcher_connection_info.edm_worker_location_info_addr =
+            default_edm_config.sender_channels_worker_conn_info_base_address[sender_channel];
+        dispatcher_connection_info.buffer_size_bytes = default_edm_config.channel_buffer_size_bytes;
+        dispatcher_connection_info.buffer_index_semaphore_id =
+            default_edm_config.sender_channels_buffer_index_semaphore_address[sender_channel];
+        // TODO: issue #26853, remove hardcoding, and have a common file between host and device for constants
+        dispatcher_connection_info.worker_free_slots_stream_id = WORKER_FREE_SLOTS_STREAM_ID;
 
         const auto& tensix_config = fabric_context.get_tensix_config();
         CoreCoord mux_core_logical = tensix_config.get_core_for_channel(physical_chip_id, eth_channel_id);

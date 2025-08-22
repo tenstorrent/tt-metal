@@ -1073,8 +1073,6 @@ void build_tt_fabric_program(
             remote_fabric_node_id.chip_id,
             wrap_around_mesh);
 
-        const auto& curr_edm_config = fabric_context.get_fabric_router_config(fabric_edm_type, fabric_edm_axis);
-
         // Create fabric tensix builder for this ethernet channel
         // Skip the link used by dispatch using relay mux API
         uint32_t dispatch_link_idx = RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
@@ -1090,8 +1088,8 @@ void build_tt_fabric_program(
             if (fabric_tensix_enabled && !is_dispatch_link) {
                 fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::MUX;
             }
-            const auto& curr_edm_config =
-                fabric_context.get_fabric_router_config(fabric_edm_type, fabric_edm_axis, fabric_tensix_config);
+            const auto& curr_edm_config = fabric_context.get_fabric_router_config(
+                fabric_edm_type, fabric_edm_axis, fabric_tensix_config, eth_direction);
 
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 device,

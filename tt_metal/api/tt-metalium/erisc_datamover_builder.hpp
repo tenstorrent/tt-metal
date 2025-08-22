@@ -216,6 +216,7 @@ struct FabricEriscDatamoverOptions {
     FabricEriscDatamoverAxis edm_axis = FabricEriscDatamoverAxis::Short;
     FabricRouterBufferConfig edm_buffer_config = FabricRouterBufferConfig{};
     FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED;
+    eth_chan_directions direction = eth_chan_directions::EAST;  // only used by 2D to get the correct router direction
 };
 
 struct FabricEriscDatamoverConfig {
@@ -400,7 +401,8 @@ private:
         std::array<size_t, num_sender_channels>& num_sender_buffer_slots,
         std::array<size_t, num_sender_channels>& num_remote_sender_buffer_slots,
         std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
-        std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots);
+        std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
+        eth_chan_directions direction);
 
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
 };
@@ -417,8 +419,8 @@ struct FabricRiscConfig {
     bool is_receiver_channel_serviced(int id) const { return is_receiver_channel_serviced_[id]; };
     tt::tt_metal::NOC get_configured_noc() const { return noc_; };
     void reset_sender_channel_serviced() { is_sender_channel_serviced_.fill(false); }
-    void set_sender_channel_serviced(size_t num_channels) {
-        std::fill_n(is_sender_channel_serviced_.begin(), num_channels, true);
+    void set_sender_channel_serviced(size_t channel_idx, bool enabled) {
+        is_sender_channel_serviced_[channel_idx] = enabled;
     }
 
 private:
