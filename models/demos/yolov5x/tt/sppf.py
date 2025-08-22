@@ -4,7 +4,7 @@
 
 
 import ttnn
-from models.experimental.yolov5x.tt.common import TtYOLOv5xConv2D, deallocate_tensors
+from models.demos.yolov5x.tt.common import TtYOLOv5xConv2D, deallocate_tensors
 from models.experimental.yolo_common.yolo_utils import concat
 
 
