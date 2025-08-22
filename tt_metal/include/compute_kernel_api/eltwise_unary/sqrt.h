@@ -18,7 +18,10 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void sqrt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_sqrt_init<APPROX>())); }
+template <bool legacy_compat = false>
+ALWI void sqrt_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_sqrt_init<APPROX, legacy_compat>()));
+}
 
 // clang-format off
 /**
@@ -34,6 +37,9 @@ ALWI void sqrt_tile_init() { MATH((llk_math_eltwise_unary_sfpu_sqrt_init<APPROX>
  * | idst           | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void sqrt_tile(uint32_t idst) { MATH((llk_math_eltwise_unary_sfpu_sqrt<APPROX, DST_ACCUM_MODE>(idst))); }
+template <bool legacy_compat = false>
+ALWI void sqrt_tile(uint32_t idst) {
+    MATH((llk_math_eltwise_unary_sfpu_sqrt<APPROX, DST_ACCUM_MODE, legacy_compat>(idst)));
+}
 
 }  // namespace ckernel

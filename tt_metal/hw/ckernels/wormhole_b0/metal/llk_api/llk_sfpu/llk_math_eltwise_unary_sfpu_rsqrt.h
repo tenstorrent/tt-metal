@@ -12,15 +12,15 @@ namespace ckernel {
 
 // New LLK SFPU APIs
 
-template <bool APPROXIMATE, bool layernorm_compat>
+template <bool APPROXIMATE, bool legacy_compat>
 inline void llk_math_eltwise_unary_sfpu_rsqrt_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt, APPROXIMATE>(sfpu::rsqrt_init<APPROXIMATE, layernorm_compat>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::rsqrt, APPROXIMATE>(sfpu::rsqrt_init<APPROXIMATE, legacy_compat>);
 }
 
-template <bool APPROXIMATE, bool fp32_dest_acc_en, bool layernorm_compat>
+template <bool APPROXIMATE, bool fp32_dest_acc_en, bool legacy_compat>
 inline void llk_math_eltwise_unary_sfpu_rsqrt(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_rsqrt<APPROXIMATE, 8, fp32_dest_acc_en, layernorm_compat>, dst_index, vector_mode);
+        ckernel::sfpu::calculate_rsqrt<APPROXIMATE, 8, fp32_dest_acc_en, legacy_compat>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

@@ -18,7 +18,11 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void recip_tile_init() { MATH((llk_math_eltwise_unary_sfpu_reciprocal_init<APPROX>())); }
+template <bool legacy_compat = true>
+ALWI void recip_tile_init() {
+    MATH((llk_math_eltwise_unary_sfpu_reciprocal_init<APPROX, legacy_compat>()));
+}
+
 // clang-format off
 /**
  * Performs element-wise computation of the reciprocal on each element of a tile
@@ -35,8 +39,9 @@ ALWI void recip_tile_init() { MATH((llk_math_eltwise_unary_sfpu_reciprocal_init<
  * | vector_mode | Specifies the vector mode for computation (e.g., Row, Column). (default: VectorMode::RC) | int      | Subject to specific hardware/kernel limits          | False    |
  */
 // clang-format on
+template <bool legacy_compat = true>
 ALWI void recip_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
-    MATH((llk_math_eltwise_unary_sfpu_reciprocal<APPROX, DST_ACCUM_MODE>(idst, vector_mode)));
+    MATH((llk_math_eltwise_unary_sfpu_reciprocal<APPROX, DST_ACCUM_MODE, legacy_compat>(idst, vector_mode)));
 }
 
 }  // namespace ckernel
