@@ -271,6 +271,7 @@ bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
 }
 
+// TODO: this should subtract out links used by runtime for dispatching to non-mmio capable devices
 size_t get_num_available_routing_planes_in_direction(FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     return control_plane.get_num_available_routing_planes_in_direction(fabric_node_id, routing_direction);
