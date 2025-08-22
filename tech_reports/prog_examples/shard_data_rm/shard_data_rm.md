@@ -3,12 +3,15 @@
 In this example, we will implement a simple TT-Metalium program to demonstrate how sharding works for untilized data. The code for this program can be found in
 [shard_data_rm.cpp](../../../tt_metal/programming_examples/sharding/shard_data_rm.cpp).
 
+## Building and Running the Example
+
 To build and execute, you may use the following commands:
 ```bash
-    export TT_METAL_HOME=$(pwd)
-    ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/metal_example_shard_data_rm
+export TT_METAL_HOME=$(pwd)
+./build_metal.sh --build-programming-examples
+./build/programming_examples/metal_example_shard_data_rm
 ```
+
 # Device setup
 
 ``` cpp
