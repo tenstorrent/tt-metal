@@ -235,22 +235,20 @@ def run_all_gather_impl(
             )
         else:
             if use_legacy_allgather:
-                pytest.skip(LEGACY_CCL_SKIP)
-                # tt_all_gather_out_tensor, tt_matmul_out_tensor, _ = ttnn.experimental.all_gather_matmul(
-                #     input_tensor_mesh_list[i],
-                #     weight_tt,
-                #     dim,
-                #     (0, 6),
-                #     bias=bias_tt,
-                #     num_links=num_links,
-                #     memory_config_ag=mem_config_ag,
-                #     memory_config_mm=mem_config_mm,
-                #     transpose_a=False,
-                #     transpose_b=False,
-                #     program_config=program_config,
-                #     compute_kernel_config=compute_kernel_config,
-                # )
-                assert False, "Legacy ccl call removed until new implementation is done"
+                tt_all_gather_out_tensor, tt_matmul_out_tensor, _ = ttnn.experimental.all_gather_matmul(
+                    input_tensor_mesh_list[i],
+                    weight_tt,
+                    dim,
+                    (0, 6),
+                    bias=bias_tt,
+                    num_links=num_links,
+                    memory_config_ag=mem_config_ag,
+                    memory_config_mm=mem_config_mm,
+                    transpose_a=False,
+                    transpose_b=False,
+                    program_config=program_config,
+                    compute_kernel_config=compute_kernel_config,
+                )
             else:
                 tt_all_gather_out_tensor, tt_matmul_out_tensor = ttnn.experimental.all_gather_matmul_async(
                     input_tensor_mesh_list[i],
