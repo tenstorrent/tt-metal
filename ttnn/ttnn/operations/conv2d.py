@@ -12,8 +12,9 @@ import ttnn
 SlidingWindowParallelConfig = ttnn._ttnn.operations.sliding_window.ParallelConfig
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 Conv2dSliceConfig = ttnn._ttnn.operations.conv.Conv2dSliceConfig
-Conv2dSliceHeight = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.SliceHeight
-Conv2dSliceWidth = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.SliceWidth
+Conv2dDRAMSliceHeight = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.DRAMSliceHeight
+Conv2dDRAMSliceWidth = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.DRAMSliceWidth
+Conv2dL1Full = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.L1Full
 
 OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv.OptimizedConvParallelizationConfig
 OptimizedConvBlockConfig = ttnn._ttnn.operations.conv.OptimizedConvBlockConfig
