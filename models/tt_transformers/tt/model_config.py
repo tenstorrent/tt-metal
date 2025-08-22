@@ -1403,6 +1403,8 @@ class ModelArgs:
         self.vocab_size = params["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
+        if self.head_dim == None:
+            self.head_dim = self.dim // self.n_heads
         if is_hf:
             self.max_context_len = params.get("max_position_embeddings")
         else:
