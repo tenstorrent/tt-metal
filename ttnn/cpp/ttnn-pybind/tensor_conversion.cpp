@@ -345,28 +345,9 @@ std::optional<PyTensorPreparedConversion> prepare_torch_tensor_conversion(
         conversion_map = {
             // clang-format off
 
-        // conversion must be done on host, but after that the tiling can be done on device. Caused by
-        // the float32 tiling on device might lose precision,
-        {{"float16", DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
-        {{"float16", DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32, "int32" }},
-        {{"float32", DataType::INT32,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
-        {{"float32", DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::UINT32, "int32" }},
-
-        // int32 conversion can be safely done on device
-        {{"int32",   DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
-        {{"int32",   DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
-        {{"int32",   DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
-        {{"int32",   DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
-        {{"int32",   DataType::UINT8,     Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
-        {{"int32",   DataType::UINT32,    Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
-        {{"int32",   DataType::UINT32,    Layout::ROW_MAJOR}, {Layout::ROW_MAJOR, DataType::INT32,  std::nullopt }},
-
-        // int64 cannot be stored in the torch tensor, and since the intermediate type is int32, all `int64` -> T conversions are also safe
-        // uint8, int32, uint32 conversion does not have show any performance improvement when done on device, and thus excluded
-        {{"int64",   DataType::FLOAT32,   Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
-        {{"int64",   DataType::BFLOAT16,  Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
-        {{"int64",   DataType::BFLOAT8_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
-        {{"int64",   DataType::BFLOAT4_B, Layout::TILE},      {Layout::ROW_MAJOR, DataType::INT32,  "int32" }},
+            // At the moment there are no cases that can be safely implemented with on-device
+            // conversion, and bfloat16 cases are to be implemented in a follow-up PR to avoid
+            // breaking too many tests in a scope of a single PR.
 
             // clang-format on
         };
