@@ -61,7 +61,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
     return ttnn::operations::experimental::ccl::all_gather_async(
         scattered_tensor,
         dim,
-        {gather_multi_device_global_semaphore},
+        std::make_optional(std::vector<GlobalSemaphore>{gather_multi_device_global_semaphore}),
+        /* do_sync */ false,
         num_preferred_links.value_or(1),
         out_memory_config,
         topology,
@@ -136,7 +137,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         cluster_axis,
         mesh_device,
         topology,
-        {gather_multi_device_global_semaphore},
+        std::make_optional(std::vector<GlobalSemaphore>{gather_multi_device_global_semaphore}),
+        /* do_sync */ false,
         std::nullopt,  // persistent_output_tensor
         out_memory_config,
         num_preferred_links,
