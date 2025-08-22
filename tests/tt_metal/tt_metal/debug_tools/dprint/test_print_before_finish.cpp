@@ -29,23 +29,19 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 static void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
-    std::cout << "entering RunTest" << std::endl;
     // Set up program
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
-    std::cout << "error here -1" << std::endl;
     distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
     auto& program_ = workload.get_programs().at(device_range);
-    std::cout << "error here -0.5" << std::endl;
     auto device = mesh_device->get_devices()[0];
 
     // This tests prints only on a single core
     CoreCoord xy_start = {0, 0};
     CoreCoord xy_end = {0, 0};
 
-    std::cout << "error here 0" << std::endl;
     KernelHandle brisc_print_kernel_id = CreateKernel(
         program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/print_with_wait.cpp",
@@ -53,9 +49,7 @@ static void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::Mes
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Run the program, use a large delay for the last print to emulate a long-running kernel.
-    std::cout << "error here 1" << std::endl;
     uint32_t clk_mhz = tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(device->id());
-    std::cout << "error here 2" << std::endl;
     uint32_t delay_cycles = clk_mhz * 4000000;  // 4 seconds
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
@@ -68,12 +62,9 @@ static void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::Mes
             );
         }
     }
-    std::cout << "error here 3" << std::endl;
     fixture->RunProgram(mesh_device, workload);
-    std::cout << "error here 4" << std::endl;
     // Close system instantly after running to attempt to cut off prints.
     fixture->TearDownTestSuite();
-    std::cout << "error here 5" << std::endl;
 
     // Check the print log against expected output.
     vector<std::string> expected_output;
@@ -92,11 +83,8 @@ static void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::Mes
 }
 
 TEST_F(DPrintMeshFixture, TensixTestPrintFinish) {
-    std::cout << "entering TensixTestPrintFinish" << std::endl;
     auto mesh_devices = this->devices_;
     // Run only on the first device, as this tests disconnects devices and this can cause
     // issues on multi-device setups.
-    std::cout << "entering RunTestOnDevice" << std::endl;
     this->RunTestOnDevice(RunTest, mesh_devices.at(0));
-    std::cout << "exiting TensixTestPrintFinish" << std::endl;
 }
