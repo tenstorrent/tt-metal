@@ -47,14 +47,13 @@ void kernel_main() {
     // Don't need batch; same as batch from READER args
 
     // COMPILE TIME ARGS
-    // interleaved accessor args
-    constexpr bool in1_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool out_is_dram = get_compile_time_arg_val(1) == 1;
-
     constexpr uint32_t cb_id_in1 = 1;
 
     // WRITER
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
+
+    constexpr auto in1_args = TensorAccessorArgs<0>();
+    constexpr auto out_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
 
 #ifdef IN1_SHARDED
     const uint32_t in1_num_tiles = batch * num_blocks * in1_block_h * in1_block_w;
@@ -62,22 +61,13 @@ void kernel_main() {
     cb_push_back(cb_id_in1, in1_num_tiles);
 #else
     const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    const DataFormat in1_data_format = get_dataformat(cb_id_in1);
-    constexpr const uint32_t in1_tile_hw = get_tile_hw(cb_id_in1);
-    const InterleavedAddrGenFast<in1_is_dram, in1_tile_hw> s1 = {
-        .bank_base_address = in1_tensor_addr, .page_size = in1_single_tile_size_bytes, .data_format = in1_data_format};
+    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes);
     uint32_t l1_write_addr_in1;
 #endif
 
 #ifndef OUT_SHARDED
     const uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
-    const DataFormat output_data_format = get_dataformat(cb_id_out0);
-    constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
-
-    const InterleavedAddrGenFast<out_is_dram, output_tile_hw> s = {
-        .bank_base_address = out_tensor_addr,
-        .page_size = output_single_tile_size_bytes,
-        .data_format = output_data_format};
+    const auto s = TensorAccessor(out_args, out_tensor_addr, output_single_tile_size_bytes);
 #endif
 
 #if not defined IN1_SHARDED or not defined OUT_SHARDED

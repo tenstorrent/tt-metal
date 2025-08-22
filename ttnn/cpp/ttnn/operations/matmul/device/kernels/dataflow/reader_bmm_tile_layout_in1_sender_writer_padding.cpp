@@ -41,53 +41,48 @@ void kernel_main() {
     const uint32_t padded_block_tiles_w_skip = get_arg_val<uint32_t>(rt_args_idx++);
 
     // COMPILE TIME ARGS
-    // interleaved accessor args
-    constexpr bool in1_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool sparsity_is_dram = (bool)get_compile_time_arg_val(1);
-    constexpr bool out_is_dram = get_compile_time_arg_val(2) == 1;
-
     // READER
     // in1 tensor args
-    constexpr uint32_t in1_tensor_stride_w = get_compile_time_arg_val(3);
-    constexpr uint32_t in1_tensor_stride_h = get_compile_time_arg_val(4);
-    constexpr uint32_t in1_tensor_next_block_stride = get_compile_time_arg_val(5);
-    constexpr uint32_t in1_tensor_next_w_dim_block_stride = get_compile_time_arg_val(6);
+    constexpr uint32_t in1_tensor_stride_w = get_compile_time_arg_val(0);
+    constexpr uint32_t in1_tensor_stride_h = get_compile_time_arg_val(1);
+    constexpr uint32_t in1_tensor_next_block_stride = get_compile_time_arg_val(2);
+    constexpr uint32_t in1_tensor_next_w_dim_block_stride = get_compile_time_arg_val(3);
     // in1 block args
-    constexpr uint32_t in1_block_w = get_compile_time_arg_val(7);
-    constexpr uint32_t in1_block_h = get_compile_time_arg_val(8);
-    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(9);
+    constexpr uint32_t in1_block_w = get_compile_time_arg_val(4);
+    constexpr uint32_t in1_block_h = get_compile_time_arg_val(5);
+    constexpr uint32_t in1_block_num_tiles = get_compile_time_arg_val(6);
     // in0/in1 common args
-    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(10);
-    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(11);
-    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(12);
+    constexpr uint32_t num_blocks_inner_dim = get_compile_time_arg_val(7);
+    constexpr uint32_t num_blocks_w_dim = get_compile_time_arg_val(8);
+    constexpr uint32_t num_blocks_h_dim = get_compile_time_arg_val(9);
 
     // in1 mcast args
-    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(13));
-    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(14));
-    constexpr uint32_t in1_mcast_num_dests = get_compile_time_arg_val(15);
-    constexpr uint32_t in1_mcast_num_cores = get_compile_time_arg_val(16);
+    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(11));
+    constexpr uint32_t in1_mcast_num_dests = get_compile_time_arg_val(12);
+    constexpr uint32_t in1_mcast_num_cores = get_compile_time_arg_val(13);
     // batch args
-    constexpr uint32_t KtNt = get_compile_time_arg_val(17);
-    constexpr uint32_t batch = get_compile_time_arg_val(18);
-    constexpr uint32_t bcast_B = get_compile_time_arg_val(19);
+    constexpr uint32_t KtNt = get_compile_time_arg_val(14);
+    constexpr uint32_t batch = get_compile_time_arg_val(15);
+    constexpr uint32_t bcast_B = get_compile_time_arg_val(16);
     // sparsity args
-    constexpr uint32_t batchB = get_compile_time_arg_val(20);
-    constexpr uint32_t sparsity_log2_of_pagesize = get_compile_time_arg_val(21);
+    constexpr uint32_t batchB = get_compile_time_arg_val(17);
+    constexpr uint32_t sparsity_pagesize = get_compile_time_arg_val(18);
 
     // WRITER
     // out tensor args
-    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(22);
-    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(23);
-    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(24);
-    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(25);
-    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(26);
-    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(27);
+    constexpr uint32_t out_tensor_stride_w = get_compile_time_arg_val(19);
+    constexpr uint32_t out_tensor_stride_h = get_compile_time_arg_val(20);
+    constexpr uint32_t out_tensor_next_subblock_stride_w = get_compile_time_arg_val(21);
+    constexpr uint32_t out_tensor_next_subblock_stride_h = get_compile_time_arg_val(22);
+    constexpr uint32_t out_tensor_next_w_dim_block_stride = get_compile_time_arg_val(23);
+    constexpr uint32_t out_tensor_next_h_dim_block_stride = get_compile_time_arg_val(24);
     // out subblock args
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(28);
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(29);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(30);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(25);
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(26);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(27);
     // batch args
-    constexpr uint32_t MtNt = get_compile_time_arg_val(31);  // if 0
+    constexpr uint32_t MtNt = get_compile_time_arg_val(28);  // if 0
     // Don't need batch; same as batch from READER args
 
     // When sparsity is disabled, we just loop once
@@ -98,21 +93,15 @@ void kernel_main() {
     const uint32_t in3_tensor_addr = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t in3_tensor_start_tile_id = get_arg_val<uint32_t>(rt_args_idx++);
 
-    constexpr bool in3_is_dram = get_compile_time_arg_val(32) == 1;
-    constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(33);
+    constexpr uint32_t in3_tensor_stride_w = get_compile_time_arg_val(29);
 
     constexpr uint32_t cb_id_in3 = 3;
     constexpr uint32_t bias_single_tile_size_bytes = get_tile_size(cb_id_in3);
-    constexpr DataFormat bias_data_format = get_dataformat(cb_id_in3);
     constexpr const uint32_t in3_tile_hw = get_tile_hw(cb_id_in3);
 
 #ifndef BIAS_SHARDED
     uint32_t l1_write_addr_in3;
-
-    const InterleavedAddrGenFast<in3_is_dram, in3_tile_hw> s3 = {
-        .bank_base_address = in3_tensor_addr,
-        .page_size = bias_single_tile_size_bytes,
-        .data_format = bias_data_format};
+    // Bias accessor will be defined later after TensorAccessor args
 #endif
 #else
     rt_args_idx += 2;  // Skip over placeholders
@@ -121,8 +110,8 @@ void kernel_main() {
     const uint32_t last_num_blocks_w_dim = get_arg_val<uint32_t>(rt_args_idx++);
 #endif
 
-    constexpr bool fuse_op_all_gather = (bool)get_compile_time_arg_val(34);
-    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(35);
+    constexpr bool fuse_op_all_gather = (bool)get_compile_time_arg_val(30);
+    constexpr bool fuse_op_reduce_scatter = (bool)get_compile_time_arg_val(31);
 
     MatmulOpReceiver fused_op_receiver;
     OpSignaler op_signaler;
@@ -137,6 +126,16 @@ void kernel_main() {
         op_signaler = OpSignaler(rt_args_idx);
     }
 
+    constexpr auto in1_args = TensorAccessorArgs<32>();
+    constexpr auto sparsity_args = TensorAccessorArgs<in1_args.next_compile_time_args_offset()>();
+    constexpr auto out_args = TensorAccessorArgs<sparsity_args.next_compile_time_args_offset()>();
+#ifdef FUSE_BIAS
+    constexpr auto bias_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr auto after_bias_offset = bias_args.next_compile_time_args_offset();
+#else
+    constexpr auto after_bias_offset = out_args.next_compile_time_args_offset();
+#endif
+
 // RT and COMPILE TIME ARGS for DRAM sharded weights
 #ifdef IN1_DRAM_SHARDED
     const uint32_t vc = get_arg_val<uint32_t>(rt_args_idx++);
@@ -145,8 +144,14 @@ void kernel_main() {
     tt_l1_ptr uint32_t* in1_block_w_dram_stride_bytes = (tt_l1_ptr uint32_t*)get_arg_addr(rt_args_idx++);
     tt_l1_ptr uint32_t* current_dram_bank_id = (tt_l1_ptr uint32_t*)get_arg_addr(rt_args_idx++);
 
-    constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(36);
-    constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(37);
+    constexpr uint32_t in1_dram_block_num_tiles = get_compile_time_arg_val(after_bias_offset);
+    constexpr uint32_t in1_block_w_dram_bytes = get_compile_time_arg_val(after_bias_offset + 1);
+#endif
+
+#ifdef FUSE_BIAS
+#ifndef BIAS_SHARDED
+    const auto s3 = TensorAccessor(bias_args, in3_tensor_addr, bias_single_tile_size_bytes);
+#endif
 #endif
 
     constexpr uint32_t cb_id_in1 = 1;
@@ -161,25 +166,18 @@ void kernel_main() {
 #else
     uint32_t l1_write_addr_in1;
 
-    constexpr DataFormat in1_data_format = get_dataformat(cb_id_in1);
-    const InterleavedAddrGenFast<in1_is_dram, in1_tile_hw> s1 = {
-        .bank_base_address = in1_tensor_addr, .page_size = in1_single_tile_size_bytes, .data_format = in1_data_format};
+    const auto s1 = TensorAccessor(in1_args, in1_tensor_addr, in1_single_tile_size_bytes);
 #endif
 
     //  WRITER
     constexpr uint32_t cb_id_out0 = tt::CBIndex::c_4;
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
     constexpr const uint32_t output_tile_hw = get_tile_hw(cb_id_out0);
-    constexpr DataFormat output_data_format = get_dataformat(cb_id_out0);
-    const InterleavedAddrGenFast<out_is_dram, output_tile_hw> s = {
-        .bank_base_address = out_tensor_addr,
-        .page_size = output_single_tile_size_bytes,
-        .data_format = output_data_format};
+    const auto s = TensorAccessor(out_args, out_tensor_addr, output_single_tile_size_bytes);
 
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = tt::CBIndex::c_7;
-    const InterleavedPow2AddrGenFast<sparsity_is_dram> s_sparsity = {
-        .bank_base_address = sparsity_addr, .log_base_2_of_page_size = sparsity_log2_of_pagesize};
+    const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr, sparsity_pagesize);
 
 #ifndef SKIP_MCAST
     // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
