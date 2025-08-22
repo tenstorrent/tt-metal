@@ -2,6 +2,12 @@
 set(TRACY_HOME ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy)
 
 option(ENABLE_TRACY_TIMER_FALLBACK "Enable Tracy timer fallback" OFF)
+if(NOT TRACY_ENABLE)
+    # CI error: Tracy Profiler initialization failure: CPU doesn't support invariant TSC.
+    #  Define TRACY_NO_INVARIANT_CHECK=1 to ignore this error, *if you know what you are doing*.
+    #  Alternatively you may rebuild the application with the TRACY_TIMER_FALLBACK define to use lower resolution timer.
+    set(TRACY_TIMER_FALLBACK ON)
+endif()
 
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
 set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME tracy)
