@@ -19,11 +19,11 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 from models.experimental.gemma3_4b.tt.text_model import Gemma3_4BTransformer
 from models.experimental.gemma3_4b.tt.gemma_vision_crossattention import TtGemmaTransformerVision
 from models.experimental.gemma3_4b.tt.gemma3_generator import Gemma3Generator
-from models.utility_functions import (
+from models.common.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.common.utility_functions import skip_for_grayskull, skip_for_blackhole
 from models.tt_transformers.tt.model_config import HfModelWrapper
 
 from models.tt_transformers.tt.model_config import ModelArgs

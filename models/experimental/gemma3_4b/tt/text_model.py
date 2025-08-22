@@ -23,7 +23,7 @@ import torch
 from models.experimental.gemma3_4b.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.common import copy_host_to_device
-from models.utility_functions import nearest_32
+from models.common.utility_functions import nearest_32
 
 
 class Gemma3_4BTransformer(LightweightModule):
