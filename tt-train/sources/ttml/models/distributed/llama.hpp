@@ -17,7 +17,7 @@ namespace ttml::models::distributed::llama {
 using RunnerType = common::transformer::RunnerType;
 using models::llama::LlamaConfig;
 
-class DistributedLlama : public ttml::autograd::ModuleBase {
+class DistributedLlama : public BaseTransformer {
 private:
     RunnerType runner_type = RunnerType::Default;
     std::shared_ptr<ttml::autograd::ModuleBase> tok_emb;
