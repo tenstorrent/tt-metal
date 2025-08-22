@@ -114,4 +114,5 @@ jobs:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} -p "${{ inputs.patch }}"
+          ./build_metal.sh --build-dir build --build-type Release --toolchain-path cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake --build-all --enable-ccache --configure-only
+          cmake --build build --target install --verbose
