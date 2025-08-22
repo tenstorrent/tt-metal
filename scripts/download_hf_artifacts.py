@@ -4,6 +4,7 @@
 
 import argparse
 
+from datasets import load_dataset
 from huggingface_hub import snapshot_download
 from loguru import logger
 
@@ -42,14 +43,20 @@ PYTHON_MODELS = [
 
 SINGLE_CARD_MODELS = [
     "CompVis/stable-diffusion-v1-4",
+    "distil-whisper/distil-large-v3",
     "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr",
-    "state-spaces/mamba-2.8b",
+    "EleutherAI/gpt-neox-20b",
+    "google/vit-base-patch16-224",
     "meta-llama/Llama-3.1-8B-Instruct",
     "meta-llama/Llama-3.2-1B-Instruct",
     "meta-llama/Llama-3.2-3B-Instruct",
     "meta-llama/Llama-3.2-11B-Vision-Instruct",
     "mistralai/Mistral-7B-Instruct-v0.3",
+    "nvidia/mit-b0",
     "nvidia/segformer-b0-finetuned-ade-512-512",
+    "state-spaces/mamba-130m",
+    "state-spaces/mamba-370m",
+    "state-spaces/mamba-2.8b",
     "tiiuae/falcon-7b-instruct",
     "timm/ese_vovnet19b_dw.ra_in1k",
     "Qwen/Qwen2-7B-Instruct",
@@ -71,7 +78,11 @@ T3K_MODELS = [
     "Qwen/Qwen3-32B",
 ]
 
+# TODO: add configs, splits, etc
 DATASETS = [
+    "hf-internal-testing/librispeech_asr_dummy",
+    "huggingface/cats-image",
+    "poloclub/diffusiondb",
     "squad_v2",
     "wikitext",
 ]
@@ -120,7 +131,10 @@ def download_models(args):
 
 def download_datasets(args):
     logger.info("Downloading datasets...")
-    download(DATASETS, args, artifact_type="dataset")
+    # download(DATASETS, args, artifact_type="dataset")
+    # datasets are using different structure then models/huggingface_hub and it's better use different API for downloading
+    for dataset in DATASETS:
+        _ = load_dataset(dataset, cache_dir=args.cache_dir, ignore_verifications=True)
     logger.info("Finished downloading datasets")
 
 

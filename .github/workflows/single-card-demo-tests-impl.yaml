@@ -167,6 +167,7 @@ jobs:
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
       HF_HOME: /mnt/MLPerf/huggingface
+      HF_METRICS_CACHE: ~/.cache/huggingface/metrics
     runs-on: >-
       ${{
         matrix.test-group.civ2-compatible == true
@@ -224,6 +225,7 @@ jobs:
             -e ARCH_NAME=${{ inputs.arch }}
             ${{ matrix.test-group.civ2-compatible && '-e TT_GH_CI_INFRA=1' || '' }}
             -e HF_HOME=/mnt/MLPerf/huggingface
+            -e HF_METRICS_CACHE=~/.cache/huggingface/metrics
             -v /mnt/MLPerf:/mnt/MLPerf:ro
             --cap-add=ALL
             --security-opt seccomp=unconfined

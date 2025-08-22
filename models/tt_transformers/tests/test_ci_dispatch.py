@@ -33,7 +33,7 @@ def test_ci_dispatch(model_weights, get_tt_cache_path):
     if os.getenv("LLAMA_DIR"):
         del os.environ["LLAMA_DIR"]
     os.environ["HF_MODEL"] = model_weights
-    os.environ["TT_CACHE_PATH"] = get_tt_cache_path(model_weights)
+    os.environ["TT_CACHE_PATH"] = str(get_tt_cache_path(model_weights))
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
     exit_code = pytest.main(

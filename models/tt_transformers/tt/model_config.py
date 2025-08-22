@@ -1633,7 +1633,7 @@ class ModelArgs:
                 )
                 self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
             else:
-                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR)
+                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
 
             config = self.hf_config.to_dict()
         else:
@@ -1729,7 +1729,8 @@ class ModelArgs:
 
                 model = model_cls.from_pretrained(
                     self.CKPT_DIR,
-                    torch_dtype="auto"
+                    torch_dtype="auto",
+                    local_files_only=os.getenv("CI") == "true"
                     # Note that the default setting is torch.dtype.float32, but model weights are
                     # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                     # unnecessary cast.
@@ -2227,13 +2228,17 @@ class ModelArgs:
                 model = AutoModelForCausalLM.from_config(config)
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, local_files_only=os.getenv("CI") == "true"
+                    )
                     self.cached_hf_model = model
                 elif self.cache_hf_flag and self.cached_hf_model is not None:
                     model = self.cached_hf_model
                 else:
                     # No caching - load fresh each time
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, local_files_only=os.getenv("CI") == "true"
+                    )
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
                     model.model = model.language_model
