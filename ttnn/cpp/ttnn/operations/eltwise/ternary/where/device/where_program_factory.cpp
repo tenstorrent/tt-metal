@@ -103,7 +103,7 @@ void set_or_update_runtime_arguments(
             const auto predicate_shape = predicate_tensor.padded_shape();
             const auto value_true_shape = value_true_tensor.value().padded_shape();
             const auto value_false_shape = value_false_tensor.value().padded_shape();
-            const auto output_shape = output.padded_shape();
+            const auto& output_shape = output.padded_shape();
             const auto& tile = output.tensor_spec().tile();
 
             // Get shape dims (D, N, C, Ht, Wt) for predicate (a)
@@ -279,7 +279,7 @@ void set_or_update_runtime_arguments(
         // Compute runtime args - binary_ng style for TTT column broadcast
         if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
             // Get output shape dimensions for freq/counter calculation
-            const auto output_shape = output.padded_shape();
+            const auto& output_shape = output.padded_shape();
             const auto& tile = output.tensor_spec().tile();
             uint32_t output_Ht = output_shape[-2] / tile.get_height();
             uint32_t output_Wt = output_shape[-1] / tile.get_width();
