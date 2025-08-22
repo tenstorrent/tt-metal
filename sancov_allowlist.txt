@@ -1,4 +1,0 @@
-src:^/home/ubuntu/tt-metal/tt_metal/.*
-src:^/home/ubuntu/tt-metal/ttnn/.*
-src:.*/tt_metal/.*
-src:.*/ttnn/.*

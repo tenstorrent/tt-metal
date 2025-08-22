@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-CC="clang++-20"
+CC="clang++-17"
 CXXSTD="-std=c++20"
 CFLAGS="-g -O0 -fPIC"
 # Base: trace-pc (no guard)
@@ -16,7 +16,7 @@ int main() { return foo(); }
 EOF
 
 # All functions
-printf 'fun:.*\n' > allow_fun_all.txt
+printf 'fun:.*\nsrc:.*' > allow_fun_all.txt
 # Only main by name
 printf 'fun:^main$\n' > allow_fun_main.txt
 # Exact absolute path (matches what DWARF shows below)

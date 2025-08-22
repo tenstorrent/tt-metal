@@ -162,11 +162,10 @@ static void* processing_thread_func(void* arg) {
                         strstr(file_path_buf, "/home/ubuntu/tt-metal/ttnn")) {
                         dprintf(
                             g_log_fd,
-                            "{\"event\":\"enter\",\"func\":\"%s\",\"file\":\"%s:%s\",\"so_path\":\"%s\"}\n",
+                            "{\"event\":\"enter\",\"func\":\"%s\",\"file\":\"%s:%s\"}\n",
                             func_name_buf,
                             file_path_buf,
-                            line_num_buf,
-                            caller_so_path);
+                            line_num_buf);
                     }
                 }
             }
