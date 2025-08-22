@@ -93,7 +93,6 @@ void set_or_update_runtime_arguments(
         if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::COL_BCAST) {
             // Initialize binary_ng style variables for TTT column broadcast
 
-            const auto out_rank = output.logical_shape().rank();
             aND = 1;  // predicate nD (simplified for now)
             bND = 1;  // value_true nD (simplified for now)
             fND = 1;  // value_false nD (simplified for now)
@@ -458,9 +457,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         num_tiles_per_cb,
         output_data_format);  // output
 
-    auto predicate_is_dram =
-        static_cast<uint32_t>(predicate_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-
     // Handle DRAM flags based on variant and tensor availability
     uint32_t value_true_is_dram = 0, value_false_is_dram = 0;
     if (variant == WhereVariant::TTS) {
@@ -475,8 +471,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         value_false_is_dram =
             static_cast<uint32_t>(value_false_tensor.value().buffer()->buffer_type() == tt_metal::BufferType::DRAM);
     }
-
-    auto output_is_dram = static_cast<uint32_t>(output.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
 
     // BROADCAST DETECTION - Common for both reader and compute kernels
     bool pred_is_bcast = false, true_is_bcast = false, false_is_bcast = false;

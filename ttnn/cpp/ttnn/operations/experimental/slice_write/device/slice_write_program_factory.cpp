@@ -197,7 +197,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
 
     bool rm_orientation = shard_spec.orientation == ShardOrientation::ROW_MAJOR;
     bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
-    uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input_tensor);
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
     uint32_t input_row_size_bytes = input_shard_shape[1] * input_tensor.element_size();

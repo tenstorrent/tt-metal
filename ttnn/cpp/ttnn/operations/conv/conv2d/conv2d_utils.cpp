@@ -1069,8 +1069,6 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
 
-    uint32_t max_slice_size = 0;
-
     const uint32_t min_output_slice_rounded_size =
         tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
     const uint32_t output_slice_rem =
