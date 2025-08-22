@@ -45,6 +45,7 @@ def test_vision_embedding(max_seq_len, batch_size, mesh_device, interpolate_pos_
     pytorch_dtype = _extract_dtype_from_state_dict(model_args.cached_hf_model)
     tt_dtype = torch_dtype_to_ttnn_dtype[pytorch_dtype]
 
+    # I'm using this shape as I saw it being used for Pytorch siglip inference
     image_shape_for_siglip = (1, 3, 896, 896)
     pytorch_input = torch.empty(image_shape_for_siglip).uniform_(-1, 1)
     pytorch_input = pytorch_input.to(pytorch_dtype)
