@@ -631,9 +631,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         1,
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
-        (std::uint32_t)is_dram(gamma),
-        (std::uint32_t)is_dram(beta),
-        (std::uint32_t)is_dram(input_mask),
         (std::uint32_t)gamma_beta_num_cols_tile_per_core,
         (std::uint32_t)per_core_N,
         (std::uint32_t)per_core_N * datum_size_bytes,
@@ -642,38 +639,29 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)num_batches_per_core,
         (std::uint32_t)block_wt};
 
+    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
+        auto gamma_stick_size = gamma.value().padded_shape()[3] * gamma.value().element_size();
+        writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
+    } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
+        auto beta_stick_size = beta.value().padded_shape()[3] * beta.value().element_size();
+        writer_mcast_sender_compile_time_args.push_back(beta_stick_size);
+    } else {
+        writer_mcast_sender_compile_time_args.push_back(TILE_HW * datum_size_bytes);
+    }
+
+    // Append TensorAccessorArgs for sharded writer kernel
+    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+        .append_to(writer_mcast_sender_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
+        .append_to(writer_mcast_sender_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
+        .append_to(writer_mcast_sender_compile_time_args);
+
     // writer kernel
     if (negative_mask.has_value()) {
         TensorAccessorArgs(*negative_mask.value().buffer()).append_to(writer_mcast_sender_compile_time_args);
     } else {
-        writer_mcast_sender_compile_time_args.push_back(0);  // ignored
-    }
-
-    if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().padded_shape()[3] * gamma.value().element_size();
-        bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
-        writer_mcast_sender_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
-        if (gamma_stick_size_is_power_of_two) {
-            uint32_t gamma_log2_stick_size =
-                gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
-            writer_mcast_sender_compile_time_args.push_back((std::uint32_t)gamma_log2_stick_size);
-        } else {
-            writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
-        }
-    } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().padded_shape()[3] * beta.value().element_size();
-        bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
-        writer_mcast_sender_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
-        if (beta_stick_size_is_power_of_two) {
-            uint32_t beta_log2_stick_size =
-                beta_stick_size_is_power_of_two ? (std::uint32_t)std::log2(beta_stick_size) : 0;
-            writer_mcast_sender_compile_time_args.push_back((std::uint32_t)beta_log2_stick_size);
-        } else {
-            writer_mcast_sender_compile_time_args.push_back(beta_stick_size);
-        }
-    } else {
-        writer_mcast_sender_compile_time_args.push_back(0);
-        writer_mcast_sender_compile_time_args.push_back(0);
+        TensorAccessorArgs().append_to(writer_mcast_sender_compile_time_args);  // placeholder
     }
 
     // writer kernel
@@ -1677,8 +1665,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     }
     // reader compile time args
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_1 = {
-        (std::uint32_t)1,
-        (std::uint32_t)1,
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_cores_per_mcast_group,
@@ -1700,9 +1686,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks};
+    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_1);
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_1 = {
-        (std::uint32_t)1,
-        (std::uint32_t)1,
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_groups_per_core * num_batches_per_core_group_1,
@@ -1722,9 +1708,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks};
+    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_1);
     std::vector<uint32_t> reader_mcast_sender_compile_time_args_group_2 = {
-        (std::uint32_t)1,
-        (std::uint32_t)1,
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_cores_per_mcast_group,
@@ -1746,9 +1732,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks};
+    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_sender_compile_time_args_group_2);
     std::vector<uint32_t> reader_mcast_receiver_compile_time_args_group_2 = {
-        (std::uint32_t)1,
-        (std::uint32_t)1,
         (std::uint32_t)reduce_receiver_semaphore_id,
         (std::uint32_t)reduce_sender_semaphore_id,
         (std::uint32_t)num_groups_per_core * num_batches_per_core_group_2,
@@ -1768,6 +1754,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks};
+    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_2);
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(reader_mcast_receiver_compile_time_args_group_2);
     tt::tt_metal::NOC writer_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
     tt::tt_metal::NOC reader_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch());
 
@@ -1824,10 +1812,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         1,
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
-        1,
-        (std::uint32_t)is_dram(gamma),
-        (std::uint32_t)is_dram(beta),
-        (std::uint32_t)is_dram(input_mask),
         (std::uint32_t)gamma_beta_num_cols_tile_per_core,
         (std::uint32_t)per_core_Mt_group_1,
         (std::uint32_t)per_core_Nt,
@@ -1849,10 +1833,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         1,
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
-        1,
-        (std::uint32_t)is_dram(gamma),
-        (std::uint32_t)is_dram(beta),
-        (std::uint32_t)is_dram(input_mask),
         (std::uint32_t)gamma_beta_num_cols_tile_per_core,
         (std::uint32_t)per_core_Mt_group_2,
         (std::uint32_t)per_core_Nt,
@@ -1873,22 +1853,33 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
 
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[3] * gamma.value().element_size();
-        bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
-        writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
-        writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         writer_mcast_sender_compile_time_args_group_1.push_back(gamma_stick_size);
         writer_mcast_sender_compile_time_args_group_2.push_back(gamma_stick_size);
     } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
         auto beta_stick_size = beta.value().padded_shape()[3] * beta.value().element_size();
-        bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
-        writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
-        writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
         writer_mcast_sender_compile_time_args_group_1.push_back(beta_stick_size);
         writer_mcast_sender_compile_time_args_group_2.push_back(beta_stick_size);
     } else {
-        writer_mcast_sender_compile_time_args_group_1.push_back(0);
-        writer_mcast_sender_compile_time_args_group_2.push_back(0);
+        writer_mcast_sender_compile_time_args_group_1.push_back(TILE_HW * datum_size_bytes);
+        writer_mcast_sender_compile_time_args_group_2.push_back(TILE_HW * datum_size_bytes);
     }
+
+    // Append TensorAccessorArgs for writer kernels
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+        .append_to(writer_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
+        .append_to(writer_mcast_sender_compile_time_args_group_1);
+    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
+        .append_to(writer_mcast_sender_compile_time_args_group_1);
+
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_mcast_sender_compile_time_args_group_2);
+    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+        .append_to(writer_mcast_sender_compile_time_args_group_2);
+    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
+        .append_to(writer_mcast_sender_compile_time_args_group_2);
+    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
+        .append_to(writer_mcast_sender_compile_time_args_group_2);
 
     // writer kernel
     bool use_row_major_kernel = true;

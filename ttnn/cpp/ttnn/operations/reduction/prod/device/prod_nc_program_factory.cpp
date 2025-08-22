@@ -91,8 +91,8 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
     ////////////////////////////////////////////////////////////////////////////
 
     tt_metal::Buffer* input_buffer_type = input.buffer();
-    bool input_is_dram = input_buffer_type->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_is_dram, static_cast<uint32_t>(dim)};
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(dim)};
+    tt::tt_metal::TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
 
     constexpr uint32_t cb_id_out = CBIndex::c_3;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out};
@@ -151,7 +151,6 @@ tt::tt_metal::operation::ProgramWithCallbacks prod_nc_format(
              num_tiles_per_core,
              input_tile_offset,
              tile_offset,
-             static_cast<uint32_t>(ttnn::operations::is_dram(input)),
              HtWt,
              CHtWt,
              static_cast<uint32_t>(dim)});

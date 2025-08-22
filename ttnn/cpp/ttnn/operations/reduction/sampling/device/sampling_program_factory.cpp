@@ -9,6 +9,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operation.hpp"
 #include <algorithm>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::reduction::detail {
 
@@ -216,14 +217,9 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     tt::tt_metal::CreateCircularBuffer(program, core_grid, temp_cb_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
-        input_values_cb_index,
-        final_indices_rm_cb_index,
-        index_cb_index,
-        (uint32_t)input_values_is_dram,
-        (uint32_t)input_indices_is_dram,
-        Ht,
-        Wt,
-        aligned_final_indices_rm_unit_size};
+        input_values_cb_index, final_indices_rm_cb_index, index_cb_index, Ht, Wt, aligned_final_indices_rm_unit_size};
+    tt::tt_metal::TensorAccessorArgs(input_values_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_indices_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/reader_values_indices_tensor.cpp",
@@ -251,27 +247,30 @@ tt::tt_metal::operation::ProgramWithCallbacks sampling_multicore_interleaved(
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
 
-        std::vector<uint32_t> writer_compile_time_args = {
-            (std::uint32_t)output_is_dram,
-            (std::uint32_t)temp_is_dram,
-            (std::uint32_t)k_is_dram,
-            (std::uint32_t)p_is_dram,
-            output_cb_index,
-            topk_mask_cb_index,
-            scale_cb_index,
-            packed_identity_scalar,
-            final_indices_rm_cb_index,
-            cb_local_vals_index,
-            output_ind_cb_index,
-            aligned_final_indices_rm_unit_size,
-            aligned_out0_unit_size,
-            rand_tile_index,
-            k_cb_index,
-            p_cb_index,
-            temp_cb_index,
-            i,
-            TILE_WIDTH,
-        };
+        std::vector<uint32_t> writer_compile_time_args;
+        tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(temp_buffer).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(p_buffer).append_to(writer_compile_time_args);
+        writer_compile_time_args.insert(
+            writer_compile_time_args.end(),
+            {
+                output_cb_index,
+                topk_mask_cb_index,
+                scale_cb_index,
+                packed_identity_scalar,
+                final_indices_rm_cb_index,
+                cb_local_vals_index,
+                output_ind_cb_index,
+                aligned_final_indices_rm_unit_size,
+                aligned_out0_unit_size,
+                rand_tile_index,
+                k_cb_index,
+                p_cb_index,
+                temp_cb_index,
+                i,
+                TILE_WIDTH,
+            });
         tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/sampling/device/kernels/dataflow/writer_interleaved.cpp",
