@@ -163,6 +163,8 @@ should be on the device. Height, width and block sharding schemes are supported.
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration for the output tensor. Defaults to <cite>None</cite>.</p></li>
 <li><p><strong>applied_shard_scheme</strong> (<em>ttnn.TensorMemoryLayout</em><em>, </em><em>optional</em>) – the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to <cite>None</cite>, which should be used with pre-sharded input tensors.</p></li>
 <li><p><strong>in_place</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to perform the halo operation in place. Defaults to <cite>False</cite>.</p></li>
+<li><p><strong>deallocate_input</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to deallocate the input tensor after the operation. Defaults to <cite>False</cite>.</p></li>
+<li><p><strong>reallocate_halo_output</strong> (<em>bool</em><em>, </em><em>optional</em>) – whether to reallocate the halo output tensor after the operation, ideally used with deallocate_activation = true. Defaults to <cite>True</cite>.</p></li>
 <li><p><strong>queue_id</strong> (<em>int</em><em>, </em><em>optional</em>) – the queue id to use for the operation. Defaults to <cite>0</cite>.</p></li>
 </ul>
 </dd>
@@ -204,6 +206,8 @@ should be on the device. Height, width and block sharding schemes are supported.
 <span class="go">                    memory_config=None,</span>
 <span class="go">                    applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,</span>
 <span class="go">                    in_place_halo=False,</span>
+<span class="go">                    deallocate_input=False,</span>
+<span class="go">                    reallocate_halo_output=True,</span>
 <span class="go">                )</span>
 </pre></div>
 </div>
