@@ -235,7 +235,7 @@ RunTimeOptions::RunTimeOptions() {
     // Enforce mutual exclusivity between Mock and Simulator
     TT_FATAL(
         !(this->runtime_target_device_ == tt::TargetDevice::Simulator && this->mock_enabled),
-        "Cannot enable both simulator and mock targets. Use only one of TT_METAL_SIMULATOR or TT_METAL_MOCK.");
+        "Cannot enable both simulator and mock targets. Use only one of TT_METAL_SIMULATOR or TT_METAL_MOCK_CLUSTER_DESC_PATH.");
 
     if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
         bool disabled = strcmp(str, "0") == 0;
