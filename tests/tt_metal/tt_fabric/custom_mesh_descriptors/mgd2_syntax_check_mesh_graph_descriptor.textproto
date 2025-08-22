@@ -1,0 +1,109 @@
+# --- Meshes ---------------------------------------------------------------
+
+mesh_descriptors {
+  name: "M0"                              
+  arch: WORMHOLE_B0                 
+  device_topology {
+    dims: [ 8, 4 ]
+    types: [ LINE, RING ]
+  }
+  host_topology   { dims: [1, 1] }   
+  channels {                                
+    count: 4
+    policy: STRICT                      
+  }
+  express_connections { src: 0 dst: 4 }     
+  express_connections { src: 1 dst: 5 }
+  express_connections { src: 2 dst: 6 }
+  express_connections { src: 3 dst: 7 }
+}
+
+mesh_descriptors {
+  name: "M1"                              
+  arch: WORMHOLE_B0  
+  device_topology {
+    dims: [ 8, 4 ]
+  }
+  host_topology   { dims: [1, 2] }   
+  channels {
+    count: 4
+    policy: STRICT
+  }
+}
+
+mesh_descriptors {
+  name: "M2"
+  arch: WORMHOLE_B0  
+  device_topology {
+    dims: [ 8, 4 ]
+  }
+  host_topology   { dims: [1, 1] }   
+  channels {
+    count: 2
+    policy: STRICT
+  }
+}
+
+mesh_descriptors {
+  name: "M3"
+  arch: WORMHOLE_B0  
+  device_topology {
+    dims: [ 8, 4 ]
+  }
+  host_topology   { dims: [1, 1] }   
+  channels {
+    count: 2
+    policy: STRICT
+  }
+}
+
+mesh_descriptors {
+  name: "M4"
+  arch: WORMHOLE_B0  
+  device_topology {
+    dims: [ 8, 4 ]
+  }
+  host_topology   { dims: [1, 1] }   
+  channels {
+    count: 2
+    policy: STRICT
+  }
+}
+
+
+# --- Graphs ---------------------------------------------------------------
+
+graph_descriptors {
+  name: "G0"
+  type: "POD"     
+  instances { mesh { mesh_descriptor: "M0" id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" id: 0 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" id: 0 device { id: 0 } } }
+    nodes { mesh { mesh_descriptor: "M1" id: 0 device { id: 0 } } }
+    channels { count: 2 policy: RELAXED }   
+    directional: false                  
+  }
+}
+
+graph_descriptors {
+  name: "G1"
+  type: "POD"
+  channels { count: 2 policy: RELAXED }                  
+  instances { mesh { mesh_descriptor: "M2" id: 0 } }
+  instances { mesh { mesh_descriptor: "M3" id: 0 } }
+  instances { mesh { mesh_descriptor: "M4" id: 0 } }
+  graph_topology: ALL_TO_ALL               
+}
+
+graph_descriptors {
+  name: "G2"
+  type: "CLUSTER"      
+  channels { count: 2 policy: RELAXED }                           
+  instances { graph { graph_descriptor: "G1" id: 0 } } 
+  instances { graph { graph_descriptor: "G0" id: 0 } }
+  graph_topology: ALL_TO_ALL               
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G2" id: 0 } } 

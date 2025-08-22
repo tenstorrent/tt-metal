@@ -62,11 +62,32 @@ endforeach()
 # Add the generated headers to your target
 target_sources(fabric PRIVATE ${GENERATED_FBS_HEADERS})
 
+# Include helper functions and generate headers from protobuf schemas
+find_package(Protobuf QUIET REQUIRED)
+include(protobuf)
+set(PROTO_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto)
+
+# Collect all generated protobuf files
+set(GENERATED_PROTO_SRCS)
+foreach(PROTO_FILE ${PROTO_SCHEMAS})
+    GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
+    list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
+endforeach()
+
+# Add the generated protobuf files to your target
+target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
+target_link_libraries(fabric PUBLIC protobuf::libprotobuf)
+
 target_include_directories(
     fabric
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
+)
+
+target_include_directories(
+    fabric
+    PUBLIC
+        ${CMAKE_CURRENT_BINARY_DIR}
 )
 
 target_link_libraries(
@@ -86,17 +107,6 @@ target_link_libraries(
 target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)
 
 target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast)
-
-find_package(Protobuf QUIET REQUIRED)
-protobuf_generate(
-    LANGUAGE cpp
-    OUT_VAR FABRIC_PROTO_SRCS
-    PROTOC_OPTIONS --experimental_allow_proto3_optional
-    PROTOS ${CMAKE_CURRENT_SOURCE_DIR}/mesh_graph_descriptor_schema/mesh_graph_descriptor.proto
-)
-target_sources(fabric PRIVATE ${FABRIC_PROTO_SRCS})
-target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(fabric PUBLIC protobuf::libprotobuf)
 
 install(
     TARGETS
