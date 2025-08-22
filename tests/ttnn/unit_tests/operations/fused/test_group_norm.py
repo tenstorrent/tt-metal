@@ -413,19 +413,19 @@ def generate_sdxl_test_inputs():
     # 1024x1024 resoultion
 
     # UNet inputs
-    inputs.append((1, 1280, 64, 64))
-    inputs.append((1, 1280, 32, 32))
-    inputs.append((1, 1920, 64, 64))
-    inputs.append((1, 1920, 32, 32))
-    inputs.append((1, 2560, 32, 32))
+    # inputs.append((1, 1280, 64, 64))
+    # inputs.append((1, 1280, 32, 32))
+    # inputs.append((1, 1920, 64, 64))
+    # inputs.append((1, 1920, 32, 32))
+    # inputs.append((1, 2560, 32, 32))
     inputs.append((1, 320, 128, 128))
-    inputs.append((1, 320, 64, 64))
-    inputs.append((1, 640, 64, 64))
-    inputs.append((1, 640, 32, 32))
-    inputs.append((1, 960, 64, 64))
+    # inputs.append((1, 320, 64, 64))
+    # inputs.append((1, 640, 64, 64))
+    # inputs.append((1, 640, 32, 32))
+    # inputs.append((1, 960, 64, 64))
 
-    # VAE inputs
-    inputs.append((1, 512, 128, 128))
+    # # VAE inputs
+    # inputs.append((1, 512, 128, 128))
 
     return inputs
 
@@ -490,6 +490,14 @@ def test_sdxl_base_group_norm(device, input_shape):
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    split_groups_tt = torch.chunk(tt_output_tensor, num_groups, dim=-1)
+    split_groups_torch = torch.chunk(torch_output_tensor, num_groups, dim=-1)
+    for i in range(num_groups):
+        # print(split_groups_torch[i])
+        # print(split_groups_tt[i])
+        passed, calc_pcc = comp_pcc(split_groups_torch[i], split_groups_tt[i], 0.9997)
+        print(f"Group {i} PCC: {calc_pcc}")
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)
 

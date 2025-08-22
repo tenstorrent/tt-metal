@@ -17,6 +17,15 @@ void generate_tile_with_packed_bfloat16_values(uint32_t cb_id, uint32_t packed_b
     cb_push_back(cb_id, 1);
 }
 
+inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
+    DPRINT << "======" << ENDL();
+    for (uint32_t r = 0; r < 32; ++r) {
+        SliceRange sr = SliceRange{.h0 = (uint8_t)r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
+        DPRINT_DATA1({ DPRINT << r << " " << TileSlice(cb_id, tile_id, sr, true, untilize) << ENDL(); });
+    }
+    DPRINT << "++++++" << ENDL();
+}
+
 void kernel_main() {
     constexpr bool is_mcast_sender = get_compile_time_arg_val(0) == 1;
     constexpr bool fuse_gamma = get_compile_time_arg_val(1) == 1;
@@ -93,6 +102,8 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_push_back(cb_input_mask, block_w);
+
+            // print_full_tile(cb_input_mask, 0, true);
 
 #if defined(FUSE_NEGATIVE_MASK)
             cb_reserve_back(cb_input_negative_mask, block_w);

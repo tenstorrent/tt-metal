@@ -49,7 +49,7 @@ inline void print_u8_pages(uint32_t l1_addr, uint32_t bytes_per_page, uint32_t n
 
 #endif
 
-#if defined(COMPILE_FOR_TRISC) && defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
+// #if defined(COMPILE_FOR_TRISC) && defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
 
 namespace tt::compute::common {
 
@@ -94,4 +94,4 @@ inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize 
 
 }  // namespace tt::compute::common
 
-#endif
+// #endif
