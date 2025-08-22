@@ -188,7 +188,7 @@ ttnn::Tensor composite_all_gather(
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -211,13 +211,13 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             input_tensor,
             dim,
             multi_device_global_semaphore,
+            barrier_semaphore.has_value(),
             num_links,
             memory_config,
             topology,
             subdevice_id,
             all_gather_async_llama_sharded_case,
-            use_optimal_ccl_for_llama,
-            barrier_semaphore);
+            use_optimal_ccl_for_llama);
     }
 }
 
@@ -225,7 +225,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -247,6 +247,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             persistent_output_buffer,
             dim,
             multi_device_global_semaphore,
+            barrier_semaphore.has_value(),
             num_links,
             memory_config,
             topology,
@@ -254,7 +255,6 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             cluster_axis,
             all_gather_async_llama_sharded_case,
             use_optimal_ccl_for_llama,
-            barrier_semaphore,
             chunks_per_sync,
             num_workers_per_link,
             num_buffers_per_channel);
@@ -267,7 +267,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
@@ -288,6 +288,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
             mesh_device,
             topology,
             multi_device_global_semaphore,
+            barrier_semaphore.has_value(),
             persistent_output_tensor,
             memory_config,
             num_preferred_links,
