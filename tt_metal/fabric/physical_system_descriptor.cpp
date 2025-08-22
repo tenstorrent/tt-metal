@@ -34,6 +34,41 @@ std::string get_mobo_name() {
     return motherboard;
 }
 
+const std::unordered_map<tt::ARCH, std::vector<std ::uint16_t>> ubb_bus_ids = {
+    {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
+    {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
+};
+
+std::pair<tray_id_t, asic_id_t> get_ubb_id(chip_id_t chip_id) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
+    const auto bus_id = cluster.get_bus_id(chip_id);
+    auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
+    if (tray_bus_id_it != tray_bus_ids.end()) {
+        auto ubb_asic_id = bus_id & 0x0F;
+        return {tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id};
+    }
+    return {};
+}
+
+std::pair<tray_id_t, n_id_t> get_asic_position(
+    chip_id_t chip_id, const std::set<uint32_t, std::greater<uint32_t>>& sorted_pcie_slots) {
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto cluster_desc = cluster.get_cluster_desc();
+    if (cluster_desc->get_board_type(chip_id) == BoardType::GALAXY) {
+        return get_ubb_id(chip_id);
+    } else if (cluster_desc->get_board_type(chip_id) == BoardType::N300) {
+        uint32_t n_id = cluster_desc->is_chip_mmio_capable(chip_id) ? 1 : 2;
+        uint32_t tray_id =
+            1 + std::distance(
+                    sorted_pcie_slots.begin(), sorted_pcie_slots.find(cluster.get_physical_slot(chip_id).value()));
+        return {tray_id, n_id};
+    } else {
+        TT_THROW("Unrecognized board type. Cannot determine asic position.");
+    }
+    return {};
+}
+
 struct EthEndpoint {
     uint64_t board_id;
     uint8_t chan_id;
@@ -76,10 +111,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = chip_unique_ids.at(src);
         // Populate ASIC Descriptor with Physical Information
-        uint32_t n_id = cluster_desc->is_chip_mmio_capable(src) ? 1 : 2;
-        uint32_t tray_id =
-            1 +
-            std::distance(sorted_pcie_slots.begin(), sorted_pcie_slots.find(cluster.get_physical_slot(src).value()));
+        auto [tray_id, n_id] = get_asic_position(src, sorted_pcie_slots);
         asic_descriptors_[src_unique_id] =
             ASICDescriptor{tray_id, n_id, cluster_desc->get_board_type(src), src_unique_id, hostname};
 
@@ -120,7 +152,6 @@ void PhysicalSystemDescriptor::run_local_discovery() {
                 .eth_conn = EthConnection(eth_chan, dst_chan, false)});
         }
     }
-    // exit(0);
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
@@ -270,7 +301,7 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::string& path_to_yaml) {
         YAML::Node tray_groups;
         host_node["motherboard"] = mobo_name;
 
-        std::unordered_map<tray_id_t, std::vector<ASICDescriptor>> grouped_asics;
+        std::map<tray_id_t, std::vector<ASICDescriptor>> grouped_asics;
 
         for (const auto& asic : system_graph_.asic_connectivity_graph[host_name]) {
             asic_id_t asic_id = asic.first;
