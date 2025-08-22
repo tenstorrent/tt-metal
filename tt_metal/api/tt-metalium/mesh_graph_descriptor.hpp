@@ -24,9 +24,8 @@ public:
 private:
     std::unique_ptr<mesh_graph_descriptor_proto::MeshGraphDescriptor> proto_;
 
-    static bool static_validate(const mesh_graph_descriptor_proto::MeshGraphDescriptor& proto);
-
     // TODO: Implement this
+    static bool static_validate(const mesh_graph_descriptor_proto::MeshGraphDescriptor& proto);
     bool populate_mesh_graph(const std::string& mesh_graph_desc_file);
     void validate_mesh_graph_against_proto();
     
