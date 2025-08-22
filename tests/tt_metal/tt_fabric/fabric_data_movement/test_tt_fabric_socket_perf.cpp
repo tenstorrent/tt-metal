@@ -47,6 +47,7 @@
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 using tt::DevicePool;
 
 namespace tt::tt_fabric {
@@ -78,9 +79,10 @@ struct PerfParams {
     chip_id_t dst_chip = 1;     // logical chip id in that mesh
     uint32_t num_hops = 1;      // 1 = direct neighbor, >1 = farther away
     bool use_dram_dst = false;  // false -> land in L1 on dst; true -> land in DRAM
-
-    // not supported yet
     uint32_t tensor_bytes = 1024 * 1024;
+    uint32_t page_size = 4096;
+    CoreCoord sender_core = {0, 0};
+    CoreCoord receiver_core = {0, 0};
 };
 
 static inline tt::tt_metal::IDevice* find_device_by_id(chip_id_t phys_id) {
@@ -108,17 +110,22 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
     ASSERT_NE(src_dev, nullptr);
     ASSERT_NE(dst_dev, nullptr);
 
+    CoreCoord tx_xy = src_dev->worker_core_from_logical_core(p.sender_core);
+    CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
+    (void)tx_xy;
+    (void)rx_xy;  // silence unused for now (sender comes next)
+
     // Allocate simple flat buffers (you control size via p.tensor_bytes)
     tt::tt_metal::BufferConfig src_cfg{
         .device = src_dev,
         .size = p.tensor_bytes,
-        .page_size = p.tensor_bytes,
+        .page_size = p.page_size,
         .buffer_type = tt::tt_metal::BufferType::DRAM  // or L1 if it fits
     };
     tt::tt_metal::BufferConfig dst_cfg{
         .device = dst_dev,
         .size = p.tensor_bytes,
-        .page_size = p.tensor_bytes,
+        .page_size = p.page_size,
         .buffer_type = p.use_dram_dst ? tt::tt_metal::BufferType::DRAM : tt::tt_metal::BufferType::L1};
 
     auto src_buf = tt::tt_metal::CreateBuffer(src_cfg);
@@ -127,8 +134,32 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
     std::cout << "[alloc] src_phys=" << src_phys << " dst_phys=" << dst_phys << " bytes=" << p.tensor_bytes
               << std::endl;
 
-    // Keep using the existing connectivity test for now
-    run_unicast_test_bw_chips(fixture, src_phys, dst_phys, p.num_hops, p.use_dram_dst);
+    // run_unicast_test_bw_chips(fixture, src_phys, dst_phys, p.num_hops, p.use_dram_dst);
+
+    // ---------- Build a tiny receiver-only program (expected_value = 0 so it returns immediately) ----------
+    tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
+
+    // create a global semaphore on the dst device
+    auto gsem = tt::tt_metal::CreateGlobalSemaphore(
+        dst_dev,
+        dst_dev->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::SubDeviceId{0}),
+        /*initial=*/0,
+        tt::tt_metal::BufferType::L1);
+
+    const CoreCoord receiver_core = p.receiver_core;
+    auto rx_wait_k = tt::tt_metal::CreateKernel(
+        receiver_prog,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver_for_perf.cpp",
+        receiver_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
+
+    // expected_value = 0  -> returns immediately (no sender needed yet)
+    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem.address(), 0u});
+
+    // Run it
+    fixture->RunProgramNonblocking(dst_dev, receiver_prog);
+    fixture->WaitForSingleProgramDone(dst_dev, receiver_prog);
 }
 
 TEST_F(Fabric2DFixture, UnicastConn_CodeControlled) {

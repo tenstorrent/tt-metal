@@ -16,5 +16,7 @@ void kernel_main() {
     const uint32_t sem_addr = get_arg_val<uint32_t>(idx++);
     const uint32_t expected_value = get_arg_val<uint32_t>(idx++);
 
+    volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+
     noc_semaphore_wait(sem_addr, expected_value);
 }
