@@ -550,20 +550,23 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
         }
     }
 
-    auto override_runtime_arguments_callback =
-        [reader_kernel_ids,
-         writer_kernel_ids,
-         all_cores,
-         num_links,
-         num_directions_per_link,
-         num_workers_per_direction,
-         num_mux_cores_per_direction_per_link,
-         num_cores_per_link](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
+    // Barrier semaphores are always created internally (within the op) and are persistent so we never have to update
+    // their address. op semaphores are conditionally created internally. If created internally we don't have to update
+    // their addresses, but if they are passed in as args at the model level we have to update their address.
+    auto override_runtime_arguments_callback_body =
+        [](const void* operation,
+           Program& program,
+           const std::vector<Tensor>& input_tensors,
+           const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+           const std::vector<Tensor>& output_tensors,
+           const std::vector<tt::tt_metal::KernelHandle>& reader_kernel_ids,
+           const std::vector<tt::tt_metal::KernelHandle>& writer_kernel_ids,
+           const std::vector<CoreCoord>& all_cores,
+           uint32_t num_links,
+           uint32_t num_directions_per_link,
+           uint32_t num_workers_per_direction,
+           uint32_t num_mux_cores_per_direction_per_link,
+           uint32_t num_cores_per_link) {
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
 
@@ -602,6 +605,84 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 }
             }
         };
+
+    // Always need to capture the barrier semaphore, as it is created internally within the op.
+    // Need to conditionally capture the op semaphores.
+    // If the op internally creates it's op semaphores they need to be captured,
+    // otherwise (model is managing the op semaphores) we should not capture those semaphores
+    std::function<void(
+        const void*,
+        Program&,
+        const std::vector<Tensor>&,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>&)>
+        override_runtime_arguments_callback;
+    if (do_sync) {
+        override_runtime_arguments_callback =
+            [override_runtime_arguments_callback_body,
+             reader_kernel_ids,
+             writer_kernel_ids,
+             all_cores,
+             num_links,
+             num_directions_per_link,
+             num_workers_per_direction,
+             num_mux_cores_per_direction_per_link,
+             num_cores_per_link,
+             barrier_semaphore,
+             semaphore](
+                const void* operation,
+                Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<Tensor>& output_tensors) {
+                override_runtime_arguments_callback_body(
+                    operation,
+                    program,
+                    input_tensors,
+                    optional_input_tensors,
+                    output_tensors,
+                    reader_kernel_ids,
+                    writer_kernel_ids,
+                    all_cores,
+                    num_links,
+                    num_directions_per_link,
+                    num_workers_per_direction,
+                    num_mux_cores_per_direction_per_link,
+                    num_cores_per_link);
+            };
+    } else {
+        override_runtime_arguments_callback =
+            [override_runtime_arguments_callback_body,
+             reader_kernel_ids,
+             writer_kernel_ids,
+             all_cores,
+             num_links,
+             num_directions_per_link,
+             num_workers_per_direction,
+             num_mux_cores_per_direction_per_link,
+             num_cores_per_link,
+             barrier_semaphore](
+                const void* operation,
+                Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<Tensor>& output_tensors) {
+                override_runtime_arguments_callback_body(
+                    operation,
+                    program,
+                    input_tensors,
+                    optional_input_tensors,
+                    output_tensors,
+                    reader_kernel_ids,
+                    writer_kernel_ids,
+                    all_cores,
+                    num_links,
+                    num_directions_per_link,
+                    num_workers_per_direction,
+                    num_mux_cores_per_direction_per_link,
+                    num_cores_per_link);
+            };
+    }
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
@@ -874,13 +955,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
-    auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore, sender_worker_cores, ring_index](
-            const void* operation,
-            Program& program,
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<Tensor>& output_tensors) {
+    // Barrier semaphores are always created internally (within the op) and are persistent so we never have to update
+    // their address. op semaphores are conditionally created internally. If created internally we don't have to update
+    // their addresses, but if they are passed in as args at the model level we have to update their address.
+    auto override_runtime_arguments_callback_body =
+        [](const void* operation,
+           Program& program,
+           const std::vector<Tensor>& input_tensors,
+           const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+           const std::vector<Tensor>& output_tensors,
+           const tt::tt_metal::KernelHandle& worker_sender_reader_kernel_id,
+           const tt::tt_metal::KernelHandle& worker_sender_writer_kernel_id,
+           const std::vector<CoreCoord>& sender_worker_cores) {
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
 
@@ -902,6 +988,64 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
                 }
             }
         };
+
+    // Always need to capture the barrier semaphore, as it is created internally within the op.
+    // Need to conditionally capture the op semaphores.
+    // If the op internally creates it's op semaphores they need to be captured,
+    // otherwise (model is managing the op semaphores) we should not capture those semaphores
+    std::function<void(
+        const void*,
+        Program&,
+        const std::vector<Tensor>&,
+        const std::vector<std::optional<const Tensor>>&,
+        const std::vector<Tensor>&)>
+        override_runtime_arguments_callback;
+    if (do_sync) {
+        override_runtime_arguments_callback =
+            [override_runtime_arguments_callback_body,
+             worker_sender_reader_kernel_id,
+             worker_sender_writer_kernel_id,
+             sender_worker_cores,
+             barrier_semaphore,
+             semaphore](
+                const void* operation,
+                Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<Tensor>& output_tensors) {
+                override_runtime_arguments_callback_body(
+                    operation,
+                    program,
+                    input_tensors,
+                    optional_input_tensors,
+                    output_tensors,
+                    worker_sender_reader_kernel_id,
+                    worker_sender_writer_kernel_id,
+                    sender_worker_cores);
+            };
+    } else {
+        override_runtime_arguments_callback =
+            [override_runtime_arguments_callback_body,
+             worker_sender_reader_kernel_id,
+             worker_sender_writer_kernel_id,
+             sender_worker_cores,
+             barrier_semaphore](
+                const void* operation,
+                Program& program,
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<Tensor>& output_tensors) {
+                override_runtime_arguments_callback_body(
+                    operation,
+                    program,
+                    input_tensors,
+                    optional_input_tensors,
+                    output_tensors,
+                    worker_sender_reader_kernel_id,
+                    worker_sender_writer_kernel_id,
+                    sender_worker_cores);
+            };
+    }
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
