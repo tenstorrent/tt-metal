@@ -6,6 +6,7 @@ target_link_libraries(
     PUBLIC
         tt_metal
         pthread
+	execinfo
 )
 
 target_include_directories(distributed_trace_and_events PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

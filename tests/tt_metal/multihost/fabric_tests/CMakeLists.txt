@@ -21,7 +21,10 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}/tests/tt_metal/multihost
 )
 
-target_link_libraries(multi_host_fabric PRIVATE test_metal_common_libs)
+target_link_libraries(
+	multi_host_fabric PRIVATE test_metal_common_libs
+	test_metal_common_libs PRIVATE execinfo
+)
 
 # Create separate object library for mesh socket components
 add_library(mesh_socket_components OBJECT)

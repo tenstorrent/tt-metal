@@ -53,6 +53,7 @@ set(SOURCES
 )
 
 add_executable(ttml_tests ${SOURCES})
+target_link_libraries( ttml PRIVATE execinfo)
 target_link_libraries(
     ttml_tests
     GTest::gmock_main

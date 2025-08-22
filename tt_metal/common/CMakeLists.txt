@@ -38,6 +38,7 @@ target_link_libraries(
         simde::simde
         Taskflow::Taskflow
     PRIVATE
+    	execinfo
         Metalium::Metal::Hardware
         Tracy::TracyClient
         TT::Metalium::HostDevCommon

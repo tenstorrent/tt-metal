@@ -11,3 +11,9 @@ set(PROFILER_EXAMPLES_SRCS
 CREATE_PGM_EXAMPLES_EXE("${PROFILER_EXAMPLES_SRCS}" "profiler")
 
 add_custom_target(profiler_examples DEPENDS ${PROGRAMMING_EXAMPLES_TEST_TARGETS})
+
+foreach(target IN LISTS PROGRAMMING_EXAMPLES_TEST_TARGETS)
+  if(TARGET ${target})
+    target_link_libraries(${target} PRIVATE metal_common_libs)
+  endif()
+endforeach()

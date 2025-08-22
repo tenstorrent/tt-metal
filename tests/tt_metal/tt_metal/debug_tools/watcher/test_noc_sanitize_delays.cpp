@@ -67,12 +67,12 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, IDevice* device, CoreCoord
         const uint32_t SINGLE_TILE_SIZE = 2 * 1024;
         const uint32_t NUM_TILES = 4;
         const uint32_t DRAM_BUFFER_SIZE = SINGLE_TILE_SIZE * NUM_TILES;  // NUM_TILES of FP16_B, hard-coded in the reader/writer kernels
-        const uint32_t PAGE_SIZE = DRAM_BUFFER_SIZE;
+        const uint32_t PGE_SIZE = DRAM_BUFFER_SIZE;
 
         tt_metal::InterleavedBufferConfig dram_config{
                     .device=device,
                     .size = DRAM_BUFFER_SIZE,
-                    .page_size = PAGE_SIZE,
+                    .page_size = PGE_SIZE,
                     .buffer_type = tt_metal::BufferType::DRAM
                     };
 
