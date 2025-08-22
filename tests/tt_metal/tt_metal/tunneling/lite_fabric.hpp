@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include "tt_metal/hw/inc/utils/utils.h"
 #include <tt-metalium/fabric_edm_types.hpp>
 #include "lite_fabric_memory_config.h"
 #include "hal_types.hpp"
@@ -19,7 +20,6 @@
 #include <umd/device/types/xy_pair.h>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
-#include "utils/utils.h"
 
 #endif
 
