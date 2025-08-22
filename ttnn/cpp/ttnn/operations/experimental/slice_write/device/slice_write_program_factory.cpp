@@ -200,11 +200,6 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
     uint32_t num_cores_channels = get_num_cores_channels_from_sharded_tensor(input_tensor);
 
     uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
-    TT_FATAL(
-        output_row_size_bytes % num_cores_channels == 0,
-        "Output row size {} should be divisible by num_cores_channels {}",
-        output_row_size_bytes,
-        num_cores_channels);
     uint32_t input_row_size_bytes = input_shard_shape[1] * input_tensor.element_size();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
@@ -317,18 +312,22 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_rm_sharded_input(
             max_num_sticks_this_core += size_till_end[j] * accumulated_input_total_per_dim[j - 1];
         }
 
+        uint32_t this_input_row_size_bytes = std::min(input_row_size_bytes, output_row_size_bytes - width_offset);
         std::vector<uint32_t> writer_kernel_args = common_writer_kernel_args;
         writer_kernel_args[0] += width_offset;
+        writer_kernel_args[2] = this_input_row_size_bytes;
 
         uint32_t num_sticks_this_core = std::min(num_sticks_per_core, max_num_sticks_this_core + 1);
 
         log_trace(
             tt::LogOp,
-            "Start ID: {}, Start ID per dim : {} , Size till end : {} Num Sticks: {} for Core: {}",
+            "Start ID: {}, Start ID per dim : {} , Size till end : {} Num Sticks: {}, this_input_row_size_bytes: {} "
+            "for Core: {}",
             start_id,
             id_per_dim,
             size_till_end,
             num_sticks_this_core,
+            this_input_row_size_bytes,
             core);
         uint32_t addr_offset = 5;  // output buffer addr, output_row_size_bytes, input_row_size_bytes, num_dims
         writer_kernel_args[addr_offset++] = start_id;
@@ -537,9 +536,8 @@ static SliceWriteRuntimeArgs get_slice_write_runtime_args_tiled_sharded_input(
     accumulated_total_tiles_per_dim[1] = tt::div_up(output_shape[-2], TILE_HEIGHT) * accumulated_total_tiles_per_dim[0];
 
     uint32_t output_channel_tiles = accumulated_total_tiles_per_dim[0];
-    accumulated_input_total_tiles_per_dim[0] = actual_input_shape[-1] / TILE_WIDTH;
-    accumulated_input_total_tiles_per_dim[1] =
-        (actual_input_shape[-2] / TILE_HEIGHT) * accumulated_input_total_tiles_per_dim[0];
+    accumulated_input_total_tiles_per_dim[0] = num_input_tiles_per_dim[0];
+    accumulated_input_total_tiles_per_dim[1] = num_input_tiles_per_dim[1] * accumulated_input_total_tiles_per_dim[0];
     for (int32_t i = 2; i < num_dims; i++) {
         uint32_t num_unpadded_dim = actual_input_shape[-(i + 1)];
         uint32_t num_total_dim = output_shape[-(i + 1)];

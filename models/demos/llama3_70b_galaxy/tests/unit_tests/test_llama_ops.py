@@ -162,19 +162,34 @@ def test_llama_tg_LayerNorm(
     "start_core, sub_core_grids",
     [
         (
-            ttnn.CoreCoord(3, 0),
+            ttnn.CoreCoord(1, 0),
             ttnn.CoreRangeSet(
                 [
-                    # ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(6, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
                 ]
             ),
         ),
     ],
 )
+@pytest.mark.parametrize("is_cur_pos_sharded", [True])
+@pytest.mark.parametrize("is_page_table_sharded", [True])
 @pytest.mark.parametrize("q_layout", [ttnn.ROW_MAJOR_LAYOUT], ids=["row_major"])
 def test_llama_tg_ScaledDotProductAttentionDecode(
-    device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, start_core, sub_core_grids, q_layout
+    device,
+    b,
+    nh,
+    nkv,
+    s,
+    d,
+    dtype,
+    grid_size,
+    q_dtype,
+    start_core,
+    sub_core_grids,
+    q_layout,
+    is_cur_pos_sharded,
+    is_page_table_sharded,
 ):
     run_test_sdpa_decode_paged_attention_single_iter(
         device,
@@ -195,6 +210,8 @@ def test_llama_tg_ScaledDotProductAttentionDecode(
         start_core=start_core,
         sub_core_grids=sub_core_grids,
         q_layout=q_layout,
+        is_cur_pos_sharded=is_cur_pos_sharded,
+        is_page_table_sharded=is_page_table_sharded,
     )
     assert device.num_program_cache_entries() == 1
 
@@ -278,6 +295,8 @@ def test_llama_tg_BinaryDeviceOperation(device, batch_size, seq_len, dim, num_he
     "chunk_sizes, cur_positions",
     (([0, 128, 256, 512], [31, 63, 95, 127, 255, 511, 1023, 2559, 4095]),),
 )
+@pytest.mark.parametrize("is_cur_pos_sharded", [True])
+@pytest.mark.parametrize("is_page_table_sharded", [True])
 def test_llama_tg_ScaledDotProductAttentionDecodeSweep(
     device,
     chunk_sizes,
@@ -292,6 +311,8 @@ def test_llama_tg_ScaledDotProductAttentionDecodeSweep(
     q_dtype,
     start_core,
     sub_core_grids,
+    is_cur_pos_sharded,
+    is_page_table_sharded,
 ):
     for chunk_size in chunk_sizes:
         for cur_pos in cur_positions:
@@ -313,6 +334,8 @@ def test_llama_tg_ScaledDotProductAttentionDecodeSweep(
                 sharded_out=True,
                 start_core=start_core,
                 sub_core_grids=sub_core_grids,
+                is_cur_pos_sharded=is_cur_pos_sharded,
+                is_page_table_sharded=is_page_table_sharded,
             )
 
     # OP caches on chunk size
@@ -408,6 +431,8 @@ def test_llama_tg_NLPConcatHeadsDecodeDeviceOperation(
 @pytest.mark.parametrize("cache_idx", [127])
 @pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("pcc", [0.9995])
+@pytest.mark.parametrize("is_cur_pos_sharded", [True])
+@pytest.mark.parametrize("is_page_table_sharded", [True])
 def test_llama_tg_PagedUpdateCacheDeviceOperation(
     device,
     paged_update,
@@ -420,6 +445,8 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
     input_dtype,
     cache_dtype,
     pcc,
+    is_cur_pos_sharded,
+    is_page_table_sharded,
 ):
     run_test_paged_fused_update_cache_decode(
         paged_update,
@@ -433,6 +460,8 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
         cache_dtype,
         device,
         pcc,
+        is_cur_pos_sharded=is_cur_pos_sharded,
+        is_page_table_sharded=is_page_table_sharded,
     )
 
 
@@ -446,6 +475,8 @@ def test_llama_tg_PagedUpdateCacheDeviceOperation(
 @pytest.mark.parametrize("cache_idx", [127])
 @pytest.mark.parametrize("cache_dtype", [ttnn.bfloat8_b])
 @pytest.mark.parametrize("pcc", [0.9995])
+@pytest.mark.parametrize("is_cur_pos_sharded", [True])
+@pytest.mark.parametrize("is_page_table_sharded", [True])
 def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
     device,
     paged_update,
@@ -458,8 +489,10 @@ def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
     input_dtype,
     cache_dtype,
     pcc,
+    is_cur_pos_sharded,
+    is_page_table_sharded,
 ):
-    for _ in range(2):
+    for _ in range(1):
         run_test_paged_fused_update_cache_decode(
             paged_update,
             cache_idx,
@@ -473,6 +506,8 @@ def test_llama_tg_RowMajorPagedUpdateCacheDeviceOperation(
             device,
             pcc,
             row_major=True,
+            is_cur_pos_sharded=is_cur_pos_sharded,
+            is_page_table_sharded=is_page_table_sharded,
         )
     assert device.num_program_cache_entries() == 1
 

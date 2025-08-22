@@ -51,6 +51,8 @@ from models.common.utility_functions import skip_for_grayskull
         "default_attention",
     ),
 )
+@pytest.mark.parametrize("is_cur_pos_sharded", (True,))
+@pytest.mark.parametrize("is_page_table_sharded", (True,))
 @pytest.mark.parametrize(
     "page_params",
     [{"page_block_size": 64, "page_max_num_blocks": 4096}],
@@ -82,7 +84,7 @@ from models.common.utility_functions import skip_for_grayskull
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "worker_l1_size": 1344544,
+            "worker_l1_size": 1345000,
             "fabric_config": True,
         }
     ],
@@ -101,6 +103,8 @@ def test_llama_model_inference(
     mesh_device,
     reset_seeds,
     ensure_gc,
+    is_cur_pos_sharded,
+    is_page_table_sharded,
 ):
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
@@ -205,19 +209,36 @@ def test_llama_model_inference(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            model_args.batch_size_per_device_group,
-            paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
+            batch_size,
+            paged_attention_config.max_num_blocks // batch_size,
+        )
+        page_table_chunks = page_table.split(batch_size // model_args.cluster_shape[1], dim=0)
+        repeated_page_table_chunks = [
+            chunk.repeat(model_args.sub_core_grids.num_cores(), 1) for chunk in page_table_chunks
+        ]
+        page_table = torch.cat(repeated_page_table_chunks, dim=0)
+        page_table_shard_spec = ttnn.ShardSpec(
+            model_args.sub_core_grids,
+            (
+                batch_size,
+                paged_attention_config.max_num_blocks // batch_size,
+            ),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        page_table_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, page_table_shard_spec
         )
         page_table_tt = ttnn.from_torch(
             page_table,
             device=mesh_device,
-            dtype=ttnn.int32,
+            dtype=ttnn.uint16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
-                dims=(None, None),
+                dims=(None, 0),
                 mesh_shape=model_args.cluster_shape,
             ),
+            memory_config=page_table_memory_config,
         )
 
     # Load TTNN model
@@ -243,7 +264,6 @@ def test_llama_model_inference(
 
     seqlen = 1  # Generating one token per user at a time
     batch = model_args.max_batch_size
-
     # Select the first token from the prompts for initial decoding
     encoded_prompts_tensor = torch.tensor(encoded_prompts)  # [:,0]
     pt_decode_input = embd(encoded_prompts_tensor[:, 0]).view(batch, seqlen, -1)
@@ -256,22 +276,32 @@ def test_llama_model_inference(
 
     # Initial positions
     current_pos = torch.tensor([generation_start_pos for _ in range(batch)])
+    if is_cur_pos_sharded:
+        current_pos_sram = torch.tensor(
+            [[generation_start_pos for _ in range(batch)]] * model_args.sub_core_grids.num_cores()
+        )
+        cur_pos_shard_spec = ttnn.ShardSpec(
+            model_args.sub_core_grids, (1, batch // mesh_device.shape[1]), ttnn.ShardOrientation.ROW_MAJOR
+        )
+        cur_pos_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
+        )
     current_pos_tensor = ttnn.from_torch(
-        current_pos,
+        current_pos_sram if is_cur_pos_sharded else current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 1 if is_cur_pos_sharded else 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
+        memory_config=cur_pos_memory_config,
     )
     all_pccs = []
 
     try:
         for i in range(generation_length):
             logger.info(f"[Llama3 Model] Generating token {i}")
-
             decode_input = model_args.prepare_residual_tensor_decode(
                 tt_decode_input,
                 model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
@@ -310,16 +340,21 @@ def test_llama_model_inference(
                 ref_output = reference_model(pt_decode_input, current_pos[0])
 
             # Increment position
-            current_pos = torch.tensor([generation_start_pos + i for _ in range(batch)])
+            current_pos = torch.full((batch,), generation_start_pos + i)
+
+            current_pos_sram = torch.full((model_args.sub_core_grids.num_cores(), batch), generation_start_pos + i)
             current_pos_tensor = ttnn.from_torch(
-                current_pos,
+                current_pos_sram,
                 device=mesh_device,
                 dtype=ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     mesh_device,
-                    dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                    dims=(None, 1 if is_cur_pos_sharded else 0)
+                    if (model_args.is_galaxy and batch_size > 1)
+                    else (None, None),
                     mesh_shape=model_args.cluster_shape,
                 ),
+                memory_config=cur_pos_memory_config,
             )
 
             # Append the generated token to the list of outputs

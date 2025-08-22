@@ -345,7 +345,9 @@ template <typename unary_operation_t>
 void bind_unary_operation_with_fast_and_approximate_mode(
     py::module& module,
     const unary_operation_t& operation,
+    const std::string& range = "",
     const std::string& supported_dtype = "BFLOAT16",
+    bool fast_approx_mode = false,
     const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
@@ -355,7 +357,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(
             \mathrm{{output\_tensor}}_i = {0}(\mathrm{{input\_tensor}}_i)
 
         Args:
-            input_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ttnn.Tensor): the input tensor. {2}
 
         Keyword Args:
             fast_and_approximate_mode (bool, optional): Use the fast and approximate mode. Defaults to `False`.
@@ -375,11 +377,11 @@ void bind_unary_operation_with_fast_and_approximate_mode(
                * - Dtypes
                  - Layouts
                  - Ranks
-               * - {2}
+               * - {3}
                  - TILE
                  - 2, 3, 4
 
-            {3}
+            {4}
 
         Example:
             >>> tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
@@ -387,7 +389,9 @@ void bind_unary_operation_with_fast_and_approximate_mode(
         )doc",
         operation.base_name(),
         operation.python_fully_qualified_name(),
+        range,
         supported_dtype,
+        fast_approx_mode,
         info_doc);
 
     bind_registered_operation(
@@ -405,7 +409,7 @@ void bind_unary_operation_with_fast_and_approximate_mode(
             },
             py::arg("input_tensor"),
             py::kw_only(),
-            py::arg("fast_and_approximate_mode") = false,
+            py::arg("fast_and_approximate_mode") = fast_approx_mode,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("queue_id") = DefaultQueueId});
@@ -733,7 +737,7 @@ void bind_unary_rdiv(
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            {2} (int): {3}.
+            {2} (float): {3}.
 
         Keyword Args:
             {4} (string): {5}. Can be  None, "trunc", "floor". Defaults to `None`.
@@ -1815,32 +1819,6 @@ void py_module(py::module& module) {
         R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
     bind_unary_operation(
         module,
-        ttnn::log,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|log|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
-        module,
-        ttnn::log10,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|log10|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(BFLOAT8_B is only supported in WHB0.)doc");
-    bind_unary_operation(
-        module,
-        ttnn::log2,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|log2|(\mathrm{{input\_tensor}}_i))doc",
-        "",
-        R"doc(BFLOAT16, BFLOAT8_B)doc",
-        R"doc(BFLOAT8_B is only supported in WHB0.)doc");
-    bind_unary_operation(
-        module,
-        ttnn::log1p,
-        R"doc(\mathrm{{output\_tensor}}_i = \verb|log1p|(\mathrm{{input\_tensor}}_i))doc",
-        R"doc([Supported range: [-1, 1e7]])doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_operation(
-        module,
         ttnn::logical_not,
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{!input\_tensor_i}})doc",
         "",
@@ -1992,6 +1970,14 @@ void py_module(py::module& module) {
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::erfc, R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::gelu, R"doc(BFLOAT16, BFLOAT8_B)doc");
     bind_unary_operation_with_fast_and_approximate_mode(module, ttnn::rsqrt, R"doc(BFLOAT16, BFLOAT8_B)doc");
+    bind_unary_operation_with_fast_and_approximate_mode(
+        module, ttnn::log, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc", true);
+    bind_unary_operation_with_fast_and_approximate_mode(
+        module, ttnn::log10, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc", true);
+    bind_unary_operation_with_fast_and_approximate_mode(
+        module, ttnn::log2, "", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc", true);
+    bind_unary_operation_with_fast_and_approximate_mode(
+        module, ttnn::log1p, R"doc([Supported range: [-1, 1e7]])doc", R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc", true);
 
     // Unaries with float parameter
     bind_unary_operation_with_float_parameter(
@@ -2277,7 +2263,7 @@ void py_module(py::module& module) {
         module,
         ttnn::rdiv,
         "value",
-        "denominator value which is actually calculated as numerator float value >= 0",
+        "denominator that is considered as numerator, which should be a non-zero float value",
         "round_mode",
         "rounding_mode value",
         "None",
