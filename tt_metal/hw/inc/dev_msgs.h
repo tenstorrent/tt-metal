@@ -395,7 +395,7 @@ struct mailboxes_t {
     profiler_msg_t profiler;
 };
 
-// Watcher struct needs to be 32b-divisible, since we need to write it from host using write_hex_vec_to_core().
+// Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
 static_assert(sizeof(watcher_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(kernel_config_msg_t) % sizeof(uint32_t) == 0);
 static_assert(sizeof(core_info_msg_t) % sizeof(uint32_t) == 0);

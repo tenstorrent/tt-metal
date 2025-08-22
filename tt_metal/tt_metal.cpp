@@ -340,7 +340,7 @@ bool WriteToDeviceL1(
     CoreType core_type) {
     ZoneScoped;
     auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    llrt::write_hex_vec_to_core(device->id(), worker_core, host_buffer, address);
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(device->id(), worker_core, host_buffer, address);
     return true;
 }
 
@@ -360,7 +360,8 @@ bool ReadFromDeviceL1(
     CoreType core_type) {
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
-    host_buffer = llrt::read_hex_vec_from_core(device->id(), virtual_core, address, size);
+    host_buffer =
+        tt::tt_metal::MetalContext::instance().get_cluster().read_core(device->id(), virtual_core, address, size);
     return true;
 }
 
@@ -473,7 +474,8 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
                 buffer.address() + bank_offset + mapped_page.device_page * buffer.aligned_page_size();
             auto core_coordinates =
                 device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_id));
-            llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                device->id(), core_coordinates, page, absolute_address);
         } else {
             auto bank_local_address = buffer.address() + mapped_page.device_page * buffer.aligned_page_size();
             WriteToDeviceDRAMChannel(device, bank_id, bank_local_address, page);
@@ -844,7 +846,8 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                     }  // PROF_END("CBS")
                     uint64_t kernel_config_base = hal.get_dev_addr(index, HalL1MemAddrType::KERNEL_CONFIG);
                     uint64_t addr = kernel_config_base + program.impl().get_program_config(index).cb_offset;
-                    llrt::write_hex_vec_to_core(device_id, physical_core, circular_buffer_config_vec, addr);
+                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                        device_id, physical_core, circular_buffer_config_vec, addr);
                 }
             }
             program.init_semaphores(*device, logical_core, index);
@@ -896,7 +899,8 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                         physical_core.str(),
                                         rt_args_addr,
                                         rt_args);
-                                    tt::llrt::write_hex_vec_to_core(device_id, physical_core, rt_args, rt_args_addr);
+                                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                                        device_id, physical_core, rt_args, rt_args_addr);
                                 }
 
                                 const auto& common_rt_args = kernel->common_runtime_args();
@@ -914,7 +918,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                                         physical_core.str(),
                                         common_rt_args_addr,
                                         common_rt_args);
-                                    tt::llrt::write_hex_vec_to_core(
+                                    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                                         device_id, physical_core, common_rt_args, common_rt_args_addr);
                                 }
                             }

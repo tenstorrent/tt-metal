@@ -390,13 +390,6 @@ Tensor _selu(
     return result_selu;
 }
 
-// threshold(a,t,v) = (a <= t)*v + (a > t)*a
-Tensor ExecuteUnaryCompositeThreshold::invoke(
-    const Tensor& input_tensor, float threshold, float value, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor sub_result = ttnn::subtract(input_tensor, threshold, std::nullopt, output_mem_config);
-    return ttnn::where(ttnn::lez(sub_result), value, input_tensor, output_mem_config);
-}
-
 std::vector<Tensor> split_tensor_for_glu(
     const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
@@ -548,7 +541,7 @@ Tensor ExecuteRdiv::invoke(
         result = ttnn::floor(result);
     }
     return ttnn::where(
-        ttnn::eqz(queue_id, input_tensor, memory_config), t_inf, result, memory_config, optional_output_tensor);
+        ttnn::eqz(queue_id, input_tensor, memory_config), t_inf * value, result, memory_config, optional_output_tensor);
 }
 
 // logit(input, eps)=log(input / 1 - input)

@@ -432,6 +432,7 @@ Tensor run_remainder(
             FusedActivations{},
             false),
         result);
+
     result = ttnn::where(
         ttnn::ltz(input_b),
         ttnn::add(
@@ -445,6 +446,7 @@ Tensor run_remainder(
             FusedActivations{},
             false),
         result);
+
     result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
     result = ttnn::where(ttnn::eqz(input_a), 0.0f, ttnn::where(ttnn::eqz(input_b), t_nan, result), output_mem_config);
     result = ttnn::where(ttnn::logical_and(ttnn::eqz(input_a), ttnn::eqz(input_b)), t_nan, result, output_mem_config);
@@ -484,7 +486,8 @@ Tensor run_fmod(
         ttnn::multiply(division_result, input_b, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    return ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
+    result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
+    return ttnn::where(ttnn::eqz(input_b, output_mem_config), std::nanf(""), result);
 }
 
 // FMOD result = input − (other * trunc(input/other))

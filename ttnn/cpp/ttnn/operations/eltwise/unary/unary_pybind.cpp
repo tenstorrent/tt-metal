@@ -733,7 +733,7 @@ void bind_unary_rdiv(
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
-            {2} (int): {3}.
+            {2} (float): {3}.
 
         Keyword Args:
             {4} (string): {5}. Can be  None, "trunc", "floor". Defaults to `None`.
@@ -1444,7 +1444,7 @@ void bind_unary_composite_int(
 
 // OpHandler_threshold
 template <typename unary_operation_t>
-void bind_unary_composite_threshold(
+void bind_unary_threshold(
     py::module& module,
     const unary_operation_t& operation,
     const std::string& parameter_name_a,
@@ -2216,7 +2216,7 @@ void py_module(py::module& module) {
         "max value",
         1.0f,
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
-    bind_unary_composite_threshold(
+    bind_unary_threshold(
         module,
         ttnn::threshold,
         "threshold",
@@ -2277,7 +2277,7 @@ void py_module(py::module& module) {
         module,
         ttnn::rdiv,
         "value",
-        "denominator value which is actually calculated as numerator float value >= 0",
+        "denominator that is considered as numerator, which should be a non-zero float value",
         "round_mode",
         "rounding_mode value",
         "None",
