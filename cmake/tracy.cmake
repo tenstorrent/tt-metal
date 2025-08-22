@@ -25,8 +25,7 @@ target_compile_definitions(
     TracyClient
     PUBLIC
         TRACY_ENABLE
-        "$<$<NOT:$<BOOL:${ENABLE_TRACY}>>:TRACY_NO_INVARIANT_CHECK>"
-        "$<$<BOOL:${ENABLE_TRACY_TIMER_FALLBACK}>:TRACY_TIMER_FALLBACK>"
+        "$<$<AND:$<BOOL:${ENABLE_TRACY}>,$<BOOL:${ENABLE_TRACY_TIMER_FALLBACK}>>:TRACY_TIMER_FALLBACK>"
 )
 target_compile_options(
     TracyClient
