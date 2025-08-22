@@ -16,7 +16,6 @@ target_link_libraries(
         Threads::Threads
         nlohmann_json::nlohmann_json
         fmt::fmt-header-only
-        small_vector
         Boost::algorithm
         Taskflow::Taskflow
         TT::Metalium
