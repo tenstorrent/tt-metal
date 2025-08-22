@@ -13,7 +13,7 @@
 
 #include <telemetry/telemetry_provider.hpp>
 #include <telemetry/ethernet/ethernet_metrics.hpp>
-#include <telemetry/arc/arc_uint_metric.hpp>
+#include <telemetry/arc/arc_metrics.hpp>
 #include <telemetry/arc/arc_telemetry_reader.hpp>
 
 static constexpr auto MONITOR_INTERVAL_SECONDS = std::chrono::seconds(5);
@@ -72,15 +72,19 @@ std::shared_ptr<TelemetrySnapshot> get_writeable_buffer() {
 }
 
 static void update(
-    std::vector<std::unique_ptr<BoolMetric>> &bool_metrics,
-    std::vector<std::unique_ptr<UIntMetric>> &uint_metrics,
-    const tt::Cluster &cluster
-) {
+    std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
+    std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
+    std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
+    const tt::Cluster& cluster) {
     for (auto &metric: bool_metrics) {
         metric->update(cluster);
     }
 
     for (auto &metric: uint_metrics) {
+        metric->update(cluster);
+    }
+
+    for (auto& metric : double_metrics) {
         metric->update(cluster);
     }
 }
@@ -104,10 +108,10 @@ static std::string get_cluster_wide_telemetry_path(const Metric &metric) {
 }
 
 static void send_initial_snapshot(
-    const std::vector<std::shared_ptr<TelemetrySubscriber>> &subscribers,
-    const std::vector<std::unique_ptr<BoolMetric>> &bool_metrics,
-    const std::vector<std::unique_ptr<UIntMetric>> &uint_metrics
-) {
+    const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers,
+    const std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
+    const std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
+    const std::vector<std::unique_ptr<DoubleMetric>>& double_metrics) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
 
     for (size_t i = 0; i < bool_metrics.size(); i++) {
@@ -129,6 +133,16 @@ static void send_initial_snapshot(
         snapshot->uint_metric_timestamps.push_back(uint_metrics[i]->timestamp());
     }
 
+    for (size_t i = 0; i < double_metrics.size(); i++) {
+        std::string path = get_cluster_wide_telemetry_path(*double_metrics[i]);
+        size_t id = double_metrics[i]->id;
+        snapshot->double_metric_ids.push_back(id);
+        snapshot->double_metric_names.push_back(path);
+        snapshot->double_metric_units.push_back(static_cast<uint16_t>(double_metrics[i]->units));
+        snapshot->double_metric_values.push_back(double_metrics[i]->value());
+        snapshot->double_metric_timestamps.push_back(double_metrics[i]->timestamp());
+    }
+
     // Populate unit label maps when names are populated
     snapshot->metric_unit_display_label_by_code = create_metric_unit_display_label_map();
     snapshot->metric_unit_full_label_by_code = create_metric_unit_full_label_map();
@@ -139,10 +153,10 @@ static void send_initial_snapshot(
 }
 
 static void send_delta(
-    const std::vector<std::shared_ptr<TelemetrySubscriber>> &subscribers,
-    std::vector<std::unique_ptr<BoolMetric>> &bool_metrics,
-    std::vector<std::unique_ptr<UIntMetric>> &uint_metrics
-) {
+    const std::vector<std::shared_ptr<TelemetrySubscriber>>& subscribers,
+    std::vector<std::unique_ptr<BoolMetric>>& bool_metrics,
+    std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
+    std::vector<std::unique_ptr<DoubleMetric>>& double_metrics) {
     std::shared_ptr<TelemetrySnapshot> snapshot = get_writeable_buffer();
 
     for (size_t i = 0; i < bool_metrics.size(); i++) {
@@ -165,6 +179,16 @@ static void send_delta(
         uint_metrics[i]->mark_transmitted();
     }
 
+    for (size_t i = 0; i < double_metrics.size(); i++) {
+        if (!double_metrics[i]->changed_since_transmission()) {
+            continue;
+        }
+        snapshot->double_metric_ids.push_back(double_metrics[i]->id);
+        snapshot->double_metric_values.push_back(double_metrics[i]->value());
+        snapshot->double_metric_timestamps.push_back(double_metrics[i]->timestamp());
+        double_metrics[i]->mark_transmitted();
+    }
+
     for (auto &subscriber: subscribers) {
         subscriber->on_telemetry_ready(snapshot);
     }
@@ -178,6 +202,7 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
     size_t id = 1;
     std::vector<std::unique_ptr<BoolMetric>> bool_metrics;
     std::vector<std::unique_ptr<UIntMetric>> uint_metrics;
+    std::vector<std::unique_ptr<DoubleMetric>> double_metrics;
 
     // Create Ethernet metrics
     for (const auto &[chip_id, endpoints]: get_ethernet_endpoints_by_chip(cluster)) {
@@ -202,19 +227,19 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
         uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::TDP));
         uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::TDC));
         uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::VCORE));
-        uint_metrics.push_back(
-            std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::ASIC_TEMPERATURE));
-        uint_metrics.push_back(
-            std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::BOARD_TEMPERATURE));
+        double_metrics.push_back(
+            std::make_unique<ARCDoubleMetric>(id++, reader, ARCDoubleMetric::CommonTelemetryTag::ASIC_TEMPERATURE));
+        double_metrics.push_back(
+            std::make_unique<ARCDoubleMetric>(id++, reader, ARCDoubleMetric::CommonTelemetryTag::BOARD_TEMPERATURE));
     }
 
     // Continuously monitor on a loop
-    update(bool_metrics, uint_metrics, cluster);
-    send_initial_snapshot(subscribers, bool_metrics, uint_metrics);
+    update(bool_metrics, uint_metrics, double_metrics, cluster);
+    send_initial_snapshot(subscribers, bool_metrics, uint_metrics, double_metrics);
     while (!stopped_.load()) {
         std::this_thread::sleep_for(MONITOR_INTERVAL_SECONDS);
-        update(bool_metrics, uint_metrics,cluster);
-        send_delta(subscribers, bool_metrics, uint_metrics);
+        update(bool_metrics, uint_metrics, double_metrics, cluster);
+        send_delta(subscribers, bool_metrics, uint_metrics, double_metrics);
     }
 }
 

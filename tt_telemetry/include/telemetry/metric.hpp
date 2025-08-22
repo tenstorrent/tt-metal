@@ -23,7 +23,8 @@ enum class MetricUnit : uint16_t {
     MILLIVOLTS = 6,
     VOLTS = 7,
     REVOLUTIONS_PER_MINUTE = 8,
-    AMPERES = 9
+    AMPERES = 9,
+    CELSIUS = 10
 };
 
 // Functions to convert MetricUnit enum to string labels
@@ -93,4 +94,15 @@ public:
 
 protected:
     uint64_t value_ = 0;
+};
+
+class DoubleMetric : public Metric {
+public:
+    DoubleMetric(size_t metric_unique_id, MetricUnit metric_units = MetricUnit::UNITLESS) :
+        Metric(metric_unique_id, metric_units) {}
+
+    double value() const { return value_; }
+
+protected:
+    double value_ = 0.0;
 };

@@ -1,10 +1,15 @@
-#include <telemetry/arc/arc_uint_metric.hpp>
+/*
+ * ARC telemetry is described in the ISA documentation:
+ * https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/ARCTile/Telemetry.md
+ */
+
+#include <telemetry/arc/arc_metrics.hpp>
 
 #include <chrono>
 #include <tt-metalium/assert.hpp>
 
 /**************************************************************************************************
- ARCUintMetric Class
+| ARCUintMetric Class
 **************************************************************************************************/
 
 ARCUintMetric::ARCUintMetric(
@@ -49,8 +54,8 @@ ARCUintMetric::ARCUintMetric(
     value_ = 0;
 }
 
-// Helper function to determine units for CommonTelemetryTag
-static MetricUnit get_units_for_common_tag(ARCUintMetric::CommonTelemetryTag common_metric) {
+// Helper function to determine units for ARCUintMetric CommonTelemetryTag
+static MetricUnit get_units_for_uint_common_tag(ARCUintMetric::CommonTelemetryTag common_metric) {
     switch (common_metric) {
         case ARCUintMetric::CommonTelemetryTag::AICLK:
         case ARCUintMetric::CommonTelemetryTag::AXICLK:
@@ -59,15 +64,13 @@ static MetricUnit get_units_for_common_tag(ARCUintMetric::CommonTelemetryTag com
         case ARCUintMetric::CommonTelemetryTag::TDP: return MetricUnit::WATTS;
         case ARCUintMetric::CommonTelemetryTag::TDC: return MetricUnit::AMPERES;
         case ARCUintMetric::CommonTelemetryTag::VCORE: return MetricUnit::MILLIVOLTS;
-        case ARCUintMetric::CommonTelemetryTag::ASIC_TEMPERATURE:
-        case ARCUintMetric::CommonTelemetryTag::BOARD_TEMPERATURE: return MetricUnit::UNITLESS;  // raw uint32
         default: return MetricUnit::UNITLESS;
     }
 }
 
 ARCUintMetric::ARCUintMetric(
     size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader, CommonTelemetryTag common_metric) :
-    UIntMetric(chip_id, get_units_for_common_tag(common_metric)),
+    UIntMetric(chip_id, get_units_for_uint_common_tag(common_metric)),
     reader_(reader),
     wormhole_tag_(),
     blackhole_tag_(),
@@ -114,18 +117,6 @@ ARCUintMetric::ARCUintMetric(
             wormhole_tag_ = tt::umd::wormhole::TelemetryTag::VCORE;
             blackhole_tag_ = tt::umd::blackhole::TelemetryTag::VCORE;
             break;
-        case CommonTelemetryTag::ASIC_TEMPERATURE:
-            metric_name_ = "ASICTemperature";
-            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::ASIC_TEMPERATURE;
-            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::ASIC_TEMPERATURE;
-            mask_ = (reader_->get_arch() == tt::ARCH::WORMHOLE_B0) ? 0xffff : 0xffffffff;
-            break;
-        case CommonTelemetryTag::BOARD_TEMPERATURE:
-            metric_name_ = "BoardTemperature";
-            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::BOARD_TEMPERATURE;
-            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::BOARD_TEMPERATURE;
-            mask_ = (reader_->get_arch() == tt::ARCH::WORMHOLE_B0) ? 0xffff : 0xffffffff;
-            break;
         default: TT_ASSERT(false, "Unknown CommonTelemetryTag type for chip {}", reader_->id);
     }
 
@@ -161,6 +152,146 @@ void ARCUintMetric::update(const tt::Cluster& cluster) {
 
     // Update the metric value and timestamp
     uint64_t old_value = value_;
+    changed_since_transmission_ = new_value != old_value;
+    value_ = new_value;
+    timestamp_ =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
+}
+
+/**************************************************************************************************
+| ARCDoubleMetric Class
+**************************************************************************************************/
+
+ARCDoubleMetric::ARCDoubleMetric(
+    size_t chip_id,
+    std::shared_ptr<ARCTelemetryReader> reader,
+    tt::umd::wormhole::TelemetryTag tag,
+    const std::string& metric_name,
+    uint32_t mask,
+    double scale_factor,
+    MetricUnit units) :
+    DoubleMetric(chip_id, units),
+    reader_(reader),
+    wormhole_tag_(tag),
+    blackhole_tag_(),  // just some dummy tag we will never use
+    metric_name_(metric_name),
+    mask_(mask),
+    scale_factor_(scale_factor) {
+    TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
+    TT_ASSERT(
+        reader_->get_arch() == tt::ARCH::WORMHOLE_B0,
+        "Reader architecture mismatch: expected Wormhole for chip {}",
+        reader_->id);
+    value_ = 0.0;
+}
+
+ARCDoubleMetric::ARCDoubleMetric(
+    size_t chip_id,
+    std::shared_ptr<ARCTelemetryReader> reader,
+    tt::umd::blackhole::TelemetryTag tag,
+    const std::string& metric_name,
+    uint32_t mask,
+    double scale_factor,
+    MetricUnit units) :
+    DoubleMetric(chip_id, units),
+    reader_(reader),
+    wormhole_tag_(),
+    blackhole_tag_(tag),
+    metric_name_(metric_name),
+    mask_(mask),
+    scale_factor_(scale_factor) {
+    TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
+    TT_ASSERT(
+        reader_->get_arch() == tt::ARCH::BLACKHOLE,
+        "Reader architecture mismatch: expected Blackhole for chip {}",
+        reader_->id);
+    value_ = 0.0;
+}
+
+// Helper function to determine units for ARCDoubleMetric CommonTelemetryTag
+static MetricUnit get_units_for_double_common_tag(ARCDoubleMetric::CommonTelemetryTag common_metric) {
+    switch (common_metric) {
+        case ARCDoubleMetric::CommonTelemetryTag::ASIC_TEMPERATURE:
+        case ARCDoubleMetric::CommonTelemetryTag::BOARD_TEMPERATURE: return MetricUnit::CELSIUS;
+        default: return MetricUnit::UNITLESS;
+    }
+}
+
+ARCDoubleMetric::ARCDoubleMetric(
+    size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader, CommonTelemetryTag common_metric) :
+    DoubleMetric(chip_id, get_units_for_double_common_tag(common_metric)),
+    reader_(reader),
+    wormhole_tag_(),
+    blackhole_tag_(),
+    mask_(0xffffffff),
+    scale_factor_(1.0) {
+    TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
+
+    // Set metric name and tags based on common metric type
+    switch (common_metric) {
+        case CommonTelemetryTag::ASIC_TEMPERATURE:
+            metric_name_ = "ASICTemperature";
+            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::ASIC_TEMPERATURE;
+            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::ASIC_TEMPERATURE;
+            // Set mask and scale factor based on architecture
+            if (reader_->get_arch() == tt::ARCH::WORMHOLE_B0) {
+                mask_ = 0xffff;                // 16-bit value for Wormhole
+                scale_factor_ = 1.0f / 16.0f;  // Wormhole scale factor
+            } else {
+                mask_ = 0xffffffff;               // 32-bit value for Blackhole
+                scale_factor_ = 1.0f / 65536.0f;  // Blackhole scale factor
+            }
+            break;
+        case CommonTelemetryTag::BOARD_TEMPERATURE:
+            metric_name_ = "BoardTemperature";
+            wormhole_tag_ = tt::umd::wormhole::TelemetryTag::BOARD_TEMPERATURE;
+            blackhole_tag_ = tt::umd::blackhole::TelemetryTag::BOARD_TEMPERATURE;
+            // Set mask and scale factor based on architecture
+            if (reader_->get_arch() == tt::ARCH::WORMHOLE_B0) {
+                mask_ = 0xff;          // 16-bit value for Wormhole
+                scale_factor_ = 1.0f;  // Wormhole scale factor
+            } else {
+                mask_ = 0xffffffff;               // 32-bit value for Blackhole
+                scale_factor_ = 1.0f / 65536.0f;  // Blackhole scale factor
+            }
+            break;
+        default: TT_ASSERT(false, "Unknown CommonTelemetryTag type for chip {}", reader_->id);
+    }
+
+    value_ = 0.0;
+}
+
+const std::vector<std::string> ARCDoubleMetric::telemetry_path() const {
+    // Start with the chip identifier path
+    std::vector<std::string> path = reader_->id.telemetry_path();
+
+    // Add the metric name
+    path.push_back(metric_name_);
+
+    return path;
+}
+
+void ARCDoubleMetric::update(const tt::Cluster& cluster) {
+    // Read the appropriate telemetry value based on architecture
+    uint32_t raw_value = 0;
+    tt::ARCH arch = reader_->get_arch();
+    if (arch == tt::ARCH::WORMHOLE_B0) {
+        raw_value = reader_->read_value(wormhole_tag_);
+    } else if (arch == tt::ARCH::BLACKHOLE) {
+        raw_value = reader_->read_value(blackhole_tag_);
+    } else {
+        TT_ASSERT(false, "Unsupported architecture for chip {}", reader_->id);
+    }
+
+    // Apply mask to get the final raw value
+    uint32_t masked_value = raw_value & mask_;
+
+    // Convert to double and apply scale factor
+    double new_value = static_cast<double>(masked_value) * scale_factor_;
+
+    // Update the metric value and timestamp
+    double old_value = value_;
     changed_since_transmission_ = new_value != old_value;
     value_ = new_value;
     timestamp_ =
