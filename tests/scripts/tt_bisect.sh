@@ -68,7 +68,13 @@ while [[ "$found" == "false" ]]; do
   echo "::group::Building $rev"
 
   git submodule update --init --recursive --force
-  rm -rf .cpmcache build build_Release build_Debug
+
+  # Use and clean the CPM cache that CMake will use
+  export CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-/work/.cpmcache}"
+  rm -rf "$CPM_SOURCE_CACHE" build build_Release build_Debug
+  mkdir -p "$CPM_SOURCE_CACHE"
+
+  export CMAKE_ARGS="-DCPM_SOURCE_CACHE=$CPM_SOURCE_CACHE -DCPM_DOWNLOAD_ALL=ON -DCPM_USE_LOCAL_PACKAGES=OFF"
 
   build_rc=0
   ./build_metal.sh \
@@ -78,6 +84,13 @@ while [[ "$found" == "false" ]]; do
     --build-all \
     --enable-ccache \
     --configure-only || build_rc=$?
+
+  grep -R "CPM_SOURCE_CACHE" build/CMakeCache.txt | cat
+  test -d "$CPM_SOURCE_CACHE/tokenizers-cpp" && echo "CPM cache OK"
+
+  # Did the patch apply? Look for the explicit ref used by your patch
+  grep -R "(&(*handle).decode_str).len()" "$CPM_SOURCE_CACHE/tokenizers-cpp" -n || true
+
   if [ $build_rc -eq 0 ]; then
     cmake --build build --target install --verbose || build_rc=$?
   fi
