@@ -193,6 +193,55 @@ export class HierarchicalTelemetryStore {
         }
     }
 
+    // Updates telemetry state for a particular double-valued node. Will set the value directly
+    // and then propagate upwards if changed. If the value did not already exist and this is the
+    // first insertion, propagation will occur.
+    updateDoubleValue(id, value, timestamp = null) {
+        if (typeof value !== "number") {
+            console.error(`[HierarchicalTelemetryStore] Value is not double (${typeof value})`);
+        }
+
+        const path = this._pathById.get(id);
+        if (!path) {
+            // Invalid telemetry data, does not map to any known path
+            console.error(`[HierarchicalTelemetryStore] Invalid id ${id}, cannot update double value`);
+            return;
+        }
+
+        // Convert timestamp to Date if provided, otherwise use current time
+        const timestampDate = timestamp ? new Date(timestamp) : new Date();
+
+        // Update value and timestamp, preserving unit information
+        const oldData = this._dataByPath.get(path);
+        const forceUpdate = oldData === undefined;
+        let changed = !oldData || value !== oldData.value || timestampDate.getTime() !== oldData.timestamp.getTime();
+        const newData = {
+            value,
+            timestamp: timestampDate,
+            unitDisplayLabel: oldData ? oldData.unitDisplayLabel : null,
+            unitFullLabel: oldData ? oldData.unitFullLabel : null
+        };
+        this._dataByPath.set(path, newData);
+        console.log(`Set ${path} = ${value} at ${timestampDate.toISOString()}`);
+
+        // No change? We are done.
+        if (!changed && !forceUpdate) {
+            return;
+        }
+
+        // Split path into components. Then move upwards to propagate the boolean value and timestamp.
+        const parts = path.split("/");
+        for (let i = parts.length; i > 0; i--) {
+            const currentPath = parts.slice(0, i).join("/");
+            if (currentPath !== path) {
+                // _getAggregateHealthAndTimestamp only supports bools at leaf level, so we don't want to
+                // invoke it on our double
+                const aggregateData = this._getAggregateHealthAndTimestamp(currentPath);
+                this._dataByPath.set(currentPath, aggregateData);
+            }
+        }
+    }
+
     // Update function for unit label maps - iterates through the provided maps
     // and updates the internal ones (overwriting existing values and adding new ones)
     updateUnitLabelMaps(displayLabelMap, fullLabelMap) {

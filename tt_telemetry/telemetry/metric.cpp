@@ -18,6 +18,7 @@ std::string metric_unit_to_display_label(MetricUnit unit) {
         case MetricUnit::VOLTS: return "V";
         case MetricUnit::REVOLUTIONS_PER_MINUTE: return "RPM";
         case MetricUnit::AMPERES: return "A";
+        case MetricUnit::CELSIUS: return "°C";
         default: return "<unknown>";
     }
 }
@@ -34,6 +35,7 @@ std::string metric_unit_to_full_label(MetricUnit unit) {
         case MetricUnit::VOLTS: return "Volts";
         case MetricUnit::REVOLUTIONS_PER_MINUTE: return "Revolutions Per Minute";
         case MetricUnit::AMPERES: return "Amperes";
+        case MetricUnit::CELSIUS: return "Celsius";
         default: return "<unknown>";
     }
 }
@@ -53,6 +55,7 @@ std::unordered_map<uint16_t, std::string> create_metric_unit_display_label_map()
     map[static_cast<uint16_t>(MetricUnit::REVOLUTIONS_PER_MINUTE)] =
         metric_unit_to_display_label(MetricUnit::REVOLUTIONS_PER_MINUTE);
     map[static_cast<uint16_t>(MetricUnit::AMPERES)] = metric_unit_to_display_label(MetricUnit::AMPERES);
+    map[static_cast<uint16_t>(MetricUnit::CELSIUS)] = metric_unit_to_display_label(MetricUnit::CELSIUS);
 
     return map;
 }
@@ -72,6 +75,7 @@ std::unordered_map<uint16_t, std::string> create_metric_unit_full_label_map() {
     map[static_cast<uint16_t>(MetricUnit::REVOLUTIONS_PER_MINUTE)] =
         metric_unit_to_full_label(MetricUnit::REVOLUTIONS_PER_MINUTE);
     map[static_cast<uint16_t>(MetricUnit::AMPERES)] = metric_unit_to_full_label(MetricUnit::AMPERES);
+    map[static_cast<uint16_t>(MetricUnit::CELSIUS)] = metric_unit_to_full_label(MetricUnit::CELSIUS);
 
     return map;
 }
