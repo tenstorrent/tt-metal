@@ -9,6 +9,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "slice_write_op.hpp"
 #include "tt-metalium/math.hpp"
@@ -420,7 +421,8 @@ static operation::ProgramWithCallbacks slice_write_rm_sharded_input_multi_core(
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -733,7 +735,8 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)src0_cb_index};
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
     std::map<std::string, std::string> writer_defines;
     if (num_tiles_channel_per_core * TILE_WIDTH * num_cores_channels > output_shape[-1]) {
         writer_defines["UNPAD_INPUT_WIDTH"] = "1";
@@ -862,8 +865,10 @@ static operation::ProgramWithCallbacks slice_write_rm_interleaved_multi_core(
             .set_page_size(src0_cb_index, cb_page_size);
     tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
-    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_cb_index, src0_is_dram};
-    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index, (std::uint32_t)dst_is_dram};
+    std::vector<uint32_t> reader_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    std::vector<uint32_t> writer_compile_time_args_vec = {(std::uint32_t)src0_cb_index};
+    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args_vec);
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args_vec);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
