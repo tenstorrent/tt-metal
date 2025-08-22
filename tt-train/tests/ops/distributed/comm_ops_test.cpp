@@ -99,10 +99,6 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    size_t batch_multiplier = rand() % 8 + 1;
-    size_t size_multiplier = rand() % 6 + 1;
-    size_t height_multiplier = rand() % 8 + 1;
-
     size_t batch = 64;
     size_t size = 384;
     size_t height = 256;

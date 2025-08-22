@@ -57,7 +57,6 @@ SortedParameters RemoteOptimizer::get_sorted_parameters() const {
 }
 
 void RemoteOptimizer::send_gradients() {
-    auto& ctx = ttml::autograd::ctx();
     for (auto& [name, tensor_ptr] : m_sorted_parameters) {
         if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
             auto grad = tensor_ptr->get_grad();
