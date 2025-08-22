@@ -74,15 +74,6 @@ class TtGroupNormParameters:
         ), f"Incompatible channels ({num_channels}%32)or groups({num_channels}%{num_groups}):"
 
         opt_core_grid = parallel_config.device.core_grid
-        """
-        grid_e = min(opt_core_grid.x, opt_core_grid.y)
-        while num_channels % (32 * grid_e) != 0:
-            grid_e -= 1
-
-        opt_core_grid = (
-            ttnn.CoreGrid(y=grid_e, x=opt_core_grid.x) if core_grid is None else core_grid
-        )  # Non uniform core grid causing issues with PCC
-        """
 
         TILE_WIDTH = 32
         num_virtual_cols = min(opt_core_grid.x, num_groups)

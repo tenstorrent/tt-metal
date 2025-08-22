@@ -177,19 +177,26 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
     ), ttnn.CoreGrid(y=grid_size[1], x=grid_size[0])
 
 
-def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_groups):
+def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_core_x):
     import torch
 
     def find_ceil_divisible_by_32(n):
         return ((n + 31) // 32) * 32
 
-    values_per_chunk = num_channels // num_groups
+    values_per_chunk = num_channels // num_core_x
     zeros_to_insert = find_ceil_divisible_by_32(values_per_chunk) - values_per_chunk
     input_tensor = input_tensor.view(-1, values_per_chunk)
     input_tensor = torch.nn.functional.pad(input_tensor, (0, zeros_to_insert))
     input_tensor = input_tensor.flatten()
     input_tensor = input_tensor[: num_channels + zeros_to_insert * (num_channels // values_per_chunk)]
     return input_tensor.reshape(1, 1, -1, 32)
+
+
+def dram_group_norm_virtual_columns(core_grid, num_channels, num_groups):
+    num_virtual_cols = min(core_grid.x, num_groups)
+    while (num_channels / num_virtual_cols) % ttnn.TILE_SIZE != 0:
+        num_virtual_cols -= 1
+    return num_virtual_cols
 
 
 def group_norm_params_from_torch(
@@ -234,10 +241,7 @@ def group_norm_params_from_torch(
 
     # Calculate number of virtual columns that will be used
     dev_core_grid = core_grid or device.core_grid
-    num_virtual_cols = min(dev_core_grid.x, groups_per_device)
-    while (channels_per_device / num_virtual_cols) % ttnn.TILE_SIZE != 0:
-        num_virtual_cols -= 1
-
+    num_virtual_cols = dram_group_norm_virtual_columns(dev_core_grid, channels_per_device, groups_per_device)
     tt_params = []
     torch_params_itr = [torch_params] if isinstance(torch_params, torch.Tensor) else torch_params
 
