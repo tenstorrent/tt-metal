@@ -460,9 +460,6 @@ target_sources(
         cpp/ttnn/operations/experimental/ccl/rms_allgather/device/multi_core/rms_allgather_pf.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_pre_all_gather.cpp
         cpp/ttnn/operations/normalization/rmsnorm_distributed/rmsnorm_post_all_gather.cpp
-        cpp/ttnn/operations/normalization/softmax/softmax.cpp
-        cpp/ttnn/operations/normalization/softmax/device/multi_core/softmax_op_multi_core.cpp
-        cpp/ttnn/operations/normalization/softmax/device/softmax_op.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_device_op.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
