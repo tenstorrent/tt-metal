@@ -487,7 +487,7 @@ class TtQwenModelArgs(TtModelArgs):
             def w1_w3_prg_config(seq_len, use_interleaved):
                 if seq_len == 128:
                     # return self.matmul_1d_config(128, 2048, 3584, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=16)
-                    return self.matmul_1d_config(128, 2048, 3200, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=16)
+                    return self.matmul_1d_config(128, 1280, 3200, grid=ttnn.CoreGrid(x=7, y=4), overwrite_per_core_k=10)
                 if not use_interleaved:
                     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                         compute_with_storage_grid_size=(7, 10),
@@ -547,9 +547,9 @@ class TtQwenModelArgs(TtModelArgs):
                         # 128, 3584, 2048, grid=ttnn.CoreGrid(x=7, y=10), overwrite_per_core_k=14
                         128,
                         3200,
-                        2048,
+                        1280,
                         grid=ttnn.CoreGrid(x=7, y=10),
-                        overwrite_per_core_k=14,
+                        overwrite_per_core_k=10,
                     )
                 # For sequence lengths < 4096, we use this config as it performs better that what would be generated below
                 if seq_len < 4096:
@@ -559,7 +559,7 @@ class TtQwenModelArgs(TtModelArgs):
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                         per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),  # 8~10 rows
-                        per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
+                        per_core_N=math.ceil(1280 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
                         fused_activation=None,
                         fuse_batch=seq_len <= 2048,

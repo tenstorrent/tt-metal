@@ -90,8 +90,6 @@ def test_qwen_transformer_inference(
                 ]
             )
         )
-        and "q_norm" not in k
-        and "k_norm" not in k  # Filter out Qwen-specific norms that aren't in reference model
     }
     reference_model = Transformer(model_args, llama3=False)
     reference_model.load_state_dict(reference_state_dict)
