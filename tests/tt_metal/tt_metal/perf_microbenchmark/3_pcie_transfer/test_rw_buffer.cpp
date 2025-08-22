@@ -27,6 +27,8 @@
 #include "test_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -108,17 +110,21 @@ int main(int argc, char** argv) {
             return 1;
         }
 
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-        device_is_mmio = device->is_mmio_capable();
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
+        device_is_mmio = device->get_devices()[0]->is_mmio_capable();
 
         if (!device->using_fast_dispatch()) {
             log_info(LogTest, "Skip! This test needs to be run with fast dispatch enabled");
             return 1;
         }
 
-        // Application setup
-        auto buffer = tt_metal::Buffer::create(
-            device, transfer_size, page_size, buffer_type == 0 ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
+        // Application setup: MeshBuffer
+        tt_metal::distributed::DeviceLocalBufferConfig device_local{
+            .page_size = page_size,
+            .buffer_type = buffer_type == 0 ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1,
+        };
+        tt_metal::distributed::ReplicatedBufferConfig global_buf{.size = transfer_size};
+        auto buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local, device.get());
 
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
             transfer_size, 1000, std::chrono::system_clock::now().time_since_epoch().count());
@@ -139,8 +145,8 @@ int main(int argc, char** argv) {
             // Execute application
             if (!skip_write) {
                 auto t_begin = std::chrono::steady_clock::now();
-                EnqueueWriteBuffer(device->command_queue(), *buffer, src_vec, false);
-                Finish(device->command_queue());
+                tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), buffer, src_vec, false);
+                tt_metal::distributed::Finish(device->mesh_command_queue());
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 float write_bw = transfer_size / (elapsed_us * 1000.0);
@@ -156,7 +162,12 @@ int main(int argc, char** argv) {
 
             if (!skip_read) {
                 auto t_begin = std::chrono::steady_clock::now();
-                EnqueueReadBuffer(device->command_queue(), *buffer, result_vec, true);
+                tt_metal::distributed::ReadShard(
+                    device->mesh_command_queue(),
+                    result_vec,
+                    buffer,
+                    tt_metal::distributed::MeshCoordinate(0, 0),
+                    true);
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
                 float read_bw = transfer_size / (elapsed_us * 1000.0);
@@ -184,7 +195,7 @@ int main(int argc, char** argv) {
             log_error(tt::LogTest, "Read data mismatch");
             pass = false;
         }
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
     } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());

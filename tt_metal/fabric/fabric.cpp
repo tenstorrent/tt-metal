@@ -237,8 +237,12 @@ tt::tt_fabric::Topology get_fabric_topology() {
 FabricConfig GetFabricConfig() { return tt::tt_metal::MetalContext::instance().get_fabric_config(); }
 
 void SetFabricConfig(
-    FabricConfig fabric_config, FabricReliabilityMode reliability_mode, std::optional<uint8_t> num_routing_planes) {
-    tt::tt_metal::MetalContext::instance().set_fabric_config(fabric_config, reliability_mode, num_routing_planes);
+    FabricConfig fabric_config,
+    FabricReliabilityMode reliability_mode,
+    std::optional<uint8_t> num_routing_planes,
+    FabricTensixConfig fabric_tensix_config) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config);
 }
 
 std::optional<eth_chan_directions> get_eth_forwarding_direction(

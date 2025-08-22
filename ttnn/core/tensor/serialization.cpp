@@ -442,7 +442,7 @@ Tensor load_tensor_flatbuffer(const std::string& file_name, MeshDevice* device) 
     TT_FATAL(fd != -1, "Cannot open \"{}\"", file_name);
     auto cleanup = ttsl::make_cleanup([fd]() { close(fd); });
 
-    struct stat file_stat;
+    struct stat file_stat{};
     TT_FATAL(fstat(fd, &file_stat) == 0, "Failed to get file stats for \"{}\"", file_name);
     size_t file_size = file_stat.st_size;
 

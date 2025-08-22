@@ -23,6 +23,11 @@ enum class FabricConfig : uint32_t {
     CUSTOM = 11
 };
 
+enum class FabricTensixConfig : uint32_t {
+    DISABLED = 0,
+    MUX = 1,
+};
+
 enum class FabricReliabilityMode : uint32_t {
 
     // When fabric is initialized, user expects live links/devices to exactly match the mesh graph descriptor.

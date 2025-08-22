@@ -97,7 +97,8 @@ tt::tt_fabric::Topology get_fabric_topology();
 void SetFabricConfig(
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-    std::optional<uint8_t> num_routing_planes = std::nullopt);
+    std::optional<uint8_t> num_routing_planes = std::nullopt,
+    FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED);
 
 FabricConfig GetFabricConfig();
 
@@ -199,15 +200,15 @@ private:
     size_t num_iters_between_teardown_checks_ = default_num_iters_between_teardown_checks;
 
     // memory regions
-    MemoryRegion status_region_;
-    MemoryRegion local_fabric_router_status_region_;
-    MemoryRegion termination_signal_region_;
-    MemoryRegion connection_info_region_;
-    MemoryRegion connection_handshake_region_;
-    MemoryRegion flow_control_region_;
-    MemoryRegion buffer_index_region_;
-    MemoryRegion full_size_channels_region_;
-    MemoryRegion header_only_channels_region_;
+    MemoryRegion status_region_{};
+    MemoryRegion local_fabric_router_status_region_{};
+    MemoryRegion termination_signal_region_{};
+    MemoryRegion connection_info_region_{};
+    MemoryRegion connection_handshake_region_{};
+    MemoryRegion flow_control_region_{};
+    MemoryRegion buffer_index_region_{};
+    MemoryRegion full_size_channels_region_{};
+    MemoryRegion header_only_channels_region_{};
 
     size_t memory_map_end_address_;
 };

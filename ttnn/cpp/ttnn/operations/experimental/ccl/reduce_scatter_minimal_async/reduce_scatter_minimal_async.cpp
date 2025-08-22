@@ -20,12 +20,8 @@ bool use_composite_reduce_scatter(
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_width = tile_shape[1];
 
-    // Composite currently only valid for scattering on dim 3
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
-    if (scatter_dim != 3) {
-        return false;
-    }
 
     uint32_t num_devices;
     if (cluster_axis.has_value()) {
@@ -47,6 +43,11 @@ bool use_composite_reduce_scatter(
         return true;
     }
 
+    // Use composite if scattering on a dim that isn't 3
+    if (scatter_dim != 3) {
+        return true;
+    }
+
     // Use composite if tiled and scattering on padded dim 3
     auto output_shape = input_shape;
     output_shape[scatter_dim] /= num_devices;
@@ -65,15 +66,25 @@ ttnn::Tensor composite_reduce_scatter(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis) {
-    DataType input_dtype = input_tensor.dtype();
-    bool convert_to_bfloat16_for_composite = input_dtype == DataType::BFLOAT8_B;
-    bool is_tiled = input_tensor.layout() == Layout::TILE;
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
+
+    auto input_shape = input_tensor.logical_shape();
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
+    bool is_tiled_and_not_tile_aligned = input_tensor.layout() == Layout::TILE &&
+                                         (input_shape[2] % tile_height != 0 || input_shape[3] % tile_width != 0);
+
+    // If we need to convert to row-major, then if the input dtype is bfloat8_b we need to typecast before untilizing
+    // and after re-tilizing
+    DataType input_dtype = input_tensor.dtype();
+    bool convert_to_bfloat16_for_composite = is_tiled_and_not_tile_aligned && input_dtype == DataType::BFLOAT8_B;
+
     // Convert to row major
-    if (is_tiled) {
+    if (is_tiled_and_not_tile_aligned) {
         // If input is tiled bfloat8_b, convert to bfloat16 to do the all_broadcast_async + concat
         if (convert_to_bfloat16_for_composite) {
             input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
@@ -97,7 +108,7 @@ ttnn::Tensor composite_reduce_scatter(
         all_reduced_tensor, scatter_dim, cluster_axis, memory_config.value_or(all_reduced_tensor.memory_config()));
 
     // Convert back to tiled
-    if (is_tiled) {
+    if (is_tiled_and_not_tile_aligned) {
         reduce_scatter_output_tensor = ttnn::to_layout(reduce_scatter_output_tensor, Layout::TILE);
         // If we had to convert the input dtype in order to execute the row-major composite op, convert back to the
         // input dtype

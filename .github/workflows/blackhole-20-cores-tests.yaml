@@ -61,7 +61,7 @@ jobs:
       - name: Run ${{ matrix.test-group.name }}
         env:
           ARCH_NAME: ${{ inputs.arch }}
-          CORE_GRID_OVERRIDE_TODEPRECATE: "4, 3"
+          TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE: "4, 3"
         run: |
           pytest ${{ matrix.test-group.cmd }}
 

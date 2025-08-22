@@ -238,12 +238,13 @@ struct ConvDRAMParamters {
     CoreCoord compute_grid;
     ttnn::Shape weights_shape;
     DataType weights_datatype;
+    DataType input_datatype;
     DataType output_datatype;
     bool enable_bias;
     bool mm_conv;
 };
 
-uint32_t estimate_halo_output_bytes(
+uint32_t estimate_halo_output_elems(
     std::array<uint32_t, 2> halo_input_shard_shape,
     uint32_t batch_size,
     uint32_t input_height,
