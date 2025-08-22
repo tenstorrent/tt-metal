@@ -15,14 +15,13 @@ def test_exp2_arange_masking(device):
     high = 127.0
 
     # Generate all possible bit pattersn for bf16
-    all_bitpatterns = np.arange(0, 2**16, dtype=np.uint16)
-    float32_bits = all_bitpatterns.astype(np.uint32) << 16
-    all_values = float32_bits.view(np.float32)
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor_f32 = input_tensor.to(torch.float32)
 
     # masking to working range
-    mask = (all_values >= low) & (all_values < high)
-    selected_values = all_values[mask]
-    input_tensor = torch.tensor(selected_values, dtype=torch.bfloat16)
+    mask = (input_tensor_f32 >= low) & (input_tensor_f32 <= high)
+    input_tensor = input_tensor[mask]
 
     tt_in = ttnn.from_torch(
         input_tensor,

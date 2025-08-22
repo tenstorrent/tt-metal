@@ -111,6 +111,7 @@ from ttnn._ttnn.multi_device import (
     create_mesh_composer,
     aggregate_tensor,
     distribute_tensor,
+    using_distributed_env,
 )
 
 from ttnn._ttnn.events import (
@@ -126,6 +127,10 @@ from ttnn._ttnn.operations.trace import (
     end_trace_capture,
     execute_trace,
     release_trace,
+)
+
+from ttnn._ttnn.operations.debug import (
+    apply_device_delay,
 )
 
 from ttnn._ttnn.global_circular_buffer import (

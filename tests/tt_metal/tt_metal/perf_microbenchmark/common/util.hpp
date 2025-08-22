@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/dprint_common.h"
 #include "impl/context/metal_context.hpp"
@@ -26,7 +27,7 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
     uint64_t min_cycle = -1;
     uint64_t max_cycle = 0;
     dprint_buf_msg_t* dprint_msg = tt::tt_metal::MetalContext::instance().hal().get_dev_addr<dprint_buf_msg_t*>(
-        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DPRINT);
+        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DPRINT_BUFFERS);
 
     // This works for tensix only, will need to be updated for eth
     std::vector<uint64_t> print_buffer_addrs = {
@@ -40,7 +41,8 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
         for (const auto& buffer_addr : print_buffer_addrs) {
             std::vector<std::uint32_t> profile_buffer;
             uint32_t end_index;
-            profile_buffer = tt::llrt::read_hex_vec_from_core(device_id, worker_core, buffer_addr, DPRINT_BUFFER_SIZE);
+            profile_buffer = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                device_id, worker_core, buffer_addr, DPRINT_BUFFER_SIZE);
 
             end_index = profile_buffer[BUFFER_END_INDEX];
 
@@ -49,15 +51,17 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
             uint32_t step = (end_index - MARKER_DATA_START) / TIMER_DATA_UINT32_SIZE;
             uint32_t timer_id = 1;
             for (int i = MARKER_DATA_START; i < end_index; i += TIMER_DATA_UINT32_SIZE, timer_id++) {
-                uint64_t cycle =
-                    ((static_cast<uint64_t>(profile_buffer[i + TIMER_VAL_H]) << 32) | profile_buffer[i + TIMER_VAL_L]);
+                if (i + TIMER_VAL_H < profile_buffer.size()) {
+                    uint64_t cycle =
+                        ((static_cast<uint64_t>(profile_buffer[i + TIMER_VAL_H]) << 32) |
+                         profile_buffer[i + TIMER_VAL_L]);
+                    if (timer_id == 1 && cycle < min_cycle) {
+                        min_cycle = cycle;
+                    }
 
-                if (timer_id == 1 && cycle < min_cycle) {
-                    min_cycle = cycle;
-                }
-
-                if (timer_id == step && cycle > max_cycle) {
-                    max_cycle = cycle;
+                    if (timer_id == step && cycle > max_cycle) {
+                        max_cycle = cycle;
+                    }
                 }
             }
         }

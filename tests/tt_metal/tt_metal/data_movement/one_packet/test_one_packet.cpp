@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "multi_device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -26,10 +28,12 @@ struct OnePacketConfig {
 };
 
 /// @brief Does OneToOne or OneFromOne but with one_packet read/write
-/// @param device
+/// @param mesh_device - MeshDevice to run the test on
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const OnePacketConfig& test_config) {
+bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const OnePacketConfig& test_config) {
+    // Get the actual device for this single-device test
+    IDevice* device = mesh_device->get_device(0);
     // Program
     Program program = CreateProgram();
 
@@ -40,9 +44,9 @@ bool run_dm(IDevice* device, const OnePacketConfig& test_config) {
     // NOTE: We don't know if the whole block of memory is actually available.
     //       This is something that could probably be checked
     L1AddressInfo master_l1_info =
-        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.master_core_coord);
+        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.master_core_coord);
     L1AddressInfo subordinate_l1_info =
-        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(device, test_config.subordinate_core_coord);
+        tt::tt_metal::unit_tests::dm::get_l1_address_and_size(mesh_device, test_config.subordinate_core_coord);
     // Checks that both master and subordinate cores have the same L1 base address and size
     if (master_l1_info.base_address != subordinate_l1_info.base_address ||
         master_l1_info.size != subordinate_l1_info.size) {
@@ -111,13 +115,33 @@ bool run_dm(IDevice* device, const OnePacketConfig& test_config) {
     if (test_config.read) {
         detail::WriteToDeviceL1(device, test_config.subordinate_core_coord, subordinate_l1_address, packed_input);
         MetalContext::instance().get_cluster().l1_barrier(device->id());
-        detail::LaunchProgram(device, program);
+
+        auto mesh_workload = distributed::CreateMeshWorkload();
+        vector<uint32_t> coord_data = {0, 0};
+        auto target_devices =
+            distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
+        distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+
+        auto& cq = mesh_device->mesh_command_queue();
+        distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+        Finish(cq);
+
         detail::ReadFromDeviceL1(
             device, test_config.master_core_coord, master_l1_address, test_config.packet_size_bytes, packed_output);
     } else {
         detail::WriteToDeviceL1(device, test_config.master_core_coord, master_l1_address, packed_input);
         MetalContext::instance().get_cluster().l1_barrier(device->id());
-        detail::LaunchProgram(device, program);
+
+        auto mesh_workload = distributed::CreateMeshWorkload();
+        vector<uint32_t> coord_data = {0, 0};
+        auto target_devices =
+            distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
+        distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+
+        auto& cq = mesh_device->mesh_command_queue();
+        distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+        Finish(cq);
+
         detail::ReadFromDeviceL1(
             device,
             test_config.subordinate_core_coord,
@@ -143,13 +167,16 @@ bool run_dm(IDevice* device, const OnePacketConfig& test_config) {
 }  // namespace unit_tests::dm::one_packet
 
 /* ========== Test case for reading varying number of packets and packet sizes; Test id = 80 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOnePacketReadSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadSizes) {
+    auto mesh_device = get_mesh_device();
+    auto device = mesh_device->get_device(0);
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     // Parameters
-    uint32_t max_packet_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;  // 16 kB for BH, 8 kB for WH
+    uint32_t max_packet_size_bytes =
+        device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;  // 16 kB for BH, 8 kB for WH
     uint32_t max_packets = 256;
 
     // Cores
@@ -170,21 +197,23 @@ TEST_F(DeviceFixture, TensixDataMovementOnePacketReadSizes) {
             };
 
             // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-            }
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
         }
     }
 }
 
 /* ========== Test case for writing varying number of packets and packet sizes; Test id = 81 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOnePacketWriteSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteSizes) {
+    auto mesh_device = get_mesh_device();
+    auto device = mesh_device->get_device(0);
+
     // Physical Constraints
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     // Parameters
-    uint32_t max_packet_size_bytes = arch_ == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;  // 16 kB for BH, 8 kB for WH
+    uint32_t max_packet_size_bytes =
+        device->arch() == tt::ARCH::BLACKHOLE ? 16 * 1024 : 8 * 1024;  // 16 kB for BH, 8 kB for WH
     uint32_t max_packets = 256;
     // Cores
     CoreCoord master_core_coord = {0, 0};
@@ -204,17 +233,16 @@ TEST_F(DeviceFixture, TensixDataMovementOnePacketWriteSizes) {
             };
 
             // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-            }
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
         }
     }
 }
 
 /* ========== Directed Ideal Test Case; Test id = 82 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOnePacketReadDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketReadDirectedIdeal) {
+    auto mesh_device = get_mesh_device();
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     // Parameters
     uint32_t packet_size_bytes = page_size_bytes * 256;  // max packet size = 256 flits
@@ -239,15 +267,14 @@ TEST_F(DeviceFixture, TensixDataMovementOnePacketReadDirectedIdeal) {
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-    }
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
 /* ========== Directed Ideal Test Case; Test id = 83 ========== */
-TEST_F(DeviceFixture, TensixDataMovementOnePacketWriteDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementOnePacketWriteDirectedIdeal) {
+    auto mesh_device = get_mesh_device();
     auto [page_size_bytes, max_transmittable_bytes, max_transmittable_pages] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     // Parameters
     uint32_t packet_size_bytes = page_size_bytes * 256;  // max packet size = 256 flits
@@ -272,9 +299,7 @@ TEST_F(DeviceFixture, TensixDataMovementOnePacketWriteDirectedIdeal) {
     };
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-    }
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
 }  // namespace tt::tt_metal

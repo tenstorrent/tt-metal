@@ -1,0 +1,17 @@
+# Fabric configuration (required)
+fabric_config:
+  topology: Mesh
+  routing_type: Dynamic
+
+# Test definitions (required)
+tests:
+  - name: "all_to_all_test"
+    num_iterations: 5
+    memory_config:
+      fifo_size: [1024, 2048]
+      page_size: [256, 512]
+      data_size: 8192
+      num_transactions: 20
+    pattern_expansions:
+      - type: "all_to_all_devices"
+        core_coord: [0, 0]

@@ -174,7 +174,7 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
     auto target_device =
         input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
 
-    ttnn::ccl::SenderRecieverConfig config =
+    ttnn::ccl::SenderReceiverConfig config =
         ttnn::ccl::get_device_sender_receiver_config(target_device, devices, this->topology);
 
     TT_FATAL(

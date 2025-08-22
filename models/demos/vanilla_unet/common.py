@@ -8,6 +8,8 @@ import torch
 
 from models.demos.vanilla_unet.reference.unet import UNet
 
+VANILLA_UNET_L1_SMALL_SIZE = (7 * 8192) + 1730
+
 
 def load_torch_model(model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:

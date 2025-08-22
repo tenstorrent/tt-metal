@@ -94,7 +94,7 @@ On previous architectures there are instances in kernels where NoC commands are 
 
 ## Debug
 
-Debug tools are functional on BH and it is reccomended to use Watcher when triaging Op failures to catch potential alignment issues. Disabling the L1 cache can be helpful to identify missed cache invalidations.
+Debug tools are functional on BH and it is recommended to use Watcher when triaging Op failures to catch potential alignment issues. Disabling the L1 cache can be helpful to identify missed cache invalidations.
 
 ## Resetting
 

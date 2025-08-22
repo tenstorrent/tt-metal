@@ -58,7 +58,6 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include <umd/device/tt_core_coordinates.h>
 #include <umd/device/types/xy_pair.h>
-#include "util.hpp"
 #include "vector_aligned.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "tt_metal/distributed/mesh_workload_impl.hpp"
@@ -1113,7 +1112,10 @@ public:
                         program.get_id(),
                         DISPATCH_DATA_BINARY,
                         kg_transfer_info.lengths[kernel_idx],
-                        kg_transfer_info.riscvs[kernel_idx]);
+                        HalProcessorIdentifier{
+                            kg_transfer_info.core_type,
+                            kg_transfer_info.processor_class,
+                            kg_transfer_info.processor_ids[kernel_idx]});
                     // Difference between prefetch total relayed pages and dispatch write linear
                     if (not using_prefetcher_cache) {
                         uint32_t relayed_bytes =
@@ -1188,7 +1190,13 @@ public:
                             .num_mcast_dests = (uint8_t)num_mcast_dests,
                             .flags = CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK});
                         RecordDispatchData(
-                            program.get_id(), DISPATCH_DATA_BINARY, write_length, kg_transfer_info.riscvs[kernel_idx]);
+                            program.get_id(),
+                            DISPATCH_DATA_BINARY,
+                            write_length,
+                            HalProcessorIdentifier{
+                                kg_transfer_info.core_type,
+                                kg_transfer_info.processor_class,
+                                kg_transfer_info.processor_ids[kernel_idx]});
                         kernel_config_buffer_offset += write_length;
 
                         if (not using_prefetcher_cache) {
@@ -1644,7 +1652,7 @@ public:
                 device_command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
             }
         }
-        go_msg_t run_program_go_signal;
+        go_msg_t run_program_go_signal{};
         run_program_go_signal.signal = RUN_MSG_GO;
         // Dispatch X/Y resolved when the program is enqueued
         run_program_go_signal.master_x = 0;
@@ -1677,7 +1685,7 @@ void assemble_device_commands(
     IDevice* device,
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache) {
-    CommandConstants constants;
+    CommandConstants constants{};
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     constants.dispatch_core_type = dispatch_core_config.get_core_type();
     constants.noc_index = k_dispatch_downstream_noc;
@@ -1831,7 +1839,7 @@ void reserve_space_in_kernel_config_buffer(
     }
 
     if (program_binary_status == ProgramBinaryStatus::InFlight) {
-        // Program binary not commited to DRAM. Sync on all workers before dispatching kernel
+        // Program binary not committed to DRAM. Sync on all workers before dispatching kernel
         // binaries for this program. This requires freeing the entire kernel config buffer.
         config_buffer_mgr.free(expected_num_workers_completed);
     } else {
@@ -2009,7 +2017,7 @@ void update_program_dispatch_commands(
         }
     }
     // Update go signal to reflect potentially modified dispatch core and new wait count
-    go_msg_t run_program_go_signal;
+    go_msg_t run_program_go_signal{};
     run_program_go_signal.signal = RUN_MSG_GO;
     run_program_go_signal.master_x = (uint8_t)dispatch_core.x;
     run_program_go_signal.master_y = (uint8_t)dispatch_core.y;
@@ -2187,7 +2195,7 @@ void update_traced_program_dispatch_commands(
         }
     }
     // Update go signal to reflect potentially modified dispatch core and new wait count
-    go_msg_t run_program_go_signal;
+    go_msg_t run_program_go_signal{};
     run_program_go_signal.signal = RUN_MSG_GO;
     run_program_go_signal.master_x = (uint8_t)dispatch_core.x;
     run_program_go_signal.master_y = (uint8_t)dispatch_core.y;
@@ -2435,7 +2443,7 @@ void reset_worker_dispatch_state_on_device(
             command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
             dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
         }
-        go_msg_t reset_launch_message_read_ptr_go_signal;
+        go_msg_t reset_launch_message_read_ptr_go_signal{};
         reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
         reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)dispatch_core.x;
         reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)dispatch_core.y;

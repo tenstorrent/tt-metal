@@ -36,7 +36,7 @@ void kernel_main() {
     //   Group Loop:
     //     This is the process which repeats for every group
     //     First Read of data:
-    //       If Reciever:
+    //       If Receiver:
     //           Send partial reduction of Average to Sender Core
     //       If Sender:
     //           Pack Partials:
@@ -45,7 +45,7 @@ void kernel_main() {
     //           Send Global:
     //               Send Global Average to all Receiver cores
     //     Second Read of data:
-    //       If Reciever:
+    //       If Receiver:
     //           Send partial reduction of Varience to Sender Core
     //       If Sender:
     //           Pack Partials:

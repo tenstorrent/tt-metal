@@ -15,8 +15,8 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Model             | Device      | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |
 |-------------------|-------------|-----------|-----------|---------------|-----------|
 | Llama-3.2-1B      | N150        | 77        | 96        | 87.8          | 26        |
-| Llama-3.2-1B      | N300        | 77        | 97        | 105.9         | 22        |
-| Llama-3.2-1B      | T3K         | 77        | 96        | 119.8         | 32        |
+| Llama-3.2-1B      | N300        | 77        | 96        | 105.9         | 22        |
+| Llama-3.2-1B      | T3K         | 77        | 95        | 119.8         | 32        |
 | Llama-3.2-1B      | TG          | 77        | 96        | 51.0          |           |
 | Llama-3.2-3B      | N150        | 87        | 97        | 54.0          | 55        |
 | Llama-3.2-3B      | N300        | 87        | 97        | 68.0          | 39        |

@@ -212,3 +212,11 @@ distributed as part of the software:
 - boost - [License available here](https://www.boost.org/LICENSE_1_0.txt)
 - glog - [License available here](https://github.com/google/glog/blob/v0.4.0/COPYING)
 - icu - [License available here](http://www.unicode.org/copyright.html#license)
+
+This project includes modified portions of the LLVM Project (https://llvm.org) in the following files:
+
+tt_stl/tt_stl/llvm/llvm_small_vector.cpp  (renamed from llvm/ADT/SmallVector.cpp)
+tt_stl/tt_stl/llvm/llvm_small_vector.hpp  (renamed from llvm/ADT/SmallVector.h)
+tt_stl/tt_stl/llvm/memory_alloc.hpp  (renamed from llvm/Support/MemAlloc.h)
+
+These files are licensed under the Apache License v2.0 with LLVM Exceptions. [License available here](https://llvm.org/LICENSE.txt)

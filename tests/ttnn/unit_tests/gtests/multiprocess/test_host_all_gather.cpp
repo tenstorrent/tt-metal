@@ -25,7 +25,7 @@ using ::testing::ElementsAre;
 using ::testing::FloatEq;
 using ::testing::Pointwise;
 using ::testing::SizeIs;
-using ::tt::tt_fabric::HostRankId;
+using ::tt::tt_fabric::MeshHostRankId;
 using ::tt::tt_metal::DataType;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
@@ -52,7 +52,7 @@ TEST_F(BigMeshDualRankTest2x4, HostAllGather) {
     Tensor sharded_tensor = distribute_tensor(input_tensor, *mapper);
 
     std::vector<Tensor> device_tensors = get_device_tensors(sharded_tensor);
-    ASSERT_EQ(device_tensors.size(), 4);
+    ASSERT_EQ(device_tensors.size(), 8);
 
     // Perform all-gather on host and validate the data at each host.
     auto all_gather_tensor = host_ccl::all_gather(sharded_tensor);

@@ -80,6 +80,8 @@ struct WorkerToFabricEdmSenderImpl {
         uint16_t buffer_size_bytes;
         uint32_t edm_copy_of_wr_counter_addr;
         volatile uint32_t* writer_send_sem_addr;
+        uint32_t worker_free_slots_stream_id;  // used to update the available buffer slot on the receiving router
+                                               // (decrement by 1 from the sending side for each packet)
 
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24959
         // remove redundant nested constructor to avoid copy
@@ -101,6 +103,7 @@ struct WorkerToFabricEdmSenderImpl {
             edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
             writer_send_sem_addr = reinterpret_cast<volatile uint32_t*>(
                 reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
+            worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
         } else {
             // TODO: will be deprecated. currently for ethernet dispatch case
             //       ethernet core need to have same memory mapping as worker
@@ -118,6 +121,7 @@ struct WorkerToFabricEdmSenderImpl {
             auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
             writer_send_sem_addr =
                 reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
+            worker_free_slots_stream_id = sender_channel_0_free_slots_stream_id;
         }
 
         // DEAD CODE
@@ -143,7 +147,7 @@ struct WorkerToFabricEdmSenderImpl {
             writer_send_sem_addr,
             worker_teardown_sem_addr,
             worker_buffer_index_semaphore_addr,
-            sender_channel_0_free_slots_stream_id,
+            worker_free_slots_stream_id,
             my_fc_stream_channel_id,
             write_reg_cmd_buf,
             write_at_cmd_buf);
@@ -317,12 +321,12 @@ struct WorkerToFabricEdmSenderImpl {
     FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
-    template <bool enable_ring_support, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api, bool increment_poiners>
+    template <bool enable_deadlock_avoidance, uint8_t EDM_TO_DOWNSTREAM_NOC, bool stateful_api, bool increment_poiners>
     FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(
         uint32_t source_address, size_t size_bytes, uint8_t trid) {
         send_payload_from_address_with_trid_impl<
             EDM_IO_BLOCKING_MODE::NON_BLOCKING,
-            enable_ring_support,
+            enable_deadlock_avoidance,
             EDM_TO_DOWNSTREAM_NOC,
             stateful_api,
             increment_poiners>(source_address, size_bytes, trid);
@@ -544,10 +548,10 @@ struct WorkerToFabricEdmSenderImpl {
     uint8_t direction;
 
 private:
-    template <bool stateful_api = false, bool enable_ring_support = false>
+    template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = noc_index) {
         if constexpr (stateful_api) {
-            if constexpr (enable_ring_support) {
+            if constexpr (enable_deadlock_avoidance) {
                 noc_inline_dw_write_with_state<true, false, true>(
                     0,  // val unused
                     this->edm_buffer_remote_free_slots_update_addr,
@@ -605,10 +609,10 @@ private:
         }
     }
 
-    template <bool stateful_api = false, bool enable_ring_support = false>
+    template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void post_send_payload_increment_pointers(uint8_t noc = noc_index) {
         this->advance_buffer_slot_write_index();
-        this->update_edm_buffer_free_slots<stateful_api, enable_ring_support>(noc);
+        this->update_edm_buffer_free_slots<stateful_api, enable_deadlock_avoidance>(noc);
     }
     template <EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_packet_header_and_notify_fabric(uint32_t source_address) {
@@ -637,7 +641,7 @@ private:
     }
     template <
         EDM_IO_BLOCKING_MODE blocking_mode,
-        bool enable_ring_support,
+        bool enable_deadlock_avoidance,
         uint8_t EDM_TO_DOWNSTREAM_NOC,
         bool stateful_api,
         bool increment_pointers>
@@ -668,7 +672,7 @@ private:
                 this->data_noc_cmd_buf);
         }
         if constexpr (increment_pointers) {
-            post_send_payload_increment_pointers<stateful_api, enable_ring_support>(EDM_TO_DOWNSTREAM_NOC);
+            post_send_payload_increment_pointers<stateful_api, enable_deadlock_avoidance>(EDM_TO_DOWNSTREAM_NOC);
         }
     }
 

@@ -27,7 +27,7 @@ enum class HalL1MemAddrType : uint8_t {
     MAILBOX,
     LAUNCH,
     WATCHER,
-    DPRINT,
+    DPRINT_BUFFERS,
     PROFILER,
     KERNEL_CONFIG,  // End is start of unreserved memory
     UNRESERVED,     // Only for ethernet cores

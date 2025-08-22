@@ -41,7 +41,7 @@ jobs:
             model: "meta-llama/Llama-3.1-8B-Instruct",
             server-timeout: 5,
             benchmark-timeout: 5,
-            runner-label: bh-deskbox,
+            runner-label: BH-DeskBox,
             mesh-device: P150x2,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 2}",
@@ -56,19 +56,19 @@ jobs:
             mesh-device: P150x4,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 4}",
-            owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
-          },
-          {
-            name: "[RB] Llama-3.1-8B-Instruct",
-            model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 35,
-            benchmark-timeout: 10,
-            runner-label: bh-rackbox,
-            mesh-device: P150x8,
-            tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 8}",
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
+          # { Removing this until #26734 is resolved
+          #   name: "[RB] Llama-3.1-8B-Instruct",
+          #   model: "meta-llama/Llama-3.1-8B-Instruct",
+          #   server-timeout: 35,
+          #   benchmark-timeout: 10,
+          #   runner-label: bh-rackbox,
+          #   mesh-device: P150x8,
+          #   tt-llama-text-ver: tt_transformers,
+          #   override-tt-config: "{\"data_parallel\": 8}",
+          #   owner_id: U08GELBB1AP, # Ambrose Ling
+          # },
           {
             name: "[TG] Llama-3.3-70B-Instruct",
             model: "meta-llama/Llama-3.3-70B-Instruct",
@@ -128,6 +128,12 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+
+      - name: Ensure BH Eth links online
+        if: ${{ contains(matrix.test-group.mesh-device, 'P150') }}
+        uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+        with:
+          runner-label: ${{ matrix.test-group.runner-label }}
 
       - name: ⬇️ Checkout vLLM
         uses: actions/checkout@v4

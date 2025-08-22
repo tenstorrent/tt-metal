@@ -92,23 +92,23 @@ public:
 
     // Get the host ranks for a given mesh_id
     // Returned MeshContainer has a shape denoting the shape of how the "board" are arranged
-    const MeshContainer<HostRankId>& get_host_ranks(MeshId mesh_id) const;
+    const MeshContainer<MeshHostRankId>& get_host_ranks(MeshId mesh_id) const;
 
     // Get the shape of the mesh, or the shape of the submesh for a given host rank if provided
-    MeshShape get_mesh_shape(MeshId mesh_id, std::optional<HostRankId> host_rank = std::nullopt) const;
+    MeshShape get_mesh_shape(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
     // Get the coordinate range of the mesh, or the coordinate range of the submesh for a given host rank if provided
-    MeshCoordinateRange get_coord_range(MeshId mesh_id, std::optional<HostRankId> host_rank = std::nullopt) const;
+    MeshCoordinateRange get_coord_range(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
     std::vector<MeshId> get_mesh_ids() const;
 
     // Get the chip ids for a given mesh_id
     // If host_rank is provided, return the chip ids for the submesh for that host rank
     // Otherwise, return the chip ids for the entire mesh
-    MeshContainer<chip_id_t> get_chip_ids(MeshId mesh_id, std::optional<HostRankId> host_rank = std::nullopt) const;
+    MeshContainer<chip_id_t> get_chip_ids(MeshId mesh_id, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
     // Get the host rank that owns a given chip in a mesh
-    std::optional<HostRankId> get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const;
+    std::optional<MeshHostRankId> get_host_rank_for_chip(MeshId mesh_id, chip_id_t chip_id) const;
 
     // Translation functions for chip_id and coordinate using RM-convention
     MeshCoordinate chip_to_coordinate(MeshId mesh_id, chip_id_t chip_id) const;
@@ -131,14 +131,14 @@ private:
         chip_id_t dest_chip_id,
         RoutingDirection port_direction);
 
-    ChipSpec chip_spec_;
+    ChipSpec chip_spec_{};
     std::map<MeshId, MeshContainer<chip_id_t>> mesh_to_chip_ids_;
     IntraMeshConnectivity intra_mesh_connectivity_;
     InterMeshConnectivity inter_mesh_connectivity_;
 
     // For distributed context, bookkeeping of host ranks and their shapes
-    std::vector<MeshContainer<HostRankId>> mesh_host_ranks_;
-    std::unordered_map<std::pair<MeshId, HostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
+    std::vector<MeshContainer<MeshHostRankId>> mesh_host_ranks_;
+    std::unordered_map<std::pair<MeshId, MeshHostRankId>, MeshCoordinateRange, hash_pair> mesh_host_rank_coord_ranges_;
 
     static const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std::string_view>>&
         cluster_type_to_mesh_graph_descriptor;

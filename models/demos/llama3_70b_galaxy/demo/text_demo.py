@@ -63,12 +63,13 @@ def load_inputs(user_input, len_per_batch, instruct):
     batch = len(len_per_batch)
     user_input = user_input * batch
     in_prompt = []
+    all_prompts = []
     cache_dir = Path("models/tt_transformers/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
     # It clips the excerpt to the max length provided to allow testing different long context lengthts
-    for i in range(batch):
+    for i in range(len(user_input)):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
             # TODO This might override the expected input size give in the prompt file
@@ -86,8 +87,12 @@ def load_inputs(user_input, len_per_batch, instruct):
                 )  # Add the markdown block to the context to comply with the prompt
             else:
                 prompt = context_text
-        in_prompt.append(prompt)
-    return in_prompt
+
+        all_prompts.append(prompt)  # return all the prompts taken from the input file to be used when repeat_batch > 1
+        if i in range(batch):
+            in_prompt.append(prompt)
+
+    return in_prompt, all_prompts
 
 
 def load_demo_targets(filename, galaxy_type):
@@ -152,11 +157,7 @@ def create_tt_model(
         # Page table which maps virtual blocks to physical
         reverse_permutation = torch.argsort(permutation)
         page_table = reverse_permutation.reshape(
-            max_batch_size, paged_attention_config.max_num_blocks // max_batch_size
-        )
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
+            tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
         )
 
     model = TtTransformer(
@@ -191,7 +192,7 @@ def create_tt_model(
 #
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 @pytest.mark.parametrize(
-    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs",
+    "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, apc_test, pcc_check, prefill_profile, num_layers, print_outputs, is_cur_pos_sharded, is_page_table_sharded",
     [
         (  # Batch-32 run (Throughput) - 32 users, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -202,13 +203,15 @@ def create_tt_model(
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 1.0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            {"temperature": 0.0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -219,13 +222,72 @@ def create_tt_model(
             128,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 1.0, "top_p": 0.05},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
+        ),
+        (  # evals-1 run (Throughput) - 1 user, smaller prompts, batch repeat 32
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
+            True,  # instruct mode
+            16,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            1024,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+        ),
+        (  # evals-32 run (Throughput) - 32 users, smaller prompts, batch repeat 32
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts.json",  # input_prompts
+            True,  # instruct mode
+            16,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            1024,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+        ),
+        (  # evals-long-prompts run (Throughput) - 1 user, smaller prompts, batch repeat 12
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_very_long.json",  # input_prompts
+            True,  # instruct mode
+            6,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            1024,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"temperature": 0.0, "top_p": 0.05},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # Repeat2 (Batch-1) run (Throughput) - 1 user, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
@@ -237,12 +299,14 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
         ),
         (  # long-4k-b1 - Single user, 4K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -254,12 +318,14 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # long-8k-b1 - Single user, 8K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
@@ -271,12 +337,14 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 1.0, "top_p": 0.04},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # long-16k-b32 - 32 users, 16K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_16k.json",  # input_prompts
@@ -288,12 +356,14 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # long-32k-b1 - Single user, 32K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_32k.json",  # input_prompts
@@ -305,12 +375,14 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # long-64k-b1 - Single user, 64K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
@@ -322,12 +394,14 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # long-128k-b1 - Single user, 128K long prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_128k.json",  # input_prompts
@@ -339,12 +413,14 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # prefill-profile [default 4K seqlen] - Runs 1L prefill-only
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_4k.json",  # input_prompts
@@ -356,12 +432,14 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            False,  # stop_at_eos
             False,  # apc_test
             False,  # pcc_check
             True,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # apc-test Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
@@ -373,12 +451,14 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            False,  # stop_at_eos
             True,  # apc_test
             True,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
         (  # pcc-80L - CI Run for PCC check for 80 Layers + Teacher Forced: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
@@ -390,17 +470,22 @@ def create_tt_model(
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
+            False,  # stop_at_eos
             False,  # apc_test
             True,  # pcc_check
             False,  # prefill-only profile
             80,  # num layers
             False,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
         ),
     ],
     ids=[
         "batch-32",  # throughput
         "batch-1",  # latency
+        "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
+        "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
+        "evals-long-prompts",  # Single user, 12 repeated batches, very long prompts (4K ~ 64K)
         "repeat2",  # latency with 2 repeat batches
         "long-4k-b1",  # 4k context for 1 user
         "long-8k-b1",  # 4k context for 1 user
@@ -430,7 +515,7 @@ def create_tt_model(
             "trace_region_size": 102000000,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "worker_l1_size": 1344544,
+            "worker_l1_size": 1345000,
             "fabric_config": True,
         }
     ],
@@ -466,6 +551,8 @@ def test_demo_text(
     request,
     galaxy_type,
     print_outputs,
+    is_cur_pos_sharded,
+    is_page_table_sharded,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -497,8 +584,6 @@ def test_demo_text(
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
-
-    stop_at_eos = False  # Default to False
     if request.config.getoption("--stop_at_eos") in [
         0,
         1,
@@ -507,7 +592,7 @@ def test_demo_text(
     print_outputs = request.config.getoption("--print_outputs") or print_outputs
 
     enable_trace = True  # Use tracing for better perf
-    prefill_enable_trace = True  # repeat_batches > 1
+    prefill_enable_trace = True
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
     input_lengths = (
@@ -549,7 +634,7 @@ def test_demo_text(
 
     logger.info(f"Reading inputs...")
     profiler.start("loading_inputs")
-    input_prompts = load_inputs(
+    input_prompts, all_prompts = load_inputs(
         input_prompts,
         input_lengths,
         instruct,
@@ -595,10 +680,11 @@ def test_demo_text(
 
     # To simulate a deployment environment, the demo supports repeating batched prompts.
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
-    # If batch_size=1, the same prompt is repeated for each batch
     repeat_batch_prompts = []
     for i in range(repeat_batches):
-        repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
+        repeat_batch_prompts.append(
+            [all_prompts[(j + i) % len(all_prompts)] for j in range(len(all_prompts))][:batch_size]
+        )
 
     model_args, model, page_table, tt_kv_cache = create_tt_model(
         mesh_device,
@@ -812,6 +898,7 @@ def test_demo_text(
         top_1_accs = []
         read_events = []
         tt_out_toks = []
+
         while users_decoding:
             if iteration == 0:  # First iteration also accounts for compile time
                 profiler.start(f"compile_decode", iteration=batch_idx)
@@ -837,6 +924,8 @@ def test_demo_text(
                     sampling_params=device_sampling_params,
                     reset_inputs=iteration == 0,
                     tt_out_logits_saved=tt_out_logits_saved,
+                    is_cur_pos_sharded=is_cur_pos_sharded,
+                    is_page_table_sharded=is_page_table_sharded,
                 )
                 read_events.append(read_event)
                 tt_out_toks.append(tt_out_tok)
@@ -859,8 +948,8 @@ def test_demo_text(
                 and num_layers == 80
             )
             if iteration > 0:
-                ttnn.event_synchronize(read_events.pop(0))
-                tt_out_tok = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks.pop(0))[0])[0, 0, 0, :32]
+                ttnn.event_synchronize(read_events.pop(0)[0])
+                tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 
@@ -990,7 +1079,10 @@ def test_demo_text(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
                 profiler.end(f"log_saving_file", iteration=batch_idx)
-            if not users_decoding and batch_size == 1 and repeat_batches > 1:
+                # TODO This check is only for the config `repeat2`.
+
+            # Since right now that config is the only using a repeat_batches=2 this if statement works
+            if not users_decoding and batch_size == 1 and repeat_batches == 2:
                 # Compare to text in outputs_batch_1.json for the first user of the first batch
                 if batch_idx == 0 and expected_outputs_data:  # Only compare if data was loaded
                     if i == 0:  # Only for the first user of the batch (i.e., user 0)
@@ -1152,8 +1244,9 @@ def test_demo_text(
         "decode_t/s": target_decode_tok_s,
         "decode_t/s/u": target_decode_tok_s_u,
     }
-    if repeat_batches > 1 and batch_size == 1:
-        target = 54 if galaxy_type == "6U" else 98
+    # TODO This is suppose to check the config `repeat2`. Since right now that config is the only using a repeat_batches=2 this if statement works
+    if repeat_batches == 2 and batch_size == 1:
+        target = 56.5 if galaxy_type == "6U" else 99
         assert (
             avg_time_to_first_token * 1000 < target
         ), f"TTFT {avg_time_to_first_token} ms is too high, should be < {target}."

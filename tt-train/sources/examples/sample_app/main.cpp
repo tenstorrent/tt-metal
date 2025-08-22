@@ -47,7 +47,6 @@ int main() {
     const size_t tensor_height = 32;
 
     // tell TTNN that we want to use the first device available
-    tt::ARCH arch_ = {};
     size_t num_devices_ = 0;
 
     std::srand(0);

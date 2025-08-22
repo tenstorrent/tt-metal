@@ -43,7 +43,7 @@ class Generator:
     def formatter(self):
         return self._ttt_generator.formatter
 
-    def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
+    def prefill_forward_text(self, tokens: torch.Tensor, rot_mats, page_table=None, kv_cache=None, prompt_lens=None):
         batch, batch_seq_len = tokens.shape[:2]
         output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
@@ -62,11 +62,11 @@ class Generator:
                 page_table_user = self._ttt_generator._get_prefill_user_page_table(page_table, kv_cache, seq_len)
 
             logits = self.__prefill_forward_single_user_text(
-                # prefill_ids,
-                tokens[user_id : user_id + 1],  # todo)) use this if the above padding is not used
+                tokens[user_id : user_id + 1],
                 page_table=page_table_user if page_table is not None else None,
                 user_id=user_id,
                 last_token_idx=last_token_idx,
+                rot_mats=rot_mats,
                 kv_cache=kv_cache,
             )
 
@@ -76,6 +76,15 @@ class Generator:
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
 
         return output_logits
+
+    def update_cos_sin(self, cos_matrix_pt=None, sin_matrix_pt=None):
+        self.model.rope_setup.update_cos_sin(cos_matrix_pt=cos_matrix_pt, sin_matrix_pt=sin_matrix_pt)
+
+    def update_cos_sin_rows(self, rot_mats_seq_ids):
+        for i, (cos, sin) in enumerate(rot_mats_seq_ids):
+            self.model.rope_setup.cos_matrix_pt[i] = cos[0]
+            self.model.rope_setup.sin_matrix_pt[i] = sin[0]
+        self.update_cos_sin()
 
     def decode_forward_text(
         self,
@@ -97,7 +106,7 @@ class Generator:
             sampling_params=sampling_params,
         )
 
-    def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None):
+    def __prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, rot_mats, kv_cache=None):
         seq_len = tokens.shape[1]
         use_chunked_prefill = seq_len > self.model_args.max_prefill_chunk_size
         if use_chunked_prefill:
@@ -166,6 +175,7 @@ class Generator:
         else:
             prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
                 tokens,
+                rot_mats=rot_mats,
                 page_table=page_table,
             )
 
@@ -190,8 +200,12 @@ class Generator:
             return logits
 
     # [INFO] this is called by vLLM
-    def read_decode_output(self, tt_out, unpadded_batch, is_tokens=False):
-        return self._ttt_generator.read_decode_output(tt_out, unpadded_batch, is_tokens)
+    def read_decode_output(self, tt_out, async_read=False):
+        return self._ttt_generator.read_decode_output(tt_out, async_read=async_read)
+
+    # [INFO] this is called by vLLM
+    def process_decode_output_host(self, tt_out, is_tokens=False):
+        return self._ttt_generator.process_decode_output_host(tt_out, is_tokens=is_tokens)
 
     ## Destructor (used to delete ttnn trace if exists)
 

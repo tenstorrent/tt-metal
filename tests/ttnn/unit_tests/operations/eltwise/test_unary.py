@@ -1142,6 +1142,25 @@ def test_unary_exp2_ttnn(input_shapes, device):
 @pytest.mark.parametrize(
     "input_shapes",
     (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+def test_unary_exp_ttnn(input_shapes, device):
+    in_data = create_full_range_tensor(input_shapes, torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output_tensor = ttnn.exp(input_tensor)
+    golden_function = ttnn.get_golden_function(ttnn.exp)
+    golden_tensor = golden_function(in_data)
+    assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
         (torch.Size([100])),
         (torch.Size([64, 32])),
         (torch.Size([3, 128, 32])),
@@ -1360,5 +1379,24 @@ def test_unary_signbit_float_edge_case_ttnn(torch_dtype, ttnn_dtype, device):
     output_tensor = ttnn.signbit(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.signbit)
     golden_tensor = golden_function(in_data)
+
+    assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("threshold", [1.0, 10.0, 100.0, -5, -8.0, -100.0])
+@pytest.mark.parametrize("value", [10.0, 100.0, -7.0, -85.5])
+def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    output_tensor = ttnn.threshold(input_tensor1, threshold, value)
+    golden_function = ttnn.get_golden_function(ttnn.threshold)
+    golden_tensor = golden_function(in_data1, threshold, value)
 
     assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))

@@ -411,6 +411,8 @@ def generate_sdxl_test_inputs():
     inputs = []
 
     # 1024x1024 resoultion
+
+    # UNet inputs
     inputs.append((1, 1280, 64, 64))
     inputs.append((1, 1280, 32, 32))
     inputs.append((1, 1920, 64, 64))
@@ -421,6 +423,9 @@ def generate_sdxl_test_inputs():
     inputs.append((1, 640, 64, 64))
     inputs.append((1, 640, 32, 32))
     inputs.append((1, 960, 64, 64))
+
+    # VAE inputs
+    inputs.append((1, 512, 128, 128))
 
     return inputs
 
@@ -448,7 +453,9 @@ def test_sdxl_base_group_norm(device, input_shape):
     tt_input_tensor = ttnn.from_torch(
         tt_input_tensor,
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=device,
     )
 
     # Generate input mask
@@ -469,7 +476,7 @@ def test_sdxl_base_group_norm(device, input_shape):
     sharded_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.BLOCK_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
-    tt_input_tensor = ttnn.to_device(tt_input_tensor, device, memory_config=sharded_mem_config)
+    tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, memory_config=sharded_mem_config)
 
     # Execute ttnn group_norm
     tt_output_tensor = ttnn.group_norm(
@@ -478,6 +485,7 @@ def test_sdxl_base_group_norm(device, input_shape):
         input_mask=input_mask_tensor,
         memory_config=sharded_mem_config,
         core_grid=grid_size,
+        inplace=tt_input_tensor.layout != ttnn.TILE_LAYOUT,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor)

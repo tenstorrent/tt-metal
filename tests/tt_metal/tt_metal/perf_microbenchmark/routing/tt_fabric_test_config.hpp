@@ -92,11 +92,17 @@ static const StringEnumMapper<Topology> topology_mapper({
     {"Ring", Topology::Ring},
     {"Linear", Topology::Linear},
     {"Mesh", Topology::Mesh},
+    {"Torus", Topology::Torus},
 });
 
 static const StringEnumMapper<RoutingType> routing_type_mapper({
-    {"Low Latency", RoutingType::LowLatency},
+    {"LowLatency", RoutingType::LowLatency},
     {"Dynamic", RoutingType::Dynamic},
+});
+
+static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
+    {"Default", FabricTensixConfig::DISABLED},
+    {"Mux", FabricTensixConfig::MUX},
 });
 
 static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
@@ -111,6 +117,7 @@ static const StringEnumMapper<HighLevelTrafficPattern> high_level_traffic_patter
     {"unidirectional_linear", HighLevelTrafficPattern::UnidirectionalLinear},
     {"full_ring", HighLevelTrafficPattern::FullRing},
     {"half_ring", HighLevelTrafficPattern::HalfRing},
+    {"all_devices_uniform_pattern", HighLevelTrafficPattern::AllDevicesUniformPattern},
 });
 // Optimized string concatenation utility to avoid multiple allocations
 template <typename... Args>
@@ -282,8 +289,15 @@ private:
 
 const std::string no_default_test_yaml_config = "";
 
-const std::vector<std::string> supported_high_level_patterns = {
-    "all_to_all", "one_to_all", "full_device_random_pairing", "unidirectional_linear", "full_ring", "half_ring"};
+// Helper function to get supported pattern names from the mapper
+inline std::vector<std::string> get_supported_high_level_patterns() {
+    std::vector<std::string> patterns;
+    patterns.reserve(detail::high_level_traffic_pattern_mapper.to_enum.size());
+    for (const auto& [pattern_name, _] : detail::high_level_traffic_pattern_mapper.to_enum) {
+        patterns.push_back(pattern_name);
+    }
+    return patterns;
+}
 
 inline ParsedYamlConfig YamlConfigParser::parse_file(const std::string& yaml_config_path) {
     std::ifstream yaml_config(yaml_config_path);
@@ -529,10 +543,36 @@ inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fa
         fabric_setup.routing_type = RoutingType::LowLatency;
     }
 
+    if (fabric_setup_yaml["fabric_tensix_config"]) {
+        auto fabric_type_str = parse_scalar<std::string>(fabric_setup_yaml["fabric_tensix_config"]);
+        fabric_setup.fabric_tensix_config =
+            detail::fabric_tensix_type_mapper.from_string(fabric_type_str, "FabricTensixConfig");
+    } else {
+        log_info(tt::LogTest, "No fabric tensix config specified, defaulting to DISABLED");
+        fabric_setup.fabric_tensix_config = FabricTensixConfig::DISABLED;
+    }
+
     if (fabric_setup_yaml["num_links"]) {
         fabric_setup.num_links = parse_scalar<uint32_t>(fabric_setup_yaml["num_links"]);
     } else {
         fabric_setup.num_links = 1;
+    }
+
+    // Handle torus_config for Torus topology
+    if (fabric_setup.topology == Topology::Torus) {
+        if (fabric_setup_yaml["torus_config"]) {
+            fabric_setup.torus_config = parse_scalar<std::string>(fabric_setup_yaml["torus_config"]);
+        } else {
+            // Default to "XY" when topology is Torus but no torus_config is specified
+            fabric_setup.torus_config = "XY";
+        }
+
+        // Validate torus_config value
+        const auto& config = fabric_setup.torus_config.value();
+        TT_FATAL(
+            config == "X" || config == "Y" || config == "XY",
+            "Invalid torus_config '{}'. Supported values are: 'X', 'Y', 'XY'",
+            config);
     }
 
     return fabric_setup;
@@ -627,11 +667,11 @@ inline std::vector<ParsedTestConfig> CmdlineParser::generate_default_configs() {
         log_info(LogTest, "Generating a high-level pattern test from command line.");
         std::string pattern_type = test_args::get_command_option(input_args_, "--pattern", "");
         TT_FATAL(
-            std::find(supported_high_level_patterns.begin(), supported_high_level_patterns.end(), pattern_type) !=
-                supported_high_level_patterns.end(),
+            detail::high_level_traffic_pattern_mapper.to_enum.find(pattern_type) !=
+                detail::high_level_traffic_pattern_mapper.to_enum.end(),
             "Unsupported pattern type from command line: '{}'. Supported types are: {}",
             pattern_type,
-            supported_high_level_patterns);
+            get_supported_high_level_patterns());
 
         HighLevelPatternConfig hlp_config;
         hlp_config.type = pattern_type;
@@ -702,15 +742,15 @@ inline void CmdlineParser::print_help() {
         "reproducibility.");
     log_info(LogTest, "");
     log_info(LogTest, "Options for command-line mode (when --test_config is NOT used):");
-    log_info(LogTest, "  --topology <Linear|Ring|Mesh>                Specify the fabric topology. Default: Linear.");
+    log_info(LogTest, "  --topology <Linear|Ring|Mesh|Torus>          Specify the fabric topology. Default: Linear.");
     log_info(
         LogTest,
         "  --pattern <type>                             Specify a high-level traffic pattern. If not provided, a "
         "simple unicast test is run.");
     log_info(
         LogTest,
-        "                                               Supported types: all_to_all, one_to_all, "
-        "full_device_random_pairing, unidirectional_linear, full_ring, half_ring.");
+        "                                               Supported types: {}",
+        get_supported_high_level_patterns());
     log_info(
         LogTest,
         "  --src-device <id>                            Source device for simple unicast test. "
@@ -862,11 +902,11 @@ inline HighLevelPatternConfig YamlConfigParser::parse_high_level_pattern_config(
     config.type = parse_scalar<std::string>(pattern_yaml["type"]);
 
     TT_FATAL(
-        std::find(supported_high_level_patterns.begin(), supported_high_level_patterns.end(), config.type) !=
-            supported_high_level_patterns.end(),
+        detail::high_level_traffic_pattern_mapper.to_enum.find(config.type) !=
+            detail::high_level_traffic_pattern_mapper.to_enum.end(),
         "Unsupported pattern type: '{}'. Supported types are: {}",
         config.type,
-        supported_high_level_patterns);
+        get_supported_high_level_patterns());
 
     if (pattern_yaml["iterations"]) {
         config.iterations = parse_scalar<uint32_t>(pattern_yaml["iterations"]);
@@ -1038,7 +1078,7 @@ private:
             resolve_missing_params(iteration_test);
 
             // After expansion and resolution, apply universal transformations like mcast splitting.
-            split_all_unnicast_or_multicast_patterns(iteration_test);
+            split_all_unicast_or_multicast_patterns(iteration_test);
 
             // Convert to resolved TestConfig
             TestConfig resolved_test = resolve_test_config(iteration_test);
@@ -1292,6 +1332,8 @@ private:
                 HighLevelTrafficPattern pattern_type =
                     detail::high_level_traffic_pattern_mapper.from_string(pattern.type, "HighLevelTrafficPattern");
                 expand_full_or_half_ring_unicast_or_multicast(test, defaults, pattern_type);
+            } else if (pattern.type == "all_devices_uniform_pattern") {
+                expand_all_devices_uniform_pattern(test, defaults);
             } else {
                 TT_THROW("Unsupported pattern type: {}", pattern.type);
             }
@@ -1328,6 +1370,17 @@ private:
         log_info(LogTest, "Expanding full_device_random_pairing pattern for test: {}", test.name);
         auto random_pairs = this->route_manager_.get_full_device_random_pairs(this->gen_);
         add_senders_from_pairs(test, random_pairs, base_pattern);
+    }
+
+    void expand_all_devices_uniform_pattern(ParsedTestConfig& test, const ParsedTrafficPatternConfig& base_pattern) {
+        log_info(LogTest, "Expanding all_devices_uniform_pattern for test: {}", test.name);
+        std::vector<FabricNodeId> devices = device_info_provider_.get_local_node_ids();
+        TT_FATAL(!devices.empty(), "Cannot expand all_devices_uniform_pattern because no devices were found.");
+
+        for (const auto& src_node : devices) {
+            // Apply the base pattern (from defaults) to each device
+            test.senders.emplace_back(ParsedSenderConfig{.device = src_node, .patterns = {base_pattern}});
+        }
     }
 
     void expand_one_or_all_to_all_multicast(
@@ -1377,7 +1430,7 @@ private:
         TT_FATAL(!devices.empty(), "Cannot expand unidirectional_linear because no devices were found.");
 
         for (const auto& src_node : devices) {
-            // instantiate N/S E/W traffic on seperate senders to avoid bottlnecking on sender.
+            // instantiate N/S E/W traffic on separate senders to avoid bottlenecking on sender.
             for (uint32_t dim = 0; dim < this->route_manager_.get_num_mesh_dims(); ++dim) {
                 // Skip dimensions with only one device
                 if (this->route_manager_.get_mesh_shape()[dim] < 2) {
@@ -1555,7 +1608,7 @@ private:
         }
     }
 
-    void split_all_unnicast_or_multicast_patterns(ParsedTestConfig& test) {
+    void split_all_unicast_or_multicast_patterns(ParsedTestConfig& test) {
         // This function iterates through all sender patterns and splits any multi-direction
         // multicast hops.
         for (auto& sender : test.senders) {
@@ -1820,6 +1873,10 @@ private:
         return detail::routing_type_mapper.to_string(rtype, "RoutingType");
     }
 
+    static std::string to_string(FabricTensixConfig ftype) {
+        return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixConfig");
+    }
+
     static std::string to_string(tt::tt_fabric::Topology topology) {
         return detail::topology_mapper.to_string(topology, "Topology");
     }
@@ -1989,6 +2046,16 @@ private:
             out << YAML::Key << "routing_type";
             out << YAML::Value << to_string(config.routing_type.value());
         }
+        if (config.fabric_tensix_config.has_value()) {
+            out << YAML::Key << "fabric_tensix_config";
+            out << YAML::Value << to_string(config.fabric_tensix_config.value());
+        }
+        if (config.topology == Topology::Torus && config.torus_config.has_value()) {
+            out << YAML::Key << "torus_config";
+            out << YAML::Value << config.torus_config.value();
+        }
+        out << YAML::Key << "num_links";
+        out << YAML::Value << config.num_links;
         out << YAML::EndMap;
     }
 };

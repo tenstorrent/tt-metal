@@ -68,7 +68,6 @@ inline std::vector<bfloat16> get_col_slice(
 
 inline void print_faces(std::vector<bfloat16> data, std::string name) {
     std::cout << name << ": " << std::endl;
-    int index = 0;
 
     int tile_index = 0;
     int face_index = 0;
@@ -142,9 +141,7 @@ inline bool move_tiles_to_dram(
     std::shared_ptr<distributed::MeshBuffer> buffer) {
     bool pass = true;
     int tile_size = 512;  // 32*32 packed into uint32_t
-    int tile_size_bytes = 32 * 32 * 2;
     int start_index = 0;
-    int tile_id = 0;
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     std::vector<uint32_t> tile;
     std::vector<uint32_t> tiles;

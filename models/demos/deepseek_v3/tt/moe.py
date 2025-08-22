@@ -13,6 +13,7 @@ from models.demos.deepseek_v3.tt.experts import Experts as MoEExperts
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
+    AllGatherAsyncConfig,
     AllToAllCombineConfig,
     AllToAllDispatchConfig,
     MulConfig,
@@ -91,15 +92,21 @@ class MoE(SharedStateAddOn, AbstractModule):
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
                 "global_semaphore": ccl.get_semaphore(0),
+                "init_semaphore": ccl.get_semaphore(0),
                 "num_links": 1,
             },
             "all_to_all_combine": {
                 "global_semaphore": ccl.get_semaphore(0),
+                "init_semaphore": ccl.get_semaphore(0),
                 "num_links": 1,
             },
             "final_output_reduce_scatter": {
                 "from_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
                 "to_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
+                "num_links": ccl.get_max_links(1),
+            },
+            "revert_tp": {
+                "multi_device_global_semaphore": ccl.get_semaphore(1),
                 "num_links": ccl.get_max_links(1),
             },
         }
@@ -155,6 +162,13 @@ class MoE(SharedStateAddOn, AbstractModule):
                 memory_config=memory_config,
                 topology=ttnn.Topology.Linear,
             ),
+            "revert_tp": AllGatherAsyncConfig(
+                mesh_device=mesh_device,
+                dim=-1,  # Last dimension
+                memory_config=memory_config,
+                cluster_axis=1,
+                topology=ttnn.Topology.Linear,
+            ),
         }
 
     @classmethod
@@ -204,7 +218,8 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        assert x.memory_config() == cfg["input_memory_config"]
+        x = ttnn.experimental.all_gather_async(x, **cfg["revert_tp"])
+
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
         batch_size_per_device = x.shape[
             -2
