@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
-import os
 import re
 from enum import Enum
 from typing import Optional
@@ -587,11 +586,7 @@ def create_tt_model(
     state_dict=None,
     num_layers=None,
 ):
-    if "HF_MODEL" in os.environ and "gemma-3" in os.environ["HF_MODEL"].lower():
-        from models.experimental.gemma3_4b.tt.text_model import Gemma3_4BTransformer as Transformer
-    else:
-        from models.tt_transformers.tt.model import Transformer
-
+    from models.tt_transformers.tt.model import Transformer
     from models.tt_transformers.tt.model_config import ModelArgs
 
     tt_model_args = ModelArgs(
