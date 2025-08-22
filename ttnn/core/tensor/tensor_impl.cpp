@@ -534,13 +534,11 @@ Tensor to_host(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
 
     // For performance, perform all allocations via DistributedHostBuffer::transform, run from multiple threads.
-    auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
-    for (const auto& coord : storage.coords) {
-        distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
-    }
+    auto distributed_host_buffer = DistributedHostBuffer::create(device->shape());
 
-    distributed_host_buffer = distributed_host_buffer.transform(
-        [&](const HostBuffer&) { return allocate_host_buffer(tensor.tensor_spec()); },
+    distributed_host_buffer.emplace_shards(
+        storage.coords,
+        [&](const distributed::MeshCoordinate&) { return allocate_host_buffer(tensor.tensor_spec()); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
     mesh_cq.enqueue_read(mesh_buffer, distributed_host_buffer, /*shards=*/std::nullopt, blocking);
