@@ -1242,6 +1242,17 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t num_batches_per_core_group_2 = num_batches_per_core_group_1;  // need this to be non-zero even if unused
     uint32_t num_groups_per_core = num_groups > num_shards_c ? num_groups / num_shards_c : 1;
 
+    // Compute num_out_blocks if not provided. If this does not provide the best result, num_out_blocks should be
+    // computed by testing different powers of 2 This is a heuristic.
+    if (num_out_blocks == -1) {
+        uint32_t den = (shape[1] * shape[2] * shape[3]) / (256 * 256 * (num_virtual_cols * num_virtual_rows));
+        den = den ? den : 1;
+        num_out_blocks = 1;
+        while (num_out_blocks < den && num_out_blocks < 256) {
+            num_out_blocks <<= 1;
+        }
+    }
+
     TT_FATAL(
         num_groups % num_virtual_cols == 0, "num_groups: {} must divide cores_y: {}", num_groups, num_virtual_cols);
     TT_FATAL(
@@ -1419,7 +1430,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // repack cb
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;  // double buffer
     // itermediate buffers
-    uint32_t interm_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
+    uint32_t interm_block_tiles_group_1 = in0_block_tiles_group_1;  // block_ht_group_1 / num_out_blocks * block_wt;
     uint32_t interm_block_tiles_group_2 = 0;
     uint32_t x_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t x_CB_size_group_2 = 0;
@@ -1440,15 +1451,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
 
     if (!equal_batches_per_core) {
         // input buffers
-        in0_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
+        // in0_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
         in0_block_tiles_group_2 = block_ht_group_2 / num_out_blocks * block_wt;
         in0_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
         in0_CB_size_group_2 = in0_block_tiles_group_2 * in_single_tile_size;
         in_CB_size_group_1 = in0_block_tiles_group_1 * in_single_tile_size;
         in_CB_size_group_2 = in0_block_tiles_group_2 * in_single_tile_size;
         // intermediate buffers
-        interm_block_tiles_group_1 = block_ht_group_1 / num_out_blocks * block_wt;
-        interm_block_tiles_group_2 = block_ht_group_2 / num_out_blocks * block_wt;
+        interm_block_tiles_group_1 = in0_block_tiles_group_1;  // block_ht_group_1 / num_out_blocks * block_wt;
+        interm_block_tiles_group_2 = in0_block_tiles_group_2;  // block_ht_group_2 / num_out_blocks * block_wt;
         x_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
         x_CB_size_group_2 = interm_block_tiles_group_2 * single_tile_size;
         xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
