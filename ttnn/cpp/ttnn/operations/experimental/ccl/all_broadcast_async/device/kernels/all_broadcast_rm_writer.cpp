@@ -6,31 +6,33 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <cstdint>
 #include <utility>
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "tt_metal/fabric/hw/inc/linear/api.h"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
+using namespace tt::tt_fabric;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
 ///////////////////////////////////////////////////
 
-constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(0);
-constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(1);
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(2));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(3);
-constexpr uint32_t page_size = get_compile_time_arg_val(4);
-constexpr uint32_t row_size = get_compile_time_arg_val(5);
-constexpr uint32_t max_packet_size = get_compile_time_arg_val(6);
-constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(7);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(8);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(9);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(10);
+constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(0));
+constexpr uint32_t cb0_id = get_compile_time_arg_val(1);
+constexpr uint32_t page_size = get_compile_time_arg_val(2);
+constexpr uint32_t row_size = get_compile_time_arg_val(3);
+constexpr uint32_t max_packet_size = get_compile_time_arg_val(4);
+constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(5);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
+constexpr bool dynamic_alternate = get_compile_time_arg_val(8);
 constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
 constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
 constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
@@ -58,17 +60,20 @@ void kernel_main() {
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
 
+    auto route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 #ifdef SHARDED
     typedef ShardedInfo<
+        get_compile_time_arg_val(9),
+        get_compile_time_arg_val(10),
         get_compile_time_arg_val(11),
         get_compile_time_arg_val(12),
         get_compile_time_arg_val(13),
         get_compile_time_arg_val(14),
-        get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16),
-        get_compile_time_arg_val(17)>
+        get_compile_time_arg_val(15)>
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =
@@ -76,63 +81,39 @@ void kernel_main() {
     experimental::ShardedAddrGen<tensor_shard_info> tensor0_addrgen = {
         .bank_base_address = tensor_address0, .shard_array = mapping_table};
     size_t fab_idx = arg_for_fab + rt_increment;
-    auto fabric_connection = FabricConnectionManager::build_from_args(fab_idx);
+    linear::experimental::open_connections(fabric_connection, route_id, fab_idx);
 #else
     constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
     const auto tensor0_addrgen = get_interleaved_addr_gen<is_dram, row_size>(tensor_address0);
-    auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
-
+    linear::experimental::open_connections(fabric_connection, route_id, arg_for_fab);
 #endif
 
-    // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
-    cb_reserve_back(reserved_packet_header_cb_id, 1);
-    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
-    cb_push_back(reserved_packet_header_cb_id, 1);
+    // Allocate packet headers from packet header pool
+    volatile PACKET_HEADER_TYPE* pkt_hdr_seminc = PacketHeaderPool::allocate_header();
 
-    // pre-populate packet headers
-    volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
-    volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
-        reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
-    volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
-        reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
-
-    pkt_hdr_forward->to_chip_multicast(
-        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-    pkt_hdr_backward->to_chip_multicast(
-        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
-
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.open();
+    uint8_t starts[] = {1, 1};
+    uint8_t ranges[] = {
+        static_cast<uint8_t>(num_targets_forward_direction), static_cast<uint8_t>(num_targets_backward_direction)};
+    if (ranges[0] == 0) {
+        ranges[0] = ranges[1];
     }
+    linear::experimental::fabric_multicast_noc_unicast_write_set_state<
+        linear::experimental::UnicastWriteUpdateMask::None>(route_id, starts, ranges);
 
     uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
 
     uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-    pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        barrier_sem_noc_addr_in_pkt,
-        static_cast<uint16_t>(1),  // increment 1
-        32});
 
-    if (num_targets_forward_direction) {
-        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        pkt_hdr_seminc->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
-    }
-    if (num_targets_backward_direction) {
-        pkt_hdr_seminc->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
-        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+    for (uint8_t i = 0; i < num_connections; i++) {
+        linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+            &fabric_connection.get(i),
+            pkt_hdr_seminc,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                barrier_sem_noc_addr_in_pkt,
+                static_cast<uint16_t>(1),  // increment 1
+                32},
+            starts[i],
+            ranges[i]);
     }
 
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
@@ -152,13 +133,25 @@ void kernel_main() {
             uint32_t packet_size = std::min(max_packet_size, page_size);
             packet_size = std::min(packet_size, page_size - max_packet_size * j);
 
-            write_and_advance_local_read_address_for_fabric_write(
-                noc0_dest_noc_addr, pkt_hdr_forward, pkt_hdr_backward, fabric_connection, l1_read_addr, packet_size);
+            const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
+            noc_async_write(l1_read_addr, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), packet_size);
+            linear::experimental::fabric_multicast_noc_unicast_write_with_state<
+                linear::experimental::UnicastWriteUpdateMask::DstAddr |
+                linear::experimental::UnicastWriteUpdateMask::PayloadSize>(
+                fabric_connection,
+                route_id,
+                l1_read_addr,
+                tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr},
+                packet_size);
+            noc_async_writes_flushed();
+            l1_read_addr += packet_size;
+
             if constexpr (dynamic_alternate) {
-                std::swap(
-                    pkt_hdr_forward->routing_fields.value,
-                    pkt_hdr_backward->routing_fields
-                        .value);  // alternate the packet header distance for better balancing
+                if (PacketHeaderPool::get_num_headers(route_id) > 1) {
+                    std::swap(
+                        PacketHeaderPool::header_table[route_id].first->routing_fields.value,
+                        (PacketHeaderPool::header_table[route_id].first + 1)->routing_fields.value);
+                }
             }
             offset += packet_size;  // advance the noc address for the next packet
         }
@@ -169,25 +162,21 @@ void kernel_main() {
     // 2. mcast output ready semaphore
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
-    pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_noc_addr_in_pkt,
-        static_cast<uint16_t>(1),  // increment 1
-        32});
-    // Write the mcast packet (forward)
-    if (fabric_connection.has_forward_connection()) {
-        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        pkt_hdr_seminc->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_forward)});
-        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+    uint8_t num_sync_targets[] = {
+        static_cast<uint8_t>(num_sync_targets_forward), static_cast<uint8_t>(num_sync_targets_backward)};
+    if (num_sync_targets[0] == 0) {
+        num_sync_targets[0] = num_sync_targets[1];
     }
-    // Write the mcast packet (backward)
-    if (fabric_connection.has_backward_connection()) {
-        pkt_hdr_seminc->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
-        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
-            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+    for (uint8_t i = 0; i < num_connections; i++) {
+        linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+            &fabric_connection.get(i),
+            pkt_hdr_seminc,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                out_ready_sem_noc_addr_in_pkt,
+                static_cast<uint16_t>(1),  // increment 1
+                32},
+            starts[i],
+            num_sync_targets[i]);
     }
     // increment locally
     uint64_t out_ready_sem_noc_addr =
@@ -205,9 +194,7 @@ void kernel_main() {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
-    if (fabric_connection.is_logically_connected()) {
-        fabric_connection.close();
-    }
+    linear::experimental::close_connections(fabric_connection);
 
     noc_async_write_barrier();
 }
