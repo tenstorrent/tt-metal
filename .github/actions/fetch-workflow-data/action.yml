@@ -2,15 +2,13 @@ name: 'Fetch Workflow Data'
 description: 'Fetches workflow run data and caches it for analysis'
 
 inputs:
-  workflow-name:
-    description: 'Exact workflow name to match'
-    required: false
-  name-prefix:
-    description: 'Workflow name prefix to match'
-    required: false
+  workflow_configs:
+    description: 'JSON array of workflow configurations to filter by'
+    required: true
   branch:
-    description: 'Branch to filter runs by'
+    description: 'Branch to filter runs by (default: main)'
     required: false
+    default: 'main'
   actor:
     description: 'Actor to filter runs by'
     required: false
@@ -23,12 +21,18 @@ inputs:
   GITHUB_TOKEN:
     description: 'GitHub token for API access'
     required: true
+  force-cache:
+    description: 'If true, skips loading cache and fetches all new data'
+    required: false
+    default: 'true'
 
 outputs:
   total-runs:
     description: 'Total number of runs fetched'
   workflow-count:
     description: 'Number of unique workflows found'
+  cache-path:
+    description: 'Path to the cached workflow data'
 
 runs:
   using: 'node20'
