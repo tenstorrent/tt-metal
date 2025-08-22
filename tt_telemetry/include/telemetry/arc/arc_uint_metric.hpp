@@ -22,9 +22,9 @@ public:
         AXICLK,            // AXI clock frequency (MHz)
         ARCCLK,            // ARC clock frequency (MHz)
         FAN_SPEED,         // Fan speed (RPM)
-        TDP,               // Thermal Design Power
-        TDC,               // Thermal Design Current
-        VCORE,             // Core voltage
+        TDP,               // Thermal Design Power (W)
+        TDC,               // Thermal Design Current (A)
+        VCORE,             // Core voltage (mV)
         ASIC_TEMPERATURE,  // ASIC temperature (raw uint32)
         BOARD_TEMPERATURE  // Board temperature (raw uint32)
     };
@@ -35,7 +35,8 @@ public:
         std::shared_ptr<ARCTelemetryReader> reader,
         tt::umd::wormhole::TelemetryTag tag,
         const std::string& metric_name,
-        uint32_t mask = 0xffffffff);
+        uint32_t mask = 0xffffffff,
+        MetricUnit units = MetricUnit::UNITLESS);
 
     // Constructor for Blackhole telemetry tags
     ARCUintMetric(
@@ -43,7 +44,8 @@ public:
         std::shared_ptr<ARCTelemetryReader> reader,
         tt::umd::blackhole::TelemetryTag tag,
         const std::string& metric_name,
-        uint32_t mask = 0xffffffff);
+        uint32_t mask = 0xffffffff,
+        MetricUnit units = MetricUnit::UNITLESS);
 
     // Constructor for common metrics (automatically selects appropriate tag based on architecture)
     ARCUintMetric(size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader, CommonTelemetryTag common_metric);

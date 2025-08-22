@@ -3,7 +3,7 @@
  *
  * Stores telemetry data, named by slash-delimited paths, in a hierarchical tree. Leaf nodes
  * contain actual reported telemetry data and intermediate nodes are aggregated from children.
- * 
+ *
  * TODO:
  * -----
  * - Better handling of value types. The isBoolValue param on addPath() needs to go!
@@ -12,7 +12,7 @@
  */
 
 export function isBool(value) {
-    return typeof value === "boolean" || value instanceof Boolean; 
+    return typeof value === "boolean" || value instanceof Boolean;
 }
 
 function isInt(value) {
@@ -25,27 +25,31 @@ export class HierarchicalTelemetryStore {
         // messages compact. This allows us to map back to path.
         this._pathById = new Map();
 
-        // Telemetry data (value + timestamp) hashed by path. Partial paths are also tracked and are the
+        // Telemetry data (value + timestamp + unit info) hashed by path. Partial paths are also tracked and are the
         // aggregate value of all children (ANDed together for bools). Timestamps for intermediate nodes
         // are the most recent timestamp of their children.
-        // Each entry is: { value: any, timestamp: Date }
+        // Each entry is: { value: any, timestamp: Date, unitDisplayLabel: string|null, unitFullLabel: string|null }
         this._dataByPath = new Map();
 
         // Hierarchical map of paths, allowing us to navigate to subsequently deeper levels. Given
         // a path like foo/bar/baz, the first level of keys will include "foo", which will index a
-        // map containing "bar", which will in turn index a map containing "baz". "baz" has no 
+        // map containing "bar", which will in turn index a map containing "baz". "baz" has no
         // children and its value is nil.
         this._pathChildren = new Map();    // hierarchical map of paths
+
+        // Unit label maps: code -> display label and code -> full label
+        this._unitDisplayLabelByCode = new Map();
+        this._unitFullLabelByCode = new Map();
     }
 
-    // Returns the aggregate "health" value and most recent timestamp of a path by looking at immediate 
-    // bool-valued children, otherwise looks at the node directly, assuming it is a leaf. 
+    // Returns the aggregate "health" value and most recent timestamp of a path by looking at immediate
+    // bool-valued children, otherwise looks at the node directly, assuming it is a leaf.
     // Returns { value: boolean, timestamp: Date }
     _getAggregateHealthAndTimestamp(path) {
         // First, we need to navigate to the correct position in the hierarchy
         const parts = path.split("/");
         let currentMap = this._pathChildren;
-        
+
         // Navigate through the hierarchy to find the correct map
         for (let i = 0; i < parts.length; i++) {
             const part = parts[i];
@@ -59,7 +63,7 @@ export class HierarchicalTelemetryStore {
             }
             currentMap = currentMap.get(part);
         }
-        
+
         // If no children, this is a leaf node
         if (!currentMap) {
             const data = this._dataByPath.get(path);
@@ -71,7 +75,7 @@ export class HierarchicalTelemetryStore {
             }
             return { value: data.value === true, timestamp: data.timestamp };
         }
-        
+
         // Aggregate childrens' boolean values and find most recent timestamp
         let value = true;
         let mostRecentTimestamp = new Date(0);
@@ -107,15 +111,21 @@ export class HierarchicalTelemetryStore {
 
         // Convert value to bool type if it is not
         value = value == true;
-        
+
         // Convert timestamp to Date if provided, otherwise use current time
         const timestampDate = timestamp ? new Date(timestamp) : new Date();
-        
-        // Update value and timestamp
+
+        // Update value and timestamp, preserving unit information
         const oldData = this._dataByPath.get(path);
         const forceUpdate = oldData === undefined;
         let changed = !oldData || value !== oldData.value || timestampDate.getTime() !== oldData.timestamp.getTime();
-        this._dataByPath.set(path, { value, timestamp: timestampDate });
+        const newData = {
+            value,
+            timestamp: timestampDate,
+            unitDisplayLabel: oldData ? oldData.unitDisplayLabel : null,
+            unitFullLabel: oldData ? oldData.unitFullLabel : null
+        };
+        this._dataByPath.set(path, newData);
         console.log(`Set ${path} = ${value} at ${timestampDate.toISOString()}`);
 
         // No change? We are done.
@@ -151,12 +161,18 @@ export class HierarchicalTelemetryStore {
 
         // Convert timestamp to Date if provided, otherwise use current time
         const timestampDate = timestamp ? new Date(timestamp) : new Date();
-        
-        // Update value and timestamp
+
+        // Update value and timestamp, preserving unit information
         const oldData = this._dataByPath.get(path);
         const forceUpdate = oldData === undefined;
         let changed = !oldData || value !== oldData.value || timestampDate.getTime() !== oldData.timestamp.getTime();
-        this._dataByPath.set(path, { value, timestamp: timestampDate });
+        const newData = {
+            value,
+            timestamp: timestampDate,
+            unitDisplayLabel: oldData ? oldData.unitDisplayLabel : null,
+            unitFullLabel: oldData ? oldData.unitFullLabel : null
+        };
+        this._dataByPath.set(path, newData);
         console.log(`Set ${path} = ${value} at ${timestampDate.toISOString()}`);
 
         // No change? We are done.
@@ -177,8 +193,47 @@ export class HierarchicalTelemetryStore {
         }
     }
 
+    // Update function for unit label maps - iterates through the provided maps
+    // and updates the internal ones (overwriting existing values and adding new ones)
+    updateUnitLabelMaps(displayLabelMap, fullLabelMap) {
+        let displayCount = 0;
+        let fullCount = 0;
+
+        if (displayLabelMap) {
+            for (const [code, label] of Object.entries(displayLabelMap)) {
+                this._unitDisplayLabelByCode.set(parseInt(code), label);
+                displayCount++;
+            }
+        }
+
+        if (fullLabelMap) {
+            for (const [code, label] of Object.entries(fullLabelMap)) {
+                this._unitFullLabelByCode.set(parseInt(code), label);
+                fullCount++;
+            }
+        }
+
+        console.log(`[HierarchicalTelemetryStore] Updated ${displayCount} display labels and ${fullCount} full labels`);
+    }
+
+    // Helper method to get unit labels for a given unit code
+    _getUnitLabels(unitCode) {
+        if (unitCode === null || unitCode === undefined) {
+            return { unitDisplayLabel: null, unitFullLabel: null };
+        }
+
+        const displayLabel = this._unitDisplayLabelByCode.get(unitCode);
+        const fullLabel = this._unitFullLabelByCode.get(unitCode);
+
+        // Only include labels if they exist and are not empty/unknown
+        const unitDisplayLabel = (displayLabel && displayLabel !== "" && displayLabel !== "<unknown>") ? displayLabel : null;
+        const unitFullLabel = (fullLabel && fullLabel !== "" && fullLabel !== "<unknown>") ? fullLabel : null;
+
+        return { unitDisplayLabel, unitFullLabel };
+    }
+
     // Adds a new telemetry value to the store for the first time.
-    addPath(path, id, initialValue, isBoolValue, timestamp = null) {
+    addPath(path, id, initialValue, isBoolValue, timestamp = null, unitCode = null) {
         if (this._pathById.has(id)) {
             const existingPath = this._pathById.get(id);
             console.error(`[HierarchicalTelemetryStore] Cannot add (${id}, ${path}) to id -> path mapping because (${id}, ${existingPath}) already exists there`);
@@ -186,7 +241,7 @@ export class HierarchicalTelemetryStore {
         }
 
         this._pathById.set(id, path);
-    
+
         // Now update path component maps. Note that terminal part of path must have no children.
         const parts = path.split("/");
         let map = this._pathChildren;
@@ -201,11 +256,31 @@ export class HierarchicalTelemetryStore {
 
         console.log(`[HierarchicalTelemetryStore] Added ${id}:${path} (value=${initialValue})`);
 
-        // Update value with timestamp
+        // Get unit labels for this metric
+        const { unitDisplayLabel, unitFullLabel } = this._getUnitLabels(unitCode);
+
+        // Convert timestamp to Date if provided, otherwise use current time
+        const timestampDate = timestamp ? new Date(timestamp) : new Date();
+
+        // Store initial data with unit information
+        const initialData = {
+            value: isBoolValue ? (initialValue == true) : initialValue,
+            timestamp: timestampDate,
+            unitDisplayLabel,
+            unitFullLabel
+        };
+        this._dataByPath.set(path, initialData);
+
+        // Propagate changes upward (for bool metrics)
         if (isBoolValue) {
-            this.updateBoolValue(id, initialValue, timestamp);
-        } else {
-            this.updateUIntValue(id, initialValue, timestamp);
+            const parts = path.split("/");
+            for (let i = parts.length; i > 0; i--) {
+                const currentPath = parts.slice(0, i).join("/");
+                if (currentPath !== path) {
+                    const aggregateData = this._getAggregateHealthAndTimestamp(currentPath);
+                    this._dataByPath.set(currentPath, aggregateData);
+                }
+            }
         }
     }
 
@@ -229,15 +304,8 @@ export class HierarchicalTelemetryStore {
         return currentMap ? [ ...currentMap.keys() ] : [];
     }
 
-    // Gets telemetry value. The path (a string) or ID (a number) may be supplied.
-    // Returns just the value for backward compatibility.
-    getValue(idOrPath) {
-        const data = this.getData(idOrPath);
-        return data ? data.value : false;
-    }
-
-    // Gets telemetry data (value + timestamp). The path (a string) or ID (a number) may be supplied.
-    // Returns { value: any, timestamp: Date } or null if not found.
+    // Gets telemetry data (value + timestamp + unit info). The path (a string) or ID (a number) may be supplied.
+    // Returns { value: any, timestamp: Date, unitDisplayLabel: string|null, unitFullLabel: string|null } or null if not found.
     getData(idOrPath) {
         const isPath = typeof(idOrPath) === "string" || idOrPath instanceof String;
         const path = isPath ? idOrPath : this._pathById.get(idOrPath);
@@ -247,8 +315,12 @@ export class HierarchicalTelemetryStore {
             return null;
         }
         const data = this._dataByPath.get(path);
-        console.log(`[HierarchicalTelemetryStore] Get data ${path} = ${data ? data.value : 'undefined'} at ${data ? data.timestamp.toISOString() : 'no timestamp'}`);
-        return data || null;
+        if (!data) {
+            return null;
+        }
+
+        console.log(`[HierarchicalTelemetryStore] Get data ${path} = ${data.value} at ${data.timestamp.toISOString()} (units: ${data.unitDisplayLabel}/${data.unitFullLabel})`);
+        return data;
     }
 }
 

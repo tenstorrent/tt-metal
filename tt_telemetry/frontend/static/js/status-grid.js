@@ -52,11 +52,11 @@ export class StatusGrid extends LitElement {
         const sortedMetrics = [...this.metrics].sort((metric1, metric2) => {
             const isBool1 = isBool(metric1.value);
             const isBool2 = isBool(metric2.value);
-            
+
             // If one is bool and the other isn't, prioritize the bool metric
             if (isBool1 && !isBool2) return -1;
             if (!isBool1 && isBool2) return 1;
-            
+
             // If both are same type (both bool or both non-bool), sort alphabetically
             return metric1.name.localeCompare(metric2.name);
         });
@@ -64,11 +64,13 @@ export class StatusGrid extends LitElement {
         return html`
             <div class="${gridClass}" @box-click="${this._handleBoxClick}">
                 ${sortedMetrics.map(metric => html`
-                    <status-box 
+                    <status-box
                         name="${metric.name}"
                         .value="${metric.value}"
                         .clickable="true"
                         .isLeaf="${metric.isLeaf || false}"
+                        .unitDisplayLabel="${metric.unitDisplayLabel || null}"
+                        .unitFullLabel="${metric.unitFullLabel || null}"
                         type="${isBool(metric.value) ? "health" : "valued"}">
                     </status-box>
                 `)}

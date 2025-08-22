@@ -1,5 +1,6 @@
 import { LitElement, html, css } from 'https://cdn.jsdelivr.net/gh/lit/dist@3/all/lit-all.min.js';
 import { HierarchicalTelemetryStore } from './hierarchical_telemetry_store.js';
+import { arrayOfPairsToObject } from './utils.js';
 import './status-grid.js';
 import './metric-sidebar.js';
 
@@ -86,7 +87,7 @@ export class TelemetryDashboard extends LitElement {
         try {
             // Replace '/api/events' with your actual SSE endpoint
             this._eventSource = new EventSource('/api/stream');
-            
+
             this._eventSource.onmessage = (event) => {
                 let didUpdate = false;
 
@@ -137,8 +138,11 @@ export class TelemetryDashboard extends LitElement {
 
                     const uintMetricIds = data["uint_metric_ids"];
                     const uintMetricNames = data["uint_metric_names"];    // optional, and indicates new telemetry metrics if present
+                    const uintMetricUnits = data["uint_metric_units"] || [];
                     const uintMetricValues = data["uint_metric_values"];
                     const uintMetricTimestamps = data["uint_metric_timestamps"] || [];
+                    const unitDisplayLabels = arrayOfPairsToObject(data["metric_unit_display_label_by_code"]);
+                    const unitFullLabels = arrayOfPairsToObject(data["metric_unit_full_label_by_code"]);
 
                     if (uintMetricIds.length != uintMetricValues.length) {
                         console.log(`SSE error: Received differing id and value counts (${uintMetricIds.length} vs. ${uintMetricValues.length})`);
@@ -155,14 +159,23 @@ export class TelemetryDashboard extends LitElement {
                         return;
                     }
 
+                    if (uintMetricUnits.length > 0 && uintMetricUnits.length != uintMetricIds.length) {
+                        console.log(`SSE error: Received differing units and id counts (${uintMetricUnits.length} vs. ${uintMetricIds.length})`);
+                        return;
+                    }
+
+                    // Update unit label maps if present
+                    this._telemetryStore.updateUnitLabelMaps(unitDisplayLabels, unitFullLabels);
+
                     if (uintMetricNames.length > 0) {
-                        // Adding new
+                        // Adding new metrics with unit information
                         for (let i = 0; i < uintMetricIds.length; i++) {
                             const path = uintMetricNames[i];
                             const id = uintMetricIds[i];
                             const value = uintMetricValues[i];
                             const timestamp = uintMetricTimestamps.length > 0 ? uintMetricTimestamps[i] : null;
-                            this._telemetryStore.addPath(path, id, value, false, timestamp);
+                            const unitCode = uintMetricUnits.length > 0 ? uintMetricUnits[i] : null;
+                            this._telemetryStore.addPath(path, id, value, false, timestamp, unitCode);
                             didUpdate = true;
                         }
                     } else {
@@ -203,11 +216,11 @@ export class TelemetryDashboard extends LitElement {
         const newPath = [ ...this.currentPath, metricName ].join("/");
 
         console.log(`Clicked ${metricName}: newPath=${newPath}`);
-        
+
         // Get children, if any, to drill in deeper
         const childNames = this._telemetryStore.getChildNames(newPath);
         console.log(childNames);
-        
+
         if (childNames.length > 0) {
             // This is an intermediate node - drill down
             this.currentPath = [...this.currentPath, metricName]; // descend one level deeper (don't use push, we need to mutate array to trigger state update)
@@ -218,7 +231,9 @@ export class TelemetryDashboard extends LitElement {
                 name: metricName,
                 fullPath: newPath,
                 value: metricData ? metricData.value : null,
-                timestamp: metricData ? metricData.timestamp : null
+                timestamp: metricData ? metricData.timestamp : null,
+                unitDisplayLabel: metricData ? metricData.unitDisplayLabel : null,
+                unitFullLabel: metricData ? metricData.unitFullLabel : null
             };
             this.sidebarOpen = true;
         }
@@ -258,6 +273,8 @@ export class TelemetryDashboard extends LitElement {
                 name: metricName,
                 value: metricData ? metricData.value : null,
                 timestamp: metricData ? metricData.timestamp : null,
+                unitDisplayLabel: metricData ? metricData.unitDisplayLabel : null,
+                unitFullLabel: metricData ? metricData.unitFullLabel : null,
                 isLeaf: !hasChildren  // True if this is a final node with no children
             });
         }
@@ -270,14 +287,14 @@ export class TelemetryDashboard extends LitElement {
         return html`
             <div class="navigation">
                 <div class="breadcrumb">${this._getBreadcrumb()}</div>
-                <button class="back-button" 
+                <button class="back-button"
                         ?disabled="${this.currentPath.length === 0}"
                         @click="${this._handleBackClick}">
                     ← Back
                 </button>
             </div>
 
-            <status-grid 
+            <status-grid
                 .metrics="${this._getCurrentMetrics()}"
                 @grid-box-click="${this._handleGridBoxClick}">
             </status-grid>
@@ -287,6 +304,8 @@ export class TelemetryDashboard extends LitElement {
                 .metricName="${this.selectedMetric?.name || ''}"
                 .metricValue="${this.selectedMetric?.value}"
                 .metricTimestamp="${this.selectedMetric?.timestamp}"
+                .unitDisplayLabel="${this.selectedMetric?.unitDisplayLabel}"
+                .unitFullLabel="${this.selectedMetric?.unitFullLabel}"
                 @sidebar-close="${this._handleSidebarClose}">
             </metric-sidebar>
         `;

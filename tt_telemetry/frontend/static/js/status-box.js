@@ -155,7 +155,9 @@ export class StatusBox extends LitElement {
         clickable: { type: Boolean },
         type: { type: String },
         value: { type: Object },
-        isLeaf: { type: Boolean }
+        isLeaf: { type: Boolean },
+        unitDisplayLabel: { type: String },
+        unitFullLabel: { type: String }
     };
 
     constructor() {
@@ -165,12 +167,14 @@ export class StatusBox extends LitElement {
         this.type = 'health';
         this.value = null;
         this.isLeaf = false;
+        this.unitDisplayLabel = null;
+        this.unitFullLabel = null;
         this._cachedFittedText = null;
     }
 
     updated(changedProperties) {
         super.updated(changedProperties);
-        
+
         // If the name changed or this is the first render, recalculate text fitting
         // after the DOM has been updated with actual dimensions
         if (changedProperties.has('name') && this.name) {
@@ -210,32 +214,32 @@ export class StatusBox extends LitElement {
         if (!forceRecalculate && this._cachedFittedText && this._cachedFittedText.text === text) {
             return this._cachedFittedText;
         }
-        
+
         // Get available dimensions with padding margin
         const availableWidth = this._getAvailableWidth();
         const availableHeight = this._getAvailableHeight();
-        
+
         // Try different sizing approaches in order of preference
         const approaches = [
             { scaleClass: '', fontSize: 1.0 },           // Normal size
             { scaleClass: 'scale-down', fontSize: 0.85 }, // Slightly smaller
             { scaleClass: 'scale-down-more', fontSize: 0.7 } // Much smaller
         ];
-        
+
         for (const approach of approaches) {
             // Check if text fits in one line at this size
             if (this._textFitsInOneLine(text, availableWidth, approach.fontSize)) {
                 const result = { text, scaleClass: approach.scaleClass };
                 return result;
             }
-            
+
             // Check if text fits in two lines at this size
             if (this._textFitsInTwoLines(text, availableWidth, availableHeight, approach.fontSize)) {
                 const result = { text, scaleClass: approach.scaleClass };
                 return result;
             }
         }
-        
+
         // If still doesn't fit, abbreviate text and use smallest size
         const abbreviatedText = this._abbreviateText(text, availableWidth, availableHeight, 0.7);
         const result = { text: abbreviatedText, scaleClass: 'scale-down-more' };
@@ -250,7 +254,7 @@ export class StatusBox extends LitElement {
         const boxElement = this.shadowRoot?.querySelector('.status-box');
         let boxWidth = 200; // Fallback default
         let isActualMeasurement = false;
-        
+
         if (boxElement) {
             const rect = boxElement.getBoundingClientRect();
             if (rect.width > 0) {
@@ -258,18 +262,18 @@ export class StatusBox extends LitElement {
                 isActualMeasurement = true;
             }
         }
-        
+
         const horizontalPadding = 16; // 8px on each side from CSS
         const indicatorSpace = this.type === 'health' ? 20 : 0; // Space for status indicator
         const margin = 10; // Safety margin
-        
+
         const availableWidth = Math.max(50, boxWidth - horizontalPadding - indicatorSpace - margin);
-        
+
         // Debug output for development
         // if (this.name && isActualMeasurement) {
         //     console.log(`[StatusBox] ${this.name}: actual width=${boxWidth}px, available=${availableWidth}px`);
         // }
-        
+
         return availableWidth;
     }
 
@@ -281,7 +285,7 @@ export class StatusBox extends LitElement {
         const boxElement = this.shadowRoot?.querySelector('.status-box');
         let boxHeight = 120; // Fallback default
         let isActualMeasurement = false;
-        
+
         if (boxElement) {
             const rect = boxElement.getBoundingClientRect();
             if (rect.height > 0) {
@@ -289,18 +293,18 @@ export class StatusBox extends LitElement {
                 isActualMeasurement = true;
             }
         }
-        
+
         const verticalPadding = 16; // From CSS
         const valueSpace = this.type === 'valued' ? 30 : 0; // Space for value display
         const margin = 10; // Safety margin
-        
+
         const availableHeight = Math.max(20, boxHeight - verticalPadding - valueSpace - margin);
-        
+
         // Debug output for development
         // if (this.name && isActualMeasurement) {
         //     console.log(`[StatusBox] ${this.name}: actual height=${boxHeight}px, available=${availableHeight}px`);
         // }
-        
+
         return availableHeight;
     }
 
@@ -311,14 +315,14 @@ export class StatusBox extends LitElement {
         // More accurate estimation considering font characteristics
         const baseFontSize = 18; // Base font size from CSS
         const actualFontSize = baseFontSize * fontSizeRatio;
-        
+
         // For bold fonts (like status labels), characters are wider
         const isBold = this.type === 'valued' || this.type === 'health';
         const fontWidthMultiplier = isBold ? 0.65 : 0.6;
-        
+
         const avgCharWidth = actualFontSize * fontWidthMultiplier;
         const estimatedWidth = text.length * avgCharWidth;
-        
+
         return estimatedWidth <= availableWidth;
     }
 
@@ -330,19 +334,19 @@ export class StatusBox extends LitElement {
         const actualFontSize = baseFontSize * fontSizeRatio;
         const lineHeight = actualFontSize * 1.2; // line-height: 1.2 from CSS
         const twoLineHeight = lineHeight * 2;
-        
+
         // Check if two lines fit vertically
         if (twoLineHeight > availableHeight) {
             return false;
         }
-        
+
         // Estimate how much text fits in two lines
         const isBold = this.type === 'valued' || this.type === 'health';
         const fontWidthMultiplier = isBold ? 0.65 : 0.6;
         const avgCharWidth = actualFontSize * fontWidthMultiplier;
         const charsPerLine = Math.floor(availableWidth / avgCharWidth);
         const maxCharsInTwoLines = charsPerLine * 2;
-        
+
         return text.length <= maxCharsInTwoLines;
     }
 
@@ -354,23 +358,23 @@ export class StatusBox extends LitElement {
         const actualFontSize = baseFontSize * fontSizeRatio;
         const lineHeight = actualFontSize * 1.2;
         const twoLineHeight = lineHeight * 2;
-        
+
         // If even two lines don't fit vertically, use very short text
         if (twoLineHeight > availableHeight) {
             return text.substring(0, 8) + '...';
         }
-        
+
         // Calculate how many characters fit in two lines, minus space for "..."
         const isBold = this.type === 'valued' || this.type === 'health';
         const fontWidthMultiplier = isBold ? 0.65 : 0.6;
         const avgCharWidth = actualFontSize * fontWidthMultiplier;
         const charsPerLine = Math.floor(availableWidth / avgCharWidth);
         const maxChars = (charsPerLine * 2) - 3; // Reserve 3 chars for "..."
-        
+
         if (text.length <= maxChars) {
             return text;
         }
-        
+
         return text.substring(0, Math.max(1, maxChars)) + '...';
     }
 
@@ -384,9 +388,11 @@ export class StatusBox extends LitElement {
 
         if (this.type === 'valued') {
             statusClass = 'valued';
+            const valueDisplay = this.value !== null ? this.value : 'N/A';
+            const unitDisplay = this.unitDisplayLabel ? ` ${this.unitDisplayLabel}` : '';
             content = html`
                 <div class="valued-name ${scaleClass}">${displayName}</div>
-                <div class="valued-value">${this.value !== null ? this.value : 'N/A'}</div>
+                <div class="valued-value">${valueDisplay}${unitDisplay}</div>
             `;
         } else {
             // Default to health type - treat value as boolean for health status
@@ -397,12 +403,12 @@ export class StatusBox extends LitElement {
                 <div class="label-text ${scaleClass}">${displayName}</div>
             `;
         }
-        
+
         const levelClass = `level-any`;
         const clickableClass = this.clickable ? '' : 'not-clickable';
 
         return html`
-            <div class="status-box ${statusClass} ${levelClass} ${clickableClass}" 
+            <div class="status-box ${statusClass} ${levelClass} ${clickableClass}"
                  @click="${this._handleClick}">
                 ${content}
             </div>

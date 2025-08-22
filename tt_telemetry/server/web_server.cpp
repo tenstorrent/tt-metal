@@ -32,7 +32,10 @@ private:
     std::unordered_map<size_t, std::string> bool_metric_name_by_id_;
     std::unordered_map<size_t, bool> bool_metric_value_by_id_;
     std::unordered_map<size_t, std::string> uint_metric_name_by_id_;
+    std::unordered_map<size_t, uint16_t> uint_metric_units_by_id_;
     std::unordered_map<size_t, uint64_t> uint_metric_value_by_id_;
+    std::unordered_map<uint16_t, std::string> metric_unit_display_label_by_code_;
+    std::unordered_map<uint16_t, std::string> metric_unit_full_label_by_code_;
     std::mutex snapshot_mutex_;
     std::queue<std::shared_ptr<TelemetrySnapshot>> pending_snapshots_;
 
@@ -54,8 +57,13 @@ private:
         for (const auto &[id, name]: uint_metric_name_by_id_) {
             full_snapshot.uint_metric_ids.push_back(id);
             full_snapshot.uint_metric_names.push_back(name);
+            full_snapshot.uint_metric_units.push_back(uint_metric_units_by_id_[id]);
             full_snapshot.uint_metric_values.push_back(uint_metric_value_by_id_[id]);
         }
+
+        // Include cached unit label maps
+        full_snapshot.metric_unit_display_label_by_code = metric_unit_display_label_by_code_;
+        full_snapshot.metric_unit_full_label_by_code = metric_unit_full_label_by_code_;
         json j = full_snapshot;
         std::string message = "data: " + j.dump() + "\n\n";
 
@@ -94,6 +102,11 @@ private:
         TT_ASSERT(snapshot->uint_metric_ids.size() == snapshot->uint_metric_values.size());
         if (snapshot->uint_metric_names.size() > 0) {
             TT_ASSERT(snapshot->uint_metric_ids.size() == snapshot->uint_metric_names.size());
+            TT_ASSERT(snapshot->uint_metric_ids.size() == snapshot->uint_metric_units.size());
+
+            // Cache unit label maps when names are populated
+            metric_unit_display_label_by_code_ = snapshot->metric_unit_display_label_by_code;
+            metric_unit_full_label_by_code_ = snapshot->metric_unit_full_label_by_code;
         }
 
         for (size_t i = 0; i < snapshot->bool_metric_ids.size(); i++) {
@@ -110,6 +123,7 @@ private:
             if (snapshot->uint_metric_names.size() > 0) {
                 // Names were included, which indicates new metrics added!
                 uint_metric_name_by_id_[idx] = snapshot->uint_metric_names[i];
+                uint_metric_units_by_id_[idx] = snapshot->uint_metric_units[i];
             }
             uint_metric_value_by_id_[idx] = snapshot->uint_metric_values[i];
         }

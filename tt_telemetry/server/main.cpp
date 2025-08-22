@@ -96,9 +96,6 @@ static void test_print_link_health() {
 }
 
 int main(int argc, char* argv[]) {
-    // Print sysfs metrics at startup
-    print_sysfs_metrics();
-    
     // Parse command line arguments
     cxxopts::Options options("tt_telemetry_server", "TT-Metal Telemetry Server");
 
