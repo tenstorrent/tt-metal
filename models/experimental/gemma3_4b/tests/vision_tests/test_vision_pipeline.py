@@ -16,6 +16,7 @@ from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
 from models.experimental.gemma3_4b.tt.gemma_vision_model import TtSiglipGemmaVisionModel
+from models.experimental.gemma3_4b.tests.references import reference_vision_model
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 
 
@@ -51,7 +52,7 @@ def test_gemma_vision(
 
     input_tensor = torch.rand((bsz, in_channels, image_size, image_size))
 
-    reference_model = model_args.reference_vision_model()
+    reference_model = reference_vision_model(model_args)
     # reference_model.load_state_dict(partial_state_dict)
     reference_output = reference_model(input_tensor).last_hidden_state
 
