@@ -188,6 +188,9 @@ void LayerNorm::validate(
                     TT_FATAL(!program_config.use_welford, "Welford's algorithm is not supported for RMSNorm");
                 }
             } else if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+                if (this->norm_type == LayerNormType::RMSNORM) {
+                    TT_FATAL(!program_config.use_welford, "Welford's algorithm is not supported for RMSNorm");
+                }
                 if (program_config.inplace) {
                     TT_FATAL(
                         this->output_mem_config.is_sharded(),
