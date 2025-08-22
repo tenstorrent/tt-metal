@@ -13,7 +13,7 @@ def test_rms_repro(device):
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 5))]),
+                ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))]),
                 [64, 32],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
@@ -29,7 +29,7 @@ def test_rms_repro(device):
     )
 
     program_config = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[1, 4],
+        compute_with_storage_grid_size=[2, 2],
         subblock_w=1,
         block_h=2,
         block_w=1,

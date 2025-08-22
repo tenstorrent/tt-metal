@@ -160,7 +160,7 @@ def test_qwen3_tg_qk_norm(
 
     norm_weight_mem_cfg = ttnn.create_sharded_memory_config(
         shape=(32, 32),
-        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 5))]),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))]),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -170,7 +170,7 @@ def test_qwen3_tg_qk_norm(
         shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
         core_grid=ttnn.CoreRangeSet(
             [
-                ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 2))
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))
             ]  # This captures the fact that we are using 1 core (height sharded)
         ),  # resharding tensor to 1 core
         strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform width sharding
@@ -180,9 +180,7 @@ def test_qwen3_tg_qk_norm(
     reshape_output_mem_cfg = ttnn.create_sharded_memory_config(
         shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
         core_grid=ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(2, 2), ttnn.CoreCoord(2, 5))
-            ]  # This captures the fact that we are using 4 cores (width sharded)
+            [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))]
         ),  # resharding tensor to 1 core
         strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -197,7 +195,7 @@ def test_qwen3_tg_qk_norm(
             break
         subblock_w -= 1
     norm_program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
-        compute_with_storage_grid_size=[1, 4],
+        compute_with_storage_grid_size=[2, 2],
         subblock_w=subblock_w,
         block_h=2,  # 64 // 32
         block_w=block_w,
