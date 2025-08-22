@@ -1,6 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
+if [ -f /.dockerenv ]; then
+    echo "Running inside Docker"
+    # Try to get container ID
+    container_id=$(cat /proc/self/cgroup | grep 'docker' | sed 's/^.*\///' | tail -n1)
+    echo "Container ID: $container_id"
+    # Try to get image name (if available, usually not inside container)
+    if [ -f /etc/os-release ]; then
+        grep PRETTY_NAME /etc/os-release
+    fi
+else
+    echo "Not running inside Docker"
+fi
+
 : << 'END'
 This script is used to find the commit that broke a test.
 Flags:
@@ -100,7 +113,7 @@ while [[ "$found" = "false" ]]; do
 
    build_rc=0
    ./build_metal.sh --build-dir build --build-type Release --toolchain-path cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake --build-all --enable-ccache --configure-only || build_rc=$?
-   cmake --build build --target install || build_rc=$?
+   cmake --build build --target install --verbose || build_rc=$?
    echo "::endgroup::"
 
    if [[ $build_rc -ne 0 ]]; then

@@ -406,7 +406,7 @@ fi
 
 echo "INFO: Configuring Project"
 echo "INFO: Running: cmake "${cmake_args[@]}""
-cmake "${cmake_args[@]}"
+cmake "${cmake_args[@]}" --debug-output
 
 if [ "$build_packages" == "ON" ];  then
   target="package"
@@ -417,5 +417,5 @@ fi
 # Build libraries and cpp tests
 if [ "$configure_only" = "OFF" ]; then
     echo "INFO: Building Project"
-    cmake --build $build_dir --target $target
+    cmake --build $build_dir --target $target --debug-output
 fi
