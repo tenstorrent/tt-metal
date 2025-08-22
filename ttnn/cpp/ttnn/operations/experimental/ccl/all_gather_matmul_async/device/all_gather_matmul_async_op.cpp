@@ -226,6 +226,7 @@ tt::tt_metal::operation::Hash AllGatherMatmulAsync::compute_program_hash(
                   shard_builder::HalProgrammableCoreType::TENSIX, this->all_gather_async_struct.sub_device_id.value())
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->all_gather_async_struct.cluster_axis,
+        this->all_gather_async_struct.semaphore.has_value(),
         this->all_gather_async_struct.do_sync,
         this->all_gather_async_struct.chunks_per_sync,
         this->all_gather_async_struct.num_workers_per_link,

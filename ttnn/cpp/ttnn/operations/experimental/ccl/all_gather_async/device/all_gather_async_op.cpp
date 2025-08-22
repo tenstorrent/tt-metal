@@ -293,6 +293,7 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
             ? input_tensors[0].device()->worker_cores(
                   tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
             : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
+        this->semaphore.has_value(),
         this->do_sync,
         this->chunks_per_sync,
         this->num_workers_per_link,
