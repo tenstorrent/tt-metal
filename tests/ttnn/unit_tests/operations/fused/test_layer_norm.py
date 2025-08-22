@@ -227,12 +227,12 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
     assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
 
 
-@pytest.mark.parametrize("h", [32])
-@pytest.mark.parametrize("w", [1024, 4096])
+@pytest.mark.parametrize("h", [32, 1024])
+@pytest.mark.parametrize("w", [2880, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
 def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford):
-    if w == 4096 or (w == 1024 and not use_welford):
-        pytest.skip("Low PCC, see https://github.com/tenstorrent/tt-metal/issues/27122")
+    if not use_welford:
+        pytest.skip("Low PCC, see https://github.com/tenstorrent/tt-metal/issues/27291")
 
     torch.manual_seed(0)
 
