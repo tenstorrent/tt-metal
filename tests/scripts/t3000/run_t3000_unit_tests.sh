@@ -412,15 +412,27 @@ run_t3000_mixtral_tests() {
 
   echo "LOG_METAL: Running run_t3000_mixtral_tests"
 
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_attention.py ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp.py ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_rms_norm.py ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_embedding.py ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe.py ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_decoder.py ; fail+=$?
-  # Mixtral prefill tests
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp_prefill.py ; fail+=$?
-  pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe_prefill.py ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_attention.py ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp.py ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_rms_norm.py ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_embedding.py ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe.py ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_decoder.py ; fail+=$?
+  # # Mixtral prefill tests
+  # pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_mlp_prefill.py ; fail+=$?
+  # pytest -n auto models/demos/t3000/mixtral8x7b/tests/test_mixtral_moe_prefill.py ; fail+=$?
+  mixtral8x7=/mnt/MLPerf/huggingface/hub/models--mistralai--Mixtral-8x7B-v0.1/snapshots/fc7ac94680e38d7348cfa806e51218e6273104b0
+
+  HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_rms_norm.py --timeout=720 ; fail+=$?
+  HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_mlp.py --timeout=720 ; fail+=$?
+  HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_moe.py --timeout=720 ; fail+=$?
+  HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_decoder.py --timeout=720 ; fail+=$?
+  HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py --timeout=720 ; fail+=$?
+  CI=true HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_model.py::test_model_inference[wormhole_b0-8-performance-256-1-page_params0-paged_attention-quick] --timeout=720 ; fail+=$?
+  CI=true HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_model.py::test_model_inference[wormhole_b0-8-performance-256-1-page_params0-default_attention-quick] --timeout=720 ; fail+=$?
+  CI=true HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-1layer-performance-max128k-4k-page_params0-paged_attention-8] --timeout=720 ; fail+=$?
+  CI=true HF_MODEL=$mixtral8x7 pytest -n auto models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py::test_model_inference[wormhole_b0-1layer-performance-max128k-4k-page_params0-default_attention-8] --timeout=720 ; fail+=$?
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))

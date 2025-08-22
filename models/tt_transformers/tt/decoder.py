@@ -7,6 +7,8 @@ from models.common.rmsnorm import RMSNorm
 from models.tt_transformers.tt.attention import Attention as DefaultAttention
 from models.tt_transformers.tt.ccl import tt_all_reduce
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
+from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
+from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.model_config import TensorGroup
 
@@ -59,16 +61,38 @@ class TransformerBlock(LightweightModule):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
         )
-        self.feed_forward = MLP(
-            mesh_device=mesh_device,
-            tt_ccl=self.tt_ccl,
-            args=args,
-            state_dict=state_dict,
-            weight_cache_path=weight_cache_path,
-            layer_num=layer_num,
-            dtype=dtype,
-            model_config=self.model_config,
-        )
+        if self.args.is_mixture_of_experts:
+            self.feed_forward = TtMoeLayer(
+                mesh_device=mesh_device,
+                state_dict=state_dict,
+                experts=TtMixtralMLP(
+                    mesh_device=mesh_device,
+                    state_dict=state_dict,
+                    args=args,
+                    layer_num=layer_num,
+                    dtypes={
+                        "w1": dtype,
+                        "w2": dtype,
+                        "w3": dtype,
+                    },
+                ),
+                args=args,
+                layer_num=layer_num,
+                dtype=dtype,
+                tt_ccl=self.tt_ccl
+            )
+        else:
+            self.feed_forward = MLP(
+                mesh_device=mesh_device,
+                tt_ccl=self.tt_ccl,
+                args=args,
+                state_dict=state_dict,
+                weight_cache_path=weight_cache_path,
+                layer_num=layer_num,
+                dtype=dtype,
+                model_config=self.model_config,
+            )
+
         self.attention_norm = DistributedNorm(
             RMSNorm(
                 device=mesh_device,
@@ -80,9 +104,12 @@ class TransformerBlock(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="attention_norm",
                 is_distributed=self.args.is_distributed_norm,
-                add_unit_offset=self.args.rms_norm_add_unit_offset,
-                sharded_program_config=self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
+                sharded_program_config=self.model_config[
+                    "SHARDED_NORM_ATTN_PRGM_CFG"
+                ],  # LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=(x=8,y=4),subblock_w=4,block_h=1,block_w=4,inplace=0)
+                sharded_output_config=self.model_config[
+                    "SHARDED_ATTN_INPUT_MEMCFG"
+                ],  # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=3)]},shape={32, 128},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),
@@ -101,9 +128,12 @@ class TransformerBlock(LightweightModule):
                 weight_dtype=ttnn.bfloat16,
                 weight_key="ffn_norm",
                 is_distributed=self.args.is_distributed_norm,
-                add_unit_offset=self.args.rms_norm_add_unit_offset,
-                sharded_program_config=self.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-                sharded_output_config=self.model_config["SHARDED_MLP_INPUT_MEMCFG"],
+                sharded_program_config=self.model_config[
+                    "SHARDED_NORM_MLP_PRGM_CFG"
+                ],  # LayerNormShardedMultiCoreProgramConfig(compute_with_storage_grid_size=(x=8,y=1),subblock_w=4,block_h=1,block_w=16,inplace=0)
+                sharded_output_config=self.model_config[
+                    "SHARDED_MLP_INPUT_MEMCFG"
+                ],  # MemoryConfig(memory_layout=TensorMemoryLayout::WIDTH_SHARDED,buffer_type=BufferType::L1,shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=0)]},shape={32, 512},orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
                 ccl_topology=self.args.ccl_topology(),
                 tt_ccl=self.tt_ccl,
             ),

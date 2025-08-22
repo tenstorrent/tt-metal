@@ -1,0 +1,536 @@
+Creating virtual env in: /localdev/hzhou/tt-metal/python_env
+Forcefully using a version of pip that will work with our view of editable installs
+Looking in indexes: https://pypi.org/simple, https://download.pytorch.org/whl/cpu
+Collecting pip==21.2.4
+  Using cached pip-21.2.4-py3-none-any.whl (1.6 MB)
+Installing collected packages: pip
+  Attempting uninstall: pip
+    Found existing installation: pip 22.0.2
+    Uninstalling pip-22.0.2:
+      Successfully uninstalled pip-22.0.2
+Successfully installed pip-21.2.4
+Setting up virtual env
+Writing to /home/hzhou/.config/pip/pip.conf
+Looking in indexes: https://pypi.org/simple, https://download.pytorch.org/whl/cpu
+Requirement already satisfied: setuptools in ./python_env/lib/python3.10/site-packages (59.6.0)
+Requirement already satisfied: wheel==0.45.1 in ./python_env/lib/python3.10/site-packages (0.45.1)
+WARNING: You are using pip version 21.2.4; however, version 25.1.1 is available.
+You should consider upgrading via the '/localdev/hzhou/tt-metal/python_env/bin/python3 -m pip install --upgrade pip' command.
+Installing dev dependencies
+Looking in indexes: https://pypi.org/simple, https://download.pytorch.org/whl/cpu
+Collecting git+https://github.com/tenstorrent/tt-smi.git@v3.0.12 (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 8))
+  Cloning https://github.com/tenstorrent/tt-smi.git (to revision v3.0.12) to /tmp/pip-req-build-brd55qdx
+  Running command git clone -q https://github.com/tenstorrent/tt-smi.git /tmp/pip-req-build-brd55qdx
+  Running command git checkout -q 55d23b3dea4d30217d9ef2350931dd55c0736d50
+  Resolved https://github.com/tenstorrent/tt-smi.git to commit 55d23b3dea4d30217d9ef2350931dd55c0736d50
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+    Preparing wheel metadata: started
+    Preparing wheel metadata: finished with status 'done'
+Collecting git+https://github.com/tenstorrent/llama-models.git@tt_metal_tag (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 32))
+  Cloning https://github.com/tenstorrent/llama-models.git (to revision tt_metal_tag) to /tmp/pip-req-build-pmphtqe3
+  Running command git clone -q https://github.com/tenstorrent/llama-models.git /tmp/pip-req-build-pmphtqe3
+  Running command git checkout -b tt_metal_tag --track origin/tt_metal_tag
+  Switched to a new branch 'tt_metal_tag'
+  Branch 'tt_metal_tag' set up to track remote branch 'tt_metal_tag' from 'origin'.
+  Resolved https://github.com/tenstorrent/llama-models.git to commit d1273428f4a8500accd0a00fc484faed46aaf724
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+    Preparing wheel metadata: started
+    Preparing wheel metadata: finished with status 'done'
+Ignoring torch: markers 'platform_machine == "aarch64"' don't match your environment
+Ignoring torchvision: markers 'platform_machine == "aarch64"' don't match your environment
+Collecting loguru==0.6.0
+  Using cached loguru-0.6.0-py3-none-any.whl (58 kB)
+Collecting pytest-github-actions-annotate-failures==0.3.0
+  Using cached pytest_github_actions_annotate_failures-0.3.0-py3-none-any.whl (6.0 kB)
+Requirement already satisfied: platformdirs<4.0.0 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 16)) (3.11.0)
+Collecting pre-commit==3.5.0
+  Using cached pre_commit-3.5.0-py2.py3-none-any.whl (203 kB)
+Collecting black==24.3.0
+  Using cached black-24.3.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.7 MB)
+Collecting clang-format==19.1.4
+  Using cached clang_format-19.1.4-py2.py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.7 MB)
+Collecting build==0.10.0
+  Using cached build-0.10.0-py3-none-any.whl (17 kB)
+Collecting twine==4.0.2
+  Using cached twine-4.0.2-py3-none-any.whl (36 kB)
+Collecting yamllint==1.32.0
+  Using cached yamllint-1.32.0-py3-none-any.whl (65 kB)
+Collecting mypy==1.9.0
+  Using cached mypy-1.9.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (12.5 MB)
+Requirement already satisfied: docutils==0.18.1 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 1)) (0.18.1)
+Requirement already satisfied: sphinx==7.1.2 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (7.1.2)
+Collecting sphinx-rtd-theme==1.3.0
+  Using cached sphinx_rtd_theme-1.3.0-py2.py3-none-any.whl (2.8 MB)
+Collecting sphinxcontrib-email==0.3.5
+  Using cached sphinxcontrib_email-0.3.5-py3-none-any.whl (6.3 kB)
+Collecting lxml==4.9.4
+  Using cached lxml-4.9.4-cp310-cp310-manylinux_2_28_x86_64.whl (7.9 MB)
+Collecting breathe==4.35.0
+  Using cached breathe-4.35.0-py3-none-any.whl (92 kB)
+Collecting nbsphinx==0.9.3
+  Using cached nbsphinx-0.9.3-py3-none-any.whl (31 kB)
+Requirement already satisfied: sphinxcontrib-jquery==4.1 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 8)) (4.1)
+Requirement already satisfied: ipython==8.12.3 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (8.12.3)
+Collecting pandoc==2.3
+  Using cached pandoc-2.3-py3-none-any.whl
+Requirement already satisfied: tabulate==0.9.0 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 11)) (0.9.0)
+Collecting myst-parser==3.0.0
+  Using cached myst_parser-3.0.0-py3-none-any.whl (83 kB)
+Requirement already satisfied: elasticsearch in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/../../tests/sweep_framework/requirements-sweeps.txt (line 1)) (8.11.0)
+Collecting termcolor
+  Using cached termcolor-3.1.0-py3-none-any.whl (7.7 kB)
+Collecting beautifultable
+  Using cached beautifultable-1.1.0-py2.py3-none-any.whl (28 kB)
+Collecting faster-fifo
+  Using cached faster_fifo-1.5.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (388 kB)
+Collecting protobuf==3.20.0
+  Using cached protobuf-3.20.0-cp310-cp310-manylinux_2_12_x86_64.manylinux2010_x86_64.whl (1.1 MB)
+Collecting pytest==7.2.2
+  Using cached pytest-7.2.2-py3-none-any.whl (317 kB)
+Collecting pytest-timeout==2.2.0
+  Using cached pytest_timeout-2.2.0-py3-none-any.whl (13 kB)
+Collecting pytest-split==0.8.2
+  Using cached pytest_split-0.8.2-py3-none-any.whl (11 kB)
+Collecting pytest-xdist==3.6.1
+  Using cached pytest_xdist-3.6.1-py3-none-any.whl (46 kB)
+Collecting pytest-benchmark==4.0.0
+  Using cached pytest_benchmark-4.0.0-py3-none-any.whl (43 kB)
+Collecting jsbeautifier==1.14.7
+  Using cached jsbeautifier-1.14.7-py3-none-any.whl
+Collecting datasets==2.9.0
+  Using cached datasets-2.9.0-py3-none-any.whl (462 kB)
+Requirement already satisfied: torch==2.2.1.0+cpu in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 45)) (2.2.1+cpu)
+Requirement already satisfied: networkx==3.1 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 47)) (3.1)
+Requirement already satisfied: torchvision==0.17.1+cpu in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 48)) (0.17.1+cpu)
+Collecting torchmetrics==1.3.1
+  Using cached torchmetrics-1.3.1-py3-none-any.whl (840 kB)
+Collecting torch-fidelity==0.3.0
+  Using cached torch_fidelity-0.3.0-py3-none-any.whl (37 kB)
+Requirement already satisfied: transformers==4.46.3 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 52)) (4.46.3)
+Collecting xlsxwriter==3.0.8
+  Using cached XlsxWriter-3.0.8-py3-none-any.whl (152 kB)
+Requirement already satisfied: tiktoken==0.3.3 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 54)) (0.3.3)
+Requirement already satisfied: tqdm==4.66.3 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 55)) (4.66.3)
+Collecting enlighten==1.12.4
+  Using cached enlighten-1.12.4-py2.py3-none-any.whl (41 kB)
+Collecting sentencepiece==0.2.0
+  Using cached sentencepiece-0.2.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.3 MB)
+Collecting numba>=0.58.1
+  Using cached numba-0.61.2-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (3.8 MB)
+Collecting librosa==0.10.0
+  Using cached librosa-0.10.0-py3-none-any.whl (252 kB)
+Requirement already satisfied: timm==0.6.13 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 60)) (0.6.13)
+Collecting ultralytics==8.3.107
+  Using cached ultralytics-8.3.107-py3-none-any.whl (974 kB)
+Requirement already satisfied: opencv-python-headless==4.8.1.78 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 62)) (4.8.1.78)
+Collecting diffusers==0.32.2
+  Using cached diffusers-0.32.2-py3-none-any.whl (3.2 MB)
+Collecting accelerate==1.7.0
+  Using cached accelerate-1.7.0-py3-none-any.whl (362 kB)
+Collecting ftfy==6.1.1
+  Using cached ftfy-6.1.1-py3-none-any.whl (53 kB)
+Collecting gitpython==3.1.41
+  Using cached GitPython-3.1.41-py3-none-any.whl (196 kB)
+Collecting einops==0.6.1
+  Using cached einops-0.6.1-py3-none-any.whl (42 kB)
+Requirement already satisfied: multiprocess==0.70.14 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 71)) (0.70.14)
+Collecting evaluate==0.4.0
+  Using cached evaluate-0.4.0-py3-none-any.whl (81 kB)
+Collecting bert-score==0.3.12
+  Using cached bert_score-0.3.12-py3-none-any.whl (60 kB)
+Requirement already satisfied: fsspec==2023.9.2 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 74)) (2023.9.2)
+Collecting docopt==0.6.2
+  Using cached docopt-0.6.2-py2.py3-none-any.whl
+Collecting blobfile==2.1.1
+  Using cached blobfile-2.1.1-py3-none-any.whl (73 kB)
+Requirement already satisfied: numpy<2,>=1.24.4 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 78)) (1.26.4)
+Requirement already satisfied: huggingface-hub==0.25.2 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 79)) (0.25.2)
+Requirement already satisfied: pydantic==2.9.2 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 80)) (2.9.2)
+Collecting fiftyone==0.25.2
+  Using cached fiftyone-0.25.2-py3-none-any.whl (10.4 MB)
+Collecting jiwer==3.0.5
+  Using cached jiwer-3.0.5-py3-none-any.whl (21 kB)
+Collecting toolz==0.12.0
+  Using cached toolz-0.12.0-py3-none-any.whl (55 kB)
+Collecting open_clip_torch==2.32.0
+  Using cached open_clip_torch-2.32.0-py3-none-any.whl (1.5 MB)
+Requirement already satisfied: pyyaml>=5.4 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 88)) (6.0.1)
+Requirement already satisfied: matplotlib in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 89)) (3.10.3)
+Requirement already satisfied: Pillow==10.3.0 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 90)) (10.3.0)
+Collecting jupyterlab==4.2.5
+  Using cached jupyterlab-4.2.5-py3-none-any.whl (11.6 MB)
+Collecting ipywidgets==8.1.1
+  Using cached ipywidgets-8.1.1-py3-none-any.whl (139 kB)
+Collecting bokeh==3.1.1
+  Using cached bokeh-3.1.1-py3-none-any.whl (8.3 MB)
+Requirement already satisfied: click==8.1.7 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 94)) (8.1.7)
+Collecting dash==2.15.0
+  Using cached dash-2.15.0-py3-none-any.whl (10.2 MB)
+Requirement already satisfied: pandas==2.0.3 in ./python_env/lib/python3.10/site-packages (from -r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 96)) (2.0.3)
+Collecting plotly==5.18.0
+  Using cached plotly-5.18.0-py3-none-any.whl (15.6 MB)
+Collecting seaborn==0.13.2
+  Using cached seaborn-0.13.2-py3-none-any.whl (294 kB)
+Collecting medpy==0.5.2
+  Using cached MedPy-0.5.2-py3-none-any.whl
+Collecting kagglehub==0.2.9
+  Using cached kagglehub-0.2.9-py3-none-any.whl (39 kB)
+Requirement already satisfied: nodeenv>=0.11.1 in ./python_env/lib/python3.10/site-packages (from pre-commit==3.5.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 17)) (1.9.1)
+Requirement already satisfied: cfgv>=2.0.0 in ./python_env/lib/python3.10/site-packages (from pre-commit==3.5.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 17)) (3.4.0)
+Requirement already satisfied: identify>=1.0.0 in ./python_env/lib/python3.10/site-packages (from pre-commit==3.5.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 17)) (2.6.12)
+Requirement already satisfied: virtualenv>=20.10.0 in ./python_env/lib/python3.10/site-packages (from pre-commit==3.5.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 17)) (20.31.2)
+Collecting pathspec>=0.9.0
+  Using cached pathspec-0.12.1-py3-none-any.whl (31 kB)
+Requirement already satisfied: packaging>=22.0 in ./python_env/lib/python3.10/site-packages (from black==24.3.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 18)) (25.0)
+Requirement already satisfied: tomli>=1.1.0 in ./python_env/lib/python3.10/site-packages (from black==24.3.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 18)) (2.2.1)
+Collecting mypy-extensions>=0.4.3
+  Using cached mypy_extensions-1.1.0-py3-none-any.whl (5.0 kB)
+Requirement already satisfied: typing-extensions>=4.0.1 in ./python_env/lib/python3.10/site-packages (from black==24.3.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 18)) (4.14.0)
+Collecting pyproject_hooks
+  Using cached pyproject_hooks-1.2.0-py3-none-any.whl (10 kB)
+Requirement already satisfied: urllib3>=1.26.0 in ./python_env/lib/python3.10/site-packages (from twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (2.5.0)
+Collecting readme-renderer>=35.0
+  Using cached readme_renderer-44.0-py3-none-any.whl (13 kB)
+Collecting requests-toolbelt!=0.9.0,>=0.8.0
+  Using cached requests_toolbelt-1.0.0-py2.py3-none-any.whl (54 kB)
+Collecting pkginfo>=1.8.1
+  Using cached pkginfo-1.12.1.2-py3-none-any.whl (32 kB)
+Requirement already satisfied: rich>=12.0.0 in ./python_env/lib/python3.10/site-packages (from twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (13.7.0)
+Collecting keyring>=15.1
+  Using cached keyring-25.6.0-py3-none-any.whl (39 kB)
+Requirement already satisfied: importlib-metadata>=3.6 in ./python_env/lib/python3.10/site-packages (from twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (8.7.0)
+Requirement already satisfied: requests>=2.20 in ./python_env/lib/python3.10/site-packages (from twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (2.32.0)
+Collecting rfc3986>=1.4.0
+  Using cached rfc3986-2.0.0-py2.py3-none-any.whl (31 kB)
+Requirement already satisfied: sphinxcontrib-htmlhelp>=2.0.0 in ./python_env/lib/python3.10/site-packages (from sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (2.1.0)
+Requirement already satisfied: alabaster<0.8,>=0.7 in ./python_env/lib/python3.10/site-packages (from sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (0.7.16)
+Requirement already satisfied: imagesize>=1.3 in ./python_env/lib/python3.10/site-packages (from sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (1.4.1)
+Requirement already satisfied: sphinxcontrib-devhelp in ./python_env/lib/python3.10/site-packages (from sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (2.0.0)
+Requirement already satisfied: sphinxcontrib-jsmath in ./python_env/lib/python3.10/site-packages (from sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (1.0.1)
+Requirement already satisfied: sphinxcontrib-qthelp in ./python_env/lib/python3.10/site-packages (from sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (2.0.0)
+Requirement already satisfied: snowballstemmer>=2.0 in ./python_env/lib/python3.10/site-packages (from sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (3.0.1)
+Requirement already satisfied: babel>=2.9 in ./python_env/lib/python3.10/site-packages (from sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (2.17.0)
+Requirement already satisfied: Pygments>=2.13 in ./python_env/lib/python3.10/site-packages (from sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (2.19.2)
+Requirement already satisfied: sphinxcontrib-serializinghtml>=1.1.5 in ./python_env/lib/python3.10/site-packages (from sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (2.0.0)
+Requirement already satisfied: Jinja2>=3.0 in ./python_env/lib/python3.10/site-packages (from sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (3.1.6)
+Requirement already satisfied: sphinxcontrib-applehelp in ./python_env/lib/python3.10/site-packages (from sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (2.0.0)
+Requirement already satisfied: nbformat in ./python_env/lib/python3.10/site-packages (from nbsphinx==0.9.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (5.10.4)
+Requirement already satisfied: traitlets>=5 in ./python_env/lib/python3.10/site-packages (from nbsphinx==0.9.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (5.14.3)
+Requirement already satisfied: nbconvert!=5.4 in ./python_env/lib/python3.10/site-packages (from nbsphinx==0.9.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (7.16.6)
+Requirement already satisfied: matplotlib-inline in ./python_env/lib/python3.10/site-packages (from ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.1.7)
+Requirement already satisfied: pickleshare in ./python_env/lib/python3.10/site-packages (from ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.7.5)
+Requirement already satisfied: prompt-toolkit!=3.0.37,<3.1.0,>=3.0.30 in ./python_env/lib/python3.10/site-packages (from ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (3.0.51)
+Requirement already satisfied: pexpect>4.3 in ./python_env/lib/python3.10/site-packages (from ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (4.9.0)
+Requirement already satisfied: backcall in ./python_env/lib/python3.10/site-packages (from ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.2.0)
+Requirement already satisfied: jedi>=0.16 in ./python_env/lib/python3.10/site-packages (from ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.19.2)
+Requirement already satisfied: decorator in ./python_env/lib/python3.10/site-packages (from ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (5.2.1)
+Requirement already satisfied: stack-data in ./python_env/lib/python3.10/site-packages (from ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.6.3)
+Collecting ply
+  Using cached ply-3.11-py2.py3-none-any.whl (49 kB)
+Collecting plumbum
+  Using cached plumbum-1.9.0-py3-none-any.whl (127 kB)
+Requirement already satisfied: mdit-py-plugins~=0.4 in ./python_env/lib/python3.10/site-packages (from myst-parser==3.0.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 12)) (0.4.2)
+Requirement already satisfied: markdown-it-py~=3.0 in ./python_env/lib/python3.10/site-packages (from myst-parser==3.0.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 12)) (3.0.0)
+Requirement already satisfied: iniconfig in ./python_env/lib/python3.10/site-packages (from pytest==7.2.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 38)) (2.1.0)
+Requirement already satisfied: attrs>=19.2.0 in ./python_env/lib/python3.10/site-packages (from pytest==7.2.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 38)) (25.3.0)
+Requirement already satisfied: pluggy<2.0,>=0.12 in ./python_env/lib/python3.10/site-packages (from pytest==7.2.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 38)) (1.6.0)
+Requirement already satisfied: exceptiongroup>=1.0.0rc8 in ./python_env/lib/python3.10/site-packages (from pytest==7.2.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 38)) (1.3.0)
+Collecting execnet>=2.1
+  Using cached execnet-2.1.1-py3-none-any.whl (40 kB)
+Collecting py-cpuinfo
+  Using cached py_cpuinfo-9.0.0-py3-none-any.whl (22 kB)
+Collecting editorconfig>=0.12.2
+  Using cached editorconfig-0.17.1-py3-none-any.whl (16 kB)
+Requirement already satisfied: six>=1.13.0 in ./python_env/lib/python3.10/site-packages (from jsbeautifier==1.14.7->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 43)) (1.17.0)
+Requirement already satisfied: xxhash in ./python_env/lib/python3.10/site-packages (from datasets==2.9.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 44)) (3.5.0)
+Requirement already satisfied: pyarrow>=6.0.0 in ./python_env/lib/python3.10/site-packages (from datasets==2.9.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 44)) (20.0.0)
+Requirement already satisfied: responses<0.19 in ./python_env/lib/python3.10/site-packages (from datasets==2.9.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 44)) (0.18.0)
+Requirement already satisfied: dill<0.3.7 in ./python_env/lib/python3.10/site-packages (from datasets==2.9.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 44)) (0.3.6)
+Requirement already satisfied: aiohttp in ./python_env/lib/python3.10/site-packages (from datasets==2.9.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 44)) (3.12.13)
+Requirement already satisfied: filelock in ./python_env/lib/python3.10/site-packages (from torch==2.2.1.0+cpu->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 45)) (3.18.0)
+Requirement already satisfied: sympy in ./python_env/lib/python3.10/site-packages (from torch==2.2.1.0+cpu->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 45)) (1.14.0)
+Collecting lightning-utilities>=0.8.0
+  Using cached lightning_utilities-0.14.3-py3-none-any.whl (28 kB)
+Requirement already satisfied: scipy in ./python_env/lib/python3.10/site-packages (from torch-fidelity==0.3.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 51)) (1.15.3)
+Requirement already satisfied: safetensors>=0.4.1 in ./python_env/lib/python3.10/site-packages (from transformers==4.46.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 52)) (0.5.3)
+Requirement already satisfied: tokenizers<0.21,>=0.20 in ./python_env/lib/python3.10/site-packages (from transformers==4.46.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 52)) (0.20.3)
+Requirement already satisfied: regex!=2019.12.17 in ./python_env/lib/python3.10/site-packages (from transformers==4.46.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 52)) (2024.11.6)
+Collecting prefixed>=0.3.2
+  Using cached prefixed-0.9.0-py2.py3-none-any.whl (13 kB)
+Collecting blessed>=1.17.7
+  Using cached blessed-1.21.0-py2.py3-none-any.whl (84 kB)
+Requirement already satisfied: soxr>=0.3.2 in ./python_env/lib/python3.10/site-packages (from librosa==0.10.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 59)) (0.5.0.post1)
+Requirement already satisfied: lazy-loader>=0.1 in ./python_env/lib/python3.10/site-packages (from librosa==0.10.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 59)) (0.4)
+Collecting audioread>=2.1.9
+  Using cached audioread-3.0.1-py3-none-any.whl (23 kB)
+Requirement already satisfied: joblib>=0.14 in ./python_env/lib/python3.10/site-packages (from librosa==0.10.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 59)) (1.5.1)
+Requirement already satisfied: scikit-learn>=0.20.0 in ./python_env/lib/python3.10/site-packages (from librosa==0.10.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 59)) (1.7.0)
+Collecting msgpack>=1.0
+  Using cached msgpack-1.1.1-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (408 kB)
+Collecting pooch>=1.0
+  Using cached pooch-1.8.2-py3-none-any.whl (64 kB)
+Requirement already satisfied: soundfile>=0.12.1 in ./python_env/lib/python3.10/site-packages (from librosa==0.10.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 59)) (0.13.1)
+Requirement already satisfied: ultralytics-thop>=2.0.0 in ./python_env/lib/python3.10/site-packages (from ultralytics==8.3.107->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 61)) (2.0.14)
+Collecting opencv-python>=4.6.0
+  Using cached opencv_python-4.11.0.86-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (63.0 MB)
+Requirement already satisfied: psutil in ./python_env/lib/python3.10/site-packages (from ultralytics==8.3.107->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 61)) (5.9.6)
+Requirement already satisfied: wcwidth>=0.2.5 in ./python_env/lib/python3.10/site-packages (from ftfy==6.1.1->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 65)) (0.2.13)
+Collecting gitdb<5,>=4.0.1
+  Using cached gitdb-4.0.12-py3-none-any.whl (62 kB)
+Requirement already satisfied: pycryptodomex~=3.8 in ./python_env/lib/python3.10/site-packages (from blobfile==2.1.1->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 77)) (3.23.0)
+Requirement already satisfied: annotated-types>=0.6.0 in ./python_env/lib/python3.10/site-packages (from pydantic==2.9.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 80)) (0.7.0)
+Requirement already satisfied: pydantic-core==2.23.4 in ./python_env/lib/python3.10/site-packages (from pydantic==2.9.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 80)) (2.23.4)
+Collecting fiftyone-brain<0.18,>=0.17.0
+  Using cached fiftyone_brain-0.17.0-py3-none-any.whl (98 kB)
+Collecting dacite<1.8.0,>=1.6.0
+  Using cached dacite-1.7.0-py3-none-any.whl (12 kB)
+Collecting pprintpp
+  Using cached pprintpp-0.4.0-py2.py3-none-any.whl (16 kB)
+Collecting mongoengine==0.24.2
+  Using cached mongoengine-0.24.2-py3-none-any.whl (108 kB)
+Collecting motor>=2.5
+  Using cached motor-3.7.1-py3-none-any.whl (74 kB)
+Requirement already satisfied: sseclient-py<2,>=1.7.2 in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.8.0)
+Collecting Deprecated
+  Using cached Deprecated-1.2.18-py2.py3-none-any.whl (10.0 kB)
+Requirement already satisfied: retrying in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.4.0)
+Requirement already satisfied: pymongo<4.9,>=3.12 in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (4.8.0)
+Requirement already satisfied: sse-starlette<1,>=0.10.3 in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (0.10.3)
+Collecting humanize
+  Using cached humanize-4.12.3-py3-none-any.whl (128 kB)
+Requirement already satisfied: xmltodict in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (0.14.2)
+Requirement already satisfied: strawberry-graphql==0.138.1 in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (0.138.1)
+Requirement already satisfied: scikit-image in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (0.25.2)
+Requirement already satisfied: argcomplete in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (3.6.2)
+Requirement already satisfied: voxel51-eta<0.13,>=0.12.7 in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (0.12.7)
+Requirement already satisfied: universal-analytics-python3<2,>=1.0.1 in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.1.1)
+Requirement already satisfied: pytz in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (2025.2)
+Collecting kaleido!=0.2.1.post1
+  Using cached kaleido-1.0.0-py3-none-any.whl (51 kB)
+Collecting pydash
+  Using cached pydash-8.0.5-py3-none-any.whl (102 kB)
+Collecting fiftyone-db<2.0,>=0.4
+  Using cached fiftyone_db-1.1.7-py3-none-manylinux1_x86_64.whl
+Collecting hypercorn>=0.13.2
+  Using cached hypercorn-0.17.3-py3-none-any.whl (61 kB)
+Requirement already satisfied: setuptools in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (59.6.0)
+Requirement already satisfied: beautifulsoup4 in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (4.13.4)
+Collecting boto3
+  Using cached boto3-1.38.43-py3-none-any.whl (139 kB)
+Collecting cachetools
+  Using cached cachetools-6.1.0-py3-none-any.whl (11 kB)
+Collecting aiofiles
+  Using cached aiofiles-24.1.0-py3-none-any.whl (15 kB)
+Requirement already satisfied: starlette>=0.24.0 in ./python_env/lib/python3.10/site-packages (from fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (0.47.1)
+Collecting rapidfuzz<4,>=3
+  Using cached rapidfuzz-3.13.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (3.1 MB)
+Requirement already satisfied: tornado>=6.2.0 in ./python_env/lib/python3.10/site-packages (from jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (6.5.1)
+Requirement already satisfied: httpx>=0.25.0 in ./python_env/lib/python3.10/site-packages (from jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (0.28.1)
+Requirement already satisfied: jupyter-core in ./python_env/lib/python3.10/site-packages (from jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (5.8.1)
+Collecting jupyter-lsp>=2.0.0
+  Using cached jupyter_lsp-2.2.5-py3-none-any.whl (69 kB)
+Collecting async-lru>=1.0.0
+  Using cached async_lru-2.0.5-py3-none-any.whl (6.1 kB)
+Collecting ipykernel>=6.5.0
+  Using cached ipykernel-6.29.5-py3-none-any.whl (117 kB)
+Collecting jupyterlab-server<3,>=2.27.1
+  Using cached jupyterlab_server-2.27.3-py3-none-any.whl (59 kB)
+Collecting notebook-shim>=0.2
+  Using cached notebook_shim-0.2.4-py3-none-any.whl (13 kB)
+Requirement already satisfied: jupyter-server<3,>=2.4.0 in ./python_env/lib/python3.10/site-packages (from jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (2.16.0)
+Requirement already satisfied: comm>=0.1.3 in ./python_env/lib/python3.10/site-packages (from ipywidgets==8.1.1->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 92)) (0.2.2)
+Collecting jupyterlab-widgets~=3.0.9
+  Using cached jupyterlab_widgets-3.0.15-py3-none-any.whl (216 kB)
+Requirement already satisfied: widgetsnbextension~=4.0.9 in ./python_env/lib/python3.10/site-packages (from ipywidgets==8.1.1->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 92)) (4.0.14)
+Requirement already satisfied: xyzservices>=2021.09.1 in ./python_env/lib/python3.10/site-packages (from bokeh==3.1.1->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 93)) (2025.4.0)
+Requirement already satisfied: contourpy>=1 in ./python_env/lib/python3.10/site-packages (from bokeh==3.1.1->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 93)) (1.3.2)
+Requirement already satisfied: nest-asyncio in ./python_env/lib/python3.10/site-packages (from dash==2.15.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 95)) (1.6.0)
+Collecting Flask<3.1,>=1.0.4
+  Using cached flask-3.0.3-py3-none-any.whl (101 kB)
+Collecting dash-core-components==2.0.0
+  Using cached dash_core_components-2.0.0-py3-none-any.whl (3.8 kB)
+Requirement already satisfied: Werkzeug<3.1 in ./python_env/lib/python3.10/site-packages (from dash==2.15.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 95)) (3.0.6)
+Collecting dash-table==5.0.0
+  Using cached dash_table-5.0.0-py3-none-any.whl (3.9 kB)
+Collecting dash-html-components==2.0.0
+  Using cached dash_html_components-2.0.0-py3-none-any.whl (4.1 kB)
+Requirement already satisfied: python-dateutil>=2.8.2 in ./python_env/lib/python3.10/site-packages (from pandas==2.0.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 96)) (2.9.0.post0)
+Requirement already satisfied: tzdata>=2022.1 in ./python_env/lib/python3.10/site-packages (from pandas==2.0.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 96)) (2025.2)
+Requirement already satisfied: tenacity>=6.2.0 in ./python_env/lib/python3.10/site-packages (from plotly==5.18.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 97)) (9.1.2)
+Collecting SimpleITK>=2.1
+  Using cached simpleitk-2.5.2-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (52.6 MB)
+Requirement already satisfied: graphql-core<3.3.0,>=3.2.0 in ./python_env/lib/python3.10/site-packages (from strawberry-graphql==0.138.1->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (3.2.6)
+Collecting pyluwen@ git+https://github.com/tenstorrent/luwen.git@v0.6.3#subdirectory=crates/pyluwen
+  Cloning https://github.com/tenstorrent/luwen.git (to revision v0.6.3) to /tmp/pip-install-725tyeha/pyluwen_879430be9a23430fb2738aca685b68ee
+  Running command git clone -q https://github.com/tenstorrent/luwen.git /tmp/pip-install-725tyeha/pyluwen_879430be9a23430fb2738aca685b68ee
+  Running command git checkout -q 4cf0446c1e13b5819e45f82b2f66b5d27cba7094
+  Resolved https://github.com/tenstorrent/luwen.git to commit 4cf0446c1e13b5819e45f82b2f66b5d27cba7094
+  Running command git submodule update --init --recursive -q
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+    Preparing wheel metadata: started
+    Preparing wheel metadata: finished with status 'done'
+Collecting tt_tools_common@ git+https://github.com/tenstorrent/tt-tools-common.git@v1.4.14
+  Cloning https://github.com/tenstorrent/tt-tools-common.git (to revision v1.4.14) to /tmp/pip-install-725tyeha/tt-tools-common_8de843c00cd047f6b7dee1dd78bedae1
+  Running command git clone -q https://github.com/tenstorrent/tt-tools-common.git /tmp/pip-install-725tyeha/tt-tools-common_8de843c00cd047f6b7dee1dd78bedae1
+  Running command git checkout -q 176cfa7a2792511237ecfb4c071393885a4e84d0
+  Resolved https://github.com/tenstorrent/tt-tools-common.git to commit 176cfa7a2792511237ecfb4c071393885a4e84d0
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+    Preparing wheel metadata: started
+    Preparing wheel metadata: finished with status 'done'
+Requirement already satisfied: distro==1.8.0 in ./python_env/lib/python3.10/site-packages (from tt-smi==3.0.12->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 8)) (1.8.0)
+Requirement already satisfied: textual==0.59.0 in ./python_env/lib/python3.10/site-packages (from tt-smi==3.0.12->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 8)) (0.59.0)
+Collecting importlib_resources==6.1.1
+  Using cached importlib_resources-6.1.1-py3-none-any.whl (33 kB)
+Requirement already satisfied: elastic-transport<9,>=8 in ./python_env/lib/python3.10/site-packages (from elasticsearch->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../tests/sweep_framework/requirements-sweeps.txt (line 1)) (8.17.1)
+Requirement already satisfied: llvmlite<0.45,>=0.44.0dev0 in ./python_env/lib/python3.10/site-packages (from numba>=0.58.1->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 58)) (0.44.0)
+Requirement already satisfied: fonttools>=4.22.0 in ./python_env/lib/python3.10/site-packages (from matplotlib->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 89)) (4.58.4)
+Requirement already satisfied: cycler>=0.10 in ./python_env/lib/python3.10/site-packages (from matplotlib->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 89)) (0.12.1)
+Requirement already satisfied: pyparsing>=2.3.1 in ./python_env/lib/python3.10/site-packages (from matplotlib->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 89)) (3.2.3)
+Requirement already satisfied: kiwisolver>=1.3.1 in ./python_env/lib/python3.10/site-packages (from matplotlib->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 89)) (1.4.8)
+Requirement already satisfied: certifi in ./python_env/lib/python3.10/site-packages (from elastic-transport<9,>=8->elasticsearch->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../tests/sweep_framework/requirements-sweeps.txt (line 1)) (2025.6.15)
+Requirement already satisfied: itsdangerous>=2.1.2 in ./python_env/lib/python3.10/site-packages (from Flask<3.1,>=1.0.4->dash==2.15.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 95)) (2.2.0)
+Requirement already satisfied: blinker>=1.6.2 in ./python_env/lib/python3.10/site-packages (from Flask<3.1,>=1.0.4->dash==2.15.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 95)) (1.9.0)
+Requirement already satisfied: propcache>=0.2.0 in ./python_env/lib/python3.10/site-packages (from aiohttp->datasets==2.9.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 44)) (0.3.2)
+Requirement already satisfied: async-timeout<6.0,>=4.0 in ./python_env/lib/python3.10/site-packages (from aiohttp->datasets==2.9.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 44)) (5.0.1)
+Requirement already satisfied: multidict<7.0,>=4.5 in ./python_env/lib/python3.10/site-packages (from aiohttp->datasets==2.9.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 44)) (6.5.1)
+Requirement already satisfied: yarl<2.0,>=1.17.0 in ./python_env/lib/python3.10/site-packages (from aiohttp->datasets==2.9.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 44)) (1.20.1)
+Requirement already satisfied: aiosignal>=1.1.2 in ./python_env/lib/python3.10/site-packages (from aiohttp->datasets==2.9.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 44)) (1.3.2)
+Requirement already satisfied: frozenlist>=1.1.1 in ./python_env/lib/python3.10/site-packages (from aiohttp->datasets==2.9.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 44)) (1.7.0)
+Requirement already satisfied: aiohappyeyeballs>=2.5.0 in ./python_env/lib/python3.10/site-packages (from aiohttp->datasets==2.9.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 44)) (2.6.1)
+Requirement already satisfied: smmap<6,>=3.0.1 in ./python_env/lib/python3.10/site-packages (from gitdb<5,>=4.0.1->gitpython==3.1.41->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 66)) (5.0.2)
+Requirement already satisfied: httpcore==1.* in ./python_env/lib/python3.10/site-packages (from httpx>=0.25.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (1.0.9)
+Requirement already satisfied: anyio in ./python_env/lib/python3.10/site-packages (from httpx>=0.25.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (4.9.0)
+Requirement already satisfied: idna in ./python_env/lib/python3.10/site-packages (from httpx>=0.25.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (3.10)
+Requirement already satisfied: h11>=0.16 in ./python_env/lib/python3.10/site-packages (from httpcore==1.*->httpx>=0.25.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (0.16.0)
+Requirement already satisfied: taskgroup in ./python_env/lib/python3.10/site-packages (from hypercorn>=0.13.2->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (0.2.2)
+Requirement already satisfied: priority in ./python_env/lib/python3.10/site-packages (from hypercorn>=0.13.2->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (2.0.0)
+Requirement already satisfied: wsproto>=0.14.0 in ./python_env/lib/python3.10/site-packages (from hypercorn>=0.13.2->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.2.0)
+Requirement already satisfied: h2>=3.1.0 in ./python_env/lib/python3.10/site-packages (from hypercorn>=0.13.2->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (4.2.0)
+Requirement already satisfied: hyperframe<7,>=6.1 in ./python_env/lib/python3.10/site-packages (from h2>=3.1.0->hypercorn>=0.13.2->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (6.1.0)
+Requirement already satisfied: hpack<5,>=4.1 in ./python_env/lib/python3.10/site-packages (from h2>=3.1.0->hypercorn>=0.13.2->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (4.1.0)
+Requirement already satisfied: zipp>=3.20 in ./python_env/lib/python3.10/site-packages (from importlib-metadata>=3.6->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (3.23.0)
+Requirement already satisfied: jupyter-client>=6.1.12 in ./python_env/lib/python3.10/site-packages (from ipykernel>=6.5.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (8.6.3)
+Requirement already satisfied: debugpy>=1.6.5 in ./python_env/lib/python3.10/site-packages (from ipykernel>=6.5.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (1.8.14)
+Requirement already satisfied: pyzmq>=24 in ./python_env/lib/python3.10/site-packages (from ipykernel>=6.5.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (27.0.0)
+Requirement already satisfied: parso<0.9.0,>=0.8.4 in ./python_env/lib/python3.10/site-packages (from jedi>=0.16->ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.8.4)
+Requirement already satisfied: MarkupSafe>=2.0 in ./python_env/lib/python3.10/site-packages (from Jinja2>=3.0->sphinx==7.1.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (3.0.2)
+Requirement already satisfied: terminado>=0.8.3 in ./python_env/lib/python3.10/site-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (0.18.1)
+Requirement already satisfied: argon2-cffi>=21.1 in ./python_env/lib/python3.10/site-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (25.1.0)
+Requirement already satisfied: prometheus-client>=0.9 in ./python_env/lib/python3.10/site-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (0.22.1)
+Requirement already satisfied: websocket-client>=1.7 in ./python_env/lib/python3.10/site-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (1.8.0)
+Requirement already satisfied: overrides>=5.0 in ./python_env/lib/python3.10/site-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (7.7.0)
+Requirement already satisfied: send2trash>=1.8.2 in ./python_env/lib/python3.10/site-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (1.8.3)
+Requirement already satisfied: jupyter-server-terminals>=0.4.4 in ./python_env/lib/python3.10/site-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (0.5.3)
+Requirement already satisfied: jupyter-events>=0.11.0 in ./python_env/lib/python3.10/site-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (0.12.0)
+Requirement already satisfied: sniffio>=1.1 in ./python_env/lib/python3.10/site-packages (from anyio->httpx>=0.25.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (1.3.1)
+Requirement already satisfied: argon2-cffi-bindings in ./python_env/lib/python3.10/site-packages (from argon2-cffi>=21.1->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (21.2.0)
+Requirement already satisfied: rfc3339-validator in ./python_env/lib/python3.10/site-packages (from jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (0.1.4)
+Requirement already satisfied: referencing in ./python_env/lib/python3.10/site-packages (from jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (0.36.2)
+Requirement already satisfied: rfc3986-validator>=0.1.1 in ./python_env/lib/python3.10/site-packages (from jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (0.1.1)
+Requirement already satisfied: jsonschema[format-nongpl]>=4.18.0 in ./python_env/lib/python3.10/site-packages (from jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (4.24.0)
+Requirement already satisfied: python-json-logger>=2.0.4 in ./python_env/lib/python3.10/site-packages (from jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (3.3.0)
+Requirement already satisfied: rpds-py>=0.7.1 in ./python_env/lib/python3.10/site-packages (from jsonschema[format-nongpl]>=4.18.0->jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (0.25.1)
+Requirement already satisfied: jsonschema-specifications>=2023.03.6 in ./python_env/lib/python3.10/site-packages (from jsonschema[format-nongpl]>=4.18.0->jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (2025.4.1)
+Requirement already satisfied: jsonpointer>1.13 in ./python_env/lib/python3.10/site-packages (from jsonschema[format-nongpl]>=4.18.0->jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (3.0.0)
+Requirement already satisfied: fqdn in ./python_env/lib/python3.10/site-packages (from jsonschema[format-nongpl]>=4.18.0->jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (1.5.1)
+Requirement already satisfied: uri-template in ./python_env/lib/python3.10/site-packages (from jsonschema[format-nongpl]>=4.18.0->jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (1.3.0)
+Requirement already satisfied: isoduration in ./python_env/lib/python3.10/site-packages (from jsonschema[format-nongpl]>=4.18.0->jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (20.11.0)
+Requirement already satisfied: webcolors>=24.6.0 in ./python_env/lib/python3.10/site-packages (from jsonschema[format-nongpl]>=4.18.0->jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (24.11.1)
+Requirement already satisfied: json5>=0.9.0 in ./python_env/lib/python3.10/site-packages (from jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (0.12.0)
+Requirement already satisfied: choreographer>=1.0.5 in ./python_env/lib/python3.10/site-packages (from kaleido!=0.2.1.post1->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.0.9)
+Requirement already satisfied: logistro>=1.0.8 in ./python_env/lib/python3.10/site-packages (from kaleido!=0.2.1.post1->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.1.0)
+Requirement already satisfied: orjson>=3.10.15 in ./python_env/lib/python3.10/site-packages (from kaleido!=0.2.1.post1->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (3.10.18)
+Requirement already satisfied: simplejson>=3.19.3 in ./python_env/lib/python3.10/site-packages (from choreographer>=1.0.5->kaleido!=0.2.1.post1->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (3.20.1)
+Requirement already satisfied: jaraco.functools in ./python_env/lib/python3.10/site-packages (from keyring>=15.1->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (4.2.1)
+Requirement already satisfied: jaraco.context in ./python_env/lib/python3.10/site-packages (from keyring>=15.1->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (6.0.1)
+Requirement already satisfied: jeepney>=0.4.2 in ./python_env/lib/python3.10/site-packages (from keyring>=15.1->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (0.9.0)
+Requirement already satisfied: SecretStorage>=3.2 in ./python_env/lib/python3.10/site-packages (from keyring>=15.1->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (3.3.3)
+Requirement already satisfied: jaraco.classes in ./python_env/lib/python3.10/site-packages (from keyring>=15.1->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (3.4.0)
+Requirement already satisfied: mdurl~=0.1 in ./python_env/lib/python3.10/site-packages (from markdown-it-py~=3.0->myst-parser==3.0.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 12)) (0.1.2)
+Requirement already satisfied: linkify-it-py<3,>=1 in ./python_env/lib/python3.10/site-packages (from markdown-it-py~=3.0->myst-parser==3.0.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 12)) (2.0.3)
+Requirement already satisfied: uc-micro-py in ./python_env/lib/python3.10/site-packages (from linkify-it-py<3,>=1->markdown-it-py~=3.0->myst-parser==3.0.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 12)) (1.0.3)
+Collecting motor>=2.5
+  Using cached motor-3.7.0-py3-none-any.whl (74 kB)
+  Using cached motor-3.6.1-py3-none-any.whl (74 kB)
+  Using cached motor-3.6.0-py3-none-any.whl (74 kB)
+  Using cached motor-3.5.3-py3-none-any.whl (74 kB)
+Requirement already satisfied: bleach[css]!=5.0.0 in ./python_env/lib/python3.10/site-packages (from nbconvert!=5.4->nbsphinx==0.9.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (6.2.0)
+Requirement already satisfied: nbclient>=0.5.0 in ./python_env/lib/python3.10/site-packages (from nbconvert!=5.4->nbsphinx==0.9.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (0.10.2)
+Requirement already satisfied: pandocfilters>=1.4.1 in ./python_env/lib/python3.10/site-packages (from nbconvert!=5.4->nbsphinx==0.9.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (1.5.1)
+Requirement already satisfied: jupyterlab-pygments in ./python_env/lib/python3.10/site-packages (from nbconvert!=5.4->nbsphinx==0.9.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (0.3.0)
+Requirement already satisfied: defusedxml in ./python_env/lib/python3.10/site-packages (from nbconvert!=5.4->nbsphinx==0.9.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (0.7.1)
+Requirement already satisfied: mistune<4,>=2.0.3 in ./python_env/lib/python3.10/site-packages (from nbconvert!=5.4->nbsphinx==0.9.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (3.1.3)
+Requirement already satisfied: webencodings in ./python_env/lib/python3.10/site-packages (from bleach[css]!=5.0.0->nbconvert!=5.4->nbsphinx==0.9.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (0.5.1)
+Requirement already satisfied: tinycss2<1.5,>=1.1.0 in ./python_env/lib/python3.10/site-packages (from bleach[css]!=5.0.0->nbconvert!=5.4->nbsphinx==0.9.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (1.4.0)
+Requirement already satisfied: fastjsonschema>=2.15 in ./python_env/lib/python3.10/site-packages (from nbformat->nbsphinx==0.9.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (2.21.1)
+Requirement already satisfied: ptyprocess>=0.5 in ./python_env/lib/python3.10/site-packages (from pexpect>4.3->ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.7.0)
+Requirement already satisfied: dnspython<3.0.0,>=1.16.0 in ./python_env/lib/python3.10/site-packages (from pymongo<4.9,>=3.12->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (2.7.0)
+Requirement already satisfied: nh3>=0.2.14 in ./python_env/lib/python3.10/site-packages (from readme-renderer>=35.0->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (0.2.21)
+Collecting readme-renderer>=35.0
+  Using cached readme_renderer-43.0-py3-none-any.whl (13 kB)
+Requirement already satisfied: charset-normalizer<4,>=2 in ./python_env/lib/python3.10/site-packages (from requests>=2.20->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (3.4.2)
+Requirement already satisfied: threadpoolctl>=3.1.0 in ./python_env/lib/python3.10/site-packages (from scikit-learn>=0.20.0->librosa==0.10.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 59)) (3.6.0)
+Requirement already satisfied: cryptography>=2.0 in ./python_env/lib/python3.10/site-packages (from SecretStorage>=3.2->keyring>=15.1->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (45.0.4)
+Requirement already satisfied: cffi>=1.14 in ./python_env/lib/python3.10/site-packages (from cryptography>=2.0->SecretStorage>=3.2->keyring>=15.1->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (1.17.1)
+Requirement already satisfied: pycparser in ./python_env/lib/python3.10/site-packages (from cffi>=1.14->cryptography>=2.0->SecretStorage>=3.2->keyring>=15.1->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (2.22)
+Requirement already satisfied: distlib<1,>=0.3.7 in ./python_env/lib/python3.10/site-packages (from virtualenv>=20.10.0->pre-commit==3.5.0->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 17)) (0.3.9)
+Requirement already satisfied: py7zr in ./python_env/lib/python3.10/site-packages (from voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.0.0)
+Requirement already satisfied: rarfile in ./python_env/lib/python3.10/site-packages (from voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (4.2)
+Requirement already satisfied: jsonlines in ./python_env/lib/python3.10/site-packages (from voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (4.0.0)
+Requirement already satisfied: future in ./python_env/lib/python3.10/site-packages (from voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.0.0)
+Requirement already satisfied: tzlocal in ./python_env/lib/python3.10/site-packages (from voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (5.3.1)
+Requirement already satisfied: glob2 in ./python_env/lib/python3.10/site-packages (from voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (0.7)
+Requirement already satisfied: sortedcontainers in ./python_env/lib/python3.10/site-packages (from voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (2.4.0)
+Requirement already satisfied: soupsieve>1.2 in ./python_env/lib/python3.10/site-packages (from beautifulsoup4->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (2.7)
+Requirement already satisfied: jmespath<2.0.0,>=0.7.1 in ./python_env/lib/python3.10/site-packages (from boto3->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.0.1)
+Requirement already satisfied: botocore<1.39.0,>=1.38.43 in ./python_env/lib/python3.10/site-packages (from boto3->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.38.43)
+Requirement already satisfied: s3transfer<0.14.0,>=0.13.0 in ./python_env/lib/python3.10/site-packages (from boto3->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (0.13.0)
+Requirement already satisfied: wrapt<2,>=1.10 in ./python_env/lib/python3.10/site-packages (from Deprecated->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.17.2)
+Requirement already satisfied: arrow>=0.15.0 in ./python_env/lib/python3.10/site-packages (from isoduration->jsonschema[format-nongpl]>=4.18.0->jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (1.3.0)
+Requirement already satisfied: types-python-dateutil>=2.8.10 in ./python_env/lib/python3.10/site-packages (from arrow>=0.15.0->isoduration->jsonschema[format-nongpl]>=4.18.0->jupyter-events>=0.11.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 91)) (2.9.0.20250516)
+Requirement already satisfied: more-itertools in ./python_env/lib/python3.10/site-packages (from jaraco.classes->keyring>=15.1->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (10.7.0)
+Requirement already satisfied: backports.tarfile in ./python_env/lib/python3.10/site-packages (from jaraco.context->keyring>=15.1->twine==4.0.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 21)) (1.2.0)
+Requirement already satisfied: pybcj<1.1.0,>=1.0.0 in ./python_env/lib/python3.10/site-packages (from py7zr->voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.0.6)
+Requirement already satisfied: inflate64<1.1.0,>=1.0.0 in ./python_env/lib/python3.10/site-packages (from py7zr->voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.0.3)
+Requirement already satisfied: pyppmd<1.3.0,>=1.1.0 in ./python_env/lib/python3.10/site-packages (from py7zr->voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.2.0)
+Requirement already satisfied: brotli>=1.1.0 in ./python_env/lib/python3.10/site-packages (from py7zr->voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.1.0)
+Requirement already satisfied: texttable in ./python_env/lib/python3.10/site-packages (from py7zr->voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (1.7.0)
+Requirement already satisfied: multivolumefile>=0.2.3 in ./python_env/lib/python3.10/site-packages (from py7zr->voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (0.2.3)
+Requirement already satisfied: pyzstd>=0.16.1 in ./python_env/lib/python3.10/site-packages (from py7zr->voxel51-eta<0.13,>=0.12.7->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (0.17.0)
+Requirement already satisfied: tifffile>=2022.8.12 in ./python_env/lib/python3.10/site-packages (from scikit-image->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (2025.5.10)
+Requirement already satisfied: imageio!=2.35.0,>=2.33 in ./python_env/lib/python3.10/site-packages (from scikit-image->fiftyone==0.25.2->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 81)) (2.37.0)
+Requirement already satisfied: executing>=1.2.0 in ./python_env/lib/python3.10/site-packages (from stack-data->ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (2.2.0)
+Requirement already satisfied: pure-eval in ./python_env/lib/python3.10/site-packages (from stack-data->ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.2.3)
+Requirement already satisfied: asttokens>=2.1.0 in ./python_env/lib/python3.10/site-packages (from stack-data->ipython==8.12.3->-r /localdev/hzhou/tt-metal/tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (3.0.0)
+Requirement already satisfied: mpmath<1.4,>=1.1.0 in ./python_env/lib/python3.10/site-packages (from sympy->torch==2.2.1.0+cpu->-r /localdev/hzhou/tt-metal/tt_metal/python_env/requirements-dev.txt (line 45)) (1.3.0)
+Building wheels for collected packages: tt-smi, llama-models, pyluwen
+  Building wheel for tt-smi (PEP 517): started
+  Building wheel for tt-smi (PEP 517): finished with status 'done'
+  Created wheel for tt-smi: filename=tt_smi-3.0.12-py3-none-any.whl size=30580 sha256=b5d5bf170b710bff8312d9c1fe88516b67a61f6e92596b2825366e096cfae894
+  Stored in directory: /tmp/pip-ephem-wheel-cache-3m74lq46/wheels/0b/88/ab/451ab903f96db4d349f06c31e60b8af70e08396e5a5cc8e9fc
+  Building wheel for llama-models (PEP 517): started
+  Building wheel for llama-models (PEP 517): finished with status 'done'
+  Created wheel for llama-models: filename=llama_models-0.0.42-py3-none-any.whl size=2163036 sha256=cfd70c632016c2aa31bfe0d74bd10f2236fec2aead100848d5d5be4315ada49f
+  Stored in directory: /tmp/pip-ephem-wheel-cache-3m74lq46/wheels/7f/14/9f/9d3a40d28dc09fb21f23e81e2982e9e5539aea40f9c221170a
+  Building wheel for pyluwen (PEP 517): started
+  Building wheel for pyluwen (PEP 517): finished with status 'done'
+  Created wheel for pyluwen: filename=pyluwen-0.7.1-cp310-cp310-linux_x86_64.whl size=3451491 sha256=bfa1e2334a75d58c975a4cd79309cb9274ca2dbd625a3d303385e37287b32be1
+  Stored in directory: /tmp/pip-ephem-wheel-cache-3m74lq46/wheels/06/08/6b/0ea508379a5374b3aa9c59869e51dc2839e2d0c64a52c133ce
+Successfully built tt-smi llama-models pyluwen
+Installing collected packages: SimpleITK, seaborn, rfc3986, requests-toolbelt, readme-renderer, rapidfuzz, pytest, pyproject-hooks, pyluwen, pydash, py-cpuinfo, prefixed, pre-commit, pprintpp, pooch, ply, plumbum, plotly, pkginfo, pathspec, opencv-python, numba, notebook-shim, mypy-extensions, msgpack, motor, mongoengine, lxml, lightning-utilities, keyring, kaleido, jupyterlab-widgets, jupyterlab-server, jupyter-lsp, ipykernel, importlib-resources, hypercorn, humanize, gitdb, ftfy, Flask, fiftyone-db, fiftyone-brain, execnet, editorconfig, Deprecated, datasets, dash-table, dash-html-components, dash-core-components, dacite, cachetools, boto3, blessed, audioread, async-lru, aiofiles, yamllint, xlsxwriter, ultralytics, twine, tt-smi, torchmetrics, torch-fidelity, toolz, termcolor, sphinxcontrib-email, sphinx-rtd-theme, sentencepiece, pytest-xdist, pytest-timeout, pytest-split, pytest-github-actions-annotate-failures, pytest-benchmark, protobuf, pandoc, open-clip-torch, nbsphinx, myst-parser, mypy, medpy, loguru, llama-models, librosa, kagglehub, jupyterlab, jsbeautifier, jiwer, ipywidgets, gitpython, fiftyone, faster-fifo, evaluate, enlighten, einops, docopt, diffusers, dash, clang-format, build, breathe, bokeh, blobfile, black, bert-score, beautifultable, accelerate
+ERROR: Could not install packages due to an OSError: [Errno 28] No space left on device
+
+WARNING: You are using pip version 21.2.4; however, version 25.1.1 is available.
+You should consider upgrading via the '/localdev/hzhou/tt-metal/python_env/bin/python3 -m pip install --upgrade pip' command.
