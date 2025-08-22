@@ -1,3 +1,4 @@
+# Ha
 cmake_minimum_required(VERSION 3.24...3.30)
 
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
