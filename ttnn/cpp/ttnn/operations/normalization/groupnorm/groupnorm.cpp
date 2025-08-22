@@ -24,7 +24,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
     std::optional<ttnn::Layout> output_layout,
     std::optional<int> num_out_blocks,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    const std::optional<ttnn::Tensor>& negative_mask) {
+    const std::optional<ttnn::Tensor>& negative_mask,
+    bool use_welford) {
     if (input_tensor.layout() == Layout::TILE and inplace.has_value()) {
         TT_FATAL(
             !inplace.value(),
@@ -116,7 +117,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
                        .num_groups = static_cast<uint32_t>(num_groups),
                        .output_mem_config = output_mem_config,
                        .program_config = program_config,
-                       .compute_kernel_config = kernel_config_val},
+                       .compute_kernel_config = kernel_config_val,
+                       .use_welford = use_welford},
                    {input_tensor},
                    {gamma, beta, input_mask, negative_mask})
             .at(0);
@@ -134,7 +136,8 @@ ttnn::Tensor ExecuteGroupNorm::invoke(
                        .num_groups = static_cast<uint32_t>(num_groups),
                        .output_mem_config = output_mem_config,
                        .program_config = program_config,
-                       .compute_kernel_config = kernel_config_val},
+                       .compute_kernel_config = kernel_config_val,
+                       .use_welford = use_welford},
                    {input_tensor},
                    {gamma, beta, input_mask, negative_mask})
             .at(0);
