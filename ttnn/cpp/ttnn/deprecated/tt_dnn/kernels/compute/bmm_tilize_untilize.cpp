@@ -162,13 +162,11 @@ void MAIN {
                 bool last_out = (in0_block_w_i == in0_num_blocks_w - 1);
                 if (tilize_in0) {
                     tilize_in(in0_cb_id, in0_subblock_h, in0_block_w, in0_num_subblocks, tilized_in0_cb_id);
-                    // Hardware startup - common MMIO configurations
-                    compute_kernel_hw_startup(tilized_in0_cb_id, in1_cb_id);
-                    cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
 
                     // Initialize matmul operation
                     matmul_init(tilized_in0_cb_id, in1_cb_id);
-                    cb_wait_front(tilized_in0_cb_id);
+
+                    cb_wait_front(tilized_in0_cb_id, in0_block_num_tiles);
                 } else {
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                 }

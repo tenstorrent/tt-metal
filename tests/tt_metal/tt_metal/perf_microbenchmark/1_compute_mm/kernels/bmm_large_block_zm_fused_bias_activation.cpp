@@ -121,7 +121,6 @@ void MAIN {
                         cb_pop_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
 
                         matmul_init(in0_cb_id, in1_cb_id);
-                        // reconfigure unpacker df for src B
                         reconfig_data_format(in1_cb_id, in0_cb_id);
 #endif
 
