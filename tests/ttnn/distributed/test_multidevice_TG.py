@@ -1475,6 +1475,38 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
 
 
 # TODO #11406 - Add unit tests for visualize_tensor API
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_visualize_tensor_col_sharded(mesh_device):
+    rows, cols, tile_size = 8, 4, 32
+    full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
+    mesh_mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(
+            placements=[
+                ttnn.PlacementReplicate(),
+                ttnn.PlacementShard(3),
+            ],
+        ),
+    )
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=mesh_mapper, layout=ttnn.Layout.ROW_MAJOR)
+    ttnn.visualize_tensor(ttnn_tensor)
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
+def test_visualize_tensor_row_sharded(mesh_device):
+    rows, cols, tile_size = 8, 4, 32
+    full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
+    mesh_mapper = ttnn.create_mesh_mapper(
+        mesh_device,
+        ttnn.MeshMapperConfig(
+            placements=[
+                ttnn.PlacementReplicate(),
+                ttnn.PlacementShard(3),
+            ],
+        ),
+    )
+    ttnn_tensor = ttnn.from_torch(full_tensor, mesh_mapper=mesh_mapper, layout=ttnn.Layout.ROW_MAJOR)
+    ttnn.visualize_tensor(ttnn_tensor)
 
 
 def rms_norm(x, gamma, eps):
