@@ -39,12 +39,12 @@ void bind_normalization_softmax_operation(py::module& module) {
                 \sigma(z_i) = \frac{e^{z_{i}}}{\sum_{j=1}^K e^{z_{j}}} \ \ \ for\ i=1,2,\dots,K
 
             Args:
-                * :attr:`input_tensor`: the input tensor
-                * :attr:`dim`: the dimension along which to compute softmax.
+                input_tensor (ttnn.Tensor): The input tensor.
+                dim (int): The dimension along which to compute softmax.
 
             Keyword Args:
-                * :attr:`memory_config`: the memory configuration for the output tensor. If not provided, the memory configuration of the input tensor is used.
-                * :attr:`compute_kernel_config`: the compute kernel configuration for the op. If not provided, the default configuration of the op is used.
+                memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. If not provided, the memory configuration of the input tensor is used.
+                compute_kernel_config (ttnn.ComputeKernelConfig, optional): the compute kernel configuration for the op. If not provided, the default configuration of the op is used.
 
             Note:
               Supported data types and layouts by tensor:
