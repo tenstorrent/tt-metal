@@ -1104,10 +1104,18 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
 
 // clang-format off
 /**
- * The stateful noc commands write a subset of the NOC registers for each transaction
- * leveraging the fact that many transactions re-use certain values (e.g. length).
- * Which values get reused and which are reset on each call depend on the noc transaction
- * type. Making template functions with a long list of booleans makes understanding what registers
+ * The stateful NOC commands provide granular control over NOC register programming by writing
+ * only a subset of registers for each transaction. This approach leverages the fact that many
+ * transactions re-use certain values (e.g. length, coordinates) while varying others.
+ *
+ * This design provides significant advantages over previous stateful APIs:
+ * - Fine-grained control: Users can specify exactly which registers to update per transaction
+ * - Better optimization: Avoid unnecessary register writes for unchanged values
+ * - Flexible transaction patterns: Support complex sequences with selective updates
+ * - Performance benefits: Reduce NOC register write overhead for repetitive operations
+ *
+ * The flags parameter uses a bitmask approach to specify which registers to program.
+ * Making template functions with a long list of booleans makes understanding what registers
  * are being set tedious. This is an attempt to pack that data in a way thats ~easy to visually parse.
  *
  * S/s: write, do not write to src address register (NOC_TARG_ADDR_LO)
@@ -1115,12 +1123,15 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_with_state(
  * D/d: write, do not write to dst address register (NOC_RET_ADDR_LO)
  * L/l: write, do not write to length register (NOC_AT_LEN_BE)
  *
- * V/v: write, do not write to value register (NOC_AT_DATA)
- * B/b: write, do not write to byte-enable register (NOC_AT_LEN_BE)
- *
  * M/m: write, do not write to multicast register (NOC_CMD_BRCST_PACKET)
  * K/k: write, do not write to linked register (NOC_CMD_VC_LINKED)
  * P/p: write, do not write to posted register (NOC_CMD_RESP_MARKED)
+ *
+ * V/v: write, do not write to value register (NOC_AT_DATA)
+ * B/b: write, do not write to byte-enable register (NOC_AT_LEN_BE)
+ *
+ * WAIT/wait: wait, do not wait for command buffer readiness (NOC_CMD_CTRL)
+ * SEND/send: send, do not send the transaction immediately (NOC_CTRL_SEND_REQ)
  */
 // clang-format on
 constexpr uint32_t CQ_NOC_FLAG_SRC = 0x01;
@@ -1193,6 +1204,20 @@ enum CQNocSend {
     CQ_NOC_SEND = 1,
 };
 
+// clang-format off
+/**
+ * Initializes the stateful registers for NOC read operations using a specific command buffer.
+ * This function sets up the basic NOC read command configuration that will be reused across
+ * multiple read transactions using the same command buffer.
+ *
+ * Return value: None
+ *
+ * | Argument                     | Description                                     | Data type | Valid range | Required |
+ * |------------------------------|-------------------------------------------------|-----------|-------------|----------|
+ * | noc                          | Which NOC to use for the transaction            | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf (template parameter) | Which command buffer to initialize              | uint32_t  | 0 - 3       | True     |
+ */
+// clang-format on
 template <uint32_t cmd_buf>
 inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
     uint32_t noc_rd_cmd_field =
@@ -1201,6 +1226,33 @@ inline __attribute__((always_inline)) void noc_read_init_state(uint32_t noc) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous read transaction using previously initialized stateful registers.
+ * This function must be preceded by a call to \a noc_read_init_state for the same command buffer.
+ * The function leverages stateful NOC registers to minimize register writes for repeated transactions
+ * with similar characteristics.
+ *
+ * This function provides more granular control compared to previous stateful NOC APIs by allowing
+ * selective register updates via the flags parameter. Users can specify exactly which NOC registers
+ * (source address, destination address, coordinates, length) should be programmed on each call,
+ * enabling fine-tuned optimization for specific transaction patterns.
+ *
+ * Return value: None
+ *
+ * | Argument                      | Description                                              | Data type        | Valid range                                              | Required |
+ * |-------------------------------|----------------------------------------------------------|------------------|----------------------------------------------------------|----------|
+ * | noc                           | Which NOC to use for the transaction                     | uint32_t         | 0 or 1                                                   | True     |
+ * | src_addr                      | Source NOC address (x,y)+local address                   | uint64_t         | Results of \a get_noc_addr calls                         | True     |
+ * | dst_addr                      | Destination address in local L1 memory                   | uint32_t         | 0..1 MB                                                  | True     |
+ * | size                          | Size of transaction in bytes                             | uint32_t         | 0..NOC_MAX_BURST_SIZE for single packet                  | True     |
+ * | noc_mode (template parameter) | NOC mode for the transaction                             | uint8_t          | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
+ * | cmd_buf (template parameter)  | Which command buffer to use for the transaction          | uint32_t         | 0 - 3                                                    | True     |
+ * | flags (template parameter)    | Which NOC registers to update in this call               | enum CQNocFlags  | Combination of CQ_NOC_FLAG_* flags                       | True     |
+ * | send (template parameter)     | Whether to send the transaction immediately              | enum CQNocSend   | CQ_NOC_SEND or CQ_NOC_send                               | False    |
+ * | wait (template parameter)     | Whether to wait for command buffer readiness             | enum CQNocWait   | CQ_NOC_WAIT or CQ_NOC_wait                               | False    |
+ */
+// clang-format on
 template <
     uint8_t noc_mode = DM_DEDICATED_NOC,
     uint32_t cmd_buf,
@@ -1239,8 +1291,25 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
 }
 
+// clang-format off
+/**
+ * Initializes the stateful registers for NOC write operations using a specific command buffer.
+ * This function sets up the basic NOC write command configuration including VC, multicast,
+ * linked, and posted flags that will be reused across multiple write transactions using
+ * the same command buffer.
+ *
+ * Return value: None
+ *
+ * | Argument                       | Description                                        | Data type           | Valid range         | Required |
+ * |--------------------------------|----------------------------------------------------|---------------------|---------------------|----------|
+ * | noc                            | Which NOC to use for the transaction               | uint32_t            | 0 or 1              | True     |
+ * | vc                             | Virtual channel to use for the transactions        | uint32_t            | 0 - 3               | True     |
+ * | cmd_buf (template parameter)   | Which command buffer to initialize                 | uint32_t            | 0 - 3               | True     |
+ * | cmd_flags (template parameter) | Command flags for multicast/linked/posted options  | enum CQNocCmdFlags  | CQ_NOC_mkp variants | False    |
+ */
+// clang-format on
 template <uint32_t cmd_buf, enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp>
-inline __attribute__((always_inline)) void noc_write_init_state(uint8_t noc, uint32_t vc) {
+inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, uint32_t vc) {
     constexpr bool multicast_path_reserve = true;
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) |
                              ((cmd_flags & CQ_NOC_CMD_FLAG_LINKED) ? NOC_CMD_VC_LINKED : 0x0) |
@@ -1252,6 +1321,36 @@ inline __attribute__((always_inline)) void noc_write_init_state(uint8_t noc, uin
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
 }
 
+// clang-format off
+/**
+ * Initiates an asynchronous write transaction using previously initialized stateful registers.
+ * This function must be preceded by a call to \a noc_write_init_state for the same command buffer.
+ * The function leverages stateful NOC registers to minimize register writes for repeated transactions
+ * with similar characteristics.
+ *
+ * This function provides more granular control compared to previous stateful NOC APIs by allowing
+ * selective register updates via the flags parameter. Users can specify exactly which NOC registers
+ * (source address, destination address, coordinates, length) should be programmed on each call,
+ * enabling fine-tuned optimization for specific transaction patterns.
+ *
+ * Return value: None
+ *
+ * | Argument                            | Description                                              | Data type       | Valid range                                              | Required |
+ * |-------------------------------------|----------------------------------------------------------|-----------------|----------------------------------------------------------|----------|
+ * | noc                                 | Which NOC to use for the transaction                     | uint32_t        | 0 or 1                                                   | True     |
+ * | src_addr                            | Source address in local L1 memory                        | uint32_t        | 0..1 MB                                                  | True     |
+ * | dst_addr                            | Destination NOC address (x,y)+local address              | uint64_t        | Results of \a get_noc_addr calls                         | True     |
+ * | size                                | Size of transaction in bytes                             | uint32_t        | 0..NOC_MAX_BURST_SIZE for single packet                  | False    |
+ * | ndests                              | Number of destinations for multicast operations          | uint32_t        | 1 or more                                                | False    |
+ * | noc_mode (template parameter)       | NOC mode for the transaction                             | uint8_t         | DM_DEDICATED_NOC, DM_DYNAMIC_NOC or DM_INVALID_NOC (0-2) | False    |
+ * | cmd_buf (template parameter)        | Which command buffer to use for the transaction          | uint32_t        | 0 - 3                                                    | True     |
+ * | flags (template parameter)          | Which NOC registers to update in this call               | enum CQNocFlags | Combination of CQ_NOC_FLAG_* flags                       | True     |
+ * | send (template parameter)           | Whether to send the transaction immediately              | enum CQNocSend  | CQ_NOC_SEND or CQ_NOC_send                               | False    |
+ * | wait (template parameter)           | Whether to wait for command buffer readiness             | enum CQNocWait  | CQ_NOC_WAIT or CQ_NOC_wait                               | False    |
+ * | update_counter (template parameter) | Whether to increment write counters                      | bool            | true or false                                            | False    |
+ * | posted (template parameter)         | Whether the transaction is posted (no ack required)      | bool            | true or false                                            | False    |
+ */
+// clang-format on
 template <
     uint8_t noc_mode = DM_DEDICATED_NOC,
     uint32_t cmd_buf,
@@ -1302,6 +1401,23 @@ inline __attribute__((always_inline)) void noc_write_with_state(
     }
 }
 
+// clang-format off
+/**
+ * Initializes the stateful registers for NOC inline direct write operations using a specific
+ * command buffer. This function sets up the basic NOC inline write command configuration including
+ * VC, multicast, and posted flags that will be reused across multiple inline write transactions.
+ * Inline writes allow writing 32-bit values directly without requiring a separate source buffer.
+ *
+ * Return value: None
+ *
+ * | Argument                       | Description                                        | Data type           | Valid range         | Required |
+ * |--------------------------------|----------------------------------------------------|---------------------|---------------------|----------|
+ * | noc                            | Which NOC to use for the transaction               | uint32_t            | 0 or 1              | True     |
+ * | vc                             | Virtual channel to use for the transactions        | uint32_t            | 0 - 3               | True     |
+ * | cmd_buf (template parameter)   | Which command buffer to initialize                 | uint32_t            | 0 - 3               | True     |
+ * | cmd_flags (template parameter) | Command flags for multicast/posted options         | enum CQNocCmdFlags  | CQ_NOC_mkp variants | False    |
+ */
+// clang-format on
 template <uint32_t cmd_buf, enum CQNocCmdFlags cmd_flags = CQ_NOC_mkp>
 FORCE_INLINE void noc_inline_dw_write_init_state(uint32_t noc, uint32_t vc) {
     constexpr bool static_vc_alloc = true;
@@ -1315,6 +1431,32 @@ FORCE_INLINE void noc_inline_dw_write_init_state(uint32_t noc, uint32_t vc) {
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
 }
 
+// clang-format off
+/**
+ * Initiates an inline direct write transaction using previously initialized stateful registers.
+ * This function must be preceded by a call to \a noc_inline_dw_write_init_state for the same command buffer.
+ * Inline writes allow writing a 32-bit value directly to a NOC destination without requiring a separate
+ * source buffer, making them efficient for register writes and small data updates.
+ *
+ * This function provides more granular control compared to previous stateful NOC APIs by allowing
+ * selective register updates via the flags parameter. Users can specify exactly which NOC registers
+ * (destination address, coordinates, value, byte enable) should be programmed on each call,
+ * enabling fine-tuned optimization for specific inline write patterns.
+ *
+ * Return value: None
+ *
+ * | Argument                     | Description                                        | Data type             | Valid range                      | Required |
+ * |------------------------------|----------------------------------------------------|-----------------------|----------------------------------|----------|
+ * | noc                          | Which NOC to use for the transaction               | uint32_t              | 0 or 1                           | True     |
+ * | dst_addr                     | Destination NOC address (x,y)+local address        | uint64_t              | Results of \a get_noc_addr calls | True     |
+ * | val                          | 32-bit value to write                              | uint32_t              | Any uint32_t value               | False    |
+ * | be                           | Byte enable mask for the write                     | uint8_t               | 0x1-0xF                          | False    |
+ * | cmd_buf (template parameter) | Which command buffer to use for the transaction    | uint32_t              | 0 - 3                            | True     |
+ * | flags (template parameter)   | Which NOC registers to update in this call         | enum CQNocInlineFlags | CQ_NOC_INLINE_* variants         | True     |
+ * | wait (template parameter)    | Whether to wait for command buffer readiness       | enum CQNocWait        | CQ_NOC_WAIT or CQ_NOC_wait       | False    |
+ * | send (template parameter)    | Whether to send the transaction immediately        | enum CQNocSend        | CQ_NOC_SEND or CQ_NOC_send       | False    |
+ */
+// clang-format on
 template <
     uint32_t cmd_buf,
     enum CQNocInlineFlags flags,
