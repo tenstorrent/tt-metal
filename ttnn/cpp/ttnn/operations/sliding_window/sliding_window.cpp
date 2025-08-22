@@ -128,8 +128,12 @@ uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
             (float)(input_hw.first + get_pad_h() - dilation_hw.first * (window_hw.first - 1) - 1) / stride_hw.first;
         uint32_t output_h = std::ceil(output_h_float) + 1;
 
+        // Calculate effective kernel size with dilation
+        uint32_t effective_kernel_h = dilation_hw.first * (window_hw.first - 1) + 1;
+
         // extra_padding = ceil size - non ceil size
-        ceil_padding_h = stride_hw.first * (output_h - 1) + window_hw.first - input_hw.first - get_pad_h();
+        int32_t padding_calc = stride_hw.first * (output_h - 1) + effective_kernel_h - input_hw.first - get_pad_h();
+        ceil_padding_h = (padding_calc > 0) ? static_cast<uint32_t>(padding_calc) : 0;
     }
 
     return ceil_padding_h;
@@ -143,8 +147,12 @@ uint32_t SlidingWindowConfig::get_ceil_pad_w() const {
             (float)(input_hw.second + get_pad_w() - dilation_hw.second * (window_hw.second - 1) - 1) / stride_hw.second;
         uint32_t output_w = std::ceil(output_w_float) + 1;
 
+        // Calculate effective kernel size with dilation
+        uint32_t effective_kernel_w = dilation_hw.second * (window_hw.second - 1) + 1;
+
         // extra_padding = ceil size - non ceil size
-        ceil_padding_w = stride_hw.second * (output_w - 1) + window_hw.second - input_hw.second - get_pad_w();
+        int32_t padding_calc = stride_hw.second * (output_w - 1) + effective_kernel_w - input_hw.second - get_pad_w();
+        ceil_padding_w = (padding_calc > 0) ? static_cast<uint32_t>(padding_calc) : 0;
     }
 
     return ceil_padding_w;
