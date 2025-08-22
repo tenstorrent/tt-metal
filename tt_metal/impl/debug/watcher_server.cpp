@@ -82,7 +82,7 @@ private:
     inline static std::chrono::time_point start_time = std::chrono::system_clock::now();
     std::mutex watch_mutex_;  // Guards server internal state + logfile + device watcher mailbox
 
-    std::thread* server_thread_;
+    std::thread* server_thread_{};
 
     FILE* logfile_ = nullptr;
     FILE* kernel_file_ = nullptr;
@@ -492,7 +492,7 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
             } else {
                 data->debug_insert_delays = debug_delays_val_zero;
             }
-            tt::llrt::write_hex_vec_to_core(
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device_id,
                 worker_core,
                 tt::stl::Span<const uint32_t>(watcher_init_val.data(), watcher_init_val.size()),
@@ -510,7 +510,7 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
         } else {
             data->debug_insert_delays = debug_delays_val_zero;
         }
-        tt::llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device_id,
             virtual_core,
             watcher_init_val,

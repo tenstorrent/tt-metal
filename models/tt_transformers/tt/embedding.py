@@ -17,11 +17,10 @@ class Embedding(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
         self.mesh_device = mesh_device
 
         base_name = args.get_state_dict_prefix("", None) + "tok_embeddings.weight"
-        torch_weight = self.state_dict[base_name].unsqueeze(0).unsqueeze(0)
+        torch_weight = state_dict[base_name].unsqueeze(0).unsqueeze(0)
         cache_name = None if args.dummy_weights else weight_cache_path / base_name
         self.weights = ttnn.as_tensor(
             torch_weight,

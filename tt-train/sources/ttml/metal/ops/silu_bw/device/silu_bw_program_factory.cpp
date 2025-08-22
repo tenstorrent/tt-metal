@@ -39,10 +39,6 @@ constexpr uint32_t kOneMinusSigmoidCbIndex = tt::CBIndex::c_4;
 constexpr uint32_t kTimesInputPlusOneCbIndex = tt::CBIndex::c_5;
 constexpr uint32_t kTimesSigmoidCbIndex = tt::CBIndex::c_6;
 
-// Some of the below constants are set to 2U because we might need to push a new value before poping the old one.
-constexpr uint32_t kNumOneTiles =
-    1U;  // in the end we do not want to have one in CB - to be figured later how to handle it
-
 }  // namespace
 
 namespace ttml::metal::ops::silu_bw::device {
@@ -107,8 +103,6 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
     tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
 
     uint32_t bfloat16_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
-    // Not sure if needed
-    uint32_t float32_single_tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float32);
 
     auto padded_tensor_shape = input.padded_shape();
     auto padded_tensor_volume = input.physical_volume();
@@ -120,12 +114,8 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
     uint32_t NC = padded_tensor_shape[0] * padded_tensor_shape[1];
     uint32_t total_rows_to_process = NC * Ht;
 
-    // Get the number of inner dimension
-    uint32_t num_inner = input.logical_shape()[-1];
-
     // Get number of free cores
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     // Compile arguments
@@ -142,19 +132,19 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
 
-    auto cb_input = create_circular_buffer(
+    [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    auto cb_dLdout = create_circular_buffer(
+    [[maybe_unused]] auto cb_dLdout = create_circular_buffer(
         program, all_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    auto cb_dL_da = create_circular_buffer(
+    [[maybe_unused]] auto cb_dL_da = create_circular_buffer(
         program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    auto cb_sigmoid = create_circular_buffer(
+    [[maybe_unused]] auto cb_sigmoid = create_circular_buffer(
         program, all_cores, kSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    auto cb_one_minus_sigmoid = create_circular_buffer(
+    [[maybe_unused]] auto cb_one_minus_sigmoid = create_circular_buffer(
         program, all_cores, kOneMinusSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    auto cb_times_input_plus_one = create_circular_buffer(
+    [[maybe_unused]] auto cb_times_input_plus_one = create_circular_buffer(
         program, all_cores, kTimesInputPlusOneCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    auto cb_times_sigmoid = create_circular_buffer(
+    [[maybe_unused]] auto cb_times_sigmoid = create_circular_buffer(
         program, all_cores, kTimesSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
     // -------------------------------------------------------------------------
@@ -248,10 +238,6 @@ void SiLUBackwardProgramFactory::override_runtime_arguments(
     auto& shared_variables = cached_program.shared_variables;
     auto& silu_bw_reader_kernel_id = shared_variables.silu_bw_reader_kernel_id;
     auto& silu_bw_writer_kernel_id = shared_variables.silu_bw_writer_kernel_id;
-    auto& silu_bw_kernel_group_1_id = shared_variables.silu_bw_kernel_group_1_id;
-    auto& silu_bw_kernel_group_2_id = shared_variables.silu_bw_kernel_group_2_id;
-    auto& core_group_1 = shared_variables.core_group_1;
-    auto& core_group_2 = shared_variables.core_group_2;
 
     uint32_t num_cores = shared_variables.num_cores;
     uint32_t num_cores_y = shared_variables.num_cores_y;

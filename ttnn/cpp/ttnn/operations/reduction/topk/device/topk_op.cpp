@@ -7,6 +7,7 @@
 #include "topk_constants.hpp"
 #include "topk_utils.hpp"
 #include "tt-metalium/allocator.hpp"
+#include "tt-metalium/assert.hpp"
 
 using namespace tt::tt_metal;
 
@@ -31,6 +32,40 @@ void TopK::validate_with_output_tensors(
 
     TT_FATAL(this->output_mem_config.is_sharded() == false, "Sharded implementation not supported yet");
     TT_FATAL(input_tensors.at(0).layout() == Layout::TILE, "The input must be in tiled format");
+
+    const auto input_tensor_dtype = input_tensors.at(0).dtype();
+    TT_FATAL(
+        input_tensor_dtype == DataType::BFLOAT16 || input_tensor_dtype == DataType::BFLOAT8_B,
+        "Input tensor must be BFLOAT16, or BFLOAT8_B, got: {}",
+        input_tensor_dtype);
+    if (!optional_input_tensors.empty()) {
+        if (optional_input_tensors.at(0).has_value()) {
+            const auto optional_tensor_dtype = optional_input_tensors.at(0)->dtype();
+            TT_FATAL(
+                optional_tensor_dtype == DataType::UINT16 || optional_tensor_dtype == DataType::UINT32,
+                "Optional input tensor must be UINT16, or UINT32, got: {}",
+                optional_tensor_dtype);
+        }
+    }
+    if (!output_tensors.empty()) {
+        if (output_tensors.at(0).has_value() && output_tensors.at(1).has_value()) {
+            const auto output_tensor0_dtype = output_tensors.at(0)->dtype();
+            const auto output_tensor1_dtype = output_tensors.at(1)->dtype();
+            TT_FATAL(
+                output_tensor0_dtype == DataType::BFLOAT16 || output_tensor0_dtype == DataType::BFLOAT8_B,
+                "Preallocated output tensor must be BFLOAT16 or BFLOAT8_B got: {}",
+                output_tensor0_dtype);
+            TT_FATAL(
+                output_tensor1_dtype == DataType::UINT16 || output_tensor1_dtype == DataType::UINT32,
+                "Preallocated indices tensor must be UINT16 or UINT32 got: {}",
+                output_tensor1_dtype);
+            TT_FATAL(
+                output_tensor0_dtype == input_tensor_dtype,
+                "Preallocated output tensor dtype must match input tensor dtype. Got output: {}, input: {}",
+                output_tensor0_dtype,
+                input_tensor_dtype);
+        }
+    }
 
     bool can_run = false;
 

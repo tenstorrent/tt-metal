@@ -13,12 +13,10 @@
 #include <array>
 #include <cstdint>
 #include <exception>
-#include <initializer_list>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -47,7 +45,6 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include "umd/device/types/xy_pair.h"
 #include <tt-metalium/distributed.hpp>
 
 namespace tt::tt_metal {
@@ -170,14 +167,14 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
     EXPECT_EQ(input_1, output_1);
     auto input_1_it = input_1.begin();
     for (const auto& physical_core : physical_cores_1) {
-        auto readback = tt::llrt::read_hex_vec_from_core(
+        auto readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device->get_devices()[0]->id(), physical_core, buffer_1->address(), page_size_1);
         EXPECT_TRUE(std::equal(input_1_it, input_1_it + page_size_1 / sizeof(uint32_t), readback.begin()));
         input_1_it += page_size_1 / sizeof(uint32_t);
     }
     auto sem_addr = global_semaphore.address();
     auto physical_syncer_core = device->worker_core_from_logical_core(syncer_core);
-    tt::llrt::write_hex_vec_to_core(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         device->get_devices()[0]->id(), physical_syncer_core, std::vector<uint32_t>{1}, sem_addr);
 
     // Full synchronization
@@ -353,9 +350,9 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
 
     // Check coordinates
     tt::tt_metal::verify_kernel_coordinates(
-        tt::BRISC, sub_device_1_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{0}, cb_addr);
+        HalProgrammableCoreType::TENSIX, sub_device_1_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{0}, cb_addr);
     tt::tt_metal::verify_kernel_coordinates(
-        tt::NCRISC, sub_device_2_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{1}, cb_addr);
+        HalProgrammableCoreType::TENSIX, sub_device_2_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{1}, cb_addr);
 }
 
 // Ensure the relative coordinate for the worker is updated correctly when it is used for multiple sub device
@@ -402,7 +399,11 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
 
         // Check coordinates
         tt::tt_metal::verify_kernel_coordinates(
-            tt::BRISC, sub_device_cores, mesh_device.get(), tt::tt_metal::SubDeviceId{i}, cb_addr);
+            HalProgrammableCoreType::TENSIX,
+            sub_device_cores,
+            mesh_device.get(),
+            tt::tt_metal::SubDeviceId{i},
+            cb_addr);
     }
 }
 

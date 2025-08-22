@@ -83,25 +83,6 @@ def run_max_pool(
             if kernel_size == (3, 3) or kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
 
-    # OOM skips
-    if shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED or shard_scheme is None:
-        if in_c == 16 and dtype == ttnn.bfloat8_b and in_n * in_h * in_w > 600000:
-            pytest.skip("This case runs out of memory")
-        if in_n > 16 and in_c > 64 and dtype == ttnn.bfloat8_b and is_wormhole_b0():
-            pytest.skip("This case runs out of memory on Wormhole b0")
-        if (
-            stride == (1, 1)
-            and (
-                input_shape == [16, 64, 112, 112]
-                or input_shape == [4, 16, 1056, 160]
-                or input_shape == [16, 16, 528, 80]
-            )
-            and is_wormhole_b0()
-        ):
-            pytest.skip("This case runs out of memory on Wormhole b0")
-        if kernel_h > 5 and kernel_w > 5 and input_shape == [16, 64, 112, 112] and is_x2_harvested(device):
-            pytest.skip("This case runs out of memory on Wormhole X2")
-
     if pad_t > kernel_h / 2 or pad_b > kernel_h / 2 or pad_l > kernel_w / 2 or pad_r > kernel_w / 2:
         pytest.skip("padding is too large for the kernel size")
 
@@ -109,9 +90,7 @@ def run_max_pool(
         pytest.skip("kernel is too large for the padded tensor")
 
     out_n = in_n
-    out_c = (
-        max(in_c, 32) if dtype == ttnn.bfloat8_b else in_c
-    )  # TTNN will pad the output channels to 32 for bfloat8_b only
+    out_c = in_c
     ceil_mode_out_shape_adj = False
     if ceil_mode:
         out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
@@ -180,6 +159,8 @@ def run_max_pool(
         applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
         in_place_halo=in_place,
+        deallocate_input=True,
+        reallocate_halo_output=True,
     )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -211,7 +192,6 @@ def run_max_pool(
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
-    ttnn_output = ttnn_output[:, :in_c, :, :]
 
     # test for equivalance
     pcc_thresh = 1.0
@@ -251,8 +231,10 @@ def run_max_pool(
             [1, 640, 32, 32],
             [1, 576, 32, 32],
             [1, 384, 32, 32],
-            # C=16 test
+            # C partial tile test
             [1, 16, 12, 12],
+            [1, 1, 56, 56],
+            [2, 290, 10, 10],
             # partial grid tests
             [1, 32, 10, 10],  # BH
             [1, 32, 6, 6],  # WH

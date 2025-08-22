@@ -20,6 +20,281 @@ MeshDevice.core_grid = property(get_mesh_device_core_grid)
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 
 
+# ====================================================================
+# TENSOR VISUALIZATION UTILITIES
+# ====================================================================
+
+
+class TensorShardingInfo:
+    """Class to hold all tensor sharding information for visualization."""
+
+    def __init__(self, tensor, shards):
+        self.tensor = tensor
+        self.shards = shards
+        self.topology = tensor.tensor_topology()
+        self.placements = self.topology.placements()
+        self.mesh_shape = list(self.topology.mesh_shape())
+        self.mesh_coords = self.topology.mesh_coords()
+        self.mesh_rank = len(self.mesh_shape)
+
+        self.dim_to_axis = self._compute_dim_to_axis_mapping()
+        self.global_tensor_shape = self._compute_global_tensor_shape()
+        self.axis_representatives = self._compute_axis_representatives()
+        self.device_to_shard_map = self._compute_device_to_shard_mapping()
+        self.axis_offsets, self.axis_sizes = self._compute_axis_offsets_and_sizes()
+
+    def _compute_dim_to_axis_mapping(self):
+        """Map tensor dimensions to mesh axes based on placements.
+        Ex. placements = [PlacementReplicate(), PlacementShard(3)] --> returns {3: 1}"""
+        mapping = {}
+        for axis, placement in enumerate(self.placements):
+            if isinstance(placement, ttnn.PlacementShard):
+                tensor_dim = placement.dim
+                if tensor_dim not in mapping:
+                    mapping[tensor_dim] = axis
+        return mapping
+
+    def _compute_global_tensor_shape(self):
+        """Compute the global tensor shape."""
+        shape = list(self.tensor.shape)
+        for tensor_dim, axis in self.dim_to_axis.items():
+            shape[tensor_dim] *= self.mesh_shape[axis]
+        return ttnn.Shape(shape)
+
+    def _compute_axis_representatives(self):
+        """Find representative device for each axis partition."""
+        mapping = {axis: {} for axis in range(self.mesh_rank)}
+
+        if self.tensor.storage_type() == ttnn.StorageType.HOST:
+            for host_idx, buffer_coord in enumerate(self.mesh_coords):
+                for axis in range(self.mesh_rank):
+                    part_index = int(buffer_coord[axis])
+                    if part_index not in mapping[axis]:
+                        mapping[axis][part_index] = host_idx
+        else:
+            mesh_device = self.tensor.device()
+            coord_range = ttnn.MeshCoordinateRange(mesh_device.shape)
+            for coord in coord_range:
+                device_id = mesh_device.get_device_id(coord)
+                for axis in range(self.mesh_rank):
+                    part_index = int(coord[axis])
+                    if part_index not in mapping[axis]:
+                        mapping[axis][part_index] = device_id
+        return mapping
+
+    def _compute_device_to_shard_mapping(self):
+        """Create mapping from device IDs to shard indices."""
+        from loguru import logger
+
+        if self.tensor.storage_type() == ttnn.StorageType.HOST:
+            return {host_idx: host_idx for host_idx, _ in enumerate(self.mesh_coords)}
+
+        mapping = {}
+        try:
+            mesh_device = self.tensor.device()
+            coord_range = ttnn.MeshCoordinateRange(mesh_device.shape)
+            for coord in coord_range:
+                dev_id = mesh_device.get_device_id(coord)
+                for i, mc in enumerate(self.mesh_coords):
+                    if int(mc[0]) == int(coord[0]) and int(mc[1]) == int(coord[1]):
+                        mapping[dev_id] = i
+                        break
+        except Exception:
+            logger.warning(
+                "Fallback in TensorShardingInfo._compute_device_to_shard_mapping: assuming device ID equals shard index. "
+                "This may not be valid in complex distributed scenarios. Please verify your device/shard mapping."
+            )
+            mapping = {i: i for i in range(len(self.shards))}
+
+        return mapping
+
+    def _compute_axis_offsets_and_sizes(self):
+        """Compute offset and size information for each axis."""
+        axis_offsets = {}
+        axis_sizes = {}
+
+        max_axis = min(len(self.mesh_shape), len(self.placements))
+
+        for axis in range(max_axis):
+            placement = self.placements[axis]
+            if isinstance(placement, ttnn.PlacementShard):
+                tensor_dim = placement.dim
+                parts = int(self.mesh_shape[axis])
+                sizes = []
+
+                for p in range(parts):
+                    rep_device_id = self.axis_representatives[axis].get(p)
+                    if rep_device_id is None:
+                        sizes.append(0)
+                    else:
+                        shard_index = self.device_to_shard_map.get(rep_device_id, None)
+                        if shard_index is not None and shard_index < len(self.shards):
+                            shard_shape = list(self.shards[shard_index].shape)
+                            if tensor_dim < len(shard_shape):
+                                sizes.append(int(shard_shape[tensor_dim]))
+                            else:
+                                sizes.append(0)
+                        else:
+                            sizes.append(0)
+
+                offsets = []
+                cumulative = 0
+                for size in sizes:
+                    offsets.append(cumulative)
+                    cumulative += size
+
+                axis_offsets[axis] = offsets
+                axis_sizes[axis] = sizes
+
+        return axis_offsets, axis_sizes
+
+
+class ColorPalette:
+    """Utility for generating distinct color palettes."""
+
+    DEFAULT_COLOR = "#9e9e9e"
+
+    @staticmethod
+    def hsv_to_hex(h: float, s: float, v: float) -> str:
+        """Convert HSV color to hex string."""
+        i = int(h * 6.0)
+        f = (h * 6.0) - i
+        p = v * (1.0 - s)
+        q = v * (1.0 - f * s)
+        t = v * (1.0 - (1.0 - f) * s)
+        i = i % 6
+
+        if i == 0:
+            r, g, b = v, t, p
+        elif i == 1:
+            r, g, b = q, v, p
+        elif i == 2:
+            r, g, b = p, v, t
+        elif i == 3:
+            r, g, b = p, q, v
+        elif i == 4:
+            r, g, b = t, p, v
+        else:
+            r, g, b = v, p, q
+
+        return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
+
+    @staticmethod
+    def generate_muted_colors(n: int) -> list:
+        """Generate a list of n distinct muted colors."""
+        saturation = 0.48
+        value = 0.80
+        colors = []
+
+        for i in range(n):
+            hue = (i / float(n)) % 1.0
+            color = ColorPalette.hsv_to_hex(hue, saturation, value)
+            colors.append(color)
+
+        return colors or [ColorPalette.DEFAULT_COLOR]
+
+
+def _compute_global_slice_ranges(device_coord, sharding_info):
+    """Compute global tensor slice ranges for a specific device coordinate."""
+    tensor_shape = list(sharding_info.tensor.shape)
+    slice_ranges = []
+
+    for tensor_dim, dim_size in enumerate(tensor_shape):
+        if tensor_dim in sharding_info.dim_to_axis:
+            axis = sharding_info.dim_to_axis[tensor_dim]
+            try:
+                part_index = int(device_coord[axis])
+                if (
+                    axis in sharding_info.axis_offsets
+                    and axis in sharding_info.axis_sizes
+                    and part_index < len(sharding_info.axis_offsets[axis])
+                ):
+                    start = sharding_info.axis_offsets[axis][part_index]
+                    size = sharding_info.axis_sizes[axis][part_index]
+                    end = start + size
+                    slice_ranges.append((start, end))
+                else:
+                    slice_ranges.append((0, dim_size))
+            except (IndexError, TypeError):
+                slice_ranges.append((0, dim_size))
+        else:
+            slice_ranges.append((0, dim_size))
+
+    return slice_ranges
+
+
+def _create_shard_annotation_text(device_id, device_coord, sharding_info):
+    """Create annotation text showing shard information for a device."""
+    shard_index = sharding_info.device_to_shard_map.get(device_id)
+    if shard_index is None:
+        if sharding_info.tensor.storage_type() == ttnn.StorageType.HOST:
+            try:
+                coord_to_shard = {mc: i for i, mc in enumerate(sharding_info.mesh_coords)}
+                shard_index = coord_to_shard.get(device_coord)
+            except (IndexError, ValueError):
+                pass
+
+    if shard_index is None or shard_index >= len(sharding_info.shards):
+        return ""
+
+    shard = sharding_info.shards[shard_index]
+    shape_str = str(list(shard.shape))
+    dtype_str = str(shard.dtype).split(".")[-1]
+    layout_str = str(shard.layout).split(".")[-1]
+
+    slice_ranges = _compute_global_slice_ranges(device_coord, sharding_info)
+    slice_strs = [
+        f"{start}:{end}" if not (start == 0 and end == sharding_info.global_tensor_shape[tensor_dim]) else ":"
+        for tensor_dim, (start, end) in enumerate(slice_ranges)
+    ]
+    slice_header = f"[{', '.join(slice_strs)}]"
+
+    return f"{slice_header}\nShape: {shape_str}\nDtype: {dtype_str}\nLayout: {layout_str}"
+
+
+def _create_replication_color_mapping(sharding_info):
+    """Create color mapping for devices with identical tensor slices."""
+    slice_key_to_group = {}
+    device_to_group = {}
+    group_index = 0
+
+    if sharding_info.tensor.storage_type() == ttnn.StorageType.HOST:
+        coord_to_device = {ttnn.MeshCoordinate(mc[0], mc[1]): i for i, mc in enumerate(sharding_info.mesh_coords)}
+
+        for coord, device_id in coord_to_device.items():
+            slice_ranges = _compute_global_slice_ranges(coord, sharding_info)
+            slice_key = tuple(slice_ranges)
+
+            if slice_key not in slice_key_to_group:
+                slice_key_to_group[slice_key] = group_index
+                group_index += 1
+            device_to_group[device_id] = slice_key_to_group[slice_key]
+    else:
+        mesh_device = sharding_info.tensor.device()
+        rows, cols = mesh_device.shape
+        for r in range(rows):
+            for c in range(cols):
+                coord = ttnn.MeshCoordinate(r, c)
+                device_id = mesh_device.get_device_id(coord)
+                slice_ranges = _compute_global_slice_ranges(coord, sharding_info)
+                slice_key = tuple(slice_ranges)
+
+                if slice_key not in slice_key_to_group:
+                    slice_key_to_group[slice_key] = group_index
+                    group_index += 1
+                device_to_group[device_id] = slice_key_to_group[slice_key]
+
+    num_groups = len(slice_key_to_group)
+    colors = ColorPalette.generate_muted_colors(num_groups)
+
+    device_to_style = {}
+    for device_id, group_id in device_to_group.items():
+        color = colors[group_id % len(colors)]
+        device_to_style[device_id] = f"on {color}"
+
+    return device_to_style
+
+
 def _get_rich_table(
     mesh_device: "ttnn.MeshDevice",
     tensor: "ttnn.Tensor" = None,
@@ -88,7 +363,13 @@ def _get_rich_table(
 
                 locality = "" if fully_local else locality
                 coords = f"({row_idx}, {col_idx})\n"
-                annotation = annotate_cell(device_id) if annotate_cell and device_id is not None else ""
+                if annotate_cell and device_id is not None:
+                    try:
+                        annotation = annotate_cell(device_id, coord)
+                    except TypeError:
+                        annotation = annotate_cell(device_id)
+                else:
+                    annotation = ""
 
                 cell_content = Text(f"{locality}{device_id_str}{coords}{annotation}", justify="center")
                 cell_content.truncate(CELL_SIZE * 4, overflow="ellipsis")  # 4 lines max
@@ -118,35 +399,77 @@ def visualize_mesh_device(mesh_device: "ttnn.MeshDevice"):
 def visualize_tensor(tensor: "ttnn.Tensor"):
     """
     Visualize tensor distribution across the mesh.
+
+    Args:
+        tensor: The tensor to visualize
     """
     from rich.console import Console
+    from rich.panel import Panel
     from loguru import logger
+
+    console = Console()
 
     try:
         shards = ttnn.get_device_tensors(tensor)
+        sharding_info = TensorShardingInfo(tensor, shards)
+        placement_panel = Panel(str(sharding_info.placements), title="Placement Configuration", border_style="blue")
+        device_to_style = _create_replication_color_mapping(sharding_info)
 
-        def annotate_with_shard_info(device_id):
-            """Add shard information to device cells"""
-            if device_id < len(shards):
-                shard = shards[device_id]
-                shape_str = str(list(shard.shape))
-                dtype_str = str(shard.dtype).split(".")[-1]
-                layout_str = str(shard.layout).split(".")[-1]
+        if tensor.storage_type() == ttnn.StorageType.HOST:
+            try:
+                host_buffer = tensor.host_buffer()
+                rows, cols = host_buffer.shape()
+            except Exception:
+                rows, cols = sharding_info.mesh_shape
 
-                # TODO: #11406 - Shard number is same as device id for now, this will break when shards are replicated
-                #       Need to update this when we can group devices by shard
-                return f"Shard {device_id}\nShape: {shape_str}\nDtype: {dtype_str}\nLayout: {layout_str}"
-            return ""
+            coord_to_device_id = {
+                (int(mc[0]), int(mc[1])): host_idx for host_idx, mc in enumerate(sharding_info.mesh_coords)
+            }
 
-        # Generate the mesh table with shard annotations
+            def style_host_cell(host_linear_id, unused_coord=None):
+                try:
+                    r = int(host_linear_id // cols)
+                    c = int(host_linear_id % cols)
+                    device_id = coord_to_device_id.get((r, c))
+                    return device_to_style.get(device_id) if device_id is not None else None
+                except Exception:
+                    return None
+
+            def annotate_host_cell(host_linear_id, host_coord):
+                try:
+                    r, c = int(host_coord[0]), int(host_coord[1])
+                    device_id = coord_to_device_id.get((r, c))
+                    if device_id is None:
+                        return ""
+
+                    logical_coord = ttnn.MeshCoordinate(r, c)
+                    return _create_shard_annotation_text(device_id, logical_coord, sharding_info)
+                except Exception:
+                    return ""
+
+            annotate_func = annotate_host_cell
+            style_func = style_host_cell
+        else:
+
+            def annotate_with_shard_info(device_id, device_coord=None):
+                return _create_shard_annotation_text(device_id, device_coord, sharding_info)
+
+            def style_device_cell(device_id):
+                return device_to_style.get(device_id)
+
+            annotate_func = annotate_with_shard_info
+            style_func = style_device_cell
+
         mesh_table = _get_rich_table(
             tensor.device(),
             tensor,
-            annotate_cell=annotate_with_shard_info,
+            annotate_cell=annotate_func,
+            style_cell=style_func,
             storage_type=tensor.storage_type(),
         )
 
-        Console().print(mesh_table)
+        console.print(placement_panel)
+        console.print(mesh_table)
 
     except Exception as e:
         logger.error(f"Error visualizing tensor: {e}")
@@ -328,7 +651,7 @@ def create_mesh_device(*args, **kwargs):
         close_mesh_device(mesh_device)
 
 
-# Temporary stubs to accomodate migration of Python-based sharding / concatenation to C++.
+# Temporary stubs to accommodate migration of Python-based sharding / concatenation to C++.
 # TODO: #24114 - When migration of concatenation is complete, remove these stubs.
 TensorToMesh = ttnn.CppTensorToMesh
 MeshToTensor = ttnn.CppMeshToTensor

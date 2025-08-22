@@ -4,22 +4,27 @@
 
 #include "data_collection.hpp"
 
-#include <core_coord.hpp>
-#include <kernel.hpp>
-#include <enchantum/enchantum.hpp>
 #include <algorithm>
 #include <array>
+#include <cstdint>
 #include <cstdlib>
 #include <map>
+#include <optional>
 #include <ostream>
-#include <string>
 #include <utility>
 
-#include "assert.hpp"
-#include "dev_msgs.h"
-#include "tt-metalium/program.hpp"
+#include <core_coord.hpp>
+#include <enchantum/enchantum.hpp>
+#include <enchantum/generators.hpp>
+#include <enchantum/iostream.hpp>
+#include <kernel.hpp>
 #include <umd/device/tt_core_coordinates.h>
+
+#include "assert.hpp"
+#include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "program/program_impl.hpp"
+#include "tt-metalium/program.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -49,7 +54,7 @@ public:
         Update(other.max_transaction_size, other.min_transaction_size, other.num_writes, other.total_write_size);
     }
 
-    void Dump(std::ofstream& outfile, std::map<uint32_t, uint32_t>& raw_data) {
+    void Dump(std::ofstream& outfile, const std::map<uint32_t, uint32_t>& raw_data) const {
         outfile << fmt::format("\t\tmax_transaction_size = {}\n", max_transaction_size);
         outfile << fmt::format("\t\tmin_transaction_size = {}\n", min_transaction_size);
         outfile << fmt::format("\t\tnum_writes           = {}\n", num_writes);
@@ -66,19 +71,20 @@ public:
 class DispatchData {
 public:
     DispatchData(data_collector_t type) : type(type) {}
-    DispatchData(int type_int) : DispatchData(static_cast<data_collector_t>(type_int)) {}
 
-    void Update(uint32_t transaction_size, RISCV riscv) { data[riscv][transaction_size]++; }
+    void Update(uint32_t transaction_size, std::optional<HalProcessorIdentifier> processor) {
+        data[processor][transaction_size]++;
+    }
 
     void Merge(const DispatchData& other) {
-        for (auto& riscv_and_data : other.data) {
-            for (auto& size_and_count : riscv_and_data.second) {
-                this->data[riscv_and_data.first][size_and_count.first] += size_and_count.second;
+        for (auto& [processor, processor_data] : other.data) {
+            for (auto& [size, count] : processor_data) {
+                this->data[processor][size] += count;
             }
         }
     }
 
-    void DumpStats(std::ofstream& outfile) {
+    void DumpStats(std::ofstream& outfile) const {
         // Only dump if this has data
         if (data.size() == 0) {
             return;
@@ -88,19 +94,20 @@ public:
         // Track stats for all RISCS, as well as per RISC
         DispatchStats total_stats;
         std::map<uint32_t, uint32_t> total_data;
-        for (auto& riscv_and_data : data) {
+        for (auto& [processor, processor_data] : data) {
             // Go through all data and update stats
-            DispatchStats riscv_stats;
-            for (auto& size_and_count : riscv_and_data.second) {
-                riscv_stats.Update(size_and_count.first, size_and_count.second);
-                total_data[size_and_count.first] += size_and_count.second;
+            DispatchStats processor_stats;
+            for (auto& [size, count] : processor_data) {
+                processor_stats.Update(size, count);
+                total_data[size] += count;
             }
-            total_stats.Update(riscv_stats);
+            total_stats.Update(processor_stats);
 
             // Only for binaries, print for each RISC type
             if (type == DISPATCH_DATA_BINARY) {
-                outfile << "\t  " << riscv_and_data.first << " binary data:\n";
-                riscv_stats.Dump(outfile, riscv_and_data.second);
+                TT_ASSERT(processor != std::nullopt);
+                outfile << "\t  " << *processor << " binary data:\n";
+                processor_stats.Dump(outfile, processor_data);
             }
         }
 
@@ -112,7 +119,8 @@ public:
     }
 
 private:
-    std::map<RISCV, std::map<uint32_t, uint32_t>> data;  // RISCV -> transaction size -> count
+    // processor -> transaction size -> count
+    std::map<std::optional<HalProcessorIdentifier>, std::map<uint32_t, uint32_t>> data;
     data_collector_t type;
 };
 
@@ -128,121 +136,106 @@ public:
     };
     ~DataCollector() { inst = nullptr; };
 
-    void RecordData(uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv);
-    void RecordKernelGroups(ProgramImpl& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups);
+    void RecordData(
+        uint64_t program_id,
+        data_collector_t type,
+        uint32_t transaction_size,
+        std::optional<HalProcessorIdentifier> processor);
+    void RecordKernelGroup(ProgramImpl& program, HalProgrammableCoreType core_type, const KernelGroup& kernel_group);
     void RecordProgramRun(uint64_t program_id);
     void DumpData();
 
 private:
+    struct KernelData {
+        int watcher_kernel_id;
+        HalProcessorClassType processor_class;
+    };
+    struct KernelGroupData {
+        std::vector<KernelData> kernels;
+        CoreRangeSet core_ranges;
+    };
     std::map<uint64_t, std::vector<DispatchData>> program_id_to_dispatch_data;
-    std::map<uint64_t, std::map<CoreType, std::vector<std::pair<kernel_id_array_t, CoreRangeSet>>>>
-        program_id_to_kernel_groups;
+    std::map<uint64_t, std::map<HalProgrammableCoreType, std::vector<KernelGroupData>>> program_id_to_kernel_groups;
     std::map<uint64_t, int> program_id_to_call_count;
 };
 
-void DataCollector::RecordData(uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
-    if (program_id_to_dispatch_data.count(program_id) == 0) {
+void DataCollector::RecordData(
+    uint64_t program_id,
+    data_collector_t type,
+    uint32_t transaction_size,
+    std::optional<HalProcessorIdentifier> processor) {
+    auto& dispatch_data = program_id_to_dispatch_data[program_id];
+    if (dispatch_data.empty()) {
         // If no existing data for this program, initialize starting values.
-        program_id_to_dispatch_data[program_id] = std::vector<DispatchData>();
-        for (int idx = 0; idx < DISPATCH_DATA_COUNT; idx++) {
-            data_collector_t curr_type = static_cast<data_collector_t>(idx);
-            DispatchData data(curr_type);
-            program_id_to_dispatch_data[program_id].push_back(data);
+        dispatch_data.reserve(enchantum::count<data_collector_t>);
+        for (auto idx : enchantum::values_generator<data_collector_t>) {
+            dispatch_data.emplace_back(idx);
         }
     }
-
-    program_id_to_dispatch_data[program_id].at(type).Update(transaction_size, riscv);
+    dispatch_data.at(type).Update(transaction_size, processor);
 }
 
-void DataCollector::RecordKernelGroups(
-    ProgramImpl& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups) {
+void DataCollector::RecordKernelGroup(
+    ProgramImpl& program, HalProgrammableCoreType core_type, const KernelGroup& kernel_group) {
     uint64_t program_id = program.get_id();
     // Make a copy of relevant info, since user may destroy program before we dump.
-    for (KernelGroup& kernel_group : kernel_groups) {
-        kernel_id_array_t watcher_kernel_ids;
-        for (int idx = 0; idx < kernel_group.kernel_ids.size(); idx++) {
-            if (kernel_group.kernel_ids[idx]) {
-                watcher_kernel_ids[idx] = program.get_kernel(*kernel_group.kernel_ids[idx])->get_watcher_kernel_id();
-            }
+    std::vector<KernelData> kernel_data;
+    for (auto kernel_id : kernel_group.kernel_ids) {
+        if (kernel_id) {
+            auto kernel = program.get_kernel(*kernel_id);
+            kernel_data.push_back({kernel->get_watcher_kernel_id(), kernel->get_kernel_processor_class()});
         }
-        program_id_to_kernel_groups[program_id][core_type].push_back({watcher_kernel_ids, kernel_group.core_ranges});
     }
+    program_id_to_kernel_groups[program_id][core_type].push_back({std::move(kernel_data), kernel_group.core_ranges});
 }
 
 void DataCollector::RecordProgramRun(uint64_t program_id) {
     program_id_to_call_count[program_id]++;
 }
 
-std::string DispatchClassToString(enum dispatch_core_processor_classes proc_class, CoreType core_type) {
-    switch (core_type) {
-        case CoreType::WORKER:
-            switch (proc_class) {
-                case DISPATCH_CLASS_TENSIX_DM0: return "brisc:";
-                case DISPATCH_CLASS_TENSIX_DM1: return "ncrisc:";
-                case DISPATCH_CLASS_TENSIX_COMPUTE: return "trisc:";
-                default: return "";
-            }
-        case CoreType::ETH:
-            if (proc_class == DISPATCH_CLASS_ETH_DM0) {
-                return "erisc:";
-            } else {
-                return "";
-            }
-        default: TT_THROW("Incompatible core type: {}", enchantum::to_string(core_type));
-    }
-    return "";
-}
-
 void DataCollector::DumpData() {
     std::ofstream outfile = std::ofstream("dispatch_data.txt");
 
     // Extra DispatchData objects to collect data across programs
-    std::vector<DispatchData*> cross_program_data;
-    cross_program_data.reserve(DISPATCH_DATA_COUNT);
-    for (int idx = 0; idx < DISPATCH_DATA_COUNT; idx++) {
-        cross_program_data.push_back(new DispatchData(idx));
+    std::vector<DispatchData> cross_program_data;
+    cross_program_data.reserve(enchantum::count<data_collector_t>);
+    for (auto idx : enchantum::values_generator<data_collector_t>) {
+        cross_program_data.emplace_back(idx);
     }
 
     // Go through all programs, and dump relevant data
-    for (auto& id_and_data : program_id_to_dispatch_data) {
-        uint64_t program_id = id_and_data.first;
+    for (const auto& [program_id, data] : program_id_to_dispatch_data) {
         outfile << fmt::format("Program {}: Ran {} time(s).\n", program_id, program_id_to_call_count[program_id]);
 
         // Dump kernel ids for each kernel group in this program
-        for (auto& core_type_and_kernel_groups : program_id_to_kernel_groups[program_id]) {
-            CoreType core_type = core_type_and_kernel_groups.first;
-            std::vector<std::pair<kernel_id_array_t, CoreRangeSet>>& kernel_groups = core_type_and_kernel_groups.second;
+        for (const auto& [core_type, kernel_groups] : program_id_to_kernel_groups[program_id]) {
             outfile << fmt::format("\t{} Kernel Groups: {}\n", core_type, kernel_groups.size());
-            for (auto& ids_and_ranges : kernel_groups) {
+            for (const auto& [kernels, ranges] : kernel_groups) {
                 // Dump kernel ids in this group
                 outfile << "\t\t{";
-                for (int i = 0; i < DISPATCH_CLASS_MAX; i++) {
-                    outfile << DispatchClassToString(static_cast<enum dispatch_core_processor_classes>(i), core_type);
-                    if (ids_and_ranges.first[i]) {
-                        outfile << *ids_and_ranges.first[i];
-                    }
-                    outfile << " ";
+                for (const auto& kernel : kernels) {
+                    using enchantum::iostream_operators::operator<<;
+                    outfile << core_type << "_" << kernel.processor_class << ":" << kernel.watcher_kernel_id << " ";
                 }
                 outfile << "} on cores ";
 
                 // Dump the cores this kernel group contains
-                outfile << ids_and_ranges.second.str() << "\n";
+                outfile << ranges.str() << "\n";
             }
         }
 
         // Dump dispatch write stats
-        for (int type_int = 0; type_int != DISPATCH_DATA_COUNT; type_int++) {
-            DispatchData& data = id_and_data.second.at(type_int);
-            cross_program_data[type_int]->Merge(data);
-            data.DumpStats(outfile);
+        for (auto type : enchantum::values_generator<data_collector_t>) {
+            const DispatchData& type_data = data.at(type);
+            cross_program_data[type].Merge(type_data);
+            type_data.DumpStats(outfile);
         }
     }
 
     // Dump cross-program stats
     outfile << "Cross-Program Data:\n";
-    for (int type_int = 0; type_int != DISPATCH_DATA_COUNT; type_int++) {
-        cross_program_data[type_int]->DumpStats(outfile);
-        delete cross_program_data[type_int];
+    for (const auto& type_data : cross_program_data) {
+        type_data.DumpStats(outfile);
     }
     outfile.close();
 }
@@ -266,24 +259,28 @@ void InitDataCollector() {
 
 namespace tt {
 
-void RecordDispatchData(uint64_t program_id, data_collector_t type, uint32_t transaction_size, RISCV riscv) {
+void RecordDispatchData(
+    uint64_t program_id,
+    data_collector_t type,
+    uint32_t transaction_size,
+    std::optional<HalProcessorIdentifier> processor) {
     // Do nothing if we're not enabling data collection.
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 
     InitDataCollector();
-    DataCollector::inst->RecordData(program_id, type, transaction_size, riscv);
+    DataCollector::inst->RecordData(program_id, type, transaction_size, processor);
 }
 
-void RecordKernelGroups(ProgramImpl& program, CoreType core_type, std::vector<KernelGroup>& kernel_groups) {
+void RecordKernelGroup(ProgramImpl& program, HalProgrammableCoreType core_type, const KernelGroup& kernel_group) {
     // Do nothing if we're not enabling data collection.
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_dispatch_data_collection_enabled()) {
         return;
     }
 
     InitDataCollector();
-    DataCollector::inst->RecordKernelGroups(program, core_type, kernel_groups);
+    DataCollector::inst->RecordKernelGroup(program, core_type, kernel_group);
 }
 
 void RecordProgramRun(uint64_t program_id) {

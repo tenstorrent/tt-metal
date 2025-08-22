@@ -28,6 +28,7 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt_stl/reflection.hpp>
+#include <tt_stl/optional_reference.hpp>
 #include "types.hpp"
 
 namespace tt {
@@ -167,7 +168,7 @@ public:
 
     [[nodiscard]] Tensor to_device(
         distributed::MeshDevice* mesh_device,
-        const MemoryConfig& mem_config = MemoryConfig{},
+        ttsl::optional_reference<const MemoryConfig> mem_config = std::nullopt,
         ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     [[nodiscard]] Tensor to_layout(Layout target_layout) const;
