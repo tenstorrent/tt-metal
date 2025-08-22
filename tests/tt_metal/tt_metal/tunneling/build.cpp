@@ -15,6 +15,19 @@
 #include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 
 namespace {
+std::string GetToolchainPath(const std::string& root_dir) {
+    const std::array<std::string, 2> sfpi_roots = {
+        root_dir + "/runtime/sfpi/compiler/bin/", "/opt/tenstorrent/sfpi/compiler/bin/"};
+
+    for (unsigned i = 0; i < 2; ++i) {
+        auto gxx = sfpi_roots[i];
+        if (std::filesystem::exists(gxx)) {
+            return gxx;
+        }
+    }
+    TT_THROW("sfpi not found at {} or {}", sfpi_roots[0], sfpi_roots[1]);
+}
+
 std::string GetCommonOptions() {
     std::vector<std::string> options{
         "Os",
@@ -114,7 +127,7 @@ int CompileLiteFabric(
     defines.insert(defines.end(), extra_defines.begin(), extra_defines.end());
 
     std::ostringstream oss;
-    oss << "riscv32-tt-elf-g++ ";
+    oss << GetToolchainPath(root_dir_str) << "riscv32-tt-elf-g++ ";
     oss << GetCommonOptions() << " ";
 
     for (size_t i = 0; i < includes.size(); ++i) {
@@ -150,7 +163,7 @@ int LinkLiteFabric(
     const std::string output_ld = fmt::format("{}/lite_fabric_preprocessed.ld", out_dir.string());
 
     std::ostringstream preprocess_oss;
-    preprocess_oss << "riscv32-tt-elf-g++ ";
+    preprocess_oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-g++ ";
     preprocess_oss << fmt::format("-I{} ", tunneling_dir);  // Include path for the memory defs header
     preprocess_oss << "-E -P -x c ";                        // Preprocess only, no line markers, treat as C
     preprocess_oss << fmt::format("-o {} ", output_ld);
@@ -167,7 +180,7 @@ int LinkLiteFabric(
 
     // Now link using the preprocessed linker script
     std::ostringstream link_oss;
-    link_oss << "riscv32-tt-elf-g++ ";
+    link_oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-g++ ";
     link_oss << GetCommonOptions() << " ";
     link_oss << "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
     link_oss << fmt::format("-T{} ", output_ld);  // Use preprocessed linker script
@@ -190,7 +203,7 @@ int LinkLiteFabric(
     bin_path.replace(bin_path.find(".elf"), 4, ".bin");
 
     std::ostringstream objcopy_oss;
-    objcopy_oss << "riscv32-tt-elf-objcopy -O binary ";
+    objcopy_oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-objcopy -O binary ";
     objcopy_oss << elf_out.string() << " " << bin_path;
 
     std::string objcopy_cmd = objcopy_oss.str();
