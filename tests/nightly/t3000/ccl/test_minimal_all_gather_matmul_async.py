@@ -256,7 +256,7 @@ def run_all_gather_impl(
                     weight_tt,
                     persistent_output_buffer=None if do_sync else persistent_output_buffers[i],
                     dim=dim,
-                    multi_device_global_semaphore=None if do_sync else ccl_semaphore_handles[i],
+                    multi_device_global_semaphore=ccl_semaphore_handles[i],
                     all_gather_core_grid_offset=(0, 6),
                     barrier_semaphore=barrier_semaphore_handles[i] if do_sync else None,
                     bias=bias_tt,

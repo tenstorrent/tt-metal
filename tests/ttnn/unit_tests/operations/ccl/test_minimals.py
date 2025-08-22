@@ -51,7 +51,7 @@ def run_allgather_only_with_trace(
     tt_out_tensor = ttnn.experimental.all_gather_async(
         input_tensor_mesh,
         dim,
-        multi_device_global_semaphore=None if do_sync else ccl_semaphore_handles[0],
+        multi_device_global_semaphore=ccl_semaphore_handles[0],
         num_links=num_links,
         memory_config=output_mem_config,
         topology=all_gather_topology,
@@ -68,7 +68,7 @@ def run_allgather_only_with_trace(
             tt_out_tensor = ttnn.experimental.all_gather_async(
                 input_tensor_mesh,
                 dim,
-                multi_device_global_semaphore=None if do_sync else ccl_semaphore_handles[i % 2],
+                multi_device_global_semaphore=ccl_semaphore_handles[i % 2],
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
@@ -83,7 +83,7 @@ def run_allgather_only_with_trace(
         tt_out_tensor = ttnn.experimental.all_gather_async(
             input_tensor_mesh,
             dim,
-            multi_device_global_semaphore=None if do_sync else ccl_semaphore_handles[i % 2],
+            multi_device_global_semaphore=ccl_semaphore_handles[i % 2],
             num_links=num_links,
             memory_config=output_mem_config,
             topology=all_gather_topology,
@@ -262,7 +262,7 @@ def run_all_gather_impl(
             tt_out_tensor = ttnn.experimental.all_gather_async(
                 input_tensor_mesh_list[i],
                 dim,
-                multi_device_global_semaphore=None if do_sync else ccl_semaphore_handles[i % 2],
+                multi_device_global_semaphore=ccl_semaphore_handles[i % 2],
                 num_links=num_links,
                 memory_config=output_mem_config,
                 topology=all_gather_topology,
