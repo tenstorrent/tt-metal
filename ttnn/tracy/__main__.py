@@ -144,6 +144,14 @@ def main():
     else:
         port = get_available_port()
 
+    if options.mid_run_device_data:
+        if options.device_trace_profiler:
+            logger.error("Cannot use --push-device-data-mid-run and --device-trace-profiler together")
+            sys.exit(1)
+        if options.profile_dispatch_cores:
+            logger.error("Cannot use --push-device-data-mid-run and --profile-dispatch-cores together")
+            sys.exit(1)
+
     opInfoCacheStr = "TT_METAL_PROFILER_NO_CACHE_OP_INFO"
     if options.opInfoCache:
         if opInfoCacheStr in os.environ.keys():

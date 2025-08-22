@@ -45,6 +45,8 @@
 #include "test_common.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include "umd/device/types/arch.h"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 using namespace tt;
 using std::chrono::duration_cast;
@@ -79,7 +81,7 @@ template <typename T>
 std::vector<T> slice_vec(std::vector<T> const& v, int m, int n);
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
-    tt_metal::IDevice* device,
+    tt_metal::distributed::MeshDevice* device,
     const CoreRangeSet& all_cores,
     const uint32_t& num_reqs_at_a_time,
     const uint32_t& single_tile_size,
@@ -87,7 +89,6 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
     const uint32_t& access_type);
 
 bool assign_runtime_args_to_program(
-    tt_metal::IDevice* device,
     tt_metal::Program& program,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
@@ -103,8 +104,8 @@ bool assign_runtime_args_to_program(
     const tt::DataFormat& tile_format);
 
 bool validation(
-    tt_metal::IDevice* device,
-    tt_metal::Buffer& input_buffer,
+    tt_metal::distributed::MeshDevice* device,
+    std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
@@ -192,10 +193,10 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
         dram_bandwidth_spec = get_dram_bandwidth(device->arch());
 
-        int clock_freq_mhz = get_tt_npu_clock(device);
+        int clock_freq_mhz = get_tt_npu_clock(device->get_devices()[0]);
 
         uint32_t num_tiles = static_cast<uint32_t>((input_size + single_tile_size - 1) / single_tile_size);
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -219,17 +220,22 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             input_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        auto input_buffer =
-            Buffer::create(device, input_vec.size() * sizeof(uint32_t), single_tile_size, tt_metal::BufferType::DRAM);
+
+        // Create MeshBuffer for DRAM
+        tt_metal::distributed::DeviceLocalBufferConfig device_local{
+            .page_size = single_tile_size,
+            .buffer_type = tt_metal::BufferType::DRAM,
+        };
+        tt_metal::distributed::ReplicatedBufferConfig global_buf{.size = input_vec.size() * sizeof(uint32_t)};
+        auto input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local, device.get());
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
         uint32_t num_reqs_at_a_time = 1;
         auto [program, kernel, cb_addr] =
-            create_program(device, all_cores, num_reqs_at_a_time, single_tile_size, tile_format, access_type);
+            create_program(device.get(), all_cores, num_reqs_at_a_time, single_tile_size, tile_format, access_type);
         pass &= assign_runtime_args_to_program(
-            device,
             program,
             num_cores,
             num_cores_y,
@@ -248,7 +254,8 @@ int main(int argc, char** argv) {
         //                      Copy Input To DRAM or L1
         ////////////////////////////////////////////////////////////////////////////
         if (access_type == 0) {
-            tt_metal::detail::WriteToBuffer(*input_buffer, input_vec);
+            tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, input_vec, false);
+            tt_metal::distributed::Finish(device->mesh_command_queue());
         } else {
             for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
                 CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -262,7 +269,7 @@ int main(int argc, char** argv) {
                 }
                 auto write_size = num_reqs_at_a_time * 512;
                 auto sliced_input = slice_vec(input_vec, input_offset, input_offset + write_size - 1);
-                tt_metal::detail::WriteToDeviceL1(device, core, cb_addr, sliced_input);
+                tt_metal::detail::WriteToDeviceL1(device->get_devices()[0], core, cb_addr, sliced_input);
                 input_offset += (num_tiles_per_core) * 512;
             }
         }
@@ -270,13 +277,15 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::detail::CompileProgram(device, program);
-
         log_info(LogTest, "Num tests {}", num_tests);
+        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        tt_metal::distributed::AddProgramToMeshWorkload(
+            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
-            EnqueueProgram(device->command_queue(), program, false);
-            Finish(device->command_queue());
+            tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+            tt_metal::distributed::Finish(device->mesh_command_queue());
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
@@ -287,7 +296,8 @@ int main(int argc, char** argv) {
                 dram_bandwidth[i]);
 
             if (use_device_profiler) {
-                unsigned long elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
+                unsigned long elapsed_cc = get_t0_to_any_riscfw_end_cycle(
+                    device->get_devices()[0], mesh_workload.get_programs().begin()->second);
                 elapsed_us = (double)elapsed_cc / clock_freq_mhz;
                 dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));
                 log_info(
@@ -302,8 +312,8 @@ int main(int argc, char** argv) {
         //                      Validation & Teardown
         ////////////////////////////////////////////////////////////////////////////
         pass = validation(
-            device,
-            *input_buffer,
+            device.get(),
+            input_buffer,
             input_vec,
             num_cores,
             num_cores_y,
@@ -317,7 +327,7 @@ int main(int argc, char** argv) {
             single_tile_size,
             access_type);
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
     } catch (const std::exception& e) {
         pass = false;
         // Capture the exception error message
@@ -390,7 +400,7 @@ std::vector<T> slice_vec(std::vector<T> const& v, int m, int n) {
 }
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
-    tt_metal::IDevice* device,
+    tt_metal::distributed::MeshDevice* device,
     const CoreRangeSet& all_cores,
     const uint32_t& num_reqs_at_a_time,
     const uint32_t& single_tile_size,
@@ -421,7 +431,6 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, uint32_t> create_program(
 }
 
 bool assign_runtime_args_to_program(
-    tt_metal::IDevice* device,
     tt_metal::Program& program,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
@@ -460,8 +469,8 @@ bool assign_runtime_args_to_program(
 }
 
 bool validation(
-    tt_metal::IDevice* device,
-    tt_metal::Buffer& input_buffer,
+    tt_metal::distributed::MeshDevice* device,
+    std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer,
     std::vector<uint32_t>& input_vec,
     const uint32_t& num_cores,
     const uint32_t& num_cores_y,
@@ -489,7 +498,7 @@ bool validation(
 
             std::vector<uint32_t> result_vec;
             tt_metal::detail::ReadFromDeviceL1(
-                device, core, cb_addr, num_reqs_at_a_time * single_tile_size, result_vec);
+                device->get_devices()[0], core, cb_addr, num_reqs_at_a_time * single_tile_size, result_vec);
             auto result_bf16 = unpack_uint32_vec_into_bfloat16_vec(result_vec);
             auto sliced_input = slice_vec(
                 input_bf16,
@@ -504,9 +513,10 @@ bool validation(
         }
     } else {
         std::vector<uint32_t> result_vec;
-        log_info(LogTest, "detail::ReadFromBuffer API may take a long time if the input size is large");
-        tt_metal::detail::ReadFromBuffer(input_buffer, result_vec);
-        log_info(LogTest, "detail::ReadFromBuffer API done");
+        log_info(LogTest, "ReadShard API may take a long time if the input size is large");
+        tt_metal::distributed::ReadShard(
+            device->mesh_command_queue(), result_vec, input_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
+        log_info(LogTest, "ReadShard API done");
 
         for (uint32_t i = 0, input_offset = 0; i < num_cores; ++i) {
             CoreCoord core = {i / num_cores_y, i % num_cores_y};
