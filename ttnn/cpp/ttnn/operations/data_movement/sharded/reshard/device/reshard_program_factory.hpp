@@ -30,7 +30,7 @@ struct PageStride {
 
 struct CompressedStrideBlock {
     std::vector<PageStride> base_pattern;
-    Stride meta_stride;
+    std::vector<Stride> meta_strides;
     uint32_t num_repeats;
 };
 
