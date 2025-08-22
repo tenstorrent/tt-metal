@@ -20,6 +20,7 @@
 
 namespace tt::tt_metal::wormhole {
 
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
 #include "core_config.h"
 
 HalCoreInfoType create_idle_eth_mem_map() {
