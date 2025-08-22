@@ -74,7 +74,7 @@ def test_performance(
         current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
 
     durations = []
-    for _ in range(2):
+    for _ in range(10):
         (input_embeds, decoder_hidden_states, decoder_attention_mask) = functional_whisper.preprocess_inputs(
             config=config,
             input_features=input_features,
@@ -94,8 +94,8 @@ def test_performance(
             current_decode_pos=current_decode_pos if use_kv_cache else None,
             parameters=parameters,
         )
-        tt_output = ttnn.to_torch(tt_output)
         end = time.time()
+        tt_output = ttnn.to_torch(tt_output)
 
         duration = end - start
         durations.append(duration)
@@ -116,3 +116,6 @@ def test_performance(
 
     logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
     logger.info(f"Inference time (encoder + decoder): {inference_time}")
+    logger.info(
+        f"ttnn_whisper_v3_batch_size: {batch_size}, One inference iteration time (sec): {inference_time}, frames per sec: {round(batch_size * device.get_num_devices()/inference_time)}"
+    )
