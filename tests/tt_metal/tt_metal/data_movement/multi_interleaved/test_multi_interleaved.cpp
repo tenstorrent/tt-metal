@@ -1,0 +1,459 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "device_fixture.hpp"
+#include "tt_metal/test_utils/comparison.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
+#include "tt_metal/test_utils/print_helpers.hpp"
+#include "dm_common.hpp"
+
+namespace tt::tt_metal {
+
+using namespace std;
+using namespace tt;
+using namespace tt::test_utils;
+
+namespace unit_tests::dm::multi_interleaved {
+// Test config, i.e. test parameters
+struct MultiInterleavedConfig {
+    uint32_t test_id = 0;
+    uint32_t num_of_transactions = 0;
+    uint32_t num_pages = 0;
+    uint32_t page_size_bytes = 0;
+    DataFormat l1_data_format = DataFormat::Invalid;
+    CoreRangeSet cores = CoreRangeSet();
+    // bool is_dram = true;  // just always do dram
+    bool read_kernel = true;
+    bool write_kernel = true;
+};
+
+/// @brief Does Interleaved buffer --> Reader --> L1 --> Writer --> Interleaved buffer
+/// @param device
+/// @param test_config - Configuration of the test -- see struct
+/// @return
+bool run_dm(IDevice* device, const MultiInterleavedConfig& test_config) {
+    log_info(
+        tt::LogTest,
+        "num transaction {}, num pages: {}, page size bytes: {}",
+        test_config.num_of_transactions,
+        test_config.num_pages,
+        test_config.page_size_bytes);
+
+    // Program
+    Program program = CreateProgram();
+
+    const size_t total_size_bytes = test_config.num_pages * test_config.page_size_bytes;
+
+    InterleavedBufferConfig interleaved_buffer_config{
+        .device = device,
+        .size = total_size_bytes,
+        .page_size = test_config.page_size_bytes,
+        .buffer_type = BufferType::DRAM};
+    std::shared_ptr<Buffer> input_buffer;
+    input_buffer = CreateBuffer(interleaved_buffer_config);
+    uint32_t input_buffer_address = input_buffer->address();
+
+    auto output_buffer = CreateBuffer(interleaved_buffer_config);
+    uint32_t output_buffer_address = output_buffer->address();
+
+    assert(input_buffer_address != output_buffer_address);
+    assert(test_config.read_kernel || test_config.write_kernel);  // At least one kernel must run
+
+    // Input
+    // vector<uint32_t> packed_input = create_arange_vector_of_bfloat16(total_size_bytes, false);
+    vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
+        -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
+
+    // Golden output
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization)
+    vector<uint32_t> packed_golden = packed_input;
+
+    uint8_t l1_cb_index = CBIndex::c_0;
+    bool sync = test_config.read_kernel == test_config.write_kernel;
+
+    // Compile-time arguments for kernels
+    vector<uint32_t> reader_compile_args = {
+        (uint32_t)test_config.num_of_transactions,
+        (uint32_t)test_config.num_pages,
+        (uint32_t)test_config.page_size_bytes,
+        (uint32_t)l1_cb_index,
+        (uint32_t)test_config.test_id,
+        (uint32_t)sync};
+
+    vector<uint32_t> writer_compile_args = {
+        (uint32_t)test_config.num_of_transactions,
+        (uint32_t)test_config.num_pages,
+        (uint32_t)test_config.page_size_bytes,
+        (uint32_t)l1_cb_index,
+        (uint32_t)test_config.test_id,
+        (uint32_t)sync};
+
+    if (sync) {
+        // Create circular buffers
+        CircularBufferConfig l1_cb_config =
+            CircularBufferConfig(total_size_bytes, {{l1_cb_index, test_config.l1_data_format}})
+                .set_page_size(l1_cb_index, test_config.page_size_bytes);
+        auto l1_cb = CreateCircularBuffer(program, test_config.cores, l1_cb_config);
+    }
+
+    std::vector<uint32_t> l1_addrs;
+    for (auto& core : corerange_to_cores(test_config.cores)) {
+        auto [l1_addr, l1_size] = get_l1_address_and_size(device, core);
+        assert(l1_size >= total_size_bytes);
+        l1_addrs.push_back(l1_addr);
+    }
+
+    // Kernels
+    if (test_config.read_kernel) {
+        auto reader_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/data_movement/multi_interleaved/kernels/multi_interleaved_read.cpp",
+            test_config.cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
+                .compile_args = reader_compile_args});
+
+        for (size_t i = 0; i < test_config.cores.size(); ++i) {
+            std::vector<uint32_t> reader_run_time_args = {input_buffer_address, l1_addrs[i]};
+            tt::tt_metal::SetRuntimeArgs(
+                program, reader_kernel, corerange_to_cores(test_config.cores)[i], reader_run_time_args);
+        }
+    }
+
+    if (test_config.write_kernel) {
+        auto writer_kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/data_movement/multi_interleaved/kernels/multi_interleaved_write.cpp",
+            test_config.cores,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = writer_compile_args});
+
+        for (size_t i = 0; i < test_config.cores.size(); ++i) {
+            std::vector<uint32_t> writer_run_time_args = {output_buffer_address, l1_addrs[i]};
+            tt::tt_metal::SetRuntimeArgs(
+                program, writer_kernel, corerange_to_cores(test_config.cores)[i], writer_run_time_args);
+        }
+    }
+
+    // log_info(tt::LogTest, "Input buffer addr: {}, Output buffer addr: {}", input_buffer_address,
+    // output_buffer_address);
+
+    // Assign unique id
+    log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
+    program.set_runtime_id(unit_tests::dm::runtime_host_id++);
+
+    // Launch program and record outputs
+
+    if (test_config.read_kernel) {
+        detail::WriteToBuffer(input_buffer, packed_input);
+        MetalContext::instance().get_cluster().dram_barrier(device->id());
+    } else {
+        for (size_t i = 0; i < test_config.cores.size(); ++i) {
+            // If not reading, write to L1 directly
+            detail::WriteToDeviceL1(device, corerange_to_cores(test_config.cores)[i], l1_addrs[i], packed_input);
+        }
+        MetalContext::instance().get_cluster().l1_barrier(device->id());
+    }
+
+    detail::LaunchProgram(device, program);
+
+    vector<uint32_t> packed_output;
+    bool pcc = false;
+
+    if (test_config.write_kernel) {
+        detail::ReadFromBuffer(output_buffer, packed_output);
+        pcc = is_close_packed_vectors<bfloat16, uint32_t>(
+            packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+        if (!pcc) {
+            log_error(tt::LogTest, "PCC Check failed");
+            log_info(tt::LogTest, "Golden vector");
+            print_vector<uint32_t>(packed_golden);
+            log_info(tt::LogTest, "Output vector");
+            print_vector<uint32_t>(packed_output);
+        }
+    } else {
+        for (size_t i = 0; i < test_config.cores.size(); ++i) {
+            detail::ReadFromDeviceL1(
+                device, corerange_to_cores(test_config.cores)[i], l1_addrs[i], total_size_bytes, packed_output);
+            pcc = is_close_packed_vectors<bfloat16, uint32_t>(
+                packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
+            if (!pcc) {
+                log_error(tt::LogTest, "PCC Check failed");
+                log_info(tt::LogTest, "Golden vector");
+                print_vector<uint32_t>(packed_golden);
+                log_info(tt::LogTest, "Output vector");
+                print_vector<uint32_t>(packed_output);
+                return pcc;
+            }
+        }
+    }
+    return pcc;
+}
+
+void directed_ideal_test(
+    tt::ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_case_id,
+    CoreCoord mst_start_coord,
+    CoreCoord mst_grid_size,
+    bool read,
+    bool write) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    // Parameters
+    uint32_t page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
+    uint32_t num_pages = 16;
+    uint32_t num_of_transactions = 16;
+
+    // Cores
+    CoreCoord mst_end_coord =
+        CoreCoord(mst_start_coord.x + mst_grid_size.x - 1, mst_start_coord.y + mst_grid_size.y - 1);
+    CoreRangeSet core_range_set({CoreRange(mst_start_coord, mst_end_coord)});
+
+    // Test config
+    unit_tests::dm::multi_interleaved::MultiInterleavedConfig test_config = {
+        .test_id = test_case_id,
+        .num_of_transactions = num_of_transactions,
+        .num_pages = num_pages,
+        .page_size_bytes = page_size_bytes,
+        .l1_data_format = DataFormat::Float16_b,
+        .cores = core_range_set,
+        .read_kernel = read,
+        .write_kernel = write};
+
+    // Run
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+    }
+}
+
+void packet_sizes_test(
+    tt::ARCH arch_,
+    vector<IDevice*>& devices_,
+    uint32_t num_devices_,
+    uint32_t test_case_id,
+    CoreCoord mst_start_coord,
+    CoreCoord mst_grid_size,
+    bool read,
+    bool write) {
+    // Physical Constraints
+    auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+
+    // Parameters
+    uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
+    uint32_t max_num_pages = 256;
+    uint32_t num_of_transactions = 1;
+    uint32_t num_pages;
+
+    // Cores
+    CoreCoord mst_end_coord =
+        CoreCoord(mst_start_coord.x + mst_grid_size.x - 1, mst_start_coord.y + mst_grid_size.y - 1);
+    CoreRangeSet core_range_set({CoreRange(mst_start_coord, mst_end_coord)});
+
+    for (uint32_t pages = 1; pages <= max_num_pages; pages *= 4) {
+        if (pages > 16) {
+            // avoid writing too large of a memory block at once, prefer to overwrite multiple times
+            num_of_transactions = pages / 16;
+            num_pages = 16;
+        } else {
+            num_pages = pages;
+        }
+        for (uint32_t page_size_bytes = flit_size_bytes; page_size_bytes <= max_page_size_bytes; page_size_bytes *= 2) {
+            // Test config
+            unit_tests::dm::multi_interleaved::MultiInterleavedConfig test_config = {
+                .test_id = test_case_id,
+                .num_of_transactions = num_of_transactions,
+                .num_pages = num_pages,
+                .page_size_bytes = page_size_bytes,
+                .l1_data_format = DataFormat::Float16_b,
+                .cores = core_range_set,
+                .read_kernel = read,
+                .write_kernel = write};
+
+            // Run
+            for (unsigned int id = 0; id < num_devices_; id++) {
+                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
+            }
+        }
+    }
+}
+
+}  // namespace unit_tests::dm::multi_interleaved
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovementMultiInterleavedDirectedIdeal) {
+    uint32_t test_case_id = 110;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    unit_tests::dm::multi_interleaved::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, true);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovementMultiInterleavedSizes) {
+    uint32_t test_case_id = 111;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    unit_tests::dm::multi_interleaved::packet_sizes_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, true);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovementMultiInterleavedReadDirectedIdeal) {
+    uint32_t test_case_id = 112;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    unit_tests::dm::multi_interleaved::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, false);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovementMultiInterleavedReadSizes) {
+    uint32_t test_case_id = 113;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    unit_tests::dm::multi_interleaved::packet_sizes_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, false);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovementMultiInterleavedWriteDirectedIdeal) {
+    uint32_t test_case_id = 114;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    unit_tests::dm::multi_interleaved::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, false, true);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovementMultiInterleavedWriteSizes) {
+    uint32_t test_case_id = 115;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {
+        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    unit_tests::dm::multi_interleaved::packet_sizes_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, false, true);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovement2x2MultiInterleavedDirectedIdeal) {
+    uint32_t test_case_id = 116;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {2, 2};
+    unit_tests::dm::multi_interleaved::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, true);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovement2x2MultiInterleavedSizes) {
+    uint32_t test_case_id = 117;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {2, 2};
+    unit_tests::dm::multi_interleaved::packet_sizes_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, true);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovement2x2MultiInterleavedReadDirectedIdeal) {
+    uint32_t test_case_id = 118;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {2, 2};
+    unit_tests::dm::multi_interleaved::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, false);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovement2x2MultiInterleavedReadSizes) {
+    uint32_t test_case_id = 119;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {2, 2};
+    unit_tests::dm::multi_interleaved::packet_sizes_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, false);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovement2x2MultiInterleavedWriteDirectedIdeal) {
+    uint32_t test_case_id = 120;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {2, 2};
+    unit_tests::dm::multi_interleaved::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, false, true);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovement2x2MultiInterleavedWriteSizes) {
+    uint32_t test_case_id = 121;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {2, 2};
+    unit_tests::dm::multi_interleaved::packet_sizes_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, false, true);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovement6x6MultiInterleavedDirectedIdeal) {
+    uint32_t test_case_id = 122;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {6, 6};
+    unit_tests::dm::multi_interleaved::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, true);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovement6x6MultiInterleavedSizes) {
+    uint32_t test_case_id = 123;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {6, 6};
+    unit_tests::dm::multi_interleaved::packet_sizes_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, true);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovement6x6MultiInterleavedReadDirectedIdeal) {
+    uint32_t test_case_id = 124;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {6, 6};
+    unit_tests::dm::multi_interleaved::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, false);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovement6x6MultiInterleavedReadSizes) {
+    uint32_t test_case_id = 125;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {6, 6};
+    unit_tests::dm::multi_interleaved::packet_sizes_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, false);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovement6x6MultiInterleavedWriteDirectedIdeal) {
+    uint32_t test_case_id = 126;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {6, 6};
+    unit_tests::dm::multi_interleaved::directed_ideal_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, false, true);
+}
+
+/* ========== Test case for varying number of pages; Test id = 61 ========== */
+TEST_F(DeviceFixture, TensixDataMovement6x6MultiInterleavedWriteSizes) {
+    uint32_t test_case_id = 127;
+    CoreCoord mst_start_coord = {0, 0};
+    CoreCoord mst_grid_size = {6, 6};
+    unit_tests::dm::multi_interleaved::packet_sizes_test(
+        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, false, true);
+}
+
+}  // namespace tt::tt_metal
