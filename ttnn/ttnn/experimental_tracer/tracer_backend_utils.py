@@ -467,6 +467,7 @@ class AtenUpsampleNearest2d(WrappedOperation):
 @register_operation("torch.ops.aten.clone")
 class AtenClone(WrappedOperation):
     """Represents the clone operation."""
+
     pass
 
 
@@ -583,6 +584,7 @@ class AtenGelu(WrappedOperation):
 @register_operation("torch.ops.aten.relu_")
 class AtenReluInplace(WrappedOperation):
     """Represents the relu_ operation."""
+
     pass
 
 
@@ -630,6 +632,7 @@ class AtenLinalgVectorNorm(WrappedOperation):
 @register_operation("torch.ops.aten.clamp_min")
 class AtenClampMin(WrappedOperation):
     """Represents the clamp_min operation."""
+
     pass
 
 
@@ -637,6 +640,7 @@ class AtenClampMin(WrappedOperation):
 @register_operation("torch.ops.aten.max.dim")
 class AtenMaxDim(WrappedOperation):
     """Represents the max.dim operation."""
+
     pass
 
 
@@ -824,12 +828,12 @@ class InputOp(Operation):
 
     def __post_init__(self):
         self.unique_name = to_valid_variable_name(self.unique_name)
-        if not self.id:
-            InputOp.counter += 1
+        self.input_identifier = f"INPUT{InputOp.counter}"
+        InputOp.counter += 1
 
     def generate_code(self):
         serialized_args = [self._serialize(arg) for arg in self.args]
-        return f"{to_valid_variable_name(self.unique_name)} = INPUT{InputOp.counter}.reshape({serialized_args[0]})"
+        return f"{to_valid_variable_name(self.unique_name)} = {self.input_identifier}.reshape({serialized_args[0]})"
 
     def to_operation(self, New_type) -> "Operation":
         """Convert this operation to a generic Operation type."""

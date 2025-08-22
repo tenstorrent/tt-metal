@@ -3,15 +3,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import torch
+from torchinfo import summary
 from tracer_backend import trace_torch_model
 from generate_pytorch_unittest_graph import (
     PytorchLayerUnitTestGraph,
     PytorchLayerUnitTestGraphConfig,
 )
-from generate_pytorch_graph import PytorchGraph
+from generate_pytorch_graph import PytorchGraph, CompositePytorchGraph
 from generate_pytorch_excel_graph import PytorchExcelGraph
-from torchinfo import summary
-from find_repeated_subgraphs import find_repeated_subgraphs, CompositePytorchGraph
+from find_repeated_subgraphs import dump_graph_patterns
 
 allowed_modes = [
     "yolov4",
@@ -42,7 +43,6 @@ allowed_modes = [
 ]
 
 allowed_dtypes = ["float32", "float64", "int32", "int64", "bfloat16"]
-import torch
 
 
 class CustomClass(torch.nn.Module):
@@ -259,6 +259,9 @@ def main(args_dict):
         save_original_tensors=not args.no_infer,
     )
     pytorch_graph = PytorchGraph(operation_graph)
+    if not args.no_infer:
+        pytorch_graph = CompositePytorchGraph(operation_graph)
+
     pytorch_graph.dump_to_python_file("graph.py", True)
     pytorch_excel_graph = PytorchExcelGraph(operation_graph)
     pytorch_excel_graph.dump_to_excel_file("graph.xlsx")
@@ -268,10 +271,7 @@ def main(args_dict):
         )
     )
     graph.dump_to_python_file("test.py", True)
-    if not args.no_infer:
-        clustered_graph, composite_ops = find_repeated_subgraphs(operation_graph)
-        pytorch_graph = CompositePytorchGraph(clustered_graph)
-        pytorch_graph.dump_to_python_file("clustered_graph.py", True)
+    dump_graph_patterns(operation_graph, "graph_patterns.py")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,11 @@
 import hashlib
 import json
+import os
 import networkx as nx
 from dataclasses import dataclass, field
-import gzip
-import torch
 from tracer_backend_utils import (
     Operation,
+    WrappedOperation,
     to_valid_variable_name,
     PlaceholderTensor,
     TupleOp,
@@ -16,11 +16,71 @@ from tracer_backend_utils import (
     AtenNativeBatchNorm,
     AtenConvolution,
     AtenScaledDotProductFlashAttention,
+    WRAPPED_OPERATION_REGISTRY,
+    to_valid_variable_name,
 )
 from tracer_backend import create_graph_json_structure, OperationGraph
-from generate_pytorch_graph import PytorchGraph
 from typing import ClassVar, List, Dict, Any, Tuple, Optional
 from collections import defaultdict
+
+
+class WrappedOpPatternObj:
+    def compareWith(self, wrapped_op: WrappedOperation):
+        if self.__class__.__name__ == "WildcardPatternObj":
+            return True
+        return wrapped_op.__class__.__name__ == self.wrapped_op.__name__
+
+
+class WrappedOpPatternObjBaseMeta(type):
+    def __new__(cls, name, bases, dct):
+        if WrappedOpPatternObj not in bases:
+            bases = (WrappedOpPatternObj,) + bases
+        if "__init__" not in dct:
+
+            def __init__(self, *args):
+                for arg in args:
+                    assert isinstance(
+                        arg, WrappedOpPatternObj
+                    ), f"Expected WrappedOpPatternObj, got {type(arg)} for {self}"
+                self.parents = args
+
+            dct["__init__"] = __init__
+        return super().__new__(cls, name, bases, dct)
+
+
+class PatternObjFactory:
+    WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY = {}
+
+    @staticmethod
+    def init_wrapped_operation_pattern_obj_registry():
+        if PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY:
+            return
+        for k, v in WRAPPED_OPERATION_REGISTRY.items():
+            PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[
+                v.__name__ + "PatternObj"
+            ] = WrappedOpPatternObjBaseMeta(v.__name__ + "PatternObj", (), {"wrapped_op": v})
+            setattr(
+                PatternObjFactory,
+                f"{v.__name__ }PatternObj",
+                PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[v.__name__ + "PatternObj"],
+            )
+        PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY["TupleOpPatternObj"] = WrappedOpPatternObjBaseMeta(
+            "TupleOpPatternObj", (), {"wrapped_op": TupleOp}
+        )
+        PatternObjFactory.TupleOpPatternObj = PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[
+            "TupleOpPatternObj"
+        ]
+        PatternObjFactory.WildcardPatternObj = WrappedOpPatternObjBaseMeta("WildcardPatternObj", (), {})
+
+    @staticmethod
+    def get_pattern_obj_from(wrapped_op: WrappedOperation) -> WrappedOpPatternObj:
+        assert (
+            wrapped_op.__class__.__name__ + "PatternObj" in PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY
+        ), f"Could not find op {wrapped_op.__class__.__name__} in pattern object registry. This should never happen."
+        return PatternObjFactory.WRAPPED_OPERATION_PATTERN_OBJ_REGISTRY[wrapped_op.__class__.__name__ + "PatternObj"]
+
+
+PatternObjFactory.init_wrapped_operation_pattern_obj_registry()
 
 
 @dataclass
@@ -282,7 +342,7 @@ def merge_nodes_as_composite(
     )
     for edge in incoming.union(outgoing):
         G.remove_edge(*edge)
-    for n in nodes_to_merge:
+    for n in nodes_to_merge_set:
         G.remove_node(n)
     G.add_node(composite_node, operation=composite_op)
 
@@ -384,6 +444,78 @@ def combine_tuple_get_item_scaled_attention_tuple_get_item(operation_graph: Oper
     return operation_graph
 
 
+def get_predecessor_ordering(G, op, predecessors):
+    args = {}
+    for pred in predecessors:
+        try:
+            # TODO: add proper parsing. Support List of Lists (concat)
+            args[G.nodes[pred]["operation"].meta_data.res.name] = pred
+        except:
+            continue
+    actual_args = []
+    for arg in op.args:
+        try:
+            actual_args.append(arg.name)
+        except:
+            continue
+    result = []
+    for i in actual_args:
+        if i in args:
+            result.append(args[i])
+    if len(predecessors) == len(result):
+        return result
+    return predecessors
+
+
+def combine_custom_patterns(operation_graph, custom_patterns):
+    G = operation_graph.graph
+    for pattern in custom_patterns:
+        assert isinstance(
+            pattern, WrappedOpPatternObj
+        ), f"Patterns can only be represented by Pattern Objects. Got {pattern}"
+        changed = True
+        while changed:
+            changed = False
+            for node in list(nx.topological_sort(G))[::-1]:
+                queue = [(pattern, node)]
+                ancestors = [node]
+                passed = True
+                while queue and passed:
+                    pat, curr_op = queue[0]
+                    queue = queue[1:]
+                    op = G.nodes[curr_op]["operation"]
+                    if pat.compareWith(op):
+                        predecessors = list(G.predecessors(curr_op))
+                        predecessors = get_predecessor_ordering(G, op, predecessors)
+                        if len(pat.parents) == 0:
+                            continue
+                        if len(pat.parents) != len(predecessors):
+                            passed = False
+                            print(
+                                f"Pattern {pat} parent count {len(pat.parents)} does not match predecessor count {len(predecessors)}. Found node {curr_op} that has {len(predecessors)}"
+                            )
+                            continue
+                        for par_pat, par_node in zip(pat.parents, predecessors):
+                            if par_pat.__class__.__name__ == "WildcardPatternObj":
+                                continue
+                            queue.append((par_pat, par_node))
+                            ancestors.append(par_node)
+                    else:
+                        passed = False
+                if passed:
+                    composite_op = merge_nodes_as_composite(
+                        operation_graph, main_output=ancestors[0], ancestors=ancestors[1:]
+                    )
+                    if composite_op is not None:
+                        changed = True
+                        print(f"Merged {node} and {set(ancestors[1:])} as composite operation {composite_op.id}")
+                        break
+                    else:
+                        print(f"COULD NOT MERGE {set(ancestors)} AS COMPOSITE OPERATION")
+
+    return operation_graph
+
+
 def combine_ops(
     reverse_index: Dict[str, List[Tuple[str, List[str]]]],
     operation_graph: OperationGraph,
@@ -444,13 +576,44 @@ def compute_subgraph_fingerprints(
     return old_fingerprints, iteration_result
 
 
-def find_repeated_subgraphs(operation_graph: OperationGraph):
+def dump_graph_patterns(operation_graph: OperationGraph, file_path: str):
+    G = operation_graph.graph
+    text = []
+    for node in list(nx.topological_sort(G))[::-1]:
+        op = G.nodes[node]["operation"]
+        parents = list(G.predecessors(node))
+        parents = get_predecessor_ordering(G, op, parents)
+        if isinstance(op, (WrappedOperation, TupleOp)):
+            op_po = PatternObjFactory.get_pattern_obj_from(op)
+            parent_unique_names = [
+                (
+                    to_valid_variable_name(G.nodes[parent]["operation"].unique_name)
+                    if isinstance(G.nodes[parent]["operation"], (WrappedOperation, TupleOp))
+                    else "POFactory.WildcardPatternObj()"
+                )
+                for parent in parents
+            ]
+            text.append(
+                f"{to_valid_variable_name(op.unique_name)} = POFactory.{op_po.__name__}({', '.join([p for p in parent_unique_names])})"
+            )
+    text.append("from find_repeated_subgraphs import PatternObjFactory as POFactory")
+    text = text[::-1]
+    with open(file_path, "w") as f:
+        f.write("\n".join(text))
+    print(f"Generated graph pattern code dumped to {os.path.abspath(file_path)}")
+
+
+def find_repeated_subgraphs(
+    operation_graph: OperationGraph, custom_patterns: Optional[List[WrappedOpPatternObj]] = None
+):
     orig_config = ConstantTensor.ConstantTensorFromModel
     ConstantTensor.ConstantTensorFromModel = True
     print("Setting ConstantTensor.ConstantTensorFromModel to True")
     composite_ops: Dict[str, CompositeOperation] = {}
     new_operation_graph = OperationGraph.from_operation_graph(operation_graph)
-
+    if custom_patterns is not None:
+        combine_custom_patterns(new_operation_graph, custom_patterns)
+    dump_graph_patterns(new_operation_graph, "graph_patterns.py")
     combine_conv_bn_relu(new_operation_graph)
     combine_tuple_get_item_scaled_attention_tuple_get_item(new_operation_graph)
     compute_subgraph_fingerprints(new_operation_graph, composite_ops)
@@ -464,48 +627,3 @@ def find_repeated_subgraphs(operation_graph: OperationGraph):
         )
     ConstantTensor.ConstantTensorFromModel = orig_config
     return new_operation_graph, composite_ops
-
-
-class CompositePytorchGraph(PytorchGraph):
-    """
-    A specialized PytorchGraph that supports composite operations.
-    It overrides the `find_repeated_subgraphs` method to use the custom implementation.
-    """
-
-    def __init__(self, graph: OperationGraph):
-        super().__init__(graph)
-
-    def get_imports_and_code_lines(self) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
-        self.orig_config = ConstantTensor.ConstantTensorFromModel
-        ConstantTensor.ConstantTensorFromModel = True
-        imports: Dict[str, List[str]] = {}
-        code_lines: Dict[str, List[str]] = {}
-        main_op = CompositeOperation(
-            id="main",
-            unique_name="OUTPUT",
-            sub_operations=list(self.graph.nodes[node_id]["operation"] for node_id in nx.topological_sort(self.graph)),
-            function_call_name="composite",
-            args=[],
-            kwargs={},
-        )
-        imports["main"] = [
-            "import gzip",
-            "import torch",
-            "import functools",
-            "import json",
-        ] + main_op.generate_import_code()
-        code_lines["main"] = 'with gzip.open("graph.pth.gz", "rb") as f:\n' + "  params = torch.load(f)\n"
-        main_op_code = main_op.generate_code()
-        for const in CompositeOperation.ALL_CONSTANTS:
-            main_op_code = main_op_code.replace(f"{const},", f"params['{const}'],")
-            main_op_code = main_op_code.replace(f"{const})", f"params['{const}'])")
-            main_op_code = main_op_code.replace(f"({const})", f"(params['{const}'])")
-        code_lines["main"] += main_op_code
-        code_lines["main"] += (
-            "\nwith open('tensor_io_log.json', 'w') as f:\n" + "  json.dump(_tensor_io_log, f, indent=2)"
-        )
-        tensor_dict = {k: v.value.detach() for k, v in main_op.ALL_CONSTANTS.items()}
-        with gzip.open("graph.pth.gz", "wb") as f:
-            torch.save(tensor_dict, f)
-        ConstantTensor.ConstantTensorFromModel = self.orig_config
-        return imports, code_lines

@@ -45,6 +45,7 @@ class TracerData:
         self.constants: Dict[str, ConstantTensor] = {}
         self.id = 0
         self.save_original_tensors = save_original_tensors
+        ConstantTensor.ConstantTensorFromModel = save_original_tensors
 
     def get_next_id(self):
         current_id = self.id
@@ -213,7 +214,7 @@ class Trackable_Tensor(torch.Tensor):
                 if Trackable_Tensor.tracer_data.save_original_tensors:
                     res = e.elem
                 else:
-                    if e.numel() <= 1:
+                    if e.numel() <= 1 and len(e.trackable_shape) == 0:
                         res = torch.empty(1, device="meta", dtype=e.trackable_dtype)
                     else:
                         res = torch.empty(*e.trackable_shape, device="meta", dtype=e.trackable_dtype)
@@ -242,7 +243,10 @@ class Trackable_Tensor(torch.Tensor):
                         else args[0].item()
                     )
             else:
-                rs = tree_map(wrap, func(*tree_map(unwrap, args), **tree_map(unwrap, kwargs)))
+                func_args = tree_map(unwrap, args)
+                func_kwargs = tree_map(unwrap, kwargs)
+                func_res = func(*func_args, **func_kwargs)
+                rs = tree_map(wrap, func_res)
         local_id = str(id)
         graph_output_to_input[local_id] = []
         input_shapes = []
@@ -932,6 +936,7 @@ def trace_torch_model(
             rand_tensor = rand_tensor.to(dtype=input_dtypes[index % len(input_dtypes)])
         input_tensor = Trackable_Tensor(rand_tensor)
         input_tensor.set_id(f"{(index+2)*-1}")
+        input_tensor.elem = rand_tensor
         input_tensor.set_module_name(f"input_tensor_{index}")
         input_tensors.append(input_tensor)
 
