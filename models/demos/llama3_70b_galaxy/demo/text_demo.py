@@ -1079,9 +1079,10 @@ def test_demo_text(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
                 profiler.end(f"log_saving_file", iteration=batch_idx)
-            # TODO Update this check for one of the specific tests only
-            if False:
-                # if not users_decoding and batch_size == 1 and repeat_batches > 1:
+                # TODO This check is only for the config `repeat2`.
+
+            # Since right now that config is the only using a repeat_batches=2 this if statement works
+            if not users_decoding and batch_size == 1 and repeat_batches == 2:
                 # Compare to text in outputs_batch_1.json for the first user of the first batch
                 if batch_idx == 0 and expected_outputs_data:  # Only compare if data was loaded
                     if i == 0:  # Only for the first user of the batch (i.e., user 0)
