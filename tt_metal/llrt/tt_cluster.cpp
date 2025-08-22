@@ -200,8 +200,9 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rt
 
     this->set_tunnels_from_mmio_device();
 
-    if (this->target_type_ != tt::TargetDevice::Mock)
+    if (this->target_type_ != tt::TargetDevice::Mock){
         this->assert_risc_reset();
+    }
 }
 
 void Cluster::detect_arch_and_target() {
