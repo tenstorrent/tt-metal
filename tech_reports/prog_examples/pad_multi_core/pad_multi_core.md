@@ -13,13 +13,15 @@ In this example, we will implement a basic TT-Metalium program for padding an in
 
 The code for this program can be found in [pad_multi_core.cpp](../../../tt_metal/programming_examples/pad/pad_multi_core.cpp).
 
+## Building and Running the Example
+
 To build and execute, you may use the following commands:
-Then run the following:
 ```bash
-    export TT_METAL_HOME=$(pwd)
-    ./build_metal.sh --build-programming-examples
-    ./build/programming_examples/metal_example_pad_multi_core
+export TT_METAL_HOME=$(pwd)
+./build_metal.sh --build-programming-examples
+./build/programming_examples/metal_example_pad_multi_core
 ```
+
 ## Device setup
 
 ``` cpp
