@@ -330,10 +330,24 @@
 <p>Compute softmax over <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p>
 <div class="math notranslate nohighlight">
 \[\sigma(z_i) = \frac{e^{z_{i}}}{\sum_{j=1}^K e^{z_{j}}} \ \ \ for\ i=1,2,\dots,K\]</div>
-<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>: the input tensor
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>: the dimension along which to compute softmax.</p>
-<p>:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: the memory configuration for the output tensor. If not provided, the memory configuration of the input tensor is used.
-:keyword * <code class="xref py py-attr docutils literal notranslate"><span class="pre">compute_kernel_config</span></code>: the compute kernel configuration for the op. If not provided, the default configuration of the op is used.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span>
+</dt>
+<dd class="field-odd">
+<ul class="simple">
+<li><p><strong>input_tensor</strong> (<em>ttnn.Tensor</em>) – The input tensor.</p></li>
+<li><p><strong>dim</strong> (<em>int</em>) – The dimension along which to compute softmax.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Keyword Arguments<span class="colon">:</span>
+</dt>
+<dd class="field-even">
+<ul class="simple">
+<li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – the memory configuration for the output tensor. If not provided, the memory configuration of the input tensor is used.</p></li>
+<li><p><strong>compute_kernel_config</strong> (<em>ttnn.ComputeKernelConfig</em><em>, </em><em>optional</em>) – the compute kernel configuration for the op. If not provided, the default configuration of the op is used.</p></li>
+</ul>
+</dd>
+</dl>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p>Supported data types and layouts by tensor:</p>
