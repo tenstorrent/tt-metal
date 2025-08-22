@@ -255,7 +255,6 @@ models/demos/yolov4 @dvartaniansTT @mbahnasTT @rdraskicTT @mbezuljTT @tenstorren
 models/demos/**/*resnet* @tenstorrent/metalium-developers-convolutions @mradosavljevicTT
 models/experimental/ @sminakov-tt @dgomezTT @jmalone-tt @ayerofieiev-tt @uaydonat
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
-models/experimental/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT
 models/demos/ufld_v2 @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/demos/vgg_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/experimental/openpdn_mnist @tenstorrent/cse-developer-ttnn
