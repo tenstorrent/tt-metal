@@ -224,9 +224,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    // constexpr uint32_t cb_ex2_partial = tt::CBIndex::c_21; // Delete
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;
-    // constexpr uint32_t cb_ex2 = tt::CBIndex::c_13;
     constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;  // sharded cb
     constexpr uint32_t cb_repack = tt::CBIndex::c_26;
@@ -329,7 +327,7 @@ void kernel_main() {
 #endif
                         if (cur_read_iteration == 0) {
                             // wait for local data ready
-                            cb_wait_front(cb_ex_partial, 1);
+                            cb_wait_front(cb_ex_partial, 2);
 
                             // read self Ex partial - on the first iteration, read a full tile for overwriting
                             // garbage in L1, on subsequent just treat it as another core
@@ -359,7 +357,7 @@ void kernel_main() {
                                     noc_async_read_barrier();
                                 }
                             }
-                            cb_pop_front(cb_ex_partial, 1);
+                            cb_pop_front(cb_ex_partial, 2);
 
                             if constexpr (num_mcast_cores > 1) {
                                 noc_semaphore_set_multicast(
@@ -416,7 +414,7 @@ void kernel_main() {
                         cb_push_back(cb_ex_external, cb_ex_external_tiles_required);
                         if constexpr (num_mcast_cores > 1) {
                             // global reduce
-                            cb_wait_front(cb_ex, 1);
+                            cb_wait_front(cb_ex, 2);
 
                             // mcast to other cores
                             uint32_t l1_read_addr_ex = get_read_ptr(cb_ex);
