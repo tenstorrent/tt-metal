@@ -100,6 +100,11 @@ static const StringEnumMapper<RoutingType> routing_type_mapper({
     {"Dynamic", RoutingType::Dynamic},
 });
 
+static const StringEnumMapper<FabricTensixConfig> fabric_tensix_type_mapper({
+    {"Default", FabricTensixConfig::DISABLED},
+    {"Mux", FabricTensixConfig::MUX},
+});
+
 static const StringEnumMapper<CoreAllocationPolicy> core_allocation_policy_mapper({
     {"RoundRobin", CoreAllocationPolicy::RoundRobin},
     {"ExhaustFirst", CoreAllocationPolicy::ExhaustFirst},
@@ -536,6 +541,15 @@ inline TestFabricSetup YamlConfigParser::parse_fabric_setup(const YAML::Node& fa
     } else {
         log_info(tt::LogTest, "No routing type specified, defaulting to LowLatency");
         fabric_setup.routing_type = RoutingType::LowLatency;
+    }
+
+    if (fabric_setup_yaml["fabric_tensix_config"]) {
+        auto fabric_type_str = parse_scalar<std::string>(fabric_setup_yaml["fabric_tensix_config"]);
+        fabric_setup.fabric_tensix_config =
+            detail::fabric_tensix_type_mapper.from_string(fabric_type_str, "FabricTensixConfig");
+    } else {
+        log_info(tt::LogTest, "No fabric tensix config specified, defaulting to DISABLED");
+        fabric_setup.fabric_tensix_config = FabricTensixConfig::DISABLED;
     }
 
     if (fabric_setup_yaml["num_links"]) {
@@ -1859,6 +1873,10 @@ private:
         return detail::routing_type_mapper.to_string(rtype, "RoutingType");
     }
 
+    static std::string to_string(FabricTensixConfig ftype) {
+        return detail::fabric_tensix_type_mapper.to_string(ftype, "FabricTensixConfig");
+    }
+
     static std::string to_string(tt::tt_fabric::Topology topology) {
         return detail::topology_mapper.to_string(topology, "Topology");
     }
@@ -2027,6 +2045,10 @@ private:
         if (config.routing_type.has_value()) {
             out << YAML::Key << "routing_type";
             out << YAML::Value << to_string(config.routing_type.value());
+        }
+        if (config.fabric_tensix_config.has_value()) {
+            out << YAML::Key << "fabric_tensix_config";
+            out << YAML::Value << to_string(config.fabric_tensix_config.value());
         }
         if (config.topology == Topology::Torus && config.torus_config.has_value()) {
             out << YAML::Key << "torus_config";
