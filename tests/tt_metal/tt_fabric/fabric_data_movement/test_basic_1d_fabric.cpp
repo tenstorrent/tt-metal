@@ -2182,19 +2182,14 @@ void FabricUnicastCommon(
         sender_runtime_args.push_back(num_hops);
     }
 
-    std::vector<tt::tt_fabric::FabricNodeId> next_hop_destinations;
-    next_hop_destinations.reserve(first_hop_phys_chip_ids.size());
+    std::vector<tt::tt_fabric::FabricNodeId> next_hop_nodes;
+    next_hop_nodes.reserve(first_hop_phys_chip_ids.size());
     for (auto phys : first_hop_phys_chip_ids) {
-        next_hop_destinations.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(phys));
+        next_hop_nodes.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(phys));
     }
 
     append_routing_plane_connection_manager_rt_args(
-        src_fabric_node_id,
-        next_hop_destinations,
-        sender_program,
-        sender_kernel,
-        {sender_logical_core},
-        sender_runtime_args);
+        src_fabric_node_id, next_hop_nodes, sender_program, sender_kernel, {sender_logical_core}, sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
@@ -2356,19 +2351,14 @@ void FabricMulticastCommon(
             .noc = tt_metal::NOC::RISCV_0_default,
             .compile_args = compile_time_args});
 
-    std::vector<tt::tt_fabric::FabricNodeId> next_hop_destinations;
-    next_hop_destinations.reserve(first_hop_phys_chip_ids.size());
+    std::vector<tt::tt_fabric::FabricNodeId> next_hop_nodes;
+    next_hop_nodes.reserve(first_hop_phys_chip_ids.size());
     for (auto phys : first_hop_phys_chip_ids) {
-        next_hop_destinations.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(phys));
+        next_hop_nodes.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(phys));
     }
 
     append_routing_plane_connection_manager_rt_args(
-        src_fabric_node_id,
-        next_hop_destinations,
-        sender_program,
-        sender_kernel,
-        {sender_logical_core},
-        sender_runtime_args);
+        src_fabric_node_id, next_hop_nodes, sender_program, sender_kernel, {sender_logical_core}, sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
