@@ -787,6 +787,7 @@ void ProcessDeviceProfilerResults(
         }
         if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
             profiler.pushTracyDeviceResults();
+            profiler.dumpDeviceResults();
         }
     }
 #endif
