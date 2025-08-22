@@ -244,6 +244,22 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
                 uint32_t batch = a.padded_shape()[0];
 
+                if (this->use_welford) {
+                    return groupnorm_multi_core_welford(
+                        a,
+                        gamma,
+                        beta,
+                        input_mask,
+                        output_tensor,
+                        this->eps,
+                        this->num_groups,
+                        batch,
+                        program_config.im_data_format,
+                        program_config.compute_with_storage_grid_size,
+                        inplace,
+                        num_out_blocks,
+                        this->compute_kernel_config);
+                }
                 return groupnorm_multi_core(
                     a,
                     gamma,
