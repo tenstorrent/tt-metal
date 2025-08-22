@@ -227,7 +227,8 @@ def test_qwen3_tg_qk_norm(
 
     # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> [1, 1, 64, 32 x 4]
 
-    rm_mem_cfg_qkv = q_heads_pre_rot_1BQD.memory_config()
+    rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
+    rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
 
     q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=reshape_intermediate_mem_cfg)
     k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=reshape_intermediate_mem_cfg)
@@ -243,9 +244,22 @@ def test_qwen3_tg_qk_norm(
 
     # [1, 1, 64, 32 x 4]
 
-    q_head_post_norm = q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
-    k_head_post_norm = k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
+    q_heads_pre_rot_1BQD = q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
+    k_heads_pre_rot_1BKD = k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
 
     logger.info(f"Finished qk_norm")
+
+    breakpoint()
+
+    q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
+    k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
+
+    breakpoint()
+
+    q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
+    k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 8, 8, 128])
+
+    q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
+    k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
 
     breakpoint()
