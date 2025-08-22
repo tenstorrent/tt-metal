@@ -76,7 +76,7 @@ def test_attention_inference(
     }
 
     reference_model = model_args.reference_attention()
-    reference_model.load_state_dict(partial_state_dict)
+    reference_model.load_state_dict(partial_state_dict, model_args.fuse_qkv)
 
     seq_len = 1
 

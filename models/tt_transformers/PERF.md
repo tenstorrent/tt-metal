@@ -45,6 +45,8 @@ This configuration uses bfp4 MLP and bfp8 attention weights for all models excep
 | Mistral-7B        | N150        | 95        | 99        | 29.75         | 100.24    |
 | Mistral-7B        | N300        | 95        | 99        | 47.01         | 65.95     |
 | Mistral-7B        | T3K         | 95        | 99        | 67.82         | 53.93     |
+| Phi-3-mini-128k-instruct | N150        | 89        | 99        | 45.0          | 73.32     |
+| Phi-3-mini-128k-instruct | N300        | 89        | 99        | 60.87         | 114.94    |
 
 
 ## Accuracy
@@ -82,6 +84,8 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 | Mistral-7B        | N150        | 95        | 99        | 29.75         | 100.24    |
 | Mistral-7B        | N300        | 95        | 99        | 47.01         | 65.95     |
 | Mistral-7B        | T3K         | 95        | 99        | 67.82         | 53.93     |
+| Phi-3-mini-128k-instruct | N150        | 94        | 99        | 40.41         | 82.58     |
+| Phi-3-mini-128k-instruct | N300        | 94        | 99        | 57.0          | 115.36    |
 
 ##  Long-context (64K Tokens)
 
@@ -109,6 +113,14 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=1 and pref
 | Qwen2.5-7B     | N300   |               |           |
 | Qwen2.5-72B    | T3K    |               |           |
 
+##  Long-context (32K Tokens)
+
+This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=1 and prefill_length is 32k tokens.**
+
+| Model                     | Device | Speed (t/s/u) | TTFT (ms) |
+|---------------------------|--------|---------------|-----------|
+| Phi-3-mini-128k-instruct  | N300   | 26.1          | 10072     |
+
 ## Short-Context, Batch-32
 
 This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=32 and prefill_length is 128 tokens.**
@@ -134,6 +146,8 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=32 and pre
 | Llama-3.1-70B  | TG     |               |               |
 | Qwen2.5-7B     | N300   |               |               |
 | Qwen2.5-72B    | T3K    |               |               |
+| Phi-3-mini-128k-instruct  | 150    | 25.66         | 68.58         |
+| Phi-3-mini-128k-instruct  | N300   | 39.4          | 85.99         |
 
 # Llama 3 model precision and math fidelity
 
