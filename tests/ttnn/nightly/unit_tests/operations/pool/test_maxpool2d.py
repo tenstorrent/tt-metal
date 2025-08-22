@@ -276,7 +276,10 @@ def run_max_pool(
 )
 @pytest.mark.parametrize(
     "dilation",
-    ((1, 1), (3, 4)),
+    (
+        (1, 1),
+        (3, 4),
+    ),
 )
 @pytest.mark.parametrize(
     "dtype",
