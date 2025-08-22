@@ -193,9 +193,9 @@ def run_sdpa_noncausal(
     # print("GOLDEN last 10:")
     # print((gt.flatten()[-10:]))
 
-    print(gt.flatten().view(32, 32))
-    print("=" * 80)
-    print(tt_back.flatten().view(32, 32))
+    # print(gt.flatten().view(32, 32))
+    # print("=" * 80)
+    # print(tt_back.flatten().view(32, 32))
 
     out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
 

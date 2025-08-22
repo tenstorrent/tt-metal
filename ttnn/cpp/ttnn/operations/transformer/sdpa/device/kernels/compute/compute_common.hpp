@@ -121,10 +121,10 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     constexpr uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
     uint32_t in0_index = 0;
 
-    // (*((volatile uint32_t*)0x18000)) = (uint32_t)scale_fp32;
-    // (*((volatile uint32_t*)0x18004)) = (uint32_t)granularity;
-    // (*((volatile uint32_t*)0x18008)) = (uint32_t)dst_tiles;
-    // (*((volatile uint32_t*)0x1800C)) = (uint32_t)scale_fp32;
+    TTI_SFPLOADI(0, 10, 0);  // insmod == A will write the lower bits, and not affect the upper bits;
+    TTI_SFPLOADI(0, 8, 0);   // insmod == 8 will write the upper bits, and not affect the lower bits;
+    TTI_SFPCONFIG(0, 0xF, 0);
+    TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
 
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
@@ -133,7 +133,12 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
                 // {
                 // DeviceZoneScopedN("EXP_TILE");
-                // exp_tile_init<true, true, scale_fp32>();
+
+                // TTI_SFPLOADI(0, 10, 0); // insmod == A will write the lower bits, and not affect the upper bits;
+                // TTI_SFPLOADI(0, 8, 0);  // insmod == 8 will write the upper bits, and not affect the lower bits;
+                // TTI_SFPCONFIG(0, 0xF, 0);
+                // TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
+
                 exp_tile<true, true>(j, (int)VectorMode::RC);
                 // (*((volatile uint32_t*)0x19000)) = (uint32_t)j;
                 // }
