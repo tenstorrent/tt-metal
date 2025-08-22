@@ -141,11 +141,6 @@ FactoryParameters get_factory_parameters(
         !last_tile_is_partial ? tt::constants::TILE_HEIGHT : tt::constants::TILE_HEIGHT / 2;
     const bool is_large_kernel = kernel_size_hw > max_rows_for_reduction;
     if (return_indices) {
-        const auto& input_shape = input.logical_shape();
-        TT_FATAL(
-            input_shape[1] * input_shape[2] <= std::numeric_limits<uint16_t>::max(),
-            "Input HW will overflow uint16 indices",
-            std::numeric_limits<uint16_t>::max());
         TT_FATAL(
             !is_avg_pool && !is_large_kernel,
             "Currently only small full width max pool is supported with return_indices");
