@@ -144,6 +144,28 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 fmt::format("rsqrt_tile_init<{}u>();", (uint32_t)param0),
                 fmt::format("rsqrt_tile<{1}u>({0});", idst, (uint32_t)param0)};
             break;
+        case UnaryOpType::LOG:
+            op_init_and_name = {
+                fmt::format("log_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("log_tile<{1}u>({0});", idst, (uint32_t)param0)};
+            break;
+        case UnaryOpType::LOG10:
+            // log10[x] = log[x]/log[10] = log[x]*0.4342944819032518; FP32@U32 0x3ede5bd9; FP16@U16 0x36f3;
+            op_init_and_name = {
+                fmt::format("log_with_base_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("log_with_base_tile<{1}u>({0}, 0x36f3u);", idst, (uint32_t)param0)};
+            break;
+
+        case UnaryOpType::LOG2:  // log2[x] = log[x]*1.4426950408889634f; FP32@U32 0x3fb8aa3b; FP16@U16 0x3dc5;
+            op_init_and_name = {
+                fmt::format("log_with_base_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("log_with_base_tile<{1}u>({0}, 0x3dc5u);", idst, (uint32_t)param0)};
+            break;
+        case UnaryOpType::LOG1P:
+            op_init_and_name = {
+                fmt::format("log1p_tile_init<{}u>();", (uint32_t)param0),
+                fmt::format("log1p_tile<{1}u>({0});", idst, (uint32_t)param0)};
+            break;
         case UnaryOpType::HEAVISIDE:
             op_init_and_name = {
                 "heaviside_tile_init();",
@@ -677,15 +699,15 @@ UnaryWithParam string_to_unary_with_param(const std::string& name) {
     } else if (name == "recip") {
         return UnaryWithParam(UnaryOpType::RECIP);
     } else if (name == "log") {
-        return UnaryWithParam(UnaryOpType::LOG);
+        return UnaryWithParam(UnaryOpType::LOG, static_cast<float>(true));
     } else if (name == "log1p") {
-        return UnaryWithParam(UnaryOpType::LOG1P);
+        return UnaryWithParam(UnaryOpType::LOG1P, static_cast<float>(true));
     } else if (name == "tanh") {
         return UnaryWithParam(UnaryOpType::TANH);
     } else if (name == "log2") {
-        return UnaryWithParam(UnaryOpType::LOG2);
+        return UnaryWithParam(UnaryOpType::LOG2, static_cast<float>(true));
     } else if (name == "log10") {
-        return UnaryWithParam(UnaryOpType::LOG10);
+        return UnaryWithParam(UnaryOpType::LOG10, static_cast<float>(true));
     } else if (name == "sin") {
         return UnaryWithParam(UnaryOpType::SIN);
     } else if (name == "cos") {
