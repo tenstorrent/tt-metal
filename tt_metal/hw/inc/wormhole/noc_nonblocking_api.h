@@ -1263,7 +1263,7 @@ template <
 inline __attribute__((always_inline)) void noc_write_with_state(
     uint32_t noc, uint32_t src_addr, uint64_t dst_addr, uint32_t size = 0, uint32_t ndests = 1) {
     if constexpr (update_counter && noc_mode == DM_DYNAMIC_NOC) {
-        if (posted) {
+        if constexpr (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
         } else {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
@@ -1293,7 +1293,7 @@ inline __attribute__((always_inline)) void noc_write_with_state(
     }
 
     if constexpr (update_counter && noc_mode == DM_DEDICATED_NOC) {
-        if (posted) {
+        if constexpr (posted) {
             noc_posted_writes_num_issued[noc] += 1;
         } else {
             noc_nonposted_writes_num_issued[noc] += 1;
@@ -1326,25 +1326,22 @@ FORCE_INLINE void noc_inline_dw_write_with_state(uint32_t noc, uint64_t dst_addr
     }
 
     if constexpr (flags & CQ_NOC_INLINE_FLAG_VAL) {
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_AT_DATA, val);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
     }
     if constexpr (flags & CQ_NOC_FLAG_DST) {
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_TARG_ADDR_LO, (uint32_t)(dst_addr));
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)(dst_addr));
     }
     if constexpr (flags & CQ_NOC_FLAG_NOC) {
         NOC_CMD_BUF_WRITE_REG(
-            noc,
-            NCRISC_WR_REG_CMD_BUF,
-            NOC_TARG_ADDR_COORDINATE,
-            (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
+            noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dst_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     }
     if constexpr (flags & CQ_NOC_INLINE_FLAG_BE) {
         uint32_t be32 = be;
         uint32_t be_shift = (dst_addr & (NOC_WORD_BYTES - 1));
         be32 = (be32 << be_shift);
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_AT_LEN_BE, be32);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
     }
     if constexpr (send) {
-        NOC_CMD_BUF_WRITE_REG(noc, NCRISC_WR_REG_CMD_BUF, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
     }
 }
