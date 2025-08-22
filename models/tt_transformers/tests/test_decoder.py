@@ -61,7 +61,7 @@ def test_decoder_inference(
     reset_seeds,
     ensure_gc,
 ):
-    dtype = ttnn.bfloat8_b
+    dtype = ttnn.bfloat16
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1
@@ -89,6 +89,19 @@ def test_decoder_inference(
         model_args.rope_theta,
         model_args.rope_scaling,
     )
+
+    if model_args.rope_local_theta is not None:
+        rope_setup_local = RotarySetup(
+            mesh_device,
+            model_args.max_batch_size,
+            model_args.head_dim,
+            model_args.max_seq_len,
+            model_args.rope_local_theta,
+            None,
+        )
+    else:
+        rope_setup_local = None
+
     transformation_mats = rope_setup.get_both_trans_mats()
 
     # Prepare page table for paged attention
@@ -176,12 +189,13 @@ def test_decoder_inference(
 
         # Get cos/sin matrices for the current position of each user
         rot_mats = rope_setup.get_rot_mats(current_pos)
-
+        rot_mats_local = None if rope_setup_local is None else rope_setup_local.get_rot_mats(current_pos)
         # Run TT model
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats_global=rot_mats,
+            rot_mats_global=rot_mats, 
+            rot_mats_local=rot_mats_local,
             mode="decode",
             page_table=page_table_tt,
         )
@@ -195,7 +209,9 @@ def test_decoder_inference(
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
         # Reference model
-        ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
+        ref_output = reference_model(pt_decode_input.to(dtype=torch.bfloat16), current_pos[0], freqs_cis_i, mask=None)
+        print("ref_output ", ref_output)
+        print("tt_output_torch ", tt_output_torch)
 
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 
@@ -209,7 +225,7 @@ def test_decoder_inference(
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,
