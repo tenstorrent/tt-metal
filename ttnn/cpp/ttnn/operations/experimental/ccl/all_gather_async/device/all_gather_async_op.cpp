@@ -133,6 +133,11 @@ void AllGatherAsync::validate_with_output_tensors(
             "Only 1D fabric config is supported for generic all gather");
         TT_FATAL(!this->do_sync, "Command Processor implementation doesn't support synchronizing");
     }
+
+    if (!this->do_sync) {
+        TT_FATAL(output_tensors.size() > 0, "Persistent buffers are required when not synchronizing");
+        TT_FATAL(this->semaphore.has_value(), "Persistent semaphores are required when not synchronizing");
+    }
 }
 
 std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
