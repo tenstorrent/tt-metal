@@ -304,7 +304,9 @@ if [ "$enable_time_trace" = "ON" ]; then
 fi
 
 if [ "$enable_profiler" = "ON" ]; then
-    cmake_args+=("-DENABLE_TRACY=ON")
+    cmake_args+=("-DTRACY_ENABLE=ON")
+else
+    cmake_args+=("-DTRACY_ENABLE=OFF")
 fi
 
 if [ "$enable_coverage" = "ON" ]; then
