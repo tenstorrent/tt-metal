@@ -7,17 +7,12 @@ You can find the full example in
 
 ## Building and Running the Example
 
-To build and execute, you may use the following commands. Note that we include the necessary environment variables here, but you may possibly need more depending on the most up-to-date installation methods.
-
-Run the appropriate command for the Tenstorrent card you have installed:
-
+To build and execute, you may use the following commands:
 ```bash
 export TT_METAL_HOME=$(pwd)
 ./build_metal.sh --build-programming-examples
 ./build/programming_examples/metal_example_noc_tile_transfer
 ```
-
----
 
 ## Main Program Overview
 
