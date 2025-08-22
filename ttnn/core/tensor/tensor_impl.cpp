@@ -534,7 +534,7 @@ Tensor to_host(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue(*cq_id);
 
     // For performance, perform all allocations via DistributedHostBuffer::transform, run from multiple threads.
-    auto distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
 
     distributed_host_buffer.emplace_shards(
         storage.coords,
@@ -698,7 +698,7 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
         shards.push_back({device_coord, distributed_host_buffer.get_shard(device_coord)});
     }
 
-    DistributedHostBuffer dst_distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    DistributedHostBuffer dst_distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
     const size_t expected_size_bytes = device_tensor.tensor_spec().compute_packed_buffer_size_bytes();
     for (const auto& [device_coord, host_buffer] : shards) {
         dst_distributed_host_buffer.emplace_shard(device_coord, [&]() {
