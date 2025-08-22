@@ -11,6 +11,7 @@
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/data_movement/move/move.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
 
@@ -37,7 +38,9 @@ static Tensor pool2d_invoke(
     std::optional<int32_t> divisor_override = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
-    bool in_place_halo = false) {
+    bool in_place_halo = false,
+    bool deallocate_input = false,
+    bool reallocate_halo_output = true) {
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     bool is_out_tiled = false;  // pool output is row major
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
@@ -70,7 +73,7 @@ static Tensor pool2d_invoke(
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
     auto output_shape = sliding_window_config.get_output_shape();
-
+    const bool is_input_tensor_in_dram = input_tensor.memory_config().is_dram();
     sliding_window::ParallelConfig parallel_config;
     MemoryConfig out_memory_config = input_tensor.memory_config();
     uint32_t num_cores_nhw = 0;
@@ -204,6 +207,14 @@ static Tensor pool2d_invoke(
         is_out_tiled,
         in_place_halo);
 
+    if (deallocate_input || is_input_tensor_in_dram) {
+        input_tensor_sharded.deallocate(/*force*/ true);
+    }
+
+    if (reallocate_halo_output) {
+        haloed_tensor = ttnn::move(haloed_tensor);
+    }
+
     const uint32_t pre_allocate_size =
         haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
@@ -239,7 +250,9 @@ Tensor MaxPool2DOp::invoke(
     bool ceil_mode,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    bool in_place_halo) {
+    bool in_place_halo,
+    bool deallocate_input,
+    bool reallocate_halo_output) {
     return pool2d_invoke(
         queue_id,
         input_tensor,
@@ -257,7 +270,9 @@ Tensor MaxPool2DOp::invoke(
         std::nullopt,  // divisor_override
         memory_config,
         applied_shard_scheme,
-        in_place_halo);
+        in_place_halo,
+        deallocate_input,
+        reallocate_halo_output);
 }
 
 Tensor AvgPool2DOp::invoke(
@@ -275,7 +290,9 @@ Tensor AvgPool2DOp::invoke(
     std::optional<int32_t> divisor_override,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    bool in_place_halo) {
+    bool in_place_halo,
+    bool deallocate_input,
+    bool reallocate_halo_output) {
     return pool2d_invoke(
         queue_id,
         input_tensor,
@@ -293,7 +310,9 @@ Tensor AvgPool2DOp::invoke(
         divisor_override,
         memory_config,
         applied_shard_scheme,
-        in_place_halo);
+        in_place_halo,
+        deallocate_input,
+        reallocate_halo_output);
 }
 
 }  // namespace operations::pool
