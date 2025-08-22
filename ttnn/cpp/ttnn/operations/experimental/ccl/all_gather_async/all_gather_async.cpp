@@ -97,10 +97,9 @@ bool use_all_gather_async_llama_sharded(const Tensor& input_tensor, const Memory
 bool use_composite_all_gather(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
-    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const std::optional<ttnn::MemoryConfig>& memory_config) {
-    uint32_t semaphore_size =
-        multi_device_global_semaphore.has_value() ? multi_device_global_semaphore.value().size() : 2;
+    uint32_t semaphore_size = multi_device_global_semaphore.size();
 
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
@@ -204,7 +203,7 @@ ttnn::Tensor composite_all_gather(
 ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
-    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -242,7 +241,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
-    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -285,7 +284,7 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
-    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
     const std::optional<ttnn::Tensor>& persistent_output_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
