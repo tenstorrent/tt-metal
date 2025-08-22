@@ -177,6 +177,11 @@ void LayerNorm::validate(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, LayerNormShardedMultiCoreProgramConfig>) {
+                if (program_config.use_welford) {
+                    TT_FATAL(
+                        this->norm_type == LayerNormType::LAYERNORM,
+                        "Welford's algorithm is only supported for LayerNorm");
+                }
                 if (program_config.inplace) {
                     TT_FATAL(
                         this->output_mem_config.is_sharded(),
@@ -414,6 +419,7 @@ operation::ProgramWithCallbacks LayerNorm::create_program(
                     program_config.subblock_w,
                     program_config.block_h,
                     program_config.block_w,
+                    program_config.use_welford,
                     this->compute_kernel_config);
             } else {
                 TT_FATAL(

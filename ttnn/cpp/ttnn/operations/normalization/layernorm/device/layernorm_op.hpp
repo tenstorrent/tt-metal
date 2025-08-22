@@ -39,6 +39,7 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     uint32_t subblock_wt,
     uint32_t block_ht,
     uint32_t block_wt,
+    bool use_welford,
     DeviceComputeKernelConfig compute_kernel_config);
 
 struct LayerNorm {
