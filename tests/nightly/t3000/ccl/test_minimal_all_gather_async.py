@@ -127,7 +127,7 @@ def run_all_gather_impl(
             input_tensor_mesh_list[i],
             persistent_output_buffer=None if do_sync else persistent_output_buffers[i],
             dim=dim,
-            multi_device_global_semaphore=None if do_sync else ccl_semaphore_handles[i],
+            multi_device_global_semaphore=ccl_semaphore_handles[i],
             num_links=num_links,
             memory_config=mem_config_ag,
             topology=all_gather_topology,

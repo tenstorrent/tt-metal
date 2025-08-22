@@ -157,7 +157,7 @@ def run_reduce_scatter_impl(
             if do_sync
             else [persistent_intermediate_buffers[i], persistent_output_buffers[i]],
             dim=dim,
-            multi_device_global_semaphore=None if do_sync else ccl_semaphore_handles[i],
+            multi_device_global_semaphore=ccl_semaphore_handles[i],
             barrier_semaphore=barrier_semaphore_handles[i] if do_sync else None,
             num_links=num_links,
             memory_config=mem_config_rs,
