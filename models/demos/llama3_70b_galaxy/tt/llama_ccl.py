@@ -471,13 +471,23 @@ class TT_CCL:
             if self.model_config is None:
                 return persistent_buffers
 
-            buffers_dict = {
-                "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
-                "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-                "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
-                "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
-            }
+            buffers_dict = (
+                {
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "WO": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                    "FF1": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF3": [(1, 1, seqlen, 3584), (1, 1, seqlen, 3584 // 4)],
+                    "FF2": [(1, 1, seqlen, 2048), (1, 1, seqlen, 2048 // 8)],
+                }
+                if not self.use_qwen_mlp
+                else {
+                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                    "FF1": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
+                    "FF3": [(1, 1, seqlen, 3200), (1, 1, seqlen, 3200 // 4)],
+                    "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
+                }
+            )
             for key, shape in buffers_dict.items():
                 tt_buffers = []
                 for i in range(1):
@@ -594,10 +604,10 @@ class TT_CCL:
                 if not self.use_qwen_mlp
                 else {
                     "QKV": [(1, 1, seqlen, 1280)],
-                    "WO": [(1, 1, seqlen, 2048)],
+                    "WO": [(1, 1, seqlen, 1280)],
                     "FF1": [(1, 1, seqlen, 3200)],
                     "FF3": [(1, 1, seqlen, 3200)],
-                    "FF2": [(1, 1, seqlen, 2048)],
+                    "FF2": [(1, 1, seqlen, 1280)],
                     "LAYERNORM": [(1, 1, seqlen, 128)],
                 }
             )
