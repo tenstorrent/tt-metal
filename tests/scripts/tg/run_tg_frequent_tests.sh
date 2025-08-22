@@ -60,7 +60,7 @@ run_tg_tests() {
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_frequent_tests failed"
-    # exit 1
+    exit 1
   fi
 
 }

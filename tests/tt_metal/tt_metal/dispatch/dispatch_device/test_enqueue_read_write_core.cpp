@@ -44,7 +44,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestBasicReadL1) {
 
     for (IDevice* device : this->devices_) {
         const CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
-        tt::llrt::write_hex_vec_to_core(device->id(), virtual_core, src_data, address);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(device->id(), virtual_core, src_data, address);
 
         std::vector<uint32_t> dst_data(num_elements, 0);
         dynamic_cast<HWCommandQueue&>(device->command_queue())
@@ -71,8 +71,8 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestBasicWriteL1) {
 
         Finish(device->command_queue());
 
-        const std::vector<uint32_t> dst_data =
-            tt::llrt::read_hex_vec_from_core(device->id(), virtual_core, address, num_elements * sizeof(uint32_t));
+        const std::vector<uint32_t> dst_data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+            device->id(), virtual_core, address, num_elements * sizeof(uint32_t));
 
         EXPECT_EQ(src_data, dst_data);
     }
