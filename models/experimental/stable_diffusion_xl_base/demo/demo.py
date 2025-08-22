@@ -40,6 +40,7 @@ def run_demo_inference(
     encoders_on_device,
     evaluation_range,
     capture_trace,
+    guidance_scale,
 ):
     batch_size = ttnn_device.get_num_devices()
 
@@ -51,8 +52,6 @@ def run_demo_inference(
 
     needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
     prompts = prompts + [""] * needed_padding
-
-    guidance_scale = 5.0
 
     # 0. Set up default height and width for unet
     height = 1024
@@ -201,16 +200,6 @@ def run_demo_inference(
     profiler.end("encode_prompts")
 
     profiler.start("prepare_latents")
-    # Reorder all_embeds to prepare for splitting across devices
-    items_per_core = len(all_embeds) // batch_size  # this will always be a multiple of batch_size because of padding
-
-    if batch_size > 1:  # If batch_size is 1, no need to reorder
-        reordered = []
-        for i in range(batch_size):
-            for j in range(items_per_core):
-                index = i + j * batch_size
-                reordered.append(all_embeds[index])
-        all_embeds = reordered
 
     prompt_embeds, negative_prompt_embeds, pooled_prompt_embeds, negative_pooled_prompt_embeds = zip(*all_embeds)
 
@@ -446,6 +435,10 @@ def run_demo_inference(
     ((50),),
 )
 @pytest.mark.parametrize(
+    "guidance_scale",
+    ((5.0),),
+)
+@pytest.mark.parametrize(
     "vae_on_device",
     [
         (True),
@@ -478,6 +471,7 @@ def test_demo(
     encoders_on_device,
     capture_trace,
     evaluation_range,
+    guidance_scale,
 ):
     return run_demo_inference(
         mesh_device,
@@ -488,4 +482,5 @@ def test_demo(
         encoders_on_device,
         evaluation_range,
         capture_trace,
+        guidance_scale,
     )
