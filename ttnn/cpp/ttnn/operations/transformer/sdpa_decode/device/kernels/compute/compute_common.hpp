@@ -123,7 +123,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
 /**
  * in0_cb = exp((in0_cb - in1_cb) * scale_fp32)
  */
-template <uint32_t in0_cb, uint32_t rows, uint32_t scale_fp32, int vector_mode = (int)VectorMode::RC, uint32_t scale_cb>
+template <uint32_t in0_cb, uint32_t rows, uint32_t scale_fp32, int vector_mode = (int)VectorMode::RC>
 void sub_exp_block_bcast_cols_inplace_reduce(uint32_t in1_cb, uint32_t reduce_cb, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
@@ -355,7 +355,8 @@ void move_block(uint32_t in_cb, uint32_t out_cb, uint32_t num_tiles) {
  */
 ALWI void cb_matmul_blocks(
     const uint32_t& in0_cb,
-    const uint32_t& in1_cb,
+    const uint32_t& in1_0_cb,
+    const uint32_t& in1_1_cb,
     const uint32_t& out_cb,
     const uint32_t& M,
     const uint32_t& N,
@@ -369,22 +370,37 @@ ALWI void cb_matmul_blocks(
     const bool& transpose,
     const bool& add_mask,
     const uint32_t& mask_cb,
-    const uint32_t& zero_cb) {
+    const uint32_t& zero_cb,
+    const bool enable_split_reader) {
     // precondition: in0_cb has M*K produced
     // preconditino: in1_cb has K*N produced
     // postcondition: in0_cb is full, in1_cb is empty
     // postcondition: out_cb has M*N produced
-
-    mm_block_init_short(
-        in0_cb, in1_cb, transpose /*transpose*/, subblock_w /*ct_dim*/, subblock_h /*rt_dim*/, in0_block_w /*kt_dim*/);
-
-    reconfig_data_format(in1_cb, in0_cb);
-    cb_wait_front(in1_cb, K * N);
-
+    uint32_t in1_cb = in1_0_cb;
     uint32_t output_num_tiles = M * N;
-    cb_reserve_back(out_cb, output_num_tiles);
     uint32_t out_subblock_num_tiles = subblock_h * subblock_w;
     uint32_t in0_index_offset = 0;
+    uint32_t in0_block_w_split = in0_block_w;
+    cb_wait_front(in0_cb, M * K);
+    cb_reserve_back(out_cb, output_num_tiles);
+
+    if (enable_split_reader) {
+        reconfig_data_format(in1_0_cb, in0_cb);
+        reconfig_data_format(in1_1_cb, in0_cb);
+        cb_wait_front(in1_0_cb, K * N / 2);
+        cb_wait_front(in1_1_cb, K * N / 2);
+        in0_block_w_split /= 2;
+    } else {
+        reconfig_data_format(in1_0_cb, in0_cb);
+        cb_wait_front(in1_0_cb, K * N);
+    }
+    mm_block_init_short(
+        in0_cb,
+        in1_cb,
+        transpose /*transpose*/,
+        subblock_w /*ct_dim*/,
+        subblock_h /*rt_dim*/,
+        in0_block_w_split /*kt_dim*/);
 
     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; ++in0_subblock) {
         uint32_t in1_index_offset = 0;
@@ -395,12 +411,26 @@ ALWI void cb_matmul_blocks(
             uint32_t in0_index = in0_index_offset;
             uint32_t in1_index = in1_index_offset;
 
+            // Iterate through DHt dim
             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
+                if (enable_split_reader) {
+                    in1_cb = (inner_dim < in0_block_w_split) ? in1_0_cb : in1_1_cb;
+                    in1_index = (inner_dim == in0_block_w_split) ? 0 : in1_index;
+                }
                 matmul_block(
-                    in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, in0_block_w);
+                    in0_cb,
+                    in1_cb,
+                    in0_index,
+                    in1_index,
+                    dst_index,
+                    transpose,
+                    subblock_w,
+                    subblock_h,
+                    in0_block_w_split);
                 in0_index++;
                 in1_index += N;
             }
+            // OPTIMIZATION : add mask immediately after matmul result is accumulated in DST
             if (add_mask) {
                 cb_wait_front(mask_cb, out_subblock_num_tiles);
                 cb_wait_front(zero_cb, 1);
@@ -422,5 +452,5 @@ ALWI void cb_matmul_blocks(
         }
         in0_index_offset += subblock_h * in0_block_w;
     }
-    cb_pop_front(in1_cb, K * N);
+    cb_pop_front(in1_0_cb, K * N);
 }
