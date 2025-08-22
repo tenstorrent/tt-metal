@@ -34,7 +34,7 @@ constexpr size_t barrier_sem = get_compile_time_arg_val(10);
 constexpr ccl_routing_utils::line_multicast_route_info_t forward_multicast_route_info =
     ccl_routing_utils::get_line_multicast_route_info_from_args<11>();
 constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_route_info =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<12 + ccl_routing_utils::num_line_multicast_args>();
+    ccl_routing_utils::get_line_multicast_route_info_from_args<11 + ccl_routing_utils::num_line_multicast_args>();
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
