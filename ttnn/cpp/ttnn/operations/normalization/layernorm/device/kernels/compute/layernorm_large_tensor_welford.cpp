@@ -100,11 +100,9 @@ void MAIN {
                 for (uint32_t j = 0; j < blk; j++) {
                     if constexpr (fuse_pre_add) {
                         // Fuse in = in + b in dst0
-                        copy_tile_to_dst_init_short(cb_in);
-                        copy_tile(cb_in, j, dst0);
-
-                        binary_dest_reuse_tiles_init<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb);
-                        binary_dest_reuse_tiles<ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(cb_inb, j, dst0);
+                        reconfig_data_format(cb_in, cb_inb);
+                        add_tiles_init(cb_in, cb_inb);
+                        add_tiles(cb_in, cb_inb, j, j, dst0);
 
                         // Welford's needs transposed input tile,
                         // and transpose_wh_dest is currently buggy,
@@ -119,9 +117,12 @@ void MAIN {
                     }
 
                     // Transpose
+                    // Note: The init_short should be sufficient here,
+                    // but there seems to be a bug with it, so we use the full init
                     constexpr auto cb_result_or_input = fuse_pre_add ? cb_interm_pre_add : cb_in;
                     reconfig_data_format_srca(cb_result_or_input);
-                    transpose_wh_init_short(cb_result_or_input);
+                    transpose_wh_init(cb_result_or_input, cb_result_or_input);
+                    // transpose_wh_init_short(cb_result_or_input);
                     transpose_wh_tile(cb_result_or_input, j, dst0);
 
                     // Accumulate mean and variance
@@ -367,8 +368,9 @@ void MAIN {
         }
 
         cb_xmm = tt::CBIndex::c_24;  // x minus mean
-        if constexpr (rms_norm) {
-            cb_pop_front(cb_ex, 1);
+        cb_pop_front(cb_ex2pe, onetile);
+        if constexpr (layernorm) {
+            cb_pop_front(cb_ex, onetile);
         }
     }  // NCHt loop
 }
