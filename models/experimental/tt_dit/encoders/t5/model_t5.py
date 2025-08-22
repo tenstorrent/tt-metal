@@ -13,9 +13,76 @@ from ...layers.feedforward import ColParallelLinear
 import math
 from ...layers.normalization import RMSNorm
 
+"""
+T5 Text Encoder Model
 
-# default values from sd35
+Architecture:
+├── T5Config
+└── T5Encoder
+    ├── RelativeTextEmbeddings
+    │   ├── token_embeddings
+    │   └── relative_attention_bias
+    │
+    ├── T5Stack
+    │   └── T5EncoderLayer[0..num_layers-1]
+    │       ├── T5Attention
+    │       │   ├── RMSNorm (pre-norm)
+    │       │   ├── Projections
+    │       │   │   ├── q_proj (ColParallelLinear)
+    │       │   │   ├── k_proj (ColParallelLinear)
+    │       │   │   ├── v_proj (ColParallelLinear)
+    │       │   │   └── o_proj (ColParallelLinear)
+    │       │   └── Operations
+    │       │       ├── QKV Split & Reshape
+    │       │       ├── Scaled Dot-Product Attention
+    │       │       └── Position Bias Addition
+    │       │
+    │       ├── First Residual Connection
+    │       │
+    │       ├── T5FF
+    │       │   ├── RMSNorm (pre-norm)
+    │       │   └── T5DenseGatedActDense
+    │       │       ├── wi0 (ColParallelLinear)
+    │       │       ├── wi1 (ColParallelLinear)
+    │       │       ├── GELU Activation
+    │       │       └── wo (ColParallelLinear)
+    │       │
+    │       └── Second Residual Connection
+    │
+    └── RMSNorm (final layer norm)
+"""
+
+
 class T5Config:
+    """
+    Configuration class to store the configuration of a `T5Encoder` model.
+
+    Instantiating a configuration with the defaults will yield a similar configuration to that of the
+    T5 model used in the Stable Diffusion 3.5 Large model.
+
+    Args:
+        vocab_size (`int`, *required*, defaults to 32128)
+            The size of the vocabulary
+        embed_dim (`int`, *required*, defaults to 4096)
+            The dimension of the embeddings
+        ff_dim (`int`, *required*, defaults to 10240)
+            The dimension of the feedforward layer
+        kv_dim (`int`, *required*, defaults to 64)
+            The dimension of the key and value vectors
+        num_heads (`int`, *required*, defaults to 64)
+            The number of attention heads
+        num_hidden_layers (`int`, *required*, defaults to 24)
+            The number of hidden layers
+        max_prompt_length (`int`, *required*, defaults to 256)
+            The maximum length of the prompt
+        layer_norm_eps (`float`, *required*, defaults to 1e-06)
+            The epsilon value for the layer normalization
+        relative_attention_num_buckets (`int`, *required*, defaults to 32)
+            The number of relative attention buckets
+        relative_attention_max_distance (`int`, *required*, defaults to 128)
+            The maximum distance for relative attention
+    """
+
     def __init__(
         self,
         vocab_size: int = 32128,
@@ -71,17 +138,12 @@ class T5Encoder:
         embeddings, position_bias = self.token_embeddings(prompt, device)
         hidden_states = self.encoder(embeddings, position_bias)
 
-        output = self.final_layer_norm(hidden_states[-1])  # Shape [batch, seq_len, embed_dim]
+        output = self.final_layer_norm(hidden_states[-1])
         hidden_states.append(output)
-        return hidden_states  # Return normalized final hidden state
-        # TODO: return the list of all hidden states with normalized final hidden state as last element
+        return hidden_states
 
 
 class T5Stack:
-    """
-    all encoder layers
-    """
-
     def __init__(
         self,
         config: T5Config,
@@ -100,21 +162,10 @@ class T5Stack:
         ]
 
     def load_state_dict(self, state_dict):
-        """
-        confirm: each encoder layer's weights are replicated across all devices
-        """
-        # TODO: check if this is correct
-        # logger.info("starting to load T5Stack state dictionary")
         layer_states = indexed_substates(state_dict, "block")
-        # logger.debug(f"extracted {len(layer_states)} layer states from state dictionary")
 
         for idx, (layer, layer_state) in enumerate(zip(self.layers, layer_states)):
-            # logger.info(f"loading layer {idx} of {len(self.layers)}")
-            # logger.debug(f"layer {idx} state keys: {list(layer_state.keys())}")
-            # logger.debug(f"layer {idx} state shapes: {[(k, v.shape if hasattr(v, 'shape') else len(v)) for k, v in layer_state.items()]}")
             layer.load_state_dict(layer_state)
-
-        # logger.info("completed loading T5Stack state dictionary")
 
     def __call__(
         self,
@@ -159,10 +210,8 @@ class T5FF:
     def __call__(
         self, hidden_states: ttnn.Tensor, ccl_manager: CCLManager, parallel_config: EncoderParallelConfig
     ) -> ttnn.Tensor:
-        # breakpoint()
-        normalized_hidden_states = self.layer_norm(hidden_states)  # [1, 256, 4096]
+        normalized_hidden_states = self.layer_norm(hidden_states)
         gated_hidden_states = self.dense_gated_dense(normalized_hidden_states)
-        # return gated_hidden_states + hidden_states  # residual
         return gated_hidden_states
 
 
@@ -211,19 +260,13 @@ class T5DenseGatedActDense:
         self.wo.load_state_dict({"weight": state_dict["wo.weight"]})
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        # breakpoint()
-        # self.wi1.weight.shape = Shape([4096, 2560])
-        # self.wi0.weight.shape = Shape([4096, 2560])
-        # self.wo.weight.shape = Shape([2560, 4096])
-
-        gelu = new_gelu_activation(self.wi0(x))  # Shape([1, 256, 2560])
-        linear = self.wi1(x)  # Shape([1, 256, 2560])
-        x = gelu * linear  # Shape([1, 256, 2560])
+        gelu = new_gelu_activation(self.wi0(x))
+        linear = self.wi1(x)
+        x = gelu * linear
         hidden_states = self.wo(x)
 
         hidden_states_shape = list(hidden_states.shape)
         hidden_states = ttnn.unsqueeze(hidden_states, 0)
-        # AllReduce output
 
         if self.parallel_config.tensor_parallel.factor > 1:
             hidden_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
@@ -235,7 +278,7 @@ class T5DenseGatedActDense:
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
-            # all gather
+
             hidden_states = ttnn.experimental.all_gather_async(
                 hidden_states_scattered,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
@@ -249,7 +292,7 @@ class T5DenseGatedActDense:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         hidden_states = ttnn.reshape(hidden_states, hidden_states_shape, hidden_states.shape)
-        return hidden_states  # Shape([1, 256, 4096])
+        return hidden_states
 
 
 def new_gelu_activation(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -286,12 +329,11 @@ class T5EncoderLayer:
             parallel_config=self.parallel_config,
         )
 
-        hidden_states_residual1 = attn_output + hidden_states  # residual
-        # breakpoint()
+        hidden_states_residual1 = attn_output + hidden_states
         hidden_states_ff = self.ff(
             hidden_states_residual1, ccl_manager=self.ccl_manager, parallel_config=self.parallel_config
         )
-        return hidden_states_ff + hidden_states_residual1  # residual
+        return hidden_states_ff + hidden_states_residual1
 
 
 class T5Attention:
@@ -311,11 +353,10 @@ class T5Attention:
         self.embed_dim = config.embed_dim
         self.head_dim = config.embed_dim // self.num_heads
 
-        # weights to be added in load_state_dict, column sharded
         self.q_proj = ColParallelLinear(
             in_features=self.embed_dim,
             out_features=self.embed_dim,
-            bias=False,  # T5 doesn't use bias in attention
+            bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
             init=True,
@@ -352,7 +393,6 @@ class T5Attention:
             mesh_device=self.mesh_device,
         )
 
-    # TODO: change all load_state_dict method names to load_weights
     def load_state_dict(self, state_dict):
         self.q_proj.load_state_dict(substate(state_dict, "SelfAttention.q"))
         self.k_proj.load_state_dict(substate(state_dict, "SelfAttention.k"))
@@ -372,39 +412,25 @@ class T5Attention:
 
         hidden_states = self.layer_norm(hidden_states)
 
-        # Project input into Q, K, V
-        q = self.q_proj(hidden_states)  # [batch_size, seq_len, embed_dim/4] # [4096, 1024]
-        k = self.k_proj(hidden_states)  # [batch_size, seq_len, embed_dim/4] # [4096, 1024]
-        v = self.v_proj(hidden_states)  # [batch_size, seq_len, embed_dim/4] # [4096, 1024]
+        q = self.q_proj(hidden_states)
+        k = self.k_proj(hidden_states)
+        v = self.v_proj(hidden_states)
 
-        qkv = ttnn.concat([q, k, v], dim=-1)  # [batch_size, seq_len, embed_dim*(3/4)]
+        qkv = ttnn.concat([q, k, v], dim=-1)
 
         num_devices = self.parallel_config.tensor_parallel.factor
         num_local_heads = self.num_heads // num_devices
 
-        # Split and reshape for multi-head attention:
-        # 1. Split qkv into q, k, v tensors
-        # 2. Reshape to add head dimension [batch_size, seq_len, num_heads, head_dim=embed_dim/num_heads]
-        # 3. Transpose to:
-        #    q [batch_size, num_heads, seq_len, head_dim]
-        #    k [batch_size, num_heads, head_dim, seq_len] (since transpose_key=True)
-        #    v [batch_size, num_heads, seq_len, head_dim]
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
             qkv, num_heads=num_local_heads, transpose_key=True
         )
 
-        # TODO: (idk yet) ? replace scores with scores = ttnn.matmul(q, k) / math.sqrt(self.head_dim)
+        scores = ttnn.matmul(q, k)
+        scores = scores + position_bias
+        attn_weights = ttnn.softmax(scores, dim=-1)
+        attn_output = ttnn.matmul(attn_weights, v)
+        attn_output = ttnn.transformer.concatenate_heads(attn_output)
 
-        scores = ttnn.matmul(q, k)  # attention scores # [batch_size, num_heads, seq_len, seq_len]
-        scores = scores + position_bias  # add position bias
-        attn_weights = ttnn.softmax(scores, dim=-1)  # attention weights
-        # print(attn_weights)
-        attn_output = ttnn.matmul(attn_weights, v)  # attention output # [batch_size, num_heads, seq_len, head_dim]
-        attn_output = ttnn.transformer.concatenate_heads(
-            attn_output
-        )  # concat heads # [batch_size, seq_len, num_heads*head_dim=embed_dim]
-
-        # all gather to get attention output on all devices
         if self.parallel_config.tensor_parallel.factor > 1:
             attn_output = ttnn.unsqueeze(attn_output, 0)  # unsqueeze for all gather
             orig_shape = list(attn_output.shape)
@@ -421,8 +447,7 @@ class T5Attention:
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
             )
 
-        # column sharded. need all gather
-        dense_out = self.o_proj(attn_output)  # [batch_size, seq_len, embed_dim/4]
+        dense_out = self.o_proj(attn_output)
 
         if self.parallel_config.tensor_parallel.factor > 1:
             dense_out = ttnn.experimental.all_gather_async(
@@ -435,9 +460,8 @@ class T5Attention:
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-                # memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        # breakpoint()
+
         dense_out_shape = list(dense_out.shape)
         dense_out_shape[2] = orig_shape[2]
         dense_out = ttnn.reshape(dense_out, tuple(dense_out_shape), dense_out.shape)
@@ -470,7 +494,21 @@ def _relative_position_bucket(relative_position: torch.Tensor, num_buckets: int,
 
 class RelativeTextEmbeddings:
     """
-    Embeds text tokens and adds *relative* position embeddings.
+    Implements text token embeddings with relative positional encoding
+
+    Two main components:
+    1. Token Embeddings: Converts input tokens into dense vectors
+    2. Relative Position Bias: Computes relative positional encodings between tokens
+
+    Args:
+        config (`T5Config`)
+            Configuration object containing model parameters
+        mesh_device (`ttnn.Device`)
+            Device for tensor placement and computation
+        ccl_manager (`CCLManager`)
+            Manager for collective communication operations
+        parallel_config (`EncoderParallelConfig`)
+            Configuration for parallel processing
     """
 
     def __init__(
@@ -487,9 +525,7 @@ class RelativeTextEmbeddings:
         self.parallel_config = parallel_config
         self.ccl_manager = ccl_manager
 
-    # TODO: make sure state_dict keys are correct
     def load_state_dict(self, state_dict):
-        # weights are replicated across all devices
         self.token_embedding_weights = bf16_tensor(
             state_dict["encoder.embed_tokens.weight"], device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
         )
@@ -500,7 +536,6 @@ class RelativeTextEmbeddings:
         )
 
     def __call__(self, prompt: ttnn.Tensor, device: ttnn.Device) -> ttnn.Tensor:
-        # breakpoint()
         input_embeddings = ttnn.embedding(prompt, self.token_embedding_weights, layout=ttnn.TILE_LAYOUT)
         position_bias = _compute_relative_position_bias(
             seq_length=prompt.shape[-1],
@@ -537,7 +572,7 @@ def _compute_relative_position_bias(
     output = torch.nn.functional.embedding(relative_position_bucket, torch_relative_attention_bias)
     output = output.permute([2, 0, 1]).unsqueeze(0)
     output = output[:, :, -seq_length:, :]
-    # Shard outputs on dim=-3, heads
+
     shard_dims = [None, None]
     shard_dims[parallel_config.tensor_parallel.mesh_axis] = -3
     return ttnn.from_torch(
@@ -547,11 +582,3 @@ def _compute_relative_position_bias(
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=tuple(device.shape), dims=shard_dims),
     )
-
-
-# t5 stack:
-# 1. transformer block
-# (one transformer layer)
-# 1.1 self attention  (uses position bias / relative attention)
-# 1.2 feedforward
-# 2. final layer norm
