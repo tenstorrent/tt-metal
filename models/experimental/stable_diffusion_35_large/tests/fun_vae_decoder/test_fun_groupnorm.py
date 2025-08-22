@@ -99,7 +99,7 @@ def test_group_norm(
     if parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape[1] != 4:
         cfg_shape = parallel_manager.dit_parallel_config.cfg_parallel.mesh_shape
         assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
-        print(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP + T5")
+        logger.info(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP + T5")
         vae_device.reshape(ttnn.MeshShape(1, 4))
     vae_parallel_config = create_vae_parallel_config(vae_device, parallel_manager)
 
