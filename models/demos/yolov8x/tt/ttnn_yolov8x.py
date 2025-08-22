@@ -342,14 +342,13 @@ class TtSppf:
         cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
         y = [cv1]
 
-        output = y[-1]
         for i in range(3):
             output = ttnn.max_pool2d(
-                input_tensor=output,
+                input_tensor=y[-1],
                 batch_size=self.batch_size,
                 input_h=out_h,
                 input_w=out_w,
-                channels=output.shape[-1],
+                channels=y[-1].shape[-1],
                 kernel_size=[5, 5],
                 stride=[1, 1],
                 padding=[2, 2],
