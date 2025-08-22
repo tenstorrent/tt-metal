@@ -493,8 +493,8 @@ Tensor all_gather_async(
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    bool use_optimal_ccl_for_llama,
-    bool use_all_gather_async_llama_sharded) {
+    bool use_all_gather_async_llama_sharded,
+    bool use_optimal_ccl_for_llama) {
     std::vector<IDevice*> devices;
     return all_gather_async_impl(
         input_tensor,
@@ -521,13 +521,12 @@ Tensor all_gather_async(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     std::optional<uint32_t> cluster_axis,
-    bool use_optimal_ccl_for_llama,
     bool use_all_gather_async_llama_sharded,
+    bool use_optimal_ccl_for_llama,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
     std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
-
     return all_gather_async_impl(
         input_tensor,
         persistent_output_buffer,
