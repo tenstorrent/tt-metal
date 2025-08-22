@@ -4,14 +4,13 @@
 
 
 from types import SimpleNamespace
-from typing import Union
 
 import torch
 from loguru import logger
 from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
     Qwen2_5_VLForConditionalGeneration as Ref_Qwen2_5_VLForConditionalGeneration,
 )
-from vllm.inputs import INPUT_REGISTRY, DecoderOnlyInputs, EncoderDecoderInputs, InputContext
+from vllm.inputs import INPUT_REGISTRY
 from vllm.model_executor.models.interfaces import SupportsMultiModal
 
 import ttnn
@@ -19,6 +18,7 @@ from models.demos.qwen25_vl.tt.common import merge_vision_tokens, multimodal_rop
 from models.demos.qwen25_vl.tt.generator import Generator as QwenVLGenerator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.tt_transformers.tt.generator_vllm import input_processor_for_multimodal
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs
 
 
@@ -84,39 +84,12 @@ def initialize_vllm_text_transformer(
     return tt_model_args, model
 
 
-def input_processor_for_qwen25_vl(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
-    input_processor = ctx.get_hf_processor()
-    if "prompt" in inputs:
-        prompt_text = inputs["prompt"]
-    else:
-        # [INFO] with current version of vLLM, in server mode, inputs["prompt"] gives KeyError; only inputs['prompt_token_ids'] is available
-        assert "prompt_token_ids" in inputs, "prompt_token_ids must be available in server mode"
-        prompt_text = input_processor.decode(inputs["prompt_token_ids"], skip_special_tokens=False)
-
-    multi_modal_data = inputs.get("multi_modal_data", None)
-
-    processed_inputs = input_processor(
-        text=prompt_text,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
-        images=multi_modal_data["image"] if multi_modal_data is not None else None,
-        videos=None,  # [INFO] videos are not supported yet
-        return_tensors="pt",
-    )
-
-    assert processed_inputs.input_ids.shape[0] == 1, "Only one image is processed at a time by vLLM"
-    return {
-        "type": inputs["type"],
-        "prompt_token_ids": processed_inputs.input_ids[0].tolist(),
-        "prompt": prompt_text,
-        "multi_modal_data": {"image": processed_inputs},  # [INFO] add processed_inputs
-    }
-
-
 class CustomNamespace(SimpleNamespace):
     def __contains__(self, key):
         return key in self.__dict__
 
 
-@INPUT_REGISTRY.register_input_processor(input_processor_for_qwen25_vl)
+@INPUT_REGISTRY.register_input_processor(input_processor_for_multimodal)
 class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
         self.reference_model = kwargs.pop("reference_model", None)
