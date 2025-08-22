@@ -96,10 +96,6 @@ template struct ExecuteUnary<UnaryOpType::ISNAN>;
 template struct ExecuteUnary<UnaryOpType::ISNEGINF>;
 template struct ExecuteUnary<UnaryOpType::ISPOSINF>;
 template struct ExecuteUnary<UnaryOpType::LEZ>;
-template struct ExecuteUnary<UnaryOpType::LOG>;
-template struct ExecuteUnary<UnaryOpType::LOG10>;
-template struct ExecuteUnary<UnaryOpType::LOG2>;
-template struct ExecuteUnary<UnaryOpType::LOG1P>;
 template struct ExecuteUnary<UnaryOpType::LOGICAL_NOT_UNARY>;
 template struct ExecuteUnary<UnaryOpType::LTZ>;
 template struct ExecuteUnary<UnaryOpType::NEG>;
@@ -146,6 +142,26 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERF>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::ERFC>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::GELU>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
+
+template <UnaryOpType unary_op_type>
+Tensor ExecuteUnaryWithFastAndApproximateModeTrue<unary_op_type>::invoke(
+    QueueId queue_id,
+    const Tensor& input_tensor,
+    const bool parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        queue_id,
+        input_tensor,
+        {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
+        memory_config,
+        optional_output_tensor);
+}
+
+template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG>;
+template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG10>;
+template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG2>;
+template struct ExecuteUnaryWithFastAndApproximateModeTrue<UnaryOpType::LOG1P>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
