@@ -292,6 +292,8 @@ FORCE_INLINE void read_sticks_activation_reuse(
 
     // Last core sometimes has less work to do, but we still need to push the same number of tiles
     // to avoid blocking compute kernels
+    DPRINT << "need_to_push_remaining_tiles " << (uint32_t)need_to_push_remaining_tiles << "\n";
+    DPRINT << "Remaining tiles to push: " << remaining_tiles_to_push << "\n";
     if constexpr (need_to_push_remaining_tiles) {
         constexpr uint32_t tiles_to_push = image_width_tiles * act_cb_w_tiles;
         for (uint32_t i = 0; i < remaining_tiles_to_push; i += image_width_tiles) {

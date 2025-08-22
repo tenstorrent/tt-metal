@@ -106,6 +106,8 @@ void kernel_main() {
             cb_push_back(cb_id_act, act_block_num_tiles);
             reader_offset += window_outer_offset;
 #else
+            DPRINT << "need_to_push_remaining_tiles " << (uint32_t)need_to_push_remaining_tiles << "\n";
+
             read_sticks_activation_reuse<
                 coalesced_read_bytes,
                 conv_act_c_read_bytes,
