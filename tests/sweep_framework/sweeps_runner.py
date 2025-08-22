@@ -4,6 +4,7 @@
 
 import argparse
 from contextlib import contextmanager
+import enlighten
 import sys
 import os
 import pathlib
@@ -284,12 +285,12 @@ def device_context(test_module, output_queue):
 
 def run(test_module, input_queue, output_queue, config: SweepsConfig):
     with device_context(test_module, output_queue) as (device, device_name):
-        while True:            
+        while True:
             try:
                 test_vector = input_queue.get(block=True, timeout=1)
             except Empty:
                 logger.info("Test suite complete")
-                return            
+                return
             test_vector = deserialize_vector_structured(test_vector)
             try:
                 results = test_module.run(**test_vector, device=device)
@@ -411,7 +412,6 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                         p.join()
                     p = None
                     reset_util.reset()
-                    reload_ttnn()
 
                 result["status"], result["exception"] = TestStatus.FAIL_CRASH_HANG, "TEST TIMED OUT (CRASH / HANG)"
                 result["e2e_perf"] = None
@@ -446,7 +446,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                     break
                 else:
                     logger.info("Continuing with remaining tests in suite despite timeout.")
-                    p = Process(target=run, args=(test_module, input_queue, output_queue))
+                    p = Process(target=run, args=(test_module, input_queue, output_queue, config))
                     p.start()
                     # Continue to the next test vector without breaking
 
