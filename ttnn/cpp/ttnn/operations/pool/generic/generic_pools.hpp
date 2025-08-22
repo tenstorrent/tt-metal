@@ -32,7 +32,7 @@ struct MaxPool2DOp {
         bool in_place_halo = false,
         bool deallocate_input = false,
         bool reallocate_halo_output = true,
-        bool return_indices);
+        bool return_indices = false);
 };
 struct AvgPool2DOp {
     static Tensor invoke(

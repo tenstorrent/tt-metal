@@ -351,6 +351,8 @@ Tensor halo_op(
         in_place = false;
     }
 
+    printf("in_nsticks_per_core: %u, max_out_nsticks_per_core: %u\n", in_nsticks_per_core, max_out_nsticks_per_core);
+
     return operation::run(
                HaloDeviceOperation{
                    .config_ = config,

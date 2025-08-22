@@ -103,8 +103,8 @@ void bind_max_pool2d_operation(py::module& module) {
                bool deallocate_input,
                bool reallocate_halo_output,
                bool return_indices,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(
+               QueueId queue_id) -> py::object {
+                auto result = self(
                     queue_id,
                     input_tensor,
                     batch_size,
