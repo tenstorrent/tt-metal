@@ -201,6 +201,7 @@ Result conv2d_DRAM(
     Conv2dSliceConfig dram_slice_config = dram_slice_config_.value_or(
         Conv2dSliceConfig{.slice_type = determine_conv_slice_type(input_height, input_width), .num_slices = 0});
 
+    TT_FATAL(!mm_conv, "DRAM Slicing doesn't currently support MM Conv");
     TT_FATAL(!memory_config_.has_value(), "Setting Memory config for Conv2D with DRAM Slicing is not supported.");
     TT_FATAL(
         !(conv_config.output_layout == Layout::ROW_MAJOR && output_dtype == DataType::BFLOAT8_B),
