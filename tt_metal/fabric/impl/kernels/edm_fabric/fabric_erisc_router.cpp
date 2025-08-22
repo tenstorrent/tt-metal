@@ -31,9 +31,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_txq_setup.h"
 #include "hostdevcommon/fabric_common.h"
 
-// Lite fabric components
-// #include "tests/tt_metal/tt_metal/tunneling/lite_fabric_channels.hpp"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>
