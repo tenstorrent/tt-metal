@@ -1,10 +1,3 @@
-/*
- * TODO:
- * -----
- * - Wait until subscribers have all finished before fetching a new buffer. Continue to use
- *   existing buffer until ready to hand off.
- */
-
 #include <future>
 #include <queue>
 #include <unistd.h>
