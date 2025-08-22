@@ -5,6 +5,7 @@
 #include "prefix_scan_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -98,6 +99,10 @@ operation::ProgramWithCallbacks multi_core_ssm_prefix_scan(
 
     std::vector<uint32_t> reader_compile_time_args = {cb_a_in_id, cb_bx_in_id, cb_h_in_id};
     std::vector<uint32_t> writer_compile_time_args = {cb_out_id, cb_h_acc_id, cb_h_in_id};
+    tt::tt_metal::TensorAccessorArgs(a_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bx_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(h_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_compile_time_args = {
         cb_a_in_id,
         cb_bx_in_id,

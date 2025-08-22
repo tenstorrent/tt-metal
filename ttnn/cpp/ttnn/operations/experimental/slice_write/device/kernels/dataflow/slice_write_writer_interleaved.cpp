@@ -40,9 +40,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* num_padded_sticks = num_unpadded_sticks + num_dims;
     volatile tt_l1_ptr uint32_t* id_per_dim = num_padded_sticks + num_dims;
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
-    constexpr bool dst0_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto dst_args = TensorAccessorArgs<1>();
 
-    const InterleavedAddrGen<dst0_is_dram> s0 = {.bank_base_address = dst_addr, .page_size = output_stick_size};
+    const auto s0 = TensorAccessor(dst_args, dst_addr, output_stick_size);
     const uint32_t noc_write_size = std::min(output_stick_size, input_stick_size);
     uint32_t dst_stick_id = start_id;
     uint32_t sticks_read = 0;
