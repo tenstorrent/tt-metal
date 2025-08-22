@@ -16,16 +16,17 @@ This document provides advanced users and developers with comprehensive instruct
 
 ### 2: Install Software Dependencies
 
-- Download and run the **TT-Installer** installation script:
+#### Option 1: **TT-Installer** Script (recommended)
+- For a quick setup, download and run the **TT-Installer** installation script:
 ```
 curl -fsSL https://github.com/tenstorrent/tt-installer/releases/latest/download/install.sh -O
 chmod +x install.sh
 ./install.sh --no-install-podman --no-install-metalium-container
 ```
-
-You can customize your installation with command-line arguments, read more about it at [TT-Installer's Wiki.](https://github.com/tenstorrent/tt-installer/wiki/Customizing-your-installation)
-
 - For more information visit Tenstorrent's [TT-Installer GitHub repository](https://github.com/tenstorrent/tt-installer).
+
+#### Option 2: Manual Installation
+- For more control over each stack component, refer to the [manual software dependencies installation guide.](https://docs.tenstorrent.com/getting-started/manual-software-install.html)
 
 ## TT-NN / TT-Metalium Installation
 
