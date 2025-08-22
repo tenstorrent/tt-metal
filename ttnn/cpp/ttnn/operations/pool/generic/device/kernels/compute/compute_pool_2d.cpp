@@ -23,9 +23,12 @@
 #define FACE_WIDTH 16
 #define FACE_HEIGHT 16
 
+#include "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel.h"
+
 namespace NAMESPACE {
 
 void MAIN {
+    uint64_t timestamp = ckernel::read_wall_clock();
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
@@ -89,6 +92,10 @@ void MAIN {
             in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
         pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
     }
+
+    // this can be done here because we do not use the SFPU for anything else so it does not get reprogrammed
+    // if you use the sfpu for other operations, you need to call this to reprogram the sfpu
+    ckernel::max_pool_with_indices_init();
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
@@ -191,8 +198,12 @@ void MAIN {
                     // dprint_tensix_dest_reg(2);
 
                     // sort tile 0 descending, phase 0 through 4 which is log2(32-1)
-                    topk_tile_init();
-                    ckernel::topk_local_sort(data_dst_idx, 0, 4, 0);
+                    // topk_tile_init();
+                    // ckernel::topk_local_sort(data_dst_idx, 0, 4, 0);
+
+                    // ckernel::max_pool_with_indices_init();
+                    constexpr int KERNEL_SIZE = 9;
+                    ckernel::max_pool_with_indices<KERNEL_SIZE>(data_dst_idx, index_dst_idx);
 
                     // Pop the temporary circular buffers after processing
                     cb_pop_front(tile_tmp_cb_id, topk_output_tiles);
@@ -244,6 +255,9 @@ void MAIN {
             cb_pop_front(curr_scalar_cb_id, 1);
         }
     }
+    uint64_t timestamp2 = ckernel::read_wall_clock();
+    uint64_t duration = timestamp2 - timestamp;
+    DPRINT << "compute_pool_2d.cpp kernel duration: " << duration << ENDL();
 }
 
 }  // namespace NAMESPACE

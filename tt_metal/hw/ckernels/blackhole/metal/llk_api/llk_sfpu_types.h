@@ -117,5 +117,6 @@ enum SfpuType {
     hardsigmoid,
     where,
     softsign,
-    celu
+    celu,
+    max_pool_with_indices,
 };
