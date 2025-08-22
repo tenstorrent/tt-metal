@@ -15,6 +15,8 @@ namespace layernorm::compute::utils {
 // and does not commit or release
 ALWI void transpose_pack_mean_and_variance(uint32_t cb_ex, uint32_t cb_ex2, uint32_t ex_dst, uint32_t ex2_dst) {
     constexpr auto onetile = 1;
+    cb_reserve_back(cb_ex, onetile);
+    cb_reserve_back(cb_ex2, onetile);
     pack_reconfig_data_format(cb_ex);
     pack_tile(ex_dst, cb_ex);
     pack_reconfig_data_format(cb_ex2);
