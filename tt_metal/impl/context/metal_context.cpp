@@ -61,7 +61,7 @@ void MetalContext::initialize(
     bool minimal) {
 
     if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
-        TT_FATAL(
+        log_error(
             tt::LogAlways,
             "Mock cluster cannot be initialized because there is no device. "
             "Mock clusters are only supported for testing control plane initialization without a device."
