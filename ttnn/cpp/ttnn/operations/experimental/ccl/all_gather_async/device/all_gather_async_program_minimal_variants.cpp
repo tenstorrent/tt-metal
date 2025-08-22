@@ -471,6 +471,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     static_cast<uint32_t>(topology),  // topology
                     dir,                              // direction
                     chunks_per_sync_val,
+                    do_sync,                      // use synchronize barrier semaphore
+                    barrier_semaphore.address(),  // synchronize barrier semaphore
                 };
                 fabric_mux_connection_ct_args(
                     worker == 0,
@@ -523,8 +525,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     semaphore.at(dir).address(),                               // out_ready_semaphore_forward
                     input_tile_id_start % input_tensor_Wt,                     // start_pages_read_in_row
                     input_tile_id_start / input_tensor_Wt * output_tensor_Wt,  // start_row_offset
-                    do_sync,                                                   // use synchronize barrier semaphore
-                    barrier_semaphore.address(),                               // synchronize barrier semaphore
                     opposite_core_coord.x,
                     opposite_core_coord.y};
                 fabric_mux_connection_rt_args(
@@ -809,6 +809,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         num_targets_backward,             // num_targets_backward_direction
         ring_size,                        // ring_size
         do_sync,                          // use_barrier_sem
+        barrier_semaphore.address(),      // barrier_sem
     };
     writer_kernel_config.compile_args.insert(
         writer_kernel_config.compile_args.end(), forward_args.begin(), forward_args.end());
@@ -922,7 +923,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
             drain_sync_core.x,                    // out_ready_sem_noc0_x
             drain_sync_core.y,                    // out_ready_sem_noc0_y
             out_ready_sem_wait_value,             // out_ready_sem_wait_value
-            barrier_semaphore.address(),          // barrier_sem
             barrier_core.x,                       // barrier_sem_noc0_x
             barrier_core.y                        // barrier_sem_noc0_y
         };
