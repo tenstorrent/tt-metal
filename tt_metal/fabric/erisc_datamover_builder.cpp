@@ -27,7 +27,6 @@
 
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
-#include "dispatch/kernel_config/relay_mux.hpp"
 #include "core_coord.hpp"
 #include "fabric_edm_types.hpp"
 #include <tt-logger/tt-logger.hpp>
