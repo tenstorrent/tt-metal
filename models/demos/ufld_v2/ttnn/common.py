@@ -21,6 +21,7 @@ class TtnnUFLDV2Conv2D:
         if is_blk:
             shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
         self.conv = conv
+        self.activation_dtype = activation_dtype
         self.device = device
         self.in_channels = conv.in_channels
         self.out_channels = conv.out_channels
@@ -35,7 +36,7 @@ class TtnnUFLDV2Conv2D:
             packer_l1_acc=False,
             math_approx_mode=True,
         )
-        self.conv_output_dtype = activation_dtype
+        self.conv_output_dtype = self.activation_dtype
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
