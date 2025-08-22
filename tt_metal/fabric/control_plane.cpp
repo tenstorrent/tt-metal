@@ -2314,7 +2314,7 @@ void ControlPlane::populate_fabric_connection_info(
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2d_fabric = topology == Topology::Mesh;
+    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
     const auto sender_channel = is_2d_fabric ? router_direction : 0;
 
     // Always populate fabric router config for normal workers
