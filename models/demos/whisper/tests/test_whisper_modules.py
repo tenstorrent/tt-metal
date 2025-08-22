@@ -397,10 +397,14 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence
     inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features
     decoder_input_ids = torch.ones(1, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
-
     batch_size = 1
     attention_mask = None
-
+    print(
+        "torch inputs, input_features and attention_mask, decoder_input_ids",
+        input_features.shape,
+        decoder_input_ids.shape,
+        attention_mask,
+    )
     model = WhisperModel.from_pretrained(model_name).eval()
 
     expected_last_hidden_state = model(
@@ -428,6 +432,31 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence
     if use_kv_cache:
         kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512)
         current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
+
+    if input_embeds is not None:
+        print("input_embeds are", input_embeds.shape)
+    else:
+        print("input_embeds are", input_embeds)
+
+    if decoder_hidden_states is not None:
+        print("decoder_hidden_states are", decoder_hidden_states.shape)
+    else:
+        print("decoder_hidden_states are", decoder_hidden_states)
+
+    if decoder_attention_mask is not None:
+        print("decoder_attention_mask are", decoder_attention_mask.shape)
+    else:
+        print("decoder_attention_mask are", decoder_attention_mask)
+
+    if use_kv_cache:
+        print("kv_cache are", kv_cache[0], kv_cache[1])
+    else:
+        print("kv_cache are", use_kv_cache)
+
+    if use_kv_cache:
+        print("current_decode_pos are", current_decode_pos.shape)
+    else:
+        print("current_decode_pos are", use_kv_cache)
 
     last_hidden_state = ttnn_model.whisper(
         config,
