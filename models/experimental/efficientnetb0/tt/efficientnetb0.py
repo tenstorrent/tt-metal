@@ -122,7 +122,11 @@ class Conv2dDynamicSamePadding:
         self.pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
 
         if self.pad_h > 0 or self.pad_w > 0:
-            if (self.pad_h, self.pad_w) != (3, 3) and (self.pad_h, self.pad_w) != (2, 2):
+            if (
+                (self.pad_h, self.pad_w) != (3, 3)
+                and (self.pad_h, self.pad_w) != (2, 2)
+                and (self.pad_h, self.pad_w) != (1, 1)
+            ):
                 conv_params.input_width = conv_params.input_width + self.pad_w // 2 + self.pad_w - self.pad_w // 2
                 conv_params.input_height = conv_params.input_height + self.pad_h // 2 + self.pad_h - self.pad_h // 2
             else:
@@ -160,7 +164,11 @@ class Conv2dDynamicSamePadding:
             input_height = int(math.sqrt((x.shape[2] // self.batch)))
             input_width = int(math.sqrt((x.shape[2] // self.batch)))
 
-            if (self.pad_h, self.pad_w) != (3, 3) and (self.pad_h, self.pad_w) != (2, 2):
+            if (
+                (self.pad_h, self.pad_w) != (3, 3)
+                and (self.pad_h, self.pad_w) != (1, 1)
+                and (self.pad_h, self.pad_w) != (2, 2)
+            ):
                 x = ttnn.sharded_to_interleaved(x)
                 x = ttnn.reshape(x, (self.batch, input_height, input_width, x.shape[3]))
                 x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
