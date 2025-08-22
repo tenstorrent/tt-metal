@@ -13,6 +13,13 @@ from loguru import logger
 import ttnn
 
 
+def _validate_file_extension(file_name: pathlib.Path, enable_multihost_format: bool):
+    if enable_multihost_format and not str(file_name).endswith(".tensorbin"):
+        raise RuntimeError(f"File {file_name} must have .tensorbin extension when enable_multihost_format=True")
+    elif not enable_multihost_format and not str(file_name).endswith(".bin"):
+        raise RuntimeError(f"File {file_name} must have .bin extension when enable_multihost_format=False")
+
+
 def _golden_function(input_tensor: ttnn.Tensor, slices):
     output_tensor = input_tensor[slices]
     if output_tensor.ndim == 0:
@@ -535,6 +542,7 @@ def load_tensor(
         >>> tensor = ttnn.load_tensor(file_name=str(tensor.bin), device=device)
     """
     file_name = pathlib.Path(file_name)
+    _validate_file_extension(file_name, enable_multihost_format)
     if not file_name.exists():
         raise RuntimeError(f"Unable to load the tensor from {file_name}.  The file does not exist.")
     if not file_name.is_file():
@@ -543,7 +551,17 @@ def load_tensor(
     if enable_multihost_format:
         return ttnn._ttnn.tensor.load_tensor_flatbuffer(str(file_name), device)
     else:
-        return ttnn._ttnn.tensor.load_tensor(str(file_name), device)
+        tensor = ttnn._ttnn.tensor.load_tensor(str(file_name), device)
+
+        tensorbin_path = file_name.parent / (file_name.stem + ".tensorbin")
+        if not tensorbin_path.exists():
+            logger.debug(f"Generating {file_name} to new format at {tensorbin_path}")
+            ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(tensorbin_path), tensor)
+
+        if device is not None:
+            tensor = tensor.to(device, tensor.memory_config())
+
+        return tensor
 
 
 # TODO: #16067 - Remove `enable_multihost_format`, when we remove the legacy format.
@@ -567,6 +585,7 @@ def dump_tensor(
         >>> dump_tensor(file_name=str(tensor.bin), tensor=tensor)
     """
     file_name = pathlib.Path(file_name)
+    _validate_file_extension(file_name, enable_multihost_format)
     if enable_multihost_format:
         ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(file_name), tensor)
     else:
@@ -616,6 +635,10 @@ def as_tensor(
             [-0.761719, 0.53125, -0.652344]], dtype=bfloat16)
     """
 
+    if device is not None and memory_config is None:
+        raise RuntimeError("memory_config must be specified when device is specified")
+
+    torch_tensor = tensor
     dtype_name = dtype.name if dtype is not None else "None"
     layout_name = layout.name if layout is not None else "None"
 
@@ -623,8 +646,27 @@ def as_tensor(
     if ttnn.using_distributed_env():
         enable_multihost_format = True
 
-    if device is not None and memory_config is None:
-        raise RuntimeError("memory_config must be specified when device is specified")
+    def multihost_filename(cache_file_name: str):
+        base_file_name = f"{cache_file_name}_dtype_{dtype_name}_layout_{layout_name}"
+        if ttnn.using_distributed_env():
+            base_file_name = f"{base_file_name}_{os.getenv('TT_MESH_HOST_RANK')}"
+
+        cache_file_name = f"{base_file_name}.tensorbin"
+
+        return pathlib.Path(cache_file_name)
+
+    def legacy_filename(cache_file_name: str):
+        if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper):
+            storage_type = f"_multi_device" if mesh_mapper else ""
+        elif mesh_mapper:
+            storage_type = f"_multi_device_{device.get_num_devices()}"
+        else:
+            storage_type = ""
+        base_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}"
+        cache_file_name = f"{base_file_name}.bin"
+        cache_path = pathlib.Path(cache_file_name)
+
+        return cache_path.parent / "tt-mesh" / cache_path.name
 
     def torch_to_ttnn(
         tensor: "torch.Tensor",
@@ -679,43 +721,36 @@ def as_tensor(
                 tensor = tensor.to(device, memory_config)
             return tensor
 
-        if enable_multihost_format:
-            # Don't embed the number of devices / storage type in the cache file name.
-            # This is not needed, as tensor multi-device vs single-device is generalized.
-            storage_type = ""
-        elif isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper):
-            storage_type = f"_multi_device" if mesh_mapper else ""
-        elif mesh_mapper:
-            storage_type = f"_multi_device_{device.get_num_devices()}"
-        else:
-            storage_type = ""
+        multihost_cache_path = multihost_filename(cache_file_name)
+        legacy_cache_path = legacy_filename(cache_file_name)
 
-        base_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}"
-        if ttnn.using_distributed_env():
-            base_file_name = f"{base_file_name}_{os.getenv('TT_MESH_HOST_RANK')}"
+        cache_path_to_use = multihost_cache_path if enable_multihost_format else legacy_cache_path
+        cache_file_name = str(cache_path_to_use)
 
-        if enable_multihost_format:
-            cache_file_name = f"{base_file_name}.tensorbin"
-        else:
-            cache_file_name = f"{base_file_name}.bin"
-
-        cache_path = pathlib.Path(cache_file_name)
-
-        if enable_multihost_format:
-            cache_path = cache_path.parent / cache_path.name
-        else:
-            # TODO: #16067 - Remove `tt-mesh` prefix when we remove the legacy format.
-            cache_path = cache_path.parent / "tt-mesh" / cache_path.name
-        cache_file_name = str(cache_path)
-
-        if not cache_path.exists() or not cache_path.is_file():
+        if not cache_path_to_use.exists() or not cache_path_to_use.is_file():
             return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper, enable_multihost_format)
 
         try:
             if enable_multihost_format:
-                tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(cache_file_name, device=device)
+                tensor = ttnn._ttnn.tensor.load_tensor_flatbuffer(str(multihost_cache_path), device=device)
             else:
-                tensor = ttnn._ttnn.tensor.load_tensor(cache_file_name, device=device)
+                tensor = ttnn._ttnn.tensor.load_tensor(str(legacy_cache_path), device=device)
+                if device is not None:
+                    tensor = tensor.to(device, tensor.memory_config())
+
+                if not multihost_cache_path.exists():
+                    logger.debug(f"Generating {cache_file_name} to new format at {multihost_cache_path}")
+                    tensor_to_dump = torch_to_ttnn(
+                        tensor=torch_tensor,
+                        dtype=dtype,
+                        layout=layout,
+                        device=None,
+                        memory_config=memory_config,
+                        mesh_mapper=mesh_mapper,
+                    )
+                    multihost_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(multihost_cache_path), tensor_to_dump)
+
             if tuple(tensor.shape) != tuple(tensor.shape):
                 logger.warning(
                     f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"
