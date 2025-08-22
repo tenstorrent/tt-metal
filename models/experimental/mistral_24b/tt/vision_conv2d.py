@@ -2,9 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+"""
+This is the modified version of the vision_patch_conv2d for the Mistral-Small-3.1-24B-Instruct-2503 model.
+We have modified the llama_patch_conv2d to be compatible with the Mistral-Small-3.1-24B-Instruct-2503 model.
+"""
 
+import torch
 import ttnn
+
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -57,7 +62,7 @@ class TtMistralConv2dPatch(LightweightModule):
 
         self._unfold = torch.nn.Unfold(kernel_size=self.kernel_size, stride=self.stride)
 
-        weight = state_dict[f"{state_dict_prefix}weight"]
+        weight = state_dict[f"{state_dict_prefix}_linear.weight"]
         if weight.ndim == 4:
             weight = weight.reshape(out_channels, -1).T
 

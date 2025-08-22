@@ -656,6 +656,7 @@ def map_hf_to_meta_keys(loaded_weights):
         ("o_proj", "wo"),
         ("q_norm", "q_norm"),
         ("k_norm", "k_norm"),
+        ("patch_conv.weight", "patch_conv._linear.weight"),
     ]
     return replace_keys(loaded_weights, replacements)
 
@@ -674,20 +675,9 @@ def map_vision_meta_to_hf_keys(loaded_weights):
         ("wk", "k_proj"),
         ("wv", "v_proj"),
         ("wo", "o_proj"),
+        ("_linear.weight", "weight"),
     ]
-
-    extra_mapping = [
-        ("attention_norm", "input_layernorm"),
-        ("ffn_norm", "post_attention_layernorm"),
-        ("attention", "self_attn"),
-        ("feed_forward", "mlp"),
-    ]
-
-    model_name = os.getenv("HF_MODEL")
-    if "Mistral" in model_name:
-        mapping = base_mapping
-    else:
-        mapping = base_mapping + extra_mapping
+    mapping = base_mapping
 
     return replace_keys(loaded_weights, mapping)
 

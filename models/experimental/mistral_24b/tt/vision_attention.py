@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 """
-This file implements the vision attention submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
-
+This is the modified version of the vision_attention for the Mistral-Small-3.1-24B-Instruct-2503 model.
+We introduced the `apply_rotary_pos_emb_vision_tt` function to llama_image_attention to be compatible with the Mistral-Small-3.1-24B-Instruct-2503 model.
 """
-import torch
 
+import torch
 import ttnn
+
 from models.common.lightweightmodule import LightweightModule
 from models.utility_functions import is_blackhole, nearest_32
 
@@ -162,7 +163,7 @@ class TtMistralImageAttention(LightweightModule):
     def forward(self, x_11SH, position_embeddings=None):
         seq_len = x_11SH.shape[-2]
 
-        MAX_MM_SEQ_LEN = self.configuration.VISION_MAX_MM_SEQ
+        MAX_MM_SEQ_LEN = seq_len
 
         if seq_len > MAX_MM_SEQ_LEN:
             x_11SH = ttnn.reshape(x_11SH, [1, seq_len // MAX_MM_SEQ_LEN, MAX_MM_SEQ_LEN, -1])

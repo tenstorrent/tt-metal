@@ -1,13 +1,15 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
 """
+This is the modified version of the FeedForward for the Mistral-Small-3.1-24B-Instruct-2503 model.
 This file implements the Vision FeedForward submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
-
 """
-import torch
 
+import torch
 import ttnn
+
 from models.common.lightweightmodule import LightweightModule
 
 
@@ -48,7 +50,6 @@ class MistralTTVisionMLP(LightweightModule):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                # cache_file_name=cache_name(name),
             )
 
         # Weights and Biases

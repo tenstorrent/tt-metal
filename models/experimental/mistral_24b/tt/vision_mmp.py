@@ -1,16 +1,15 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""
+This file implements the Vision MultiModalProjector submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
+"""
 
 import torch
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.mistral_24b.tt.rmsnorm import RMSNorm
 import ttnn
 from ttnn import ConcatMeshToTensor
-
-"""
-This file implements the Vision pixtral image submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
-"""
 
 
 class TTMistral3PatchMerger(LightweightModule):
@@ -26,7 +25,7 @@ class TTMistral3PatchMerger(LightweightModule):
         super().__init__()
         self.device = mesh_device
         hidden_size = args.vision_dim
-        self.spatial_merge_size = 2  # TODO Handle in Model_config spatial_merge_size
+        self.spatial_merge_size = 2
         self.patch_size = args.vision_patch_size
         self.args = args
 

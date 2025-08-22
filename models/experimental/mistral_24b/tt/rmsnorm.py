@@ -1,6 +1,12 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+
+"""
+This is the modified version of the rmsnorm for the Mistral-Small-3.1-24B-Instruct-2503 model.
+We introduced the `simplified_rms_norm` function to be compatible with the Mistral-Small-3.1-24B-Instruct-2503 model.
+"""
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 

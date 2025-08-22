@@ -10,7 +10,7 @@ from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAt
 from models.experimental.mistral_24b.tt.vision_mlp import MistralTTVisionMLP as MLP
 
 """
-This file implements the Pixtral_image_block submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
+This file implements the pixtral image block specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
 """
 
 

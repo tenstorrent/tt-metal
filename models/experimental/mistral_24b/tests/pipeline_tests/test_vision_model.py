@@ -82,7 +82,7 @@ def test_mistral_vision_model(mesh_device, reset_seeds):
         model_args=model_args,
     )
 
-    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])  # [0]
+    tt_output = vision_model(input_tensor, image_sizes=[(H, W)])
     tt_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
         :, : tt_output.shape[-1]
     ]

@@ -2,9 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
+"""
+This is the modified version of the RoPE for the Mistral-Small-3.1-24B-Instruct-2503 model.
+We have modified the compute_gather_cos_sin function of RMSNorm to be compatible with the Mistral-Small-3.1-24B-Instruct-2503 model.
+"""
 
+import torch
 import ttnn
+
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.common import precompute_mistral_vision_freqs
 from ttnn import ReplicateTensorToMesh
@@ -71,7 +76,6 @@ class VisionRotarySetup(LightweightModule):
     def get_rot_mats(self, position_idxs, return_rot_idxs=False):
         device = self.device
 
-        # return self.cos_matrix, self.sin_matrix
         # If position_idxs is a torch tensor, get the TTNN version of it
         if isinstance(position_idxs, torch.Tensor):
             rot_idxs = position_idxs.unsqueeze(0)

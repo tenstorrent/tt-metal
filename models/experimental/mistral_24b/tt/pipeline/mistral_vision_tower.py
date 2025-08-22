@@ -4,6 +4,7 @@
 
 """
 This file implements the Vision Tower submodule specific for the Mistral-Small-3.1-24B-Instruct-2503 model.
+This pipeline constructs the vision tower from vision model architecture.
 """
 
 import ttnn
