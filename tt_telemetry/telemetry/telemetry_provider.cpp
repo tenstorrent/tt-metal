@@ -124,9 +124,14 @@ static void send_initial_snapshot(
         size_t id = uint_metrics[i]->id;
         snapshot->uint_metric_ids.push_back(id);
         snapshot->uint_metric_names.push_back(path);
+        snapshot->uint_metric_units.push_back(static_cast<uint16_t>(uint_metrics[i]->units));
         snapshot->uint_metric_values.push_back(uint_metrics[i]->value());
         snapshot->uint_metric_timestamps.push_back(uint_metrics[i]->timestamp());
     }
+
+    // Populate unit label maps when names are populated
+    snapshot->metric_unit_display_label_by_code = create_metric_unit_display_label_map();
+    snapshot->metric_unit_full_label_by_code = create_metric_unit_full_label_map();
 
     for (auto &subscriber: subscribers) {
         subscriber->on_telemetry_ready(snapshot);

@@ -7,18 +7,40 @@
  */
 
  #include <vector>
- #include <chrono>
+#include <chrono>
+#include <string>
+#include <unordered_map>
 
- #include <llrt/tt_cluster.hpp>
+#include <llrt/tt_cluster.hpp>
+
+enum class MetricUnit : uint16_t {
+    UNITLESS = 0,
+    RESERVED_1 = 1,
+    RESERVED_2 = 2,
+    RESERVED_3 = 3,
+    MEGAHERTZ = 4,
+    WATTS = 5,
+    MILLIVOLTS = 6,
+    VOLTS = 7,
+    REVOLUTIONS_PER_MINUTE = 8,
+    AMPERES = 9
+};
+
+// Functions to convert MetricUnit enum to string labels
+std::string metric_unit_to_display_label(MetricUnit unit);
+std::string metric_unit_to_full_label(MetricUnit unit);
+
+// Function to produce unit label maps for snapshots
+std::unordered_map<uint16_t, std::string> create_metric_unit_display_label_map();
+std::unordered_map<uint16_t, std::string> create_metric_unit_full_label_map();
 
 class Metric {
 public:
     const size_t id = 0;
+    const MetricUnit units;
 
-    Metric(size_t metric_unique_id)
-        : id(metric_unique_id)
-    {
-    }
+    Metric(size_t metric_unique_id, MetricUnit metric_units = MetricUnit::UNITLESS) :
+        id(metric_unique_id), units(metric_units) {}
 
     virtual const std::vector<std::string> telemetry_path() const {
         return { "dummy", "metric", "someone", "forgot", "to", "implement", "telemetry", "path", "function" };
@@ -49,10 +71,8 @@ protected:
 
 class BoolMetric: public Metric {
 public:
-    BoolMetric(size_t metric_unique_id)
-        : Metric(metric_unique_id)
-    {
-    }
+    BoolMetric(size_t metric_unique_id, MetricUnit metric_units = MetricUnit::UNITLESS) :
+        Metric(metric_unique_id, metric_units) {}
 
     bool value() const {
         return value_;
@@ -64,10 +84,8 @@ protected:
 
 class UIntMetric: public Metric {
 public:
-    UIntMetric(size_t metric_unique_id)
-        : Metric(metric_unique_id)
-    {
-    }
+    UIntMetric(size_t metric_unique_id, MetricUnit metric_units = MetricUnit::UNITLESS) :
+        Metric(metric_unique_id, metric_units) {}
 
     uint64_t value() const {
         return value_;

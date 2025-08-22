@@ -161,7 +161,9 @@ export class MetricSidebar extends LitElement {
         open: { type: Boolean, reflect: true },
         metricName: { type: String },
         metricValue: { type: Object },
-        metricTimestamp: { type: Object }
+        metricTimestamp: { type: Object },
+        unitDisplayLabel: { type: String },
+        unitFullLabel: { type: String }
     };
 
     constructor() {
@@ -170,6 +172,8 @@ export class MetricSidebar extends LitElement {
         this.metricName = '';
         this.metricValue = null;
         this.metricTimestamp = null;
+        this.unitDisplayLabel = null;
+        this.unitFullLabel = null;
     }
 
     _handleClose() {
@@ -180,10 +184,10 @@ export class MetricSidebar extends LitElement {
 
     _getMockData() {
         // Mock data - in the future this would come from props or API calls
-        const lastUpdated = this.metricTimestamp ? 
-            this.metricTimestamp.toLocaleString() : 
+        const lastUpdated = this.metricTimestamp ?
+            this.metricTimestamp.toLocaleString() :
             'Never';
-        
+
         return {
             lastUpdated,
             updateFrequency: '5 seconds',
@@ -197,7 +201,7 @@ export class MetricSidebar extends LitElement {
                 //     message: 'Metric value updated successfully'
                 // },
                 // {
-                //     time: '5 minutes ago', 
+                //     time: '5 minutes ago',
                 //     message: 'Data collection cycle completed'
                 // },
                 // {
@@ -210,17 +214,17 @@ export class MetricSidebar extends LitElement {
 
     _renderStatusBadge(status) {
         const statusClass = `status-badge status-${status ? 'good' : 'bad'}`;
-        const statusText = status ? 'GOOD' : 'BAD'; 
+        const statusText = status ? 'GOOD' : 'BAD';
         return html`<span class="${statusClass}">${statusText}</span>`;
     }
 
     _getTimestampAge() {
         if (!this.metricTimestamp) return 'Unknown';
-        
+
         const now = new Date();
         const diffMs = now.getTime() - this.metricTimestamp.getTime();
         const diffSeconds = Math.floor(diffMs / 1000);
-        
+
         if (diffSeconds < 60) {
             return `${diffSeconds} seconds ago`;
         } else if (diffSeconds < 3600) {
@@ -285,6 +289,14 @@ export class MetricSidebar extends LitElement {
                         <span class="info-label">Data Type:</span>
                         <span class="info-value">${mockData.dataType}</span>
                     </div>
+                    ${this.unitDisplayLabel || this.unitFullLabel ? html`
+                    <div class="info-item">
+                        <span class="info-label">Units:</span>
+                        <span class="info-value">
+                            ${this.unitDisplayLabel || ''}${this.unitFullLabel ? ` (${this.unitFullLabel})` : ''}
+                        </span>
+                    </div>
+                    ` : ''}
                     <div class="info-item">
                         <span class="info-label">Update Frequency:</span>
                         <span class="info-value">${mockData.updateFrequency}</span>
