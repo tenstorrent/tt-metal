@@ -49,34 +49,21 @@ void MAIN {
     // Batch Loop:
     //   Group Loop:
     //     This is the process which repeats for every group
-    //     Average Calc: E[x]
+    //     Average, Variance Calc: μ[x] and σ^2[x]
     //       Local Reduce:
     //           First we apply an input mask
-    //           This is where we sum up our core's subtensor
-    //           After summing up, we pass our scalar tile to cb_ex_partial
-    //           The reader kernels then aggregate all of the local scalars into a single tile
+    //           This is where we calculate μ[x] and σ^2[x]
+    //           After summing up, we pass the intermediate results to cb_ex_partial
+    //           The reader kernels then aggregate all of the local scalars into two tiles // TBD
     //       Global Reduce:
-    //           This single tile (cb_ex_external) is a tile that contains each partial reduce from all the other cores
-    //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
+    //           These two tiles (cb_ex_external) contain the partial values of μ[x] and σ^2[x] from all the other cores
+    //           Only the core designated as the sender reduces this tile to produce the global μ[x] and σ^2[x]
     //           It's reader core the sends this data out to all other cores as cb_ex_global
-    //
-    //     Variance Calc: ∑(x-E[x])^2
-    //     This follows the same pattern as the average calculation
-    //       Local Reduce:
-    //           First we subtract each value from our core's subtensor by the average value
-    //           We next apply our input mask to zero our the values we wish to ignore
-    //           Next we square our residuals to obtain the squared residuals
-    //           After summing up, we pass our scalar tile to cb_ex2_partial
-    //           The reader kernels then aggregate all of the local scalars into a single tile
-    //       Global Reduce:
-    //           This single tile (cb_ex_external) is a tile that contains each partial reduce from all the other cores
-    //           Only the core designated as the sender reduces this tile to produce the global scalar reduce value.
-    //           It's reader core the sends this data out to all other cores as cb_ex2_global
-    //
-    //     cb_ex2pe Calculation:
+    //           The reader core also sends the partial reduce from itself to all other cores as cb_ex    // TBD
+    //     Denominator Calculation:
     //       First we add cb_ex2_global with cb_eps
     //       Then we take the sqrt
-    //       Lastly we take the reciprocal and he have the denominator of our calculation
+    //       Lastly we take the reciprocal and we have the denominator of our calculation
     //     Final Val Calc:
     //       First we subtract each value from our core's subtensor by the average value
     //       We next apply our input mask to zero our the values we wish to ignore
@@ -149,9 +136,7 @@ void MAIN {
     constexpr uint32_t cb_x = tt::CBIndex::c_24;
     constexpr uint32_t cb_xmm = tt::CBIndex::c_25;
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    // constexpr uint32_t cb_ex2_partial = tt::CBIndex::c_21; // Delete
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;
-    // constexpr uint32_t cb_ex2 = tt::CBIndex::c_13; // Delete
     constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;
     constexpr uint32_t cb_ex2_global = tt::CBIndex::c_14;
@@ -228,7 +213,7 @@ void MAIN {
     tilize_uninit(cb_in_rm, cb_in);
     cb_wait_front(cb_in, per_core_MN);
 #else
-    binary_op_init_common(cb_in0, cb_input_mask, cb_x);
+    binary_op_init_common(cb_in0, cb_input_mask, cb_x);  // TBD
 #endif
 
     index_b_offset = 0;
@@ -265,7 +250,67 @@ void MAIN {
         for (uint32_t g = 0; g < group; ++g) {
             // Start Average Calc
             // Start Local Reduce
+            uint32_t start_N = 0;
+
             cb_wait_front(cb_input_mask, block_w);
+
+            // for h in ht
+            //     for w in wt
+            //         // get to a unique tile in the group
+            //         // transpose the tile -> put it in dst0
+            //         // Call welford's algorithm
+            //         // welford(0, 1, 2, h * c + w * 32, (h + 1) * c, 0)
+            //             // Start copy
+            //             welford_init();
+            //             cb_reserve_back(cb_ex_partial, 2);
+            //             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded;
+            //             out_block_index++) {
+            //                 uint32_t out_block_h_actual, out_block_hw_actual;
+            //                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+            //                     out_block_h_actual = out_block_h_last;
+            //                     out_block_hw_actual = out_block_hw_last;
+            //                 } else {
+            //                     out_block_h_actual = out_block_h_normal;
+            //                     out_block_hw_actual = out_block_hw_normal;
+            //                 }
+            //                 cb_wait_front(cb_in0, out_block_hw_normal);
+
+            //                 index_h_offset = 0;
+            //                 reconfig_data_format_srcb(cb_in0, cb_input_mask);
+            //                 // mask input
+            //                 mul_tiles_init(cb_in0, cb_input_mask);
+            //                 for (uint32_t i = 0; i < out_block_h_actual; ++i) {
+            //                     index_subblock_w_offset = 0;
+            //                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
+            //                         tile_regs_acquire();
+            //                         for (uint32_t w = 0; w < subblock_w; ++w) {
+            //                             uint32_t index = w + index_subblock_w_offset + index_h_offset;
+            //                             uint32_t index_mask = w + index_subblock_w_offset;
+            // #ifdef TILIZE_IN
+            //                             mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
+            // #else
+            //                             mul_tiles(cb_in0, cb_input_mask, index, index_mask, w);
+            // #endif
+            //                             // Transpose the tile -> put it in dst0
+            //                             welford(0, 1, 2, 32 * index, num_cols_per_group, 0);
+            //                         }
+            //                         tile_regs_commit();
+            //                         index_subblock_w_offset += subblock_w;
+            //                     }
+            //                     index_h_offset += block_w;
+            //                 }
+            // #ifdef TILIZE_IN
+            //                 cb_pop_front(cb_in, out_block_hw_actual);
+            // #else
+            //                 cb_pop_front(cb_in0, out_block_hw_normal);
+            // #endif
+            //             }
+            //             pack_tile(1, cb_ex_partial);
+            //             pack_tile(2, cb_ex_partial);
+            //             cb_push_back(cb_ex_partial, 2);
+            //             // End copy
+
+            welford_init();
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                 uint32_t out_block_h_actual, out_block_hw_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
@@ -311,30 +356,25 @@ void MAIN {
                 cb_pop_front(cb_in0, out_block_hw_normal);
 #endif
                 cb_push_back(cb_x, out_block_hw_normal);
-                reconfig_data_format_srcb(cb_input_mask, cb_scaler);
 
-                // Partial/E[x]
-                index_h_offset = 0;
-                reduce_init(cb_x, cb_scaler, cb_ex_partial);
-                cb_reserve_back(cb_ex_partial, 1);
+                // Partial/E[x] and Var[x]
+                welford_init();
+                cb_reserve_back(cb_ex_partial, 2);
                 tile_regs_acquire();
-                cb_wait_front(cb_scaler, 1);
                 cb_wait_front(cb_x, out_block_hw_normal);
 
                 for (uint32_t h = 0; h < out_block_h_actual; ++h) {
                     for (uint32_t w = 0; w < block_w; ++w) {
-                        uint32_t index = index_h_offset + w;
-                        reduce_tile(cb_x, cb_scaler, index, scaler0, dst0);
+                        // welford(0, 1, 2, 32 * index, num_cols_per_group, 0);
                     }
-                    index_h_offset += block_w;
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(dst0, cb_ex_partial);
+                pack_tile(1, cb_ex_partial);
+                pack_tile(2, cb_ex_partial);
                 tile_regs_release();
                 cb_pop_front(cb_x, out_block_hw_normal);
-                cb_push_back(cb_ex_partial, 1);
-                reduce_uninit();
+                cb_push_back(cb_ex_partial, 2);
             }
 
             // End Local Reduce
@@ -344,7 +384,7 @@ void MAIN {
                 cb_reserve_back(cb_ex_global, 1);
                 cb_reserve_back(cb_ex2_global, 1);
                 if (num_cores_per_mcast_group > 1) {
-                    cb_reserve_back(cb_ex, 1);
+                    cb_reserve_back(cb_ex, 2);
                 }
                 tile_regs_acquire();
                 cb_wait_front(cb_scaler_global, 1);
@@ -361,7 +401,7 @@ void MAIN {
                 cb_push_back(cb_ex_global, 1);
                 cb_push_back(cb_ex2_global, 1);
                 if (num_cores_per_mcast_group > 1) {
-                    cb_push_back(cb_ex, 1);
+                    cb_push_back(cb_ex, 2);
                 }
             }
             // End Global Reduce

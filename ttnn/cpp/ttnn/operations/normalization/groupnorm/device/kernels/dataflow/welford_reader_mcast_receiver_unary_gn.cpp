@@ -103,10 +103,7 @@ void kernel_main() {
     const uint32_t mcast_sender_noc_y = get_arg_val<uint32_t>(6);
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;  // E[x] partial reduce
-    // constexpr uint32_t cb_ex2_partial = tt::CBIndex::c_21;  // E[x] partial reduce // Delete
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;          // E[x] partial reduce
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
-    // constexpr uint32_t cb_ex2 = tt::CBIndex::c_13;        // E[x]^2 partial reduce // Delete
     constexpr uint32_t cb_ex2_global = tt::CBIndex::c_14;  // E[x]^2 global reduce
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;         // input cb
     constexpr uint32_t cb_repack = tt::CBIndex::c_26;
@@ -206,10 +203,10 @@ void kernel_main() {
                     if (cur_read_iteration == 0) {
                         //Section for wating for local reduce to be pushed to a cb_ex_partial
                         //Wait for local avg calculation
-                        cb_wait_front(cb_ex_partial, 1);
+                        cb_wait_front(cb_ex_partial, 2);
                         noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
                         noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-                        cb_pop_front(cb_ex_partial, 1);
+                        cb_pop_front(cb_ex_partial, 2);
                         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
                     } else if (cur_read_iteration == 2) {
                         const InterleavedAddrGenFast<out_is_dram> dst_a = {
