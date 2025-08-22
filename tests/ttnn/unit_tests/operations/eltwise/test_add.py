@@ -30,7 +30,7 @@ def test_add_scalar(device, hw, scalar):
 
     input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.L1_MEMORY_CONFIG)
     input_tensor_a = ttnn.to_memory_config(input_tensor_a, ttnn.DRAM_MEMORY_CONFIG)
-    output = input_tensor_a + scalar
+    output = ttnn.add(input_tensor_a, scalar)
 
     output = ttnn.to_memory_config(output, ttnn.L1_MEMORY_CONFIG)
     output = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
