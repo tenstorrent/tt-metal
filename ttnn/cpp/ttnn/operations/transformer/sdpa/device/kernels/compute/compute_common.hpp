@@ -120,12 +120,23 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
     constexpr uint32_t dst_tiles = SUB_EXP_GRANULARITY;
     constexpr uint32_t granularity = cols >> LOG2_SUB_EXP_GRANULARITY;
     uint32_t in0_index = 0;
+
+    // (*((volatile uint32_t*)0x18000)) = (uint32_t)scale_fp32;
+    // (*((volatile uint32_t*)0x18004)) = (uint32_t)granularity;
+    // (*((volatile uint32_t*)0x18008)) = (uint32_t)dst_tiles;
+    // (*((volatile uint32_t*)0x1800C)) = (uint32_t)scale_fp32;
+
     for (uint32_t i = 0; i < rows; ++i) {
         for (uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
-                exp_tile<true, true>(j);
+                // {
+                // DeviceZoneScopedN("EXP_TILE");
+                // exp_tile_init<true, true, scale_fp32>();
+                exp_tile<true, true>(j, (int)VectorMode::RC);
+                // (*((volatile uint32_t*)0x19000)) = (uint32_t)j;
+                // }
                 in0_index++;
             }
             tile_regs_commit();

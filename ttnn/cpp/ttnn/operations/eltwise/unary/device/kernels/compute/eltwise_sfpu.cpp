@@ -15,6 +15,8 @@ void MAIN {
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
+    uint32_t DST_TILE = 7;
+
     init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);
@@ -24,17 +26,20 @@ void MAIN {
             // Pop tile after tile, copy to DST and pack
             cb_wait_front(tt::CBIndex::c_0, 1);
 
-            copy_tile(tt::CBIndex::c_0, 0, 0);
+            copy_tile(tt::CBIndex::c_0, 0, DST_TILE);
 
-#ifdef SFPU_OP_CHAIN_0
-            SFPU_OP_CHAIN_0
-#endif
+            // #ifdef SFPU_OP_CHAIN_0
+            //             SFPU_OP_CHAIN_0
+            // #endif
+            // (*((volatile uint32_t*)0x18000)) = (uint32_t)0xccccdddd;
+            exp_tile_init<true, true, 0x3F800000>();
+            exp_tile<true, true>(DST_TILE);
 
             tile_regs_commit();
 
             tile_regs_wait();
 
-            pack_tile(0, tt::CBIndex::c_2);
+            pack_tile(DST_TILE, tt::CBIndex::c_2);
 
             cb_pop_front(tt::CBIndex::c_0, 1);
 

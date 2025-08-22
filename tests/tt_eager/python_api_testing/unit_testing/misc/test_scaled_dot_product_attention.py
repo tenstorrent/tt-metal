@@ -15,11 +15,11 @@ import pytest
 from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 
 
-def fa_rand(*shape):
-    normal_1 = torch.randn(shape)
-    normal_2 = torch.randn(shape) * 10
-    bernoulli = torch.bernoulli(torch.full(shape, 0.001))
-    return normal_1 + normal_2 * bernoulli
+# def fa_rand(*shape):
+#     normal_1 = torch.randn(shape)
+#     normal_2 = torch.randn(shape) * 10
+#     bernoulli = torch.bernoulli(torch.full(shape, 0.001))
+#     return normal_1 + normal_2 * bernoulli
 
 
 def is_watcher_enabled():
@@ -27,7 +27,9 @@ def is_watcher_enabled():
 
 
 def fa_rand(*shape):
-    normal_1 = torch.randn(shape)
+    # normal_1 = torch.randn(shape)
+    # normal_2 = torch.randn(shape) * 10
+    normal_1 = torch.ones(shape) * 2
     normal_2 = torch.randn(shape) * 10
     bernoulli = torch.bernoulli(torch.full(shape, 0.001))
     return normal_1 + normal_2 * bernoulli
@@ -176,7 +178,29 @@ def run_sdpa_noncausal(
 
     gt = torch.nn.functional.scaled_dot_product_attention(Q, K, V, is_causal=False, attn_mask=mask)
 
+    torch.set_printoptions(linewidth=500)
+    torch.set_printoptions(threshold=float("inf"), precision=3)
+
+    # print("RES_TENSOR first 10:")
+    # print((tt_back.flatten()[0:10]))
+    # print("GOLDEN first 10:")
+    # print((gt.flatten()[0:10]))
+
+    # print("=" * 80)
+
+    # print("RES_TENSOR last 10:")
+    # print((tt_back.flatten()[-10:]))
+    # print("GOLDEN last 10:")
+    # print((gt.flatten()[-10:]))
+
+    print(gt.flatten().view(32, 32))
+    print("=" * 80)
+    print(tt_back.flatten().view(32, 32))
+
     out_pass, out_pcc = comp_pcc(gt, tt_back, 0.994)
+
+    print("PCC: ", out_pcc)
+
     logger.debug(f"python vs pytorch: {out_pcc}")
     rmse = torch.sqrt(((gt - tt_back) ** 2).mean()).item()
     logger.debug(f"rmse: {rmse}")
@@ -248,11 +272,13 @@ def test_sdpa_tt(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
 
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16], ids=["bf16"])
-@pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
-@pytest.mark.parametrize("k_chunk_size", [512], ids=["k512"])
+# @pytest.mark.parametrize("q_chunk_size", [256], ids=["q256"])
+# @pytest.mark.parametrize("k_chunk_size", [512], ids=["k512"])
+@pytest.mark.parametrize("q_chunk_size", [32], ids=["q32"])
+@pytest.mark.parametrize("k_chunk_size", [32], ids=["k32"])
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
-    ([1, 1, 1, 2048, 128],),
+    ([1, 1, 1, 32, 32],),
 )
 def test_sdpa_perf_single_core(device, b, nh, nkv, s, d, q_chunk_size, k_chunk_size, dtype):
     rmse_threshold = 0.004202

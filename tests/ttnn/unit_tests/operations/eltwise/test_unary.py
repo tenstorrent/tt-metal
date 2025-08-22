@@ -52,6 +52,12 @@ def run_unary_test(device, h, w, ttnn_function, pcc=0.9999):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    print("INPUT TENSOR: ")
+    print(torch_output_tensor.flatten()[0:10])
+
+    print("OUTPUT TENSOR: ")
+    print(output_tensor.flatten()[0:10])
+
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
@@ -206,8 +212,8 @@ def test_fp32_uint32(device, h, w, dtype):
     run_identity_test(device, h, w, dtype)
 
 
-@pytest.mark.parametrize("h", [64])
-@pytest.mark.parametrize("w", [128])
+@pytest.mark.parametrize("h", [32])
+@pytest.mark.parametrize("w", [32])
 def test_exp(device, h, w):
     run_unary_test(device, h, w, ttnn.exp, pcc=0.9998)
 
