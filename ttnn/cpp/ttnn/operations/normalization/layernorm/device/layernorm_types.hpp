@@ -23,6 +23,7 @@ struct LayerNormShardedMultiCoreProgramConfig {
     std::size_t block_h;
     std::size_t block_w;
     bool inplace;
+    bool use_welford;
 };
 
 using LayerNormProgramConfig = std::variant<LayerNormDefaultProgramConfig, LayerNormShardedMultiCoreProgramConfig>;
