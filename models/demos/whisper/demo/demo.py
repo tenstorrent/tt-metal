@@ -23,6 +23,7 @@ from transformers import (
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
@@ -278,26 +279,30 @@ def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn
     return _model_pipeline
 
 
-def run_demo_whisper_for_audio_classification_inference(input_path, ttnn_model, device, num_inputs):
+def run_demo_whisper_for_audio_classification_inference(input_path, ttnn_model, mesh_device, num_inputs):
+    # device=mesh_device
     torch.manual_seed(1234)
 
     feature_extractor = AutoFeatureExtractor.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
     model = WhisperForAudioClassification.from_pretrained("sanchit-gandhi/whisper-medium-fleurs-lang-id")
 
     model.eval()
+    print("befroe lading input path", input_path)
     input_data = load_input_paths(input_path)
-
+    print("after lading input path", input_path)
+    inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer = get_mesh_mappers(mesh_device)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
-        device=device,
+        custom_preprocessor=ttnn_model.create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=mesh_device,
     )
     if len(input_data) < num_inputs:
         assert False, "num_inputs exceeds number of audio files available in folder"
 
     for i in range(num_inputs):
         input_file_path = input_data[i]
+        print("path is ", input_file_path)
         samplerate, data = wavfile.read(input_file_path)
 
         inputs = feature_extractor(
@@ -309,10 +314,16 @@ def run_demo_whisper_for_audio_classification_inference(input_path, ttnn_model, 
         input_features = inputs.input_features
 
         config = model.config
+        print("wt maper is", weights_mesh_mapper)
         input_embedding = ttnn_model.preprocess_encoder_inputs(
-            config=config, input_features=input_features, parameters=parameters.encoder, device=device
+            config=config,
+            input_features=input_features,
+            parameters=parameters.encoder,
+            device=mesh_device,
+            inputs_mesh_mapper=inputs_mesh_mapper,
+            weights_mesh_mapper=weights_mesh_mapper,
         )
-
+        print("input shape is", input_embedding.shape)
         encoder_outputs = ttnn_model.encoder(
             config=config, inputs_embeds=input_embedding, parameters=parameters.encoder
         )
@@ -325,7 +336,8 @@ def run_demo_whisper_for_audio_classification_inference(input_path, ttnn_model, 
         logits = ttnn.matmul(pooled_output, parameters.classifier.weight)
         logits = ttnn.add(logits, parameters.classifier.bias)
 
-        logits_torch = ttnn.to_torch(logits)
+        logits_torch = ttnn.to_torch(logits, mesh_composer=output_mesh_composer)
+        print("lgits shae is", logits_torch.shape)
         predicted_class_ids = torch.argmax(logits_torch).item()
         predicted_label = model.config.id2label[predicted_class_ids]
 
@@ -459,8 +471,8 @@ def run_demo_whisper_for_conditional_generation_dataset(ttnn_model, device, mode
     ((1),),
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": WHISPER_L1_SMALL_SIZE}], indirect=True)
-def test_demo_for_audio_classification(input_path, ttnn_model, device, num_inputs):
-    return run_demo_whisper_for_audio_classification_inference(input_path, ttnn_model, device, num_inputs)
+def test_demo_for_audio_classification(input_path, ttnn_model, mesh_device, num_inputs):
+    return run_demo_whisper_for_audio_classification_inference(input_path, ttnn_model, mesh_device, num_inputs)
 
 
 @pytest.mark.parametrize(
