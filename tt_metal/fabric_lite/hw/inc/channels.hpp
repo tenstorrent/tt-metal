@@ -6,15 +6,15 @@
 
 #include <stdint.h>
 #include <cstdint>
-#include "lite_fabric.hpp"
-#include "lite_fabric_constants.hpp"
-#include "lite_fabric_header.hpp"
+#include "tt_metal/fabric_lite/hw/inc/constants.hpp"
+#include "tt_metal/fabric_lite/hw/inc/header.hpp"
+#include "tt_metal/fabric_lite/hw/inc/host_interface.hpp"
+#include "tt_metal/fabric_lite/hw/inc/types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_transaction_id_tracker.hpp"
-#include "lite_fabric_types.hpp"
 
-namespace lite_fabric {
+namespace fabric_lite {
 
 // Linked from main
 extern bool on_mmio_chip;
@@ -31,16 +31,16 @@ extern ReceiverChannelPointersTupleImpl receiver_channel_pointers_tuple;
 /////////////////////
 FORCE_INLINE void send_next_data(
     SenderEthChannelBuffer& sender_buffer_channel,
-    lite_fabric::OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS_ARRAY[0]>& outbound_to_receiver_channel_pointers,
+    fabric_lite::OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS_ARRAY[0]>& outbound_to_receiver_channel_pointers,
     ReceiverEthChannelBuffer& receiver_buffer_channel) {
     auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
     constexpr uint32_t sender_txq_id = 0;
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
-    volatile auto* pkt_header = reinterpret_cast<volatile lite_fabric::LiteFabricHeader*>(src_addr);
+    volatile auto* pkt_header = reinterpret_cast<volatile fabric_lite::FabricLiteHeader*>(src_addr);
 
-    if (pkt_header->get_base_send_type() == lite_fabric::NocSendTypeEnum::WRITE_REG) {
+    if (pkt_header->get_base_send_type() == fabric_lite::NocSendTypeEnum::WRITE_REG) {
         const uint32_t reg_address = pkt_header->command_fields.write_reg.reg_address;
         const uint32_t reg_value = pkt_header->command_fields.write_reg.reg_value;
         while (internal_::eth_txq_is_busy(sender_txq_id));
@@ -77,7 +77,7 @@ FORCE_INLINE void send_next_data(
 
 FORCE_INLINE void run_sender_channel_step() {
     auto& outbound_to_receiver_channel_pointers = outbound_to_receiver_channel_pointers_tuple.template get<0>();
-    auto& local_sender_channel = lite_fabric::local_sender_channels.template get<0>();
+    auto& local_sender_channel = fabric_lite::local_sender_channels.template get<0>();
     auto& remote_receiver_channel = remote_receiver_channels.template get<0>();
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
     bool has_unsent_packet =
@@ -100,23 +100,23 @@ FORCE_INLINE void run_sender_channel_step() {
 // Receiver Channel
 /////////////////////
 __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_request(
-    tt_l1_ptr lite_fabric::LiteFabricHeader* const packet_start,
+    tt_l1_ptr fabric_lite::FabricLiteHeader* const packet_start,
     uint16_t payload_size_bytes,
     uint32_t transaction_id,
-    tt::tt_fabric::EthChannelBuffer<lite_fabric::LiteFabricHeader, SENDER_NUM_BUFFERS_ARRAY[0]>&
+    tt::tt_fabric::EthChannelBuffer<fabric_lite::FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY[0]>&
         sender_buffer_channel) {
     invalidate_l1_cache();
     const auto& header = *packet_start;
 
-    lite_fabric::NocSendTypeEnum noc_send_type = header.get_base_send_type();
+    fabric_lite::NocSendTypeEnum noc_send_type = header.get_base_send_type();
     uint8_t noc_index = header.get_noc_index();
-    if (static_cast<int>(noc_send_type) > static_cast<int>(lite_fabric::NocSendTypeEnum::NOC_SEND_TYPE_LAST)) {
+    if (static_cast<int>(noc_send_type) > static_cast<int>(fabric_lite::NocSendTypeEnum::NOC_SEND_TYPE_LAST)) {
         __builtin_unreachable();
     }
     switch (noc_send_type) {
-        case lite_fabric::NocSendTypeEnum::NOC_UNICAST_WRITE: {
+        case fabric_lite::NocSendTypeEnum::NOC_UNICAST_WRITE: {
             const uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) +
-                                                   sizeof(lite_fabric::LiteFabricHeader) + header.unaligned_offset;
+                                                   sizeof(fabric_lite::FabricLiteHeader) + header.unaligned_offset;
 
             const auto dest_address = header.command_fields.noc_unicast.noc_address;
 
@@ -125,22 +125,22 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
                 dest_address,
                 payload_size_bytes,
                 transaction_id,
-                lite_fabric::local_chip_data_cmd_buf,
+                fabric_lite::local_chip_data_cmd_buf,
                 noc_index,
-                lite_fabric::forward_and_local_write_noc_vc);
+                fabric_lite::forward_and_local_write_noc_vc);
         } break;
 
-        case lite_fabric::NocSendTypeEnum::NOC_READ: {
+        case fabric_lite::NocSendTypeEnum::NOC_READ: {
             if (!on_mmio_chip) {
                 const auto src_address = header.command_fields.noc_read.noc_address;
                 // This assumes nobody else is using the sender channel on device 1 because
                 // the tunnel depth is only 1 at the moment
                 uint32_t dst_address = sender_buffer_channel.get_cached_next_buffer_slot_addr();
                 uint32_t payload_dst_address =
-                    dst_address + sizeof(lite_fabric::LiteFabricHeader) + header.unaligned_offset;
+                    dst_address + sizeof(fabric_lite::FabricLiteHeader) + header.unaligned_offset;
                 // Create packet header for writing back
-                tt_l1_ptr lite_fabric::LiteFabricHeader* packet_header_in_sender_ch =
-                    reinterpret_cast<lite_fabric::LiteFabricHeader*>(dst_address);
+                tt_l1_ptr fabric_lite::FabricLiteHeader* packet_header_in_sender_ch =
+                    reinterpret_cast<fabric_lite::FabricLiteHeader*>(dst_address);
                 *packet_header_in_sender_ch = header;
                 // Read the data into the buffer
                 // This is safe only if the data at the sender buffer slot has been flushed out
@@ -156,7 +156,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
             }
         } break;
 
-        case lite_fabric::NocSendTypeEnum::WRITE_REG: {
+        case fabric_lite::NocSendTypeEnum::WRITE_REG: {
             // Do nothing. Sender directly wrote to us with eth_write_remote_reg
         } break;
 
@@ -174,7 +174,7 @@ FORCE_INLINE void receiver_send_completion_ack(uint8_t src_id) {
 
 FORCE_INLINE void run_receiver_channel_step() {
     auto& receiver_channel_pointers = receiver_channel_pointers_tuple.template get<0>();
-    auto& local_sender_channel = lite_fabric::local_sender_channels.template get<0>();
+    auto& local_sender_channel = fabric_lite::local_sender_channels.template get<0>();
     auto& remote_receiver_channel = remote_receiver_channels.template get<0>();
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_0_pkts_sent_id>();
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
@@ -183,8 +183,8 @@ FORCE_INLINE void run_receiver_channel_step() {
     if (unwritten_packets) {
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
-        tt_l1_ptr lite_fabric::LiteFabricHeader* packet_header = const_cast<lite_fabric::LiteFabricHeader*>(
-            remote_receiver_channel.template get_packet_header<lite_fabric::LiteFabricHeader>(receiver_buffer_index));
+        tt_l1_ptr fabric_lite::FabricLiteHeader* packet_header = const_cast<fabric_lite::FabricLiteHeader*>(
+            remote_receiver_channel.template get_packet_header<fabric_lite::FabricLiteHeader>(receiver_buffer_index));
 
         receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
 
@@ -224,4 +224,4 @@ FORCE_INLINE void run_receiver_channel_step() {
     }
 }
 
-}  // namespace lite_fabric
+}  // namespace fabric_lite

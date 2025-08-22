@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include "lite_fabric.hpp"
+#include "tt_metal/fabric_lite/hw/inc/host_interface.hpp"
 
 #include "tt_cluster.hpp"
 #include "core_coord.hpp"
 #include <umd/device/types/xy_pair.h>
 #include <tt-metalium/control_plane.hpp>
 
-namespace lite_fabric {
+namespace fabric_lite {
 
 // Depth of 1
 struct TunnelDescriptor {
@@ -46,28 +46,28 @@ void SetPC(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t pc_addr, uin
 
 void SetPC(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t pc_addr, uint32_t pc_val);
 
-void WaitForState(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t addr, lite_fabric::InitState state);
+void WaitForState(tt::Cluster& cluster, tt_cxy_pair virtual_core, uint32_t addr, fabric_lite::InitState state);
 
-void WaitForState(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t addr, lite_fabric::InitState state);
+void WaitForState(tt::Cluster& cluster, const SystemDescriptor& desc, uint32_t addr, fabric_lite::InitState state);
 
-void LaunchLiteFabric(
+void LaunchFabricLite(
     tt::Cluster& cluster,
     const tt::tt_metal::Hal& hal,
     const SystemDescriptor& desc,
     const std::filesystem::path& elf_path);
 
-void LaunchLiteFabric(tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const SystemDescriptor& desc);
+void LaunchFabricLite(tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const SystemDescriptor& desc);
 
 // Resume the execution of Lite Fabric which is already on the device
 // Resets the PC to execute from the start of the Lite Fabric firmware and updates the host interface pointers
 // WARNING: This function is only valid if all work as already been completed.
 // WARNING: This function is only valid if the lite fabric binary and config on the device are still intact. If they are
 // corrupted, a full
-//          reinit with LaunchLiteFabric() is required.
+//          reinit with LaunchFabricLite() is required.
 template <typename HOST_INTERFACE>
-void ResumeLiteFabric(
+void ResumeFabricLite(
     tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const SystemDescriptor& desc, HOST_INTERFACE& host_interface);
 
-void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc);
+void TerminateFabricLite(tt::Cluster& cluster, const SystemDescriptor& desc);
 
-}  // namespace lite_fabric
+}  // namespace fabric_lite

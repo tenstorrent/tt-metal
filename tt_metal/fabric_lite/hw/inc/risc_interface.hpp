@@ -6,9 +6,9 @@
 #include "blackhole/noc_nonblocking_api.h"
 #include "ethernet/tunneling.h"
 #include "risc_common.h"
-#include "lite_fabric_memory_config.h"
+#include "tt_metal/fabric_lite/hw/inc/fl_dev_mem_map.hpp"
 
-namespace lite_fabric {
+namespace fabric_lite {
 
 // Interface to the connected RISC1 processor via ethernet
 struct ConnectedRisc1Interface {
@@ -32,11 +32,11 @@ struct ConnectedRisc1Interface {
     }
 
     inline static void set_pc(uint32_t pc) {
-        constexpr uint32_t k_ResetPcAddr = LITE_FABRIC_RESET_PC;
+        constexpr uint32_t k_ResetPcAddr = FABRIC_LITE_RESET_PC;
         internal_::eth_write_remote_reg(k_Txq, k_ResetPcAddr, pc);
         while (internal_::eth_txq_is_busy(k_Txq)) {
         }
     }
 };
 
-}  // namespace lite_fabric
+}  // namespace fabric_lite

@@ -7,7 +7,7 @@
 #include "noc_nonblocking_api.h"
 
 #if !defined(COOPERATIVE_ERISC)
-#include "tests/tt_metal/tt_metal/tunneling/lite_fabric.hpp"
+#include "tt_metal/fabric_lite/hw/inc/kernel_api.hpp"
 #endif
 
 inline void (*rtos_context_switch_ptr)();
@@ -27,7 +27,7 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
 #if defined(COOPERATIVE_ERISC)
     rtos_context_switch_ptr();
 #else
-    lite_fabric::service_lite_fabric_channels();
+    fabric_lite::service_fabric_lite_channels();
 #endif
 }
 

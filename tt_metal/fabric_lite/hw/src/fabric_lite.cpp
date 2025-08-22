@@ -10,14 +10,14 @@
 #include "blackhole/noc_nonblocking_api.h"
 #include "dataflow_api.h"
 #include "eth_chan_noc_mapping.h"
-#include "lite_fabric.hpp"
 #include "firmware_common.h"
-#include "init-fsm-basic.h"
-#include "lite_fabric_constants.hpp"
-#include "lite_fabric_channels.hpp"
-#include "lite_fabric_channel_util.hpp"
-#include "lite_fabric_header.hpp"
-#include "lite_fabric_types.hpp"
+#include "tt_metal/fabric_lite/hw/inc/host_interface.hpp"
+#include "tt_metal/fabric_lite/hw/inc/init-fsm-basic.hpp"
+#include "tt_metal/fabric_lite/hw/inc/constants.hpp"
+#include "tt_metal/fabric_lite/hw/inc/channels.hpp"
+#include "tt_metal/fabric_lite/hw/inc/channel_util.hpp"
+#include "tt_metal/fabric_lite/hw/inc/header.hpp"
+#include "tt_metal/fabric_lite/hw/inc/types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
 #if !defined(tt_l1_ptr)
@@ -63,9 +63,9 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 /////////////////////
 // Lite Fabric globals
 /////////////////////
-namespace lite_fabric {
+namespace fabric_lite {
 
-// Global variable definitions matching extern declarations in lite_fabric_channels.hpp
+// Global variable definitions matching extern declarations in fabric_lite_channels.hpp
 RemoteReceiverChannelsType remote_receiver_channels __attribute__((used));
 
 LocalSenderChannelsType local_sender_channels __attribute__((used));
@@ -82,25 +82,25 @@ OutboundReceiverChannelPointersTupleImpl outbound_to_receiver_channel_pointers_t
 ReceiverChannelPointersTupleImpl receiver_channel_pointers_tuple __attribute__((used));
 
 // object_init is expected to be called before this
-__attribute__((noinline)) void service_lite_fabric() {
+__attribute__((noinline)) void service_fabric_lite() {
     invalidate_l1_cache();
-    if (!reinterpret_cast<volatile lite_fabric::LiteFabricMemoryMap*>(LITE_FABRIC_CONFIG_START)
+    if (!reinterpret_cast<volatile fabric_lite::FabricLiteMemoryMap*>(FABRIC_LITE_CONFIG_START)
              ->config.routing_enabled) {
         return;
     }
     reinterpret_cast<uint32_t*>(0x20000)[1]++;
     reinterpret_cast<uint32_t*>(0x20000)[2] = (uint32_t)host_interface;
     reinterpret_cast<uint32_t*>(0x20000)[3] = (uint32_t)&host_interface;
-    lite_fabric::run_sender_channel_step();
-    lite_fabric::run_receiver_channel_step();
+    fabric_lite::run_sender_channel_step();
+    fabric_lite::run_receiver_channel_step();
 }
 
-inline void object_init(volatile lite_fabric::LiteFabricMemoryMap* mem_map) {
+inline void object_init(volatile fabric_lite::FabricLiteMemoryMap* mem_map) {
     local_sender_channels =
-        tt::tt_fabric::EthChannelBuffers<lite_fabric::LiteFabricHeader, SENDER_NUM_BUFFERS_ARRAY>::make(
+        tt::tt_fabric::EthChannelBuffers<fabric_lite::FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_SENDER_CHANNELS>{});
     remote_receiver_channels =
-        tt::tt_fabric::EthChannelBuffers<lite_fabric::LiteFabricHeader, RECEIVER_NUM_BUFFERS_ARRAY>::make(
+        tt::tt_fabric::EthChannelBuffers<fabric_lite::FabricLiteHeader, RECEIVER_NUM_BUFFERS_ARRAY>::make(
             std::make_index_sequence<NUM_RECEIVER_CHANNELS>{});
     outbound_to_receiver_channel_pointers_tuple = OutboundReceiverChannelPointersTuple::make();
     receiver_channel_pointers_tuple = ReceiverChannelPointersTuple::make();
@@ -126,24 +126,24 @@ inline void object_init(volatile lite_fabric::LiteFabricMemoryMap* mem_map) {
     init_ptr_val<to_sender_0_pkts_acked_id>(0);
     init_ptr_val<to_sender_0_pkts_completed_id>(0);
 
-    lite_fabric::remote_receiver_channels.init(
+    fabric_lite::remote_receiver_channels.init(
         remote_receiver_buffer_addresses.data(),
         CHANNEL_BUFFER_SIZE,
-        sizeof(lite_fabric::LiteFabricHeader),
+        sizeof(fabric_lite::FabricLiteHeader),
         RECEIVER_CHANNEL_BASE_ID);
-    lite_fabric::init_receiver_headers(lite_fabric::remote_receiver_channels);
+    fabric_lite::init_receiver_headers(fabric_lite::remote_receiver_channels);
 
-    lite_fabric::local_sender_channels.init(
+    fabric_lite::local_sender_channels.init(
         local_sender_buffer_addresses.data(),
         CHANNEL_BUFFER_SIZE,
-        sizeof(lite_fabric::LiteFabricHeader),
+        sizeof(fabric_lite::FabricLiteHeader),
         SENDER_CHANNEL_BASE_ID);
 
-    (lite_fabric::receiver_channel_pointers_tuple.template get<0>()).reset();
-    lite_fabric::on_mmio_chip = mem_map->config.is_mmio;
-    lite_fabric::host_interface = &mem_map->host_interface;
-    mem_map->service_lite_fabric_addr = reinterpret_cast<uint32_t>(&service_lite_fabric);
-    lite_fabric::host_interface->init();
+    (fabric_lite::receiver_channel_pointers_tuple.template get<0>()).reset();
+    fabric_lite::on_mmio_chip = mem_map->config.is_mmio;
+    fabric_lite::host_interface = &mem_map->host_interface;
+    mem_map->service_fabric_lite_addr = reinterpret_cast<uint32_t>(&service_fabric_lite);
+    fabric_lite::host_interface->init();
 }
 
 inline void data_init() {
@@ -151,43 +151,43 @@ inline void data_init() {
     wzerorange(__ldm_bss_start, __ldm_bss_end);
 }
 
-inline void teardown(volatile lite_fabric::LiteFabricMemoryMap* mem_map) {
-    lite_fabric::receiver_channel_0_trid_tracker.all_buffer_slot_transactions_acked();
+inline void teardown(volatile fabric_lite::FabricLiteMemoryMap* mem_map) {
+    fabric_lite::receiver_channel_0_trid_tracker.all_buffer_slot_transactions_acked();
 
     ncrisc_noc_counters_init();
 
     noc_async_write_barrier();
     noc_async_atomic_barrier();
 
-    lite_fabric::ConnectedRisc1Interface::assert_connected_dm1_reset();
+    fabric_lite::ConnectedRisc1Interface::assert_connected_dm1_reset();
 
-    mem_map->config.current_state = lite_fabric::InitState::READY;
+    mem_map->config.current_state = fabric_lite::InitState::READY;
 }
 
-}  // namespace lite_fabric
+}  // namespace fabric_lite
 
 int main() {
     invalidate_l1_cache();
     configure_csr();
     noc_index = NOC_INDEX;
-    lite_fabric::data_init();
-    noc_bank_table_init(LITE_FABRIC_INIT_BANK_TO_NOC_SCRATCH);
+    fabric_lite::data_init();
+    noc_bank_table_init(FABRIC_LITE_INIT_BANK_TO_NOC_SCRATCH);
     risc_init();
-    noc_init(MEM_LITE_FABRIC_NOC_ATOMIC_RET_VAL_ADDR);
+    noc_init(MEM_FABRIC_LITE_NOC_ATOMIC_RET_VAL_ADDR);
     for (uint32_t n = 0; n < NUM_NOCS; n++) {
         noc_local_state_init(n);
     }
 
-    auto structs = reinterpret_cast<volatile lite_fabric::LiteFabricMemoryMap*>(LITE_FABRIC_CONFIG_START);
-    lite_fabric::object_init(structs);
-    lite_fabric::routing_init(&structs->config);
+    auto structs = reinterpret_cast<volatile fabric_lite::FabricLiteMemoryMap*>(FABRIC_LITE_CONFIG_START);
+    fabric_lite::object_init(structs);
+    fabric_lite::routing_init(&structs->config);
 
     invalidate_l1_cache();
     while (true) {
-        lite_fabric::service_lite_fabric();
+        fabric_lite::service_fabric_lite();
     }
 
-    lite_fabric::teardown(structs);
+    fabric_lite::teardown(structs);
 
     return 0;
 }

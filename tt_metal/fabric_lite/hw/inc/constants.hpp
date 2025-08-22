@@ -2,21 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Substitute for 1d_fabric_constants.hpp
-
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <array>
-#include "lite_fabric_header.hpp"
+#include "tt_metal/fabric_lite/hw/inc/header.hpp"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 #include "noc_nonblocking_api.h"
 #endif
 
-namespace lite_fabric {
+namespace fabric_lite {
 
 // STREAM REGISTER ASSIGNMENT
 // senders update this stream
@@ -50,7 +48,7 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
 static_assert(NUM_SENDER_CHANNELS == 1);
 
 // Additional 16B to be used only for unaligned reads/writes
-constexpr uint32_t CHANNEL_BUFFER_SIZE = 2048 + 16 + sizeof(lite_fabric::LiteFabricHeader);
+constexpr uint32_t CHANNEL_BUFFER_SIZE = 2048 + 16 + sizeof(fabric_lite::FabricLiteHeader);
 
 constexpr size_t RECEIVER_CHANNEL_BASE_ID = NUM_SENDER_CHANNELS;
 constexpr size_t SENDER_CHANNEL_BASE_ID = 0;
@@ -103,4 +101,4 @@ constexpr uint8_t forward_and_local_write_noc_vc = 2;  // FabricEriscDatamoverCo
 constexpr uint8_t edm_to_downstream_noc = 0;                 // Used?
 constexpr bool local_chip_noc_equals_downstream_noc = true;  // Used?
 
-}  // namespace lite_fabric
+}  // namespace fabric_lite

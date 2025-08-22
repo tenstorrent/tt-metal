@@ -12,8 +12,8 @@ OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv", "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
 
-/* Include shared memory definitions */
-#include "lite_fabric_memory_defs.h"
+/* Not to be confused with dev_mem_map.h which is for tt-metal kernels and firmware */
+#include "fl_dev_mem_map.hpp"
 
 PHDRS {
     attributes 0x70000003;
@@ -24,7 +24,7 @@ PHDRS {
 SECTIONS
 {
     /* Text section starts at firmware base address */
-    .text LITE_FABRIC_TEXT_START :
+    .text FABRIC_LITE_TEXT_START :
     {
         *(.start)
         *(.text.unlikely .text.*_unlikely .text.unlikely.*)
@@ -47,10 +47,10 @@ SECTIONS
     __fw_export_text_end = ABSOLUTE(.);
 
     /* Set up global pointer for efficient access to data */
-    PROVIDE(__global_pointer$ = LITE_FABRIC_DATA_START + 0x7f0);
+    PROVIDE(__global_pointer$ = FABRIC_LITE_DATA_START + 0x7f0);
 
     /* Data section starts at local memory base */
-    .data LITE_FABRIC_DATA_START :
+    .data FABRIC_LITE_DATA_START :
     {
         __ldm_data_start = .;
 
@@ -117,13 +117,13 @@ SECTIONS
     __fw_export_ldm_end = ABSOLUTE(.);
 
     /* Stack grows downward */
-    __stack_top = LITE_FABRIC_STACK_START + LITE_FABRIC_STACK_SIZE;
+    __stack_top = FABRIC_LITE_STACK_START + FABRIC_LITE_STACK_SIZE;
 
     /* Loader information for size checks */
     .phdrs 0 (INFO) :
     {
-        LONG(LITE_FABRIC_TEXT_SIZE)
-        LONG(LITE_FABRIC_DATA_SIZE)
+        LONG(FABRIC_LITE_TEXT_SIZE)
+        LONG(FABRIC_LITE_DATA_SIZE)
     }
 
     /* RISC-V attributes */

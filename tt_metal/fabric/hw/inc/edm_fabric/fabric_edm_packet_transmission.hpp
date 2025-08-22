@@ -11,7 +11,7 @@
 #include "edm_fabric_worker_adapters.hpp"
 #include "fabric_edm_types.hpp"
 
-#if !defined(COMPILE_FOR_LITE_FABRIC)
+#if !defined(COMPILE_FOR_FABRIC_LITE)
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
 

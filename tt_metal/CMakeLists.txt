@@ -147,6 +147,7 @@ target_link_libraries(
         detail
         distributed
         fabric
+        fabric_lite
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
 )
@@ -196,6 +197,7 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(fabric)
+add_subdirectory(fabric_lite)
 if(TT_METAL_BUILD_TESTS)
     add_subdirectory(test)
 endif()
