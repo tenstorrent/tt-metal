@@ -149,8 +149,8 @@ def run_avg_pool2d(
 
     ceil_mode_out_shape_adj = False
     if ceil_mode:
-        out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.ceil((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        out_h = math.ceil((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.ceil((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
         if ((out_h - 1) * stride_h) >= (in_h + pad_t):
             ceil_mode_out_shape_adj = True
             out_h -= 1
@@ -158,8 +158,8 @@ def run_avg_pool2d(
             ceil_mode_out_shape_adj = True
             out_w -= 1
     else:
-        out_h = math.floor((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.floor((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        out_h = math.floor((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
 
     # using non-zero seed to avoid random spike in floating point error on single element of the
     # 1x256x56x56 tensor with divisor_override=5 and 5x5 kernel resulting in rtol=0.015 for that element
