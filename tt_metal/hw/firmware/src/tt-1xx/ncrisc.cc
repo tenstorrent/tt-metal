@@ -51,6 +51,10 @@ int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
+// These arrays are used to store the logical to translated coordinate mapping
+uint16_t logical_col_to_translated_col[noc_size_x + (noc_size_x % 2)] __attribute__((used));
+uint16_t logical_row_to_translated_row[noc_size_y + (noc_size_y % 2)] __attribute__((used));
+
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
@@ -103,6 +107,7 @@ int main(int argc, char* argv[]) {
     do_crt1((uint32_t tt_l1_ptr*)MEM_NCRISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+    noc_logical_to_translated_map_init(MEM_LOGICAL_TO_TRANSLATED_SCRATCH);
 
     risc_init();
 
