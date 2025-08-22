@@ -605,10 +605,10 @@ def test_demo_text(
         pytest.skip(f"Invalid number of DP groups: {data_parallel}, for {num_devices} devices")
 
     if is_ci_env:
-        llama_dir = os.getenv("LLAMA_DIR", "")
-        is_33_70b = "3.3-70B" in llama_dir
-        is_32_1b = "3.2-1B" in llama_dir
-        is_31_8b = "3.1-8B" in llama_dir
+        hf_model = os.getenv("HF_MODEL", "")
+        is_33_70b = "3.3-70B" in hf_model
+        is_32_1b = "3.2-1B" in hf_model
+        is_31_8b = "3.1-8B" in hf_model
 
         tg_enabled = (data_parallel == 4 and is_33_70b) or (data_parallel in [4, 16, 32] and is_31_8b)
 
@@ -666,7 +666,7 @@ def test_demo_text(
                 f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
             )
 
-    generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
+    generator = Generator(model, model_args, mesh_device, preprocessor=tokenizer)
 
     if token_accuracy:
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)

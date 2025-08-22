@@ -230,6 +230,9 @@ def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
         chat.append({"role": "system", "content": system_prompt_text})
     if prompt_text:
         chat.append({"role": "user", "content": prompt_text})
+    # for multimodal model tokenizer is instance of Processor which produces different from tokenizer shape for single prompt
+    if hasattr(tokenizer, "tokenizer"):
+        tokenizer = tokenizer.tokenizer
     return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
 
 

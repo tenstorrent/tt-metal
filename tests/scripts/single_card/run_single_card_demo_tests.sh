@@ -9,7 +9,7 @@ run_falcon7b_func() {
 
 run_mistral7b_func() {
 
-  mistral7b=/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db
+  mistral7b=mistralai/Mistral-7B-Instruct-v0.3
   mistral_cache=/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3
   HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 1200; fail+=$?
 
@@ -17,7 +17,7 @@ run_mistral7b_func() {
 
 run_qwen7b_func() {
 
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
+  HF_MODEL=Qwen/Qwen2-7B-Instruct MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
 
 }
 
@@ -83,16 +83,16 @@ run_llama3_func() {
 
   # Llama3 Accuracy tests
   # Llama3.2-1B
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+  llama1b=meta-llama/Llama-3.2-1B-Instruct
   # Llama3.2-3B
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  llama3b=meta-llama/Llama-3.2-3B-Instruct
   # Llama3.1-8B (11B weights are the same)
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  llama8b=meta-llama/Llama-3.1-8B-Instruct
 
   # Run Llama3 accuracy tests for 1B, 3B, 8B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 420 || fail=1
-    echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
+  for hf_model in "$llama1b" "$llama3b" "$llama8b"; do
+    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/tests/test_accuracy.py -k perf --timeout 420 || fail=1
+    echo "LOG_METAL: Llama3 accuracy tests for $hf_model completed"
   done
 
   if [[ $fail -ne 0 ]]; then
@@ -205,7 +205,7 @@ run_stable_diffusion_func() {
 run_mistral7b_perf() {
 
   # To ensure a proper perf measurement and dashboard upload of Mistral-7B N150, we have to run them on the N300 perf pipeline for now
-  mistral7b=/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db
+  mistral7b=mistralai/Mistral-7B-Instruct-v0.3
   mistral_cache=/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3
   # Run Mistral-7B-v0.3 for N150
   MESH_DEVICE=N150 HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1"; fail+=$?
@@ -218,24 +218,24 @@ run_llama3_perf() {
   fail=0
 
   # Llama3.2-1B
-  llama1b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-1B-Instruct/
+  llama1b=meta-llama/Llama-3.2-1B-Instruct
   # Llama3.2-3B
-  llama3b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-3B-Instruct/
+  llama3b=meta-llama/Llama-3.2-3B-Instruct
   # Llama3.1-8B
-  llama8b=/mnt/MLPerf/tt_dnn-models/llama/Meta-Llama-3.1-8B-Instruct/
+  llama8b=meta-llama/Llama-3.1-8B-Instruct
   # Llama3.2-11B (same tet weights as 8B)
-  llama11b=/mnt/MLPerf/tt_dnn-models/llama/Llama3.2-11B-Vision-Instruct/
+  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 
   # Run all Llama3 tests for 1B, 3B, 8B weights for N150
   # To ensure a proper perf measurement and dashboard upload of the Llama3 models on a N150, we have to run them on the N300 perf pipeline for now
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b"; do
-    MESH_DEVICE=N150 LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
-    echo "LOG_METAL: Llama3 tests for $llama_dir completed on N150"
+  for hf_model in "$llama1b" "$llama3b" "$llama8b"; do
+    MESH_DEVICE=N150 HF_MODEL=$hf_model pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+    echo "LOG_METAL: Llama3 tests for $hf_model completed on N150"
   done
   # Run all Llama3 tests for 1B, 3B, 8B and 11B weights
-  for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
-    echo "LOG_METAL: Llama3 tests for $llama_dir completed"
+  for hf_model in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
+    HF_MODEL=$hf_model pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 600 -k "not performance-ci-stress-1" || fail=1
+    echo "LOG_METAL: Llama3 tests for $hf_model completed"
   done
 
   if [[ $fail -ne 0 ]]; then

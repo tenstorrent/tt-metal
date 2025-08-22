@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import json
 import math
 import os
@@ -26,6 +27,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
+    convert_hf_to_meta_mllama,
     convert_meta_to_hf,
     load_hf_state_dict,
     load_meta_state_dict,
@@ -410,6 +412,12 @@ class ModelArgs:
     }
 
     LOCAL_HF_PARAMS = {
+        "Llama-3.1-8B-Instruct": "models/tt_transformers/model_params/Llama-3.1-8B-Instruct",
+        "Llama-3.1-70B-Instruct": "models/tt_transformers/model_params/Llama-3.1-70B-Instruct",
+        "Llama-3.2-1B-Instruct": "models/tt_transformers/model_params/Llama-3.2-1B-Instruct",
+        "Llama-3.2-3B-Instruct": "models/tt_transformers/model_params/Llama-3.2-3B-Instruct",
+        "Llama-3.2-11B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-11B-Vision-Instruct",
+        "Llama-3.2-90B-Vision-Instruct": "models/tt_transformers/model_params/Llama-3.2-90B-Vision-Instruct",
         "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
         "Qwen2.5-VL-3B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-3B-Instruct",
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
@@ -527,19 +535,8 @@ class ModelArgs:
             self._set_model_params(self.CKPT_DIR)
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
             self.checkpoint_type = CheckpointType.Meta
-            if "3.2-1B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_1B_PARAMS"
-            elif "3.2-3B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_3B_PARAMS"
-            elif "3.1-8B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_8B_PARAMS"
-            elif "3.2-11B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_11B_PARAMS"
-            elif "3.1-70B" in self.CKPT_DIR:
-                local_params = "LLAMA3_1_70B_PARAMS"
-            elif "3.2-90B" in self.CKPT_DIR:
-                local_params = "LLAMA3_2_90B_PARAMS"
-            else:
+            local_params = self.__get_llama_local_params_name(self.CKPT_DIR)
+            if local_params is None:
                 raise ValueError(
                     f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
                 )
@@ -1275,6 +1272,24 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+    @staticmethod
+    def __get_llama_local_params_name(model_name):
+        if "3.2-1B" in model_name:
+            local_params = "LLAMA3_2_1B_PARAMS"
+        elif "3.2-3B" in model_name:
+            local_params = "LLAMA3_2_3B_PARAMS"
+        elif "3.1-8B" in model_name:
+            local_params = "LLAMA3_1_8B_PARAMS"
+        elif "3.2-11B" in model_name:
+            local_params = "LLAMA3_2_11B_PARAMS"
+        elif "3.1-70B" in model_name:
+            local_params = "LLAMA3_1_70B_PARAMS"
+        elif "3.2-90B" in model_name:
+            local_params = "LLAMA3_2_90B_PARAMS"
+        else:
+            local_params = None
+        return local_params
+
     def get_xqkv_prefill_mem_cfg(self, seq_len):
         return ttnn.create_sharded_memory_config(
             (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
@@ -1418,6 +1433,9 @@ class ModelArgs:
         self.n_heads = text_config.get("n_heads", text_config.get("num_attention_heads"))
         self.n_kv_heads = text_config.get("n_kv_heads", text_config.get("num_key_value_heads"))
         self.n_layers = text_config.get("n_layers", text_config.get("num_hidden_layers"))
+        # multimodal llama additionally adds cross attention layers
+        # they are calculated in HF but not calculated in Meta
+        self.n_layers -= len(text_config.get("cross_attention_layers", ()))
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
         self.vocab_size = text_config["vocab_size"]
@@ -1435,6 +1453,16 @@ class ModelArgs:
             self.hidden_dim = text_config["intermediate_size"]
             self.ffn_dim_multiplier = None
             self.multiple_of = None
+
+            # temporary solution for using HF_MODEL for LLaMA until llama_model references are removed
+            local_params = self.__get_llama_local_params_name(self.model_name)
+            if local_params in self.LOCAL_LLAMA_PARAMS:
+                params_file = os.path.join(self.LOCAL_LLAMA_PARAMS[local_params], "params.json")
+                if os.path.exists(params_file):
+                    with open(params_file, "r") as f:
+                        params = json.load(f)
+                    self.ffn_dim_multiplier = params["ffn_dim_multiplier"]
+                    self.multiple_of = params["multiple_of"]
         else:
             self.ffn_dim_multiplier = text_config["ffn_dim_multiplier"]
             self.multiple_of = text_config["multiple_of"]
@@ -1499,9 +1527,13 @@ class ModelArgs:
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
         # Vision params (Meta-specific)
-        self.vision_chunk_size = config.get("vision_chunk_size", -1)
-        self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
+        vision_config = config.get("vision_config", config)
+
+        self.vision_chunk_size = vision_config.get("vision_chunk_size", vision_config.get("image_size", -1))
+        self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", vision_config.get("max_num_tiles", 4))
+        self.vision_num_cross_attention_layers = vision_config.get(
+            "vision_num_cross_attention_layers", vision_config.get("num_global_layers", -1)
+        )
 
         # Vision constants
         self.vision_dim = 1280
@@ -1605,7 +1637,7 @@ class ModelArgs:
                 )
                 self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
             else:
-                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR)
+                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
 
             config = self.hf_config.to_dict()
         else:
@@ -1692,11 +1724,17 @@ class ModelArgs:
 
                     print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
                 else:
-                    from transformers import AutoModelForCausalLM
+                    from transformers import AutoModelForCausalLM, AutoModelForVision2Seq
 
-                model = AutoModelForCausalLM.from_pretrained(
+                if self.is_vision():
+                    model_cls = AutoModelForVision2Seq
+                else:
+                    model_cls = AutoModelForCausalLM
+
+                model = model_cls.from_pretrained(
                     self.CKPT_DIR,
-                    torch_dtype="auto"
+                    torch_dtype="auto",
+                    local_files_only=os.getenv("CI") == "true"
                     # Note that the default setting is torch.dtype.float32, but model weights are
                     # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                     # unnecessary cast.
@@ -1712,7 +1750,10 @@ class ModelArgs:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
             else:
                 state_dict = standardize_hf_keys(state_dict)
-            state_dict = convert_hf_to_meta(state_dict, self.head_dim)
+            if self.is_multimodal and "llama" in self.CKPT_DIR.lower():
+                state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
+            else:
+                state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -2046,7 +2087,7 @@ class ModelArgs:
             return Tokenizer(self.tokenizer_path)
         else:
             # Create a HuggingFace AutoTokenizer
-            from transformers import AutoTokenizer
+            from transformers import AutoProcessor
 
             # Mapping of base model names to their known tokenizer paths
             # These are the original models that have proper tokenizers
@@ -2073,7 +2114,10 @@ class ModelArgs:
 
             try:
                 # Try to load tokenizer from the original model path
-                tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
+                # If there is no Processor, it will return Tokenizer (useful for multimodal models)
+                tokenizer = AutoProcessor.from_pretrained(
+                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
+                )
                 logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load tokenizer from {self.TOKENIZER_PATH}: {e}")
@@ -2112,7 +2156,9 @@ class ModelArgs:
                 if fallback_tokenizer_path:
                     logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                     try:
-                        tokenizer = AutoTokenizer.from_pretrained(fallback_tokenizer_path)
+                        tokenizer = AutoProcessor.from_pretrained(
+                            fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
+                        )
                         logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
                     except Exception as fallback_e:
                         logger.error(f"Failed to load fallback tokenizer from {fallback_tokenizer_path}: {fallback_e}")
@@ -2123,7 +2169,11 @@ class ModelArgs:
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
-                tokenizer.stop_tokens = [tokenizer.eos_token_id]
+                tokenizer.stop_tokens = []
+                if hasattr(tokenizer, "eos_token_id"):
+                    tokenizer.stop_tokens.append(tokenizer.eos_token_id)
+                elif hasattr(tokenizer, "tokenizer"):
+                    tokenizer.stop_tokens.append(tokenizer.tokenizer.eos_token_id)
             return tokenizer
 
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
@@ -2139,7 +2189,8 @@ class ModelArgs:
                 except ValueError as e:
                     logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
                     logger.warning(f"Falling back to base model encoding with no chat template")
-
+            if hasattr(self.tokenizer, "tokenizer"):
+                return self.tokenizer.tokenizer.encode(prompt_text, add_special_tokens=False)
             return self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
     def reference_lm_head(self):
@@ -2181,13 +2232,17 @@ class ModelArgs:
                 model = AutoModelForCausalLM.from_config(config)
             else:
                 if self.cache_hf_flag and self.cached_hf_model is None:
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, local_files_only=os.getenv("CI") == "true"
+                    )
                     self.cached_hf_model = model
                 elif self.cache_hf_flag and self.cached_hf_model is not None:
                     model = self.cached_hf_model
                 else:
                     # No caching - load fresh each time
-                    model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    model = AutoModelForCausalLM.from_pretrained(
+                        self.CKPT_DIR, local_files_only=os.getenv("CI") == "true"
+                    )
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
                     model.model = model.language_model
@@ -2258,7 +2313,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = layer.__class__.__name__ in ("Qwen3Attention", "MistralAttention")
+            use_position_embeddings = "position_embeddings" in inspect.signature(layer.forward).parameters
             wrapper = HfAttentionWrapper(
                 layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
             )
@@ -2364,7 +2419,7 @@ class HfAttentionWrapper:
 
         if self.rotary_emb is not None:
             position_embeddings = self.rotary_emb(x, position_ids)
-            output, _ = self.attention(
+            output, *_ = self.attention(
                 x,
                 position_embeddings=position_embeddings,
                 past_key_value=self.past_key_value,
@@ -2479,26 +2534,34 @@ class HfModelWrapper:
 
     @property
     def cache_k(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
-        hf_k = k.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
-        batch_size, seq_len, n_heads, head_dim = hf_k.shape
+        kvs = self.past_key_values.to_legacy_cache()
+        meta_ks = []
+        for k, v in kvs:
+            hf_k = k.permute(
+                0, 2, 1, 3
+            )  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+            batch_size, seq_len, n_heads, head_dim = hf_k.shape
 
-        meta_k = torch.zeros_like(hf_k)
-        for b in range(batch_size):
-            for s in range(seq_len):
-                # Flatten just heads and head_dim
-                flat = hf_k[b, s].flatten()
-                # Apply reverse_permute
-                transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
-                # Restore heads and head_dim shape
-                meta_k[b, s] = transformed.reshape(n_heads, head_dim)
+            meta_k = torch.zeros_like(hf_k)
+            for b in range(batch_size):
+                for s in range(seq_len):
+                    # Flatten just heads and head_dim
+                    flat = hf_k[b, s].flatten()
+                    # Apply reverse_permute
+                    transformed = reverse_permute(flat.unsqueeze(-1), n_heads, flat.shape[0], 1).squeeze(-1)
+                    # Restore heads and head_dim shape
+                    meta_k[b, s] = transformed.reshape(n_heads, head_dim)
 
-        return meta_k
+            meta_ks.append(meta_k)
+
+        return meta_ks
 
     @property
     def cache_v(self):
-        [(k, v)] = self.past_key_values.to_legacy_cache()
-        return v.permute(0, 2, 1, 3)  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
+        kvs = self.past_key_values.to_legacy_cache()
+        return [
+            v.permute(0, 2, 1, 3) for k, v in kvs
+        ]  # match meta-style reference which uses (batch_size, seq, n_kv_heads, head_dim)
 
 
 class DecodersPrecision:
