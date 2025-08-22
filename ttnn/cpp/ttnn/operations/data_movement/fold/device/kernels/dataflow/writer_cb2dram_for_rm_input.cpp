@@ -6,22 +6,6 @@
 #include <cstdint>
 #include "dataflow_api.h"
 
-inline void print_bf16_pages(uint32_t l1_addr, uint32_t elts_per_page, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * elts_per_page;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < elts_per_page; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
-
-#define dump(a)                                               \
-    do {                                                      \
-        DPRINT << "Activations: " << #a " = " << a << ENDL(); \
-    } while (false)
-
 void kernel_main() {
     constexpr uint32_t stick_nbytes = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(1);
@@ -59,11 +43,8 @@ void kernel_main() {
             // If L1 aligned, write directly from the circular buffer
             noc_async_write(l1_addr, dst_noc_addr, stick_nbytes * patch_size);
         }
-        dump(dst_index);
-        dump(patch_size);
-        print_bf16_pages((uint32_t)patch_data, stick_nbytes / 2, patch_size);
         noc_async_write_barrier();
-        dst_index++;
         cb_pop_front(cb_id_in0, 1);
+        dst_index++;
     }
 }
