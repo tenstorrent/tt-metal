@@ -59,31 +59,21 @@ protected:
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint, true);
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_prepend_device_core_risc(
             tt::llrt::RunTimeDebugFeatureDprint, false);
-        std::cout << "construction error here 0" << std::endl;
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER, tt::llrt::RunTimeDebugClassWorker);
-        std::cout << "construction error here 1" << std::endl;
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_cores(
             tt::llrt::RunTimeDebugFeatureDprint, CoreType::ETH, tt::llrt::RunTimeDebugClassWorker);
-        std::cout << "construction error here 2" << std::endl;
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_all_chips(tt::llrt::RunTimeDebugFeatureDprint, true);
-        std::cout << "construction error here 3" << std::endl;
         // Send output to a file so the test can check after program is run.
         tt::tt_metal::MetalContext::instance().rtoptions().set_feature_file_name(tt::llrt::RunTimeDebugFeatureDprint, dprint_file_name);
-        std::cout << "construction error here 4" << std::endl;
         tt::tt_metal::MetalContext::instance().rtoptions().set_test_mode_enabled(true);
-        std::cout << "construction error here 5" << std::endl;
         watcher_previous_enabled = tt::tt_metal::MetalContext::instance().rtoptions().get_watcher_enabled();
-        std::cout << "construction error here 6" << std::endl;
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_enabled(false);
-        std::cout << "construction error here 7" << std::endl;
 
         ExtraSetUp();
 
         // Parent class initializes devices and any necessary flags
-        std::cout << "construction error here 8" << std::endl;
         DebugToolsMeshFixture::SetUp();
-        std::cout << "construction error here 9" << std::endl;
     }
 
     void TearDown() override {
