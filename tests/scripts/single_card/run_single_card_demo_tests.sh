@@ -1,10 +1,34 @@
 #!/bin/bash
 set -e
 
+get_hf_cache_path() {
+  local hf_model="$1"
+  # Cache dir for "meta-llama/Llama-3.1-8B-Instruct" is "meta-llama--Llama-3.1-8B-Instruct"
+  # HF flow adds device name to cache dir automatically (e.g. N150/N300/T3K/TG)
+  local model_name="${hf_model/\//--}"
+  local tt_cache_path="$HF_HOME/tt_cache/$model_name"
+  echo "$tt_cache_path"
+}
+
 run_falcon7b_func() {
 
   pytest -n auto --disable-warnings -q -s --input-method=cli --cli-input="YOUR PROMPT GOES HERE!"  models/demos/wormhole/falcon7b/demo_wormhole.py::test_demo -k "default_mode_1024_stochastic"
 
+}
+
+run_gemma3_func() {
+  fail=0
+
+  gemma3_4b="google/gemma-3-4b-it"
+
+  for gemma3 in "$gemma3_4b"; do
+    HF_MODEL=$gemma3 TT_CACHE_PATH=$(get_hf_cache_path $gemma3) pytest models/experimental/gemma3_4b/tests/vision_tests/test_end2end.py --timeout 600 || fail=1
+    echo "LOG_METAL: Gemma3 e2e test for $gemma3 completed"
+  done
+
+  if [[ $fail -ne 0 ]]; then
+    exit 1
+  fi
 }
 
 run_mistral7b_func() {
