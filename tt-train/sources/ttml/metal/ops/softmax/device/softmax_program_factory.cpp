@@ -184,22 +184,22 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto precise_data_format = tt::DataFormat::Float32;
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_mask = create_circular_buffer(
         program, all_cores, kMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_max_mask = create_circular_buffer(
         program, all_cores, kMaxMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
         program, all_cores, KReductionScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_mat_mul_reduce = create_circular_buffer(
         program, all_cores, kMatMulCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_max_value_before_reduction = create_circular_buffer(
         program,
         all_cores,
         kMaxValueBeforeReductionCbIndex,
@@ -207,7 +207,7 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
         bfloat16_single_tile_size_bytes,
         kMaxValueBeforeReductionTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_max_value_after_reduction = create_circular_buffer(
         program,
         all_cores,
         kMaxValueAfterReductionCbIndex,
@@ -215,10 +215,10 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
         bfloat16_single_tile_size_bytes,
         kNumMaxValueAfterReductionTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_input = create_circular_buffer(
         program, all_cores, kExpCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_sum_before_reduction = create_circular_buffer(
         program,
         all_cores,
         kExpSumBeforeReductionCbIndex,
@@ -226,7 +226,7 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
         float32_single_tile_size_bytes,
         kNumExpSumBeforeReductionTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_sum_after_refuction = create_circular_buffer(
         program,
         all_cores,
         KExpSumAfterReductionCbIndex,
@@ -234,7 +234,7 @@ SoftmaxProgramFactory::cached_program_t SoftmaxProgramFactory::create(
         float32_single_tile_size_bytes,
         kNumExpSumAfterReductionTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_output_tiles);
 
     // -------------------------------------------------------------------------
@@ -346,9 +346,6 @@ void SoftmaxProgramFactory::override_runtime_arguments(
     auto& shared_variables = cached_program.shared_variables;
     auto& softmax_reader_kernel_id = shared_variables.reader_kernel_id;
     auto& softmax_writer_kernel_id = shared_variables.writer_kernel_id;
-    auto& softmax_kernel_group_1_id = shared_variables.compute_kernel_group_1_id;
-    auto& softmax_kernel_group_2_id = shared_variables.compute_kernel_group_2_id;
-    auto& core_group_2 = shared_variables.core_group_2;
 
     uint32_t num_cores = shared_variables.num_cores;
     uint32_t num_cores_y = shared_variables.num_cores_y;
@@ -359,10 +356,6 @@ void SoftmaxProgramFactory::override_runtime_arguments(
     // Only address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, softmax_reader_kernel_id);
     auto& writer_runtime_args = GetRuntimeArgs(program, softmax_writer_kernel_id);
-    auto& group_1_runtime_args = GetRuntimeArgs(program, softmax_kernel_group_1_id);
-    // we need to initialize it with something, but if group 2 is  empty it will be used in the loop
-    [[maybe_unused]] auto& group_2_runtime_args =
-        core_group_2.ranges().empty() ? group_1_runtime_args : GetRuntimeArgs(program, softmax_kernel_group_2_id);
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};

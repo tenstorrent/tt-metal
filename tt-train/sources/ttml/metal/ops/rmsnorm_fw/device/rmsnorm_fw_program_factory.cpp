@@ -194,21 +194,22 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
     auto data_format = input_data_format;
     auto precise_data_format = tt::DataFormat::Float32;
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_mask = create_circular_buffer(
         program, all_cores, kMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    create_circular_buffer(program, all_cores, kEpsCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumEpsTiles);
+    [[maybe_unused]] auto cb_eps = create_circular_buffer(
+        program, all_cores, kEpsCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumEpsTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_gamma = create_circular_buffer(
         program, all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_gamma_tiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_rms_before_reduction_intermediate = create_circular_buffer(
         program,
         all_cores,
         kRmsBeforeReductionCbIndex,
@@ -216,7 +217,7 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
         float32_single_tile_size_bytes,
         kNumRmsBeforeReductionTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_rms_after_reduction_intermediate = create_circular_buffer(
         program,
         all_cores,
         kRmsAfterReductionCbIndex,
@@ -224,7 +225,7 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
         float32_single_tile_size_bytes,
         kNumRmsAfterReductionTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_inverse_rms_after_reduction_intermediate = create_circular_buffer(
         program,
         all_cores,
         kInverseRmsAfterReductionCbIndex,
@@ -232,13 +233,13 @@ RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::cre
         float32_single_tile_size_bytes,
         kNumInverseRmsAfterReductionTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_output = create_circular_buffer(
         program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_rms_output = create_circular_buffer(
         program, all_cores, kRmsOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRmsOutputTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_output_intermediate = create_circular_buffer(
         program, all_cores, kOutputIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
     // -------------------------------------------------------------------------

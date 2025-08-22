@@ -343,6 +343,8 @@ class Generator:
         sampling_params: SamplingParams = None,  # Should be None if not greedy decoding / sampling on device.
         reset_inputs=False,
         tt_out_logits_saved=None,
+        is_cur_pos_sharded=False,
+        is_page_table_sharded=False,
     ):
         if self.prev_page_table is None:
             self.prev_page_table = page_table
@@ -359,6 +361,8 @@ class Generator:
             "tokens": tokens,
             "page_table": page_table,
             "kv_cache": kv_cache,
+            "is_cur_pos_sharded": is_cur_pos_sharded,
+            "is_page_table_sharded": is_page_table_sharded,
         }
         if reset_inputs and sampling_params is not None:
             if sampling_params.temperature == 0:  # argmax
@@ -370,7 +374,6 @@ class Generator:
             )
         if tt_out_logits_saved is not None:
             decode_kwargs["tt_out_logits_saved"] = tt_out_logits_saved
-
         if enable_trace:
             tt_tok = self._easy_trace_text(**decode_kwargs, reset_inputs=reset_inputs)
         else:
@@ -389,13 +392,15 @@ class Generator:
         page_table=None,
         kv_cache=None,
         tt_out_logits_saved=None,
+        is_cur_pos_sharded=False,
+        is_page_table_sharded=False,
     ):
         """
         Performs text decode step.
         Returns tt_logits on device
         """
         tt_tokens, tt_current_pos, rot_mat_idxs, tt_page_table = self.model.prepare_inputs_decode(
-            tokens, current_pos, page_table
+            tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
         )
         tt_tok = self.model.ttnn_decode_forward(
             tt_tokens,
@@ -408,30 +413,38 @@ class Generator:
         return tt_tok
 
     def _capture_trace_text(
-        self,
-        tokens,
-        current_pos,
-        page_table=None,
-        kv_cache=None,
+        self, tokens, current_pos, page_table=None, kv_cache=None, is_cur_pos_sharded=False, is_page_table_sharded=False
     ):
         """
         Captures a trace for the decode_forward method.
         """
 
         # Compile run
-        self._decode_forward_no_trace_text(tokens, current_pos, page_table=page_table, kv_cache=kv_cache)
+        self._decode_forward_no_trace_text(
+            tokens,
+            current_pos,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            is_cur_pos_sharded=is_cur_pos_sharded,
+            is_page_table_sharded=is_page_table_sharded,
+        )
         logger.info("Done Compiling Model")
 
         # Get inputs ready for trace run
-        host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table=page_table)
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+        tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt = self.model.prepare_inputs_decode(
+            tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
+        )
 
+        # Save the buffer addresses for preallocated tensors
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        tt_out_tok = self.model.ttnn_decode_forward(*device_inputs, kv_cache=kv_cache)
+        tt_out_tok = self.model.ttnn_decode_forward(
+            tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt, kv_cache=kv_cache
+        )
 
+        # Try allocating our persistent tensors here and verifying it matches the address that trace captured
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         logger.info("Done Capturing Decode Trace")
-        return trace_id, tt_out_tok, *device_inputs
+        return trace_id, tt_out_tok, tokens_tt, current_pos_tt, rope_idxs_tt, page_table_tt
 
     def _decode_forward_trace_text(
         self,
@@ -456,6 +469,8 @@ class Generator:
         page_table=None,
         kv_cache=None,
         reset_inputs=False,
+        is_cur_pos_sharded=False,
+        is_page_table_sharded=False,
     ):
         """
         Tracing is easy! Just call this method and we'll handle tracing for you.
@@ -464,16 +479,25 @@ class Generator:
 
         if not hasattr(self, "trace_id_text"):
             trace_id, tt_out_tok, *device_inputs = self._capture_trace_text(
-                tokens, current_pos, page_table=page_table, kv_cache=kv_cache
+                tokens,
+                current_pos,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                is_cur_pos_sharded=is_cur_pos_sharded,
+                is_page_table_sharded=is_page_table_sharded,
             )
             self.trace_id_text = trace_id
             self.trace_inputs_text = device_inputs
             self.trace_output_text = tt_out_tok
         if reset_inputs:
-            host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
+            host_inputs = self.model.prepare_decode_inputs_host(
+                tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
+            )
+            shard_specs = self.model.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
             device_inputs = copy_host_to_device(
                 host_tensors=host_inputs,
                 device_tensors=self.trace_inputs_text,
+                shard_specs=shard_specs,
             )
 
         trace_tok_rm = self._decode_forward_trace_text(

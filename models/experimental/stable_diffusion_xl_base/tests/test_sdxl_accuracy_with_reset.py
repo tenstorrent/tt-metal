@@ -10,7 +10,7 @@ from PIL import Image
 
 from loguru import logger
 from models.experimental.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
-from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import sdxl_get_prompts
+from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import sdxl_get_prompts, check_clip_scores
 from models.experimental.stable_diffusion_xl_base.utils.clip_encoder import CLIPEncoder
 from models.experimental.stable_diffusion_xl_base.tests.test_sdxl_accuracy import OUT_ROOT, RESULTS_FILE_NAME
 
@@ -200,18 +200,3 @@ def sdxl_collect_images(start_from, num_prompts):
         img = Image.open(current_filename_path).convert("RGB")
         collected_images.append(img)
     return collected_images
-
-
-def check_clip_scores(start_from, num_prompts, prompts, clip_scores):
-    assert len(clip_scores) == num_prompts == len(prompts), f"Expected {num_prompts} CLIP scores and prompts."
-    for idx, score in enumerate(clip_scores):
-        if clip_scores[idx] < 27:
-            if clip_scores[idx] < 20:
-                logger.error(
-                    f"Very low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]},  \
-                        this indicates a fragmented image or noise or prompt mismatch or something else very wrong."
-                )
-            else:
-                logger.warning(
-                    f"Low CLIP score detected for image {start_from + idx + 1}: {score}, prompt: {prompts[idx]}"
-                )

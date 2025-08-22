@@ -42,7 +42,7 @@ protected:
 TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
     using namespace ttml;
 
-    uint32_t W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -57,7 +57,7 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
 TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
     using namespace ttml;
 
-    uint32_t W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -165,7 +165,7 @@ TEST_F(RMSNormOpTest, RMSNorm_Backward_Batch) {
 TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Forward) {
     using namespace ttml;
 
-    uint32_t W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -180,7 +180,7 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Forward) {
 TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Backward) {
     using namespace ttml;
 
-    uint32_t W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));

@@ -132,19 +132,19 @@ SiLUBackwardProgramFactory::cached_program_t SiLUBackwardProgramFactory::create(
 
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_dLdout = create_circular_buffer(
         program, all_cores, kDLoutCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_dL_da = create_circular_buffer(
         program, all_cores, kDLdaCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_sigmoid = create_circular_buffer(
         program, all_cores, kSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_one_minus_sigmoid = create_circular_buffer(
         program, all_cores, kOneMinusSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_times_input_plus_one = create_circular_buffer(
         program, all_cores, kTimesInputPlusOneCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_times_sigmoid = create_circular_buffer(
         program, all_cores, kTimesSigmoidCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
 
     // -------------------------------------------------------------------------

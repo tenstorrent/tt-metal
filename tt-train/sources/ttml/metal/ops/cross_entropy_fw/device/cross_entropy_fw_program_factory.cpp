@@ -208,28 +208,28 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
     auto data_format = input_data_format;  // tt::DataFormat::Float16_b
     auto target_indexes_data_format = tt::DataFormat::UInt32;
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_input = create_circular_buffer(
         program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_target = create_circular_buffer(
         program, all_cores, kTargetCbIndex, target_indexes_data_format, uint32_read_page_size, kNumTargetIndexesTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_mask = create_circular_buffer(
         program, all_cores, kMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_max_mask = create_circular_buffer(
         program, all_cores, kMaxMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_scaler = create_circular_buffer(
         program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_input_tile_by_idx = create_circular_buffer(
         program, all_cores, kInputTileCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumInputTilesByIndx);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_target_inputs = create_circular_buffer(
         program, all_cores, kTargetLogitsCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumTargetLogitsTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_max_value_before_reduction = create_circular_buffer(
         program,
         all_cores,
         kMaxValueBeforeReductionCbIndex,
@@ -237,7 +237,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         bfloat16_single_tile_size_bytes,
         kMaxValueBeforeReductionTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_max_value_after_reduction = create_circular_buffer(
         program,
         all_cores,
         kMaxValueAfterReductionCbIndex,
@@ -245,7 +245,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         bfloat16_single_tile_size_bytes,
         kNumMaxValueAfterReductionTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_sum_before_reduction = create_circular_buffer(
         program,
         all_cores,
         kExpSumBeforeReductionCbIndex,
@@ -253,7 +253,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         bfloat16_single_tile_size_bytes,
         kNumExpSumBeforeReductionTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_exp_sum_after_refuction = create_circular_buffer(
         program,
         all_cores,
         KExpSumAfterReductionCbIndex,
@@ -261,7 +261,7 @@ CrossEntropyForwardProgramFactory::cached_program_t CrossEntropyForwardProgramFa
         bfloat16_single_tile_size_bytes,
         kNumExpSumAfterReductionTiles);
 
-    create_circular_buffer(
+    [[maybe_unused]] auto cb_output = create_circular_buffer(
         program,
         all_cores,
         kOutputCbIndex,
