@@ -47,10 +47,6 @@ on:
         required: true
         type: string
         description: "Timeout for one iteration (eg: 5m, 1h)"
-      patch:
-        required: false
-        type: string
-        description: "Commit-ish to cherry-pick for each step"
 
 run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
@@ -114,4 +110,4 @@ jobs:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
-          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} -p "${{ inputs.patch }}"
+          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }}
