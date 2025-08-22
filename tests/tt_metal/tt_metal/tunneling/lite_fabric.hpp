@@ -90,18 +90,18 @@ struct LiteFabricConfig {
     // get the ethernet core coordinate.
     volatile uint32_t eth_chans_mask = 0;
 
-    unsigned char padding0[4];
+    unsigned char padding0[4]{};
 
     // Subordinate cores on the same chip increment this value when they are ready. The primary core
     // will stall until this value shows all eth cores are ready.
     volatile uint32_t primary_local_handshake = 0;
 
-    unsigned char padding1[12];
+    unsigned char padding1[12]{};
 
     // Becomes 1 when the neighbour is ready
     volatile uint32_t neighbour_handshake = 0;
 
-    unsigned char padding2[14];
+    unsigned char padding2[14]{};
 
     // This is the local primary core
     volatile uint16_t is_primary = false;
@@ -203,7 +203,7 @@ struct HostToLiteFabricInterface {
         auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
         tt_driver_atomics::mfence();
 
-        volatile LiteFabricHeader header;
+        volatile LiteFabricHeader header{};
         header.command_fields.noc_read.event = 0;
         const auto expectedOrderId = HostToLiteFabricReadEvent::get();
         log_debug(
@@ -329,7 +329,7 @@ struct HostToLiteFabricInterface {
 
     // Only up to max buffer size is supported
     void write(void* mem_ptr, size_t size, tt_cxy_pair sender_core, uint64_t dst_noc_addr, uint8_t noc_index) {
-        LiteFabricHeader header;
+        LiteFabricHeader header{};
         header.to_chip_unicast(1);
         header.to_noc_unicast_write(lite_fabric::NocUnicastCommandHeader{dst_noc_addr}, size, noc_index);
         // Unaligned address
@@ -369,7 +369,7 @@ struct HostToLiteFabricInterface {
     }
 
     void read(void* mem_ptr, size_t size, tt_cxy_pair receiver_core, uint64_t src_noc_addr, uint8_t noc_index = lite_fabric::edm_to_local_chip_noc) {
-        LiteFabricHeader header;
+        LiteFabricHeader header{};
         header.to_chip_unicast(1);
         header.to_noc_read(lite_fabric::NocReadCommandHeader{src_noc_addr, HostToLiteFabricReadEvent::get()}, size, noc_index);
         header.unaligned_offset = src_noc_addr & (l1_alignment_bytes - 1);
@@ -428,7 +428,7 @@ struct HostToLiteFabricInterface {
     // Write the register of the connected ethernet core directly from the sender using the Ethernet Dataflow API.
     // If you need to write registers to cores on the receiver chip, use write() instead
     void write_reg_direct(uint32_t reg_address, uint32_t reg_value, tt_cxy_pair sender_core) {
-        LiteFabricHeader header;
+        LiteFabricHeader header{};
         header.to_write_reg(lite_fabric::WriteRegCommandHeader{reg_address, reg_value});
 
         wait_for_empty_write_slot(sender_core);
@@ -454,18 +454,18 @@ struct HostToLiteFabricInterface {
 struct LiteFabricMemoryMap {
     lite_fabric::LiteFabricConfig config;
     tt::tt_fabric::EDMChannelWorkerLocationInfo sender_location_info;
-    uint32_t sender_flow_control_semaphore;
-    unsigned char padding0[12];
-    uint32_t sender_connection_live_semaphore;
-    unsigned char padding1[12];
-    uint32_t worker_semaphore;
-    unsigned char padding2[12];
-    unsigned char sender_channel_buffer[lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0] * lite_fabric::CHANNEL_BUFFER_SIZE];
+    uint32_t sender_flow_control_semaphore{};
+    unsigned char padding0[12]{};
+    uint32_t sender_connection_live_semaphore{};
+    unsigned char padding1[12]{};
+    uint32_t worker_semaphore{};
+    unsigned char padding2[12]{};
+    unsigned char sender_channel_buffer[lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0] * lite_fabric::CHANNEL_BUFFER_SIZE]{};
     unsigned char
-        receiver_channel_buffer[lite_fabric::RECEIVER_NUM_BUFFERS_ARRAY[0] * lite_fabric::CHANNEL_BUFFER_SIZE];
+        receiver_channel_buffer[lite_fabric::RECEIVER_NUM_BUFFERS_ARRAY[0] * lite_fabric::CHANNEL_BUFFER_SIZE]{};
     // L1 address of the service_lite_fabric function
-    uint32_t service_lite_fabric_addr;
-    unsigned char padding3[12];
+    uint32_t service_lite_fabric_addr{};
+    unsigned char padding3[12]{};
     // Must be last because it has members that are only stored on the host
     HostToLiteFabricInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>
         host_interface;
