@@ -433,9 +433,11 @@ INSTANTIATE_TEST_SUITE_P(
         // Standalone tests (no mesh device, no fabric)
         LiteFabricTestConfig{.standalone = true},
         // Standard tests with mesh device but no fabric
-        LiteFabricTestConfig{.standalone = false}
-        // Full fabric parallel test with 2D dynamic routing
-        // LiteFabricTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}
+        LiteFabricTestConfig{.standalone = false},
+        // Test with 1D fabric active (full fabric)
+        LiteFabricTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}
+        // Test with 2D fabric active (full fabric)
+        // LiteFabricTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D}
         ),
     [](const testing::TestParamInfo<LiteFabricTestConfig>& info) {
         std::string name;
@@ -443,8 +445,6 @@ INSTANTIATE_TEST_SUITE_P(
             name = "Standalone";
         } else if (info.param.fabric_config == tt::tt_fabric::FabricConfig::DISABLED) {
             name = "MeshDevice";
-        } else if (info.param.fabric_config == tt::tt_fabric::FabricConfig::FABRIC_1D) {
-            name = "FullFabric";
         } else {
             name = "MeshDevice_";
             name += enchantum::to_string(info.param.fabric_config);
@@ -556,6 +556,9 @@ TEST_P(LiteFabric, BasicFunctions) {
 TEST_P(LiteFabric, ActiveEthKernelDevice0) {
     if (!mesh_device_) {
         GTEST_SKIP() << "Mesh device required for this test";
+    }
+    if (GetParam().fabric_config != tt::tt_fabric::FabricConfig::DISABLED) {
+        GTEST_SKIP() << "ActiveEthKernelDevice0 test requires fabric to be disabled";
     }
     // Launch an active eth kernel on device 0 which calls the servicing routine and ensure we can still send/recv
     // through lite fabric

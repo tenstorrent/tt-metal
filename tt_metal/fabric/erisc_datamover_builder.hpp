@@ -170,6 +170,7 @@ struct StreamRegAssignments {
     static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
     static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
     static constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+    // 23,24,25,26,27,28 Used by Lite Fabric
     // Multi-RISC teardown synchronization stream ID
     static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
 

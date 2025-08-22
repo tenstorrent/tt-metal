@@ -11,43 +11,20 @@
 #include <array>
 #include "lite_fabric_header.hpp"
 
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
+#include "noc_nonblocking_api.h"
+#endif
+
 namespace lite_fabric {
 
 // STREAM REGISTER ASSIGNMENT
 // senders update this stream
-constexpr uint32_t to_receiver_0_pkts_sent_id = 0;
-// senders update this stream
-constexpr uint32_t to_receiver_1_pkts_sent_id = 1;
+constexpr uint32_t to_receiver_0_pkts_sent_id = 23;
 // receivers updates the reg on this stream
-constexpr uint32_t to_sender_0_pkts_acked_id = 2;
+constexpr uint32_t to_sender_0_pkts_acked_id = 24;
 // receivers updates the reg on this stream
-constexpr uint32_t to_sender_1_pkts_acked_id = 3;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_2_pkts_acked_id = 4;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_3_pkts_acked_id = 5;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_4_pkts_acked_id = 6;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_0_pkts_completed_id = 7;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_1_pkts_completed_id = 8;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_2_pkts_completed_id = 9;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_3_pkts_completed_id = 10;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_4_pkts_completed_id = 11;
-constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
-constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
-constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
-constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
-constexpr uint32_t sender_channel_0_free_slots_stream_id = 17;
-constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
-constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
-constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
-constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
-constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+constexpr uint32_t to_sender_0_pkts_completed_id = 25;
 
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 
@@ -79,38 +56,6 @@ constexpr size_t RECEIVER_CHANNEL_BASE_ID = NUM_SENDER_CHANNELS;
 constexpr size_t SENDER_CHANNEL_BASE_ID = 0;
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
-
-#include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
-#include "noc_nonblocking_api.h"
-
-constexpr std::array<uint32_t, NUM_RECEIVER_CHANNELS> to_receiver_packets_sent_streams =
-    take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, uint32_t>(
-        std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id});
-
-constexpr std::array<uint32_t, NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
-    take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
-        std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
-            to_sender_0_pkts_acked_id,
-            to_sender_1_pkts_acked_id,
-            to_sender_2_pkts_acked_id,
-            to_sender_3_pkts_acked_id,
-            to_sender_4_pkts_acked_id});
-
-constexpr std::array<uint32_t, NUM_SENDER_CHANNELS> to_sender_packets_completed_streams =
-    take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
-        std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
-            to_sender_0_pkts_completed_id,
-            to_sender_1_pkts_completed_id,
-            to_sender_2_pkts_completed_id,
-            to_sender_3_pkts_completed_id,
-            to_sender_4_pkts_completed_id});
-
-static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
-    sender_channel_0_free_slots_stream_id,
-    sender_channel_1_free_slots_stream_id,
-    sender_channel_2_free_slots_stream_id,
-    sender_channel_3_free_slots_stream_id,
-    sender_channel_4_free_slots_stream_id};
 
 // Always using NOC0 and default cmd bufs
 // Used for acks
