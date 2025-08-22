@@ -11,6 +11,7 @@ table MeshHostRankId {
 table EthChanDescriptor {
     board_id: uint64;
     chan_id: uint32;
+    hello: uint32;
 }
 
 table EthernetLink {
