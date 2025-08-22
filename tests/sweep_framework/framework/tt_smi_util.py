@@ -5,6 +5,7 @@
 import os
 import shutil
 import subprocess
+from time import sleep
 from tests.sweep_framework.framework.sweeps_logger import sweeps_logger as logger
 
 
@@ -37,7 +38,7 @@ class ResetUtil:
             raise Exception(f"SWEEPS: Unable to locate tt-smi executable")
 
     def reset(self):
-        smi_process = subprocess.run([self.command, *self.args], stdout=subprocess.DEVNULL)
+        smi_process = subprocess.run([self.command, *self.args])  # , stdout=subprocess.DEVNULL)
         if smi_process.returncode == 0:
             logger.info("TT-SMI Reset Complete Successfully")
             return
