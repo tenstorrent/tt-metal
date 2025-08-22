@@ -50,6 +50,7 @@ void kernel_main() {
 
     const uint32_t St = get_compile_time_arg_val(20);
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(21));  // semaphore for receiver
+    constexpr uint32_t batch_size = get_compile_time_arg_val(22);
 
     constexpr uint32_t head_offset_t = Wt * St;
 
@@ -72,13 +73,14 @@ void kernel_main() {
     if constexpr (use_index_tensor) {
         const InterleavedAddrGen<index_is_dram> addrg = {
             .bank_base_address = index_tensor_addr, .page_size = index_stick_size_B};
-
         cb_reserve_back(cb_index_id, 1);
         uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
-        // index_tensor has one page to read
-        uint64_t tensor_index_noc_addr = get_noc_addr(0, addrg);
-        noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
-        noc_async_read_barrier();
+        if constexpr (index_is_dram) {
+            // index_tensor has one page to read
+            uint64_t tensor_index_noc_addr = get_noc_addr(0, addrg);
+            noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
+            noc_async_read_barrier();
+        }
         cb_push_back(cb_index_id, 1);
         volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
 
@@ -88,19 +90,36 @@ void kernel_main() {
             skip_update = true;
         } else {
             if constexpr (is_paged_cache) {
-                const InterleavedAddrGen<page_table_is_dram> page_table_gen = {
-                    .bank_base_address = page_table_tensor_addr, .page_size = page_table_stick_size};
-                cb_reserve_back(page_table_cb_id, 1);
+                uint32_t num_pages_to_read = page_table_is_dram ? 1 : batch_size;
+                cb_reserve_back(page_table_cb_id, num_pages_to_read);
                 uint32_t page_table_cb_wr_ptr = get_write_ptr(page_table_cb_id);
-                uint64_t page_table_noc_addr = get_noc_addr(my_batch_idx, page_table_gen);
-                noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
-                noc_async_read_barrier();
-                cb_push_back(page_table_cb_id, 1);
-                volatile tt_l1_ptr uint32_t* page_table_ptr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+
+                if constexpr (page_table_is_dram) {
+                    const InterleavedAddrGen<page_table_is_dram> page_table_gen = {
+                        .bank_base_address = page_table_tensor_addr, .page_size = page_table_stick_size};
+                    uint64_t page_table_noc_addr = get_noc_addr(my_batch_idx, page_table_gen);
+                    noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_stick_size);
+                    noc_async_read_barrier();
+                } else {
+                    page_table_cb_wr_ptr += my_batch_idx * page_table_stick_size;
+                }
+
+                cb_push_back(page_table_cb_id, num_pages_to_read);
+                // DRAM uses uint32 entries; L1-sharded page table uses uint16 entries
+                volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
+                volatile tt_l1_ptr uint16_t* page_table_ptr_u16 = nullptr;
+
+                if constexpr (page_table_is_dram) {
+                    page_table_ptr_u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+                } else {
+                    page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_cb_wr_ptr);
+                }
 
                 const uint32_t virtual_block_id = update_idx / block_size;
-                const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
+                const uint32_t physical_block_id = (page_table_is_dram)
+                                                       ? page_table_ptr_u32[virtual_block_id]
+                                                       : static_cast<uint32_t>(page_table_ptr_u16[virtual_block_id]);
+
                 const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
                 const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
                 const uint32_t block_offset = block_row_tile * Wt;
