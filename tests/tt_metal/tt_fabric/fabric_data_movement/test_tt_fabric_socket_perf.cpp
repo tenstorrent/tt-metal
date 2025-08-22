@@ -112,8 +112,6 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
 
     CoreCoord tx_xy = src_dev->worker_core_from_logical_core(p.sender_core);
     CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
-    (void)tx_xy;
-    (void)rx_xy;  // silence unused for now (sender comes next)
 
     // Allocate simple flat buffers (you control size via p.tensor_bytes)
     tt::tt_metal::BufferConfig src_cfg{
@@ -136,7 +134,7 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
 
     // run_unicast_test_bw_chips(fixture, src_phys, dst_phys, p.num_hops, p.use_dram_dst);
 
-    // ---------- Build a tiny receiver-only program (expected_value = 0 so it returns immediately) ----------
+    // ---------- Build a tiny receiver-only program xw----------
     tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
 
     // create a global semaphore on the dst device
@@ -154,11 +152,66 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::RISCV_0_default});
 
-    // expected_value = 0  -> returns immediately (no sender needed yet)
-    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem.address(), 0u});
+    // expected_value = 1  -> return after sender bumps the sem once
+    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem.address(), 1u});
 
-    // Run it
+    // ---------------- Sender program: READER (RISCV_0) + WRITER (RISCV_1) ----------------
+    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
+
+    // A small CB on the sender (2 pages capacity, 1-page page_size)
+    const uint32_t NUM_PAGES = 1;  // <-- one page
+    const uint32_t CB_ID = tt::CBIndex::c_0;
+    auto cb_cfg = tt::tt_metal::CircularBufferConfig(2 * p.page_size, {{CB_ID, tt::DataFormat::Float16}})
+                      .set_page_size(CB_ID, p.page_size);
+    (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
+
+    // READER kernel (DRAM->CB or L1->CB). We read from src_buf (DRAM).
+    auto reader_k = tt::tt_metal::CreateKernel(
+        sender_prog,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_sender_reader_for_perf.cpp",
+        p.sender_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = {1u /*SRC_IS_DRAM*/, NUM_PAGES, p.page_size}});
+    tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
+
+    // WRITER kernel (CB->Fabric->dst + final sem INC)
+    auto writer_k = tt::tt_metal::CreateKernel(
+        sender_prog,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_sender_writer_for_perf.cpp",
+        p.sender_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::RISCV_1_default,
+            .compile_args = {NUM_PAGES, p.page_size}});
+
+    // Writer runtime args (must match the writer kernel’s RT layout)
+    std::vector<uint32_t> writer_rt = {
+        (uint32_t)dst_buf->address(),        // 0: dst_base (receiver L1 offset)
+        (uint32_t)(p.use_dram_dst ? 1 : 0),  // 1: dst_is_dram (we set false above)
+        (uint32_t)p.mesh_id,                 // 2: dst_mesh_id (logical)
+        (uint32_t)p.dst_chip,                // 3: dst_dev_id  (logical)
+        (uint32_t)rx_xy.x,                   // 4: receiver_noc_x
+        (uint32_t)rx_xy.y,                   // 5: receiver_noc_y
+        (uint32_t)gsem.address()             // 6: receiver L1 semaphore addr
+    };
+
+    // Append fabric connection RT args so WorkerToFabricEdmSender can open the link
+    tt::tt_fabric::append_fabric_connection_rt_args(
+        tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip},
+        tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip},
+        /*link_index=*/0,
+        sender_prog,
+        p.sender_core,
+        writer_rt);
+
+    tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
+
+    // ---------------- Run order: receiver first (waits), then sender ----------------
     fixture->RunProgramNonblocking(dst_dev, receiver_prog);
+    fixture->RunProgramNonblocking(src_dev, sender_prog);
+    fixture->WaitForSingleProgramDone(src_dev, sender_prog);
     fixture->WaitForSingleProgramDone(dst_dev, receiver_prog);
 }
 
@@ -167,9 +220,10 @@ TEST_F(Fabric2DFixture, UnicastConn_CodeControlled) {
     p.mesh_id = 0;
     p.src_chip = 0;
     p.dst_chip = 1;
-    p.num_hops = 1;          // e.g., 1 for neighbor
-    p.use_dram_dst = true;   // set true to land in DRAM on dst
-    p.tensor_bytes = 4 * 1024 * 1024;
+    p.num_hops = 1;
+    p.use_dram_dst = false;        // <-- land in L1 (simpler)
+    p.page_size = 4096;            // one page
+    p.tensor_bytes = p.page_size;  // send exactly one page
 
     RunUnicastConnWithParams(this, p);
 }
