@@ -102,8 +102,8 @@ def test_conv_features(
     )
 
 
-SliceHeight = ttnn.Conv2dSliceHeight
-SliceWidth = ttnn.Conv2dSliceWidth
+SliceHeight = ttnn.Conv2dDRAMSliceHeight
+SliceWidth = ttnn.Conv2dDRAMSliceWidth
 
 
 @skip_for_blackhole("Not fully tested on Blackhole")
@@ -130,9 +130,6 @@ SliceWidth = ttnn.Conv2dSliceWidth
 @pytest.mark.parametrize(
     "has_bias, fp32_accum, packer_l1_acc",
     [[True, True, False]],
-)
-@pytest.mark.skip(
-    reason="Temporarily disabled due to issues - see ticket: https://github.com/tenstorrent/tt-metal/issues/26930"
 )
 def test_conv_dram(
     device,
