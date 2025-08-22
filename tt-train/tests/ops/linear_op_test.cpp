@@ -54,7 +54,6 @@ bool compare_tensors_for_broken(const ttnn::Tensor& t1, const ttnn::Tensor& t2, 
 }
 
 TEST_F(LinearOpTest, TTNNBackwardGoodShape) {
-    auto* device = &ttml::autograd::ctx().get_device();
     auto tensor = ttml::autograd::create_tensor();
     ttml::init::uniform_init(tensor, ttnn::Shape({64, 1, 256, 64}), ttml::init::UniformRange{-0.1F, 0.1F});
 
@@ -88,7 +87,6 @@ TEST_F(LinearOpTest, TTNNBackwardGoodShape) {
 }
 void test_linear(uint32_t batch, uint32_t emb_dim) {
     std::cout << "dim: " << emb_dim << std::endl;
-    auto* device = &ttml::autograd::ctx().get_device();
     auto tensor = ttml::autograd::create_tensor();
     ttml::init::uniform_init(tensor, ttnn::Shape({batch, 1, 1024, 768}), ttml::init::UniformRange{-0.1F, 0.1F});
 

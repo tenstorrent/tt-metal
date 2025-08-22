@@ -51,8 +51,6 @@ void normal_init(std::vector<float>& vec, NormalParams params) {
 }
 
 void constant_init(std::vector<float>& vec, float value) {
-    auto& gen = autograd::ctx().get_generator();
-    uint32_t seed = gen();
     std::fill(vec.begin(), vec.end(), value);
 }
 
