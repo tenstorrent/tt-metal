@@ -371,6 +371,7 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/profiler.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/program_descriptors.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/pytensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/tensor_conversion.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/reports.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-${PY_BINDING}/types.cpp
