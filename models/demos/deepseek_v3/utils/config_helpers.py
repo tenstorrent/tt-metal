@@ -587,7 +587,7 @@ def save_and_get_path(path, tensor):
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
     memory_config = tensor.memory_config()
-    ttnn.dump_tensor(path, tensor, enable_multihost_format=True)
+    ttnn.dump_tensor(path, tensor)
     ttnn.deallocate(tensor)
     return SavedWeight(
         path=path, memory_config=memory_config
