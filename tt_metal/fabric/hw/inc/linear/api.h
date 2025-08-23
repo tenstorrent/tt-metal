@@ -238,11 +238,11 @@ FORCE_INLINE void open_connections(
 #ifdef FABRIC_2D
     uint32_t ew_dim = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t my_dev_id = get_arg_val<uint32_t>(rt_arg_idx++);
-    uint32_t dst_mesh_id = get_arg_val<uint32_t>(rt_arg_idx++);
 
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        uint16_t eth_dir = static_cast<uint16_t>(get_arg_val<uint32_t>(rt_arg_idx++));
+        uint16_t eth_dir = static_cast<uint16_t>(connection_manager.get_tag(i));
         uint16_t dst_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(rt_arg_idx++));
+        uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(rt_arg_idx++));
         fabric_set_unicast_route(
 #if defined(DYNAMIC_ROUTING_ENABLED)
             (MeshPacketHeader*)packet_header,
