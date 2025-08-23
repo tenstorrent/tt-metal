@@ -122,12 +122,14 @@ class CodeGen:
                     array_sizes.append(array_size)
             else:
                 array_size_idx = None
+            struct_idx = None
             struct_id = self.struct_ids.get(type_name)
             if struct_id is not None:
+                struct_idx = len(struct_ids)
                 struct_ids.append(struct_id)
             elif not self.is_scalar_type(type_name):
                 self.parse_error(line, f"unresolved type {type_name}")
-            fields.append(Field(field_name, type_name, struct_id, array_size_idx))
+            fields.append(Field(field_name, type_name, struct_idx, array_size_idx))
         return Struct(name, fields, array_sizes, struct_ids)
 
     def generate_interface_header(self, file: TextIO):
