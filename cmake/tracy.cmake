@@ -1,12 +1,24 @@
 # Built as outlined in Tracy documentation (pg.12)
 set(TRACY_HOME ${PROJECT_SOURCE_DIR}/tt_metal/third_party/tracy)
 
+# Propagate ENABLE_TRACY to TRACY_ENABLE (Tracy build option)
+if(ENABLE_TRACY)
+    set(TRACY_ENABLE ON)
+else()
+    set(TRACY_ENABLE OFF)
+endif()
+
 option(ENABLE_TRACY_TIMER_FALLBACK "Enable Tracy timer fallback" OFF)
 if(NOT TRACY_ENABLE)
     # CI error: Tracy Profiler initialization failure: CPU doesn't support invariant TSC.
-    #  Define TRACY_NO_INVARIANT_CHECK=1 to ignore this error, *if you know what you are doing*.
-    #  Alternatively you may rebuild the application with the TRACY_TIMER_FALLBACK define to use lower resolution timer.
+    #   Define TRACY_NO_INVARIANT_CHECK=1 to ignore this error, *if you know what you are doing*.
+    #   Alternatively you may rebuild the application with the TRACY_TIMER_FALLBACK define to use lower resolution timer.
+    # Comment: We can safely enable this option when ENABLE_TRACY is OFF.
     set(TRACY_TIMER_FALLBACK ON)
+elseif(ENABLE_TRACY_TIMER_FALLBACK)
+    set(TRACY_TIMER_FALLBACK ON)
+else()
+    set(TRACY_TIMER_FALLBACK OFF)
 endif()
 
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
@@ -31,7 +43,7 @@ target_compile_definitions(
     TracyClient
     PUBLIC
         TRACY_ENABLE
-        "$<$<BOOL:${ENABLE_TRACY_TIMER_FALLBACK}>:TRACY_TIMER_FALLBACK>"
+        TRACY_TIMER_FALLBACK
 )
 target_compile_options(
     TracyClient
