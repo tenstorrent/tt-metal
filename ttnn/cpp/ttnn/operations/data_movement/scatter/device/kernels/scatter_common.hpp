@@ -10,6 +10,9 @@
 
 constexpr uint32_t ONE_PAGE = 1;
 
+// supported reduction methods for scatter to be applied for source values coming from recurring indices
+enum class ScatterReductionType : uint8_t { INVALID, ADD, MULTIPLY, AMIN, AMAX };
+
 // choose the right C++ POD type at compile-time
 template <DataFormat df>
 struct df_to_std {
@@ -71,6 +74,7 @@ struct ScatterCTAs {
     const uint32_t index_stick_size_bytes;
     const uint32_t source_stick_size_bytes;
     const uint32_t output_stick_size_bytes;
+    const ScatterReductionType scatter_reduction_type;
     const InputAccessorArgs input_args;
     const IndexAccessorArgs index_args;
     const SourceAccessorArgs source_args;
@@ -78,7 +82,7 @@ struct ScatterCTAs {
 };
 
 FORCE_INLINE constexpr auto get_ctas() {
-    constexpr auto input_args = TensorAccessorArgs<16>();
+    constexpr auto input_args = TensorAccessorArgs<17>();
     constexpr auto index_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto source_args = TensorAccessorArgs<index_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<source_args.next_compile_time_args_offset()>();
@@ -99,6 +103,7 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(13),
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
+        static_cast<ScatterReductionType>(get_compile_time_arg_val(16)),
         input_args,
         index_args,
         source_args,
