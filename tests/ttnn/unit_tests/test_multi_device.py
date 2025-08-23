@@ -381,7 +381,6 @@ def test_multi_device_as_tensor_api(mesh_device, layout, memory_config, dtype):
             device=mesh_device,
             memory_config=memory_config,
             cache_file_name=f"{temp_file.name}.weight",
-            enable_multihost_format=True,
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
@@ -392,7 +391,6 @@ def test_multi_device_as_tensor_api(mesh_device, layout, memory_config, dtype):
             device=mesh_device,
             memory_config=memory_config,
             cache_file_name=f"{temp_file.name}.weight",
-            enable_multihost_format=True,
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
@@ -427,7 +425,6 @@ def test_multi_device_as_tensor_api_sharded_tensor(mesh_device, layout, memory_c
             device=mesh_device,
             memory_config=memory_config,
             cache_file_name=f"{temp_file.name}.weight",
-            enable_multihost_format=True,
             mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
         )
         load_tensor = ttnn.as_tensor(
@@ -437,7 +434,6 @@ def test_multi_device_as_tensor_api_sharded_tensor(mesh_device, layout, memory_c
             device=mesh_device,
             memory_config=memory_config,
             cache_file_name=f"{temp_file.name}.weight",
-            enable_multihost_format=True,
             mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
         )
         torch_loaded_tensor = ttnn.to_torch(load_tensor, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))
@@ -447,79 +443,10 @@ def test_multi_device_as_tensor_api_sharded_tensor(mesh_device, layout, memory_c
 
 def test_tensor_file_extension_validation(tmp_path):
     with pytest.raises(RuntimeError, match="must have .tensorbin extension"):
-        ttnn.load_tensor(str(tmp_path / "test.bin"), enable_multihost_format=True)
-
-    with pytest.raises(RuntimeError, match="must have .bin extension"):
-        ttnn.load_tensor(str(tmp_path / "test.tensorbin"), enable_multihost_format=False)
+        ttnn.load_tensor(str(tmp_path / "test.bin"))
 
     with pytest.raises(RuntimeError, match="must have .tensorbin extension"):
-        ttnn.dump_tensor(str(tmp_path / "test.bin"), torch.rand((1, 1, 32, 32)), enable_multihost_format=True)
-
-    with pytest.raises(RuntimeError, match="must have .bin extension"):
-        ttnn.dump_tensor(str(tmp_path / "test.tensorbin"), torch.rand((1, 1, 32, 32)), enable_multihost_format=False)
-
-
-def test_auto_conversion_load_tensor(tmp_path):
-    """Test automatic conversion from old tensor format (.bin) to new format (.tensorbin)"""
-    torch_tensor = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
-
-    ttnn_tensor = ttnn.from_torch(
-        torch_tensor,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-    )
-
-    old_format_file = tmp_path / "test_tensor.bin"
-    ttnn.dump_tensor(str(old_format_file), ttnn_tensor, enable_multihost_format=False)
-
-    assert old_format_file.exists()
-    new_format_file = tmp_path / "test_tensor.tensorbin"
-    assert not new_format_file.exists()
-
-    loaded_tensor = ttnn.load_tensor(str(old_format_file), enable_multihost_format=False)
-
-    assert old_format_file.exists()
-    assert new_format_file.exists()
-
-    loaded_new_format = ttnn.load_tensor(str(new_format_file), enable_multihost_format=True)
-
-    torch_loaded_old = ttnn.to_torch(loaded_tensor)
-    torch_loaded_new = ttnn.to_torch(loaded_new_format)
-    assert_with_pcc(torch_loaded_old, torch_loaded_new, pcc=1.0)
-
-
-def test_auto_conversion_as_tensor(tmp_path):
-    """Test automatic conversion from old tensor format (.bin) to new format (.tensorbin)"""
-    torch_tensor = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
-
-    cache_file = tmp_path / "test_tensor"
-
-    tensor1 = ttnn.as_tensor(
-        torch_tensor,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        cache_file_name=str(cache_file),
-        enable_multihost_format=False,
-    )
-
-    bin_file = cache_file.parent / "tt-mesh" / f"{cache_file.name}_dtype_BFLOAT16_layout_TILE.bin"
-    tensorbin_file = cache_file.parent / f"{cache_file.name}_dtype_BFLOAT16_layout_TILE.tensorbin"
-
-    assert bin_file.exists()
-    assert not tensorbin_file.exists()
-
-    tensor2 = ttnn.as_tensor(
-        torch_tensor,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-        cache_file_name=str(cache_file),
-        enable_multihost_format=False,
-    )
-
-    assert bin_file.exists()
-    assert tensorbin_file.exists()
+        ttnn.dump_tensor(str(tmp_path / "test.bin"), torch.rand((1, 1, 32, 32)))
 
 
 @pytest.mark.parametrize(
@@ -725,7 +652,6 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         memory_config=memory_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         cache_file_name=tmp_path / "cache_file",
-        enable_multihost_format=True,
     )
     assert tensor.dtype == ttnn.float32
     assert tensor.layout == ttnn.TILE_LAYOUT
@@ -739,7 +665,6 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         memory_config=memory_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         cache_file_name=tmp_path / "cache_file",
-        enable_multihost_format=True,
     )
     assert tensor.dtype == ttnn.float32
     assert tensor.layout == ttnn.TILE_LAYOUT
