@@ -75,7 +75,7 @@ def test_qwen_attention_inference(
     dtype = ttnn.bfloat8_b
     pcc = 0.99
 
-    model_args = TtQwenModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = TtQwenModelArgs(mesh_device, dummy_weights=False, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1  # For the unit test, just run a sigle layer
 
     state_dict = model_args.load_state_dict()
