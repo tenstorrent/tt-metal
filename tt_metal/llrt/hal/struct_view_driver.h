@@ -1,10 +1,12 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <type_traits>
-#include <vector>
+#include <utility>
 
 namespace tt::tt_metal::detail {
 
@@ -55,7 +57,7 @@ public:
     iterator end() const { return {info_, base_ + size_ * info_.get_size()}; }
 
 private:
-    const StructInfo info_;
+    StructInfo info_;
     byte_type* base_;
     size_t size_;
 };
@@ -98,14 +100,28 @@ protected:
     }
 
 private:
-    const StructInfo info_;
+    StructInfo info_;
     byte_type* base_;
 };
 
 template <template <bool> typename View, typename Fields>
 class StructStorage {
 public:
-    StructStorage(const StructInfo info) : info_(info), storage_(info.get_size()) {}
+    StructStorage(const StructInfo info) : info_(info), storage_(std::make_unique<std::byte[]>(info.get_size())) {}
+    StructStorage(const StructStorage& other) :
+        info_(other.info_), storage_(std::make_unique<std::byte[]>(other.size())) {
+        std::copy(other.data(), other.data() + other.size(), data());
+    }
+    StructStorage& operator=(const StructStorage& other) {
+        if (this != &other) {
+            StructStorage tmp(other);
+            *this = std::move(tmp);
+        }
+        return *this;
+    }
+    StructStorage(StructStorage&&) = default;
+    StructStorage& operator=(StructStorage&&) = default;
+
     using view = View<false>;
     using const_view = View<true>;
     using field_type = Fields;
@@ -115,15 +131,15 @@ public:
     view get_view() { return {info_, data()}; }
     const_view get_view() const { return {info_, data()}; }
 
-    std::byte* data() { return storage_.data(); }
-    const std::byte* data() const { return storage_.data(); }
+    std::byte* data() { return storage_.get(); }
+    const std::byte* data() const { return storage_.get(); }
 
     size_t size() const { return info_.get_size(); }
     size_t offset_of(field_type i) const { return info_.offset_of(static_cast<size_t>(i)); }
 
 protected:
-    const StructInfo info_;
-    std::vector<std::byte> storage_;
+    StructInfo info_;
+    std::unique_ptr<std::byte[]> storage_;
 };
 
 }  // namespace tt::tt_metal::detail
