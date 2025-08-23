@@ -108,17 +108,10 @@ template <template <bool> typename View, typename Fields>
 class StructStorage {
 public:
     StructStorage(const StructInfo info) : info_(info), storage_(std::make_unique<std::byte[]>(info.get_size())) {}
-    StructStorage(const StructStorage& other) :
-        info_(other.info_), storage_(std::make_unique<std::byte[]>(other.size())) {
-        std::copy(other.data(), other.data() + other.size(), data());
+    StructStorage(const StructStorage& other) : StructStorage(other.info_) {
+        std::copy(other.data(), other.data() + size(), data());
     }
-    StructStorage& operator=(const StructStorage& other) {
-        if (this != &other) {
-            StructStorage tmp(other);
-            *this = std::move(tmp);
-        }
-        return *this;
-    }
+    StructStorage& operator=(const StructStorage& other) { return *this = StructStorage(other); }
     StructStorage(StructStorage&&) = default;
     StructStorage& operator=(StructStorage&&) = default;
 
