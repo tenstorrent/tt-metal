@@ -620,8 +620,8 @@ class TtLlamaAttention(LightweightModule):
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
             ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
 
-        if self.qk_norm:
-            q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
+        # if self.qk_norm:
+        #     q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
 
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
@@ -632,8 +632,8 @@ class TtLlamaAttention(LightweightModule):
         )
         ttnn.deallocate(q_heads_1QSD_pre_rot)
 
-        if self.qk_norm:
-            k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
+        # if self.qk_norm:
+        #     k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
 
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
             k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
