@@ -141,12 +141,13 @@ public:
     std::vector<EthConnection> get_eth_connections(asic_id_t src_asic_id, asic_id_t dst_asic_id) const;
     const AsicTopology& get_asic_topology(const std::string& hostname) const;
     tray_id_t get_tray_id(asic_id_t asic_id) const;
-    n_id_t get_n_id(n_id_t n_id) const;
+    n_id_t get_n_id(asic_id_t asic_id) const;
     std::vector<asic_id_t> get_asics_connected_to_host(std::string hostname) const;
 
     // Query APIs for InterHost Connectivity
     std::vector<std::string> get_host_neighbors(const std::string& hostname) const;
-    std::vector<ExitNodeConnection> get_connecting_exit_nodes(const std::string& src_host, const std::string& dst_host);
+    std::vector<ExitNodeConnection> get_connecting_exit_nodes(
+        const std::string& src_host, const std::string& dst_host) const;
     const HostTopology& get_host_topology() const;
     std::string get_host_name_for_asic(asic_id_t asic_id) const;
     // Physical info that can be derived from the cabling spec (helps with clearer messages during physical validation).
@@ -155,12 +156,6 @@ public:
     rack_id_t get_rack_id(const std::string& hostname);
     aisle_id_t get_aisle_id(const std::string& hostname);
     hall_id_t get_hall_id(const std::string& hostname);
-    // Returns an ethernet path between two ASICs.
-    std::vector<AsicConnectionEdge> get_path_between_asics(
-        asic_id_t src_asic_id,
-        asic_id_t dst_asic_id,
-        bool terminate_at_exit_node,
-        std::optional<uint32_t> chan_idx = std::nullopt) const;
 
     const PhysicalConnectivityGraph& get_system_graph() const { return system_graph_; }
     const std::unordered_map<asic_id_t, ASICDescriptor>& get_asic_descriptors() const { return asic_descriptors_; }
