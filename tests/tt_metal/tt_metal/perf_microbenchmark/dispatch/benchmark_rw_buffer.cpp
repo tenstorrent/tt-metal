@@ -7,13 +7,14 @@
 #include <fmt/format.h>
 #include <stdint.h>
 #include <cstdint>
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <memory>
 #include <string>
 #include <vector>
+#include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -58,59 +59,48 @@ static const auto MB = 1024 * KB;
 
 static const int64_t TRANSFER_SIZE = 64 * MB;
 
-static const std::vector<int64_t> PAGE_SIZE_ARGS = benchmark::CreateRange(32, 2048, 2);
-
+// This is page sizes for non-sharded (interleaved) buffers
+static const std::vector<int64_t> PAGE_SIZES = benchmark::CreateRange(32, 2048, 2);
+// This is page sizes for sharded buffers, because we need to specify the page dimension, and we would like to mirror
+// real-world usage of such functionalities, we need the page size to align with tile size (32x32). With a realworld
+// data type (e.g. float16/32), this means the minimum page size would be 2048.
+static const std::vector<int64_t> SHARDED_PAGE_SIZES = {2048, 4096};
 static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, BufferType::L1};
-static const std::vector<int64_t> BUFFER_TYPE_ARGS = {0, 1};
+// Interleaved is the default sharding config.
+static constexpr std::array<TensorMemoryLayout, 2> SHARD_ORIENTATIONS = {
+    TensorMemoryLayout::INTERLEAVED, TensorMemoryLayout::HEIGHT_SHARDED};
 
-static const std::vector<int64_t> SHARD_ENABLE_ARGS = {false, true};
+static std::shared_ptr<MeshBuffer> create_device_buffer(
+    std::shared_ptr<MeshDevice> mesh_device, int64_t page_size, BufferType buffer_type, TensorMemoryLayout sharding) {
+    BufferShardingArgs sharding_args;
+    if (sharding != TensorMemoryLayout::INTERLEAVED) {
+        // TODO: Create customized sharding args;
+    }
 
-static BufferShardingArgs get_sharding_args(std::shared_ptr<MeshDevice> mesh_device, BufferType buffer_type) {
-    // These are pulled out of TTNN for WH,
-    // This is modeled with a 4096 x 4096 tensor,
-    // which if containing float32, would occupy 64MB (our transfer size).
-    static const std::array<uint32_t, 2> PAGE_SHAPE = {32, 32};
-    static const std::array<uint32_t, 2> TENSOR2D_SHAPE_IN_PAGES = {128, 128};
+    DeviceLocalBufferConfig device_local_config{
+        .page_size = page_size, .buffer_type = buffer_type, .sharding_args = sharding_args};
 
-    static const std::array<uint32_t, 2> L1_SHARD_SHAPE = {64, 4096};
-    static const std::array<uint32_t, 2> DRAM_SHARD_SHAPE = {352, 4096};
-
-    auto device_grid_size =
-        buffer_type == BufferType::L1 ? mesh_device->compute_with_storage_grid_size() : mesh_device->dram_grid_size();
-    CoreRangeSet core_range_set(
-        {CoreRange(CoreCoord(0, 0), CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))});
-    ShardSpec shard_spec(core_range_set, buffer_type == BufferType::L1 ? L1_SHARD_SHAPE : DRAM_SHARD_SHAPE);
-    ShardSpecBuffer shard_spec_buffer(shard_spec, PAGE_SHAPE, TENSOR2D_SHAPE_IN_PAGES);
-
-    return BufferShardingArgs(shard_spec_buffer, TensorMemoryLayout::HEIGHT_SHARDED);
+    return MeshBuffer::create(ReplicatedBufferConfig{TRANSFER_SIZE}, device_local_config, mesh_device.get());
 }
 
 static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
     auto buffer_type = BUFFER_TYPES[state.range(1)];
-    auto shard_enable = state.range(2);
+    auto sharding = SHARD_ORIENTATIONS[state.range(2)];
     auto device_id = state.range(3);
 
     log_debug(
         LogTest,
-        "Running Write Benchmark for Page Size: {}, Buffer Type: {}, Shard Enable: {}, Device ID: {}",
+        "Running Write Benchmark for Page Size: {}, Buffer Type: {}, Sharding: {}, Device ID: {}",
         page_size,
-        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
-        shard_enable,
+        enchantum::to_string(buffer_type),
+        enchantum::to_string(sharding),
         device_id);
 
     auto random_buffer_seed = std::chrono::system_clock::now().time_since_epoch().count();
     auto host_buffer = create_random_vector_of_bfloat16(TRANSFER_SIZE, 1000, random_buffer_seed);
 
-    BufferShardingArgs sharding_args;
-    if (shard_enable) {
-        sharding_args = get_sharding_args(mesh_device, buffer_type);
-    }
-
-    auto device_buffer = MeshBuffer::create(
-        ReplicatedBufferConfig{TRANSFER_SIZE},
-        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type, .sharding_args = sharding_args},
-        mesh_device.get());
+    auto device_buffer = create_device_buffer(mesh_device, page_size, buffer_type, sharding);
 
     for (auto _ : state) {
         EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), device_buffer, host_buffer, true);
@@ -122,26 +112,18 @@ static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_d
 static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
     auto buffer_type = BUFFER_TYPES[state.range(1)];
-    auto shard_enable = state.range(2);
+    auto sharding = SHARD_ORIENTATIONS[state.range(2)];
     auto device_id = state.range(3);
 
     log_debug(
         LogTest,
-        "Running Read Benchmark for Page Size: {}, Buffer Type: {}, Shard Enable: {}, Device ID: {}",
+        "Running Read Benchmark for Page Size: {}, Buffer Type: {}, Sharding: {}, Device ID: {}",
         page_size,
-        buffer_type == BufferType::DRAM ? "DRAM" : "L1",
-        shard_enable,
+        enchantum::to_string(buffer_type),
+        enchantum::to_string(sharding),
         device_id);
 
-    BufferShardingArgs sharding_args;
-    if (shard_enable) {
-        sharding_args = get_sharding_args(mesh_device, buffer_type);
-    }
-
-    auto device_buffer = MeshBuffer::create(
-        ReplicatedBufferConfig{TRANSFER_SIZE},
-        DeviceLocalBufferConfig{.page_size = page_size, .buffer_type = buffer_type, .sharding_args = sharding_args},
-        mesh_device.get());
+    auto device_buffer = create_device_buffer(mesh_device, page_size, buffer_type, sharding);
     std::vector<uint32_t> host_buffer;
 
     for (auto _ : state) {
@@ -168,11 +150,27 @@ int main(int argc, char** argv) {
     }
 
     auto devices = MeshDevice::create_unit_meshes(device_ids);
+
+    auto buffer_type_args = benchmark::CreateDenseRange(0, BUFFER_TYPES.size() - 1, 1);
+
+    // Benchmark with no special sharding config
     for (auto [device_id, device] : devices) {
-        // Device ID embedded here for extraction
-        auto benchmark_args = {PAGE_SIZE_ARGS, BUFFER_TYPE_ARGS, SHARD_ENABLE_ARGS, {device_id}};
+        auto benchmark_args = {
+            PAGE_SIZES,
+            buffer_type_args,
+            // We only consider interleaved buffer here
+            {0},
+            {device_id}};
         // Google Benchmark uses CPU time to calculate throughput by default, which is not suitable for this
         // benchmark
+        benchmark::RegisterBenchmark("Write", BM_write, device)->ArgsProduct(benchmark_args)->UseRealTime();
+        benchmark::RegisterBenchmark("Read", BM_read, device)->ArgsProduct(benchmark_args)->UseRealTime();
+    }
+
+    // Benchmark with customized sharding config
+    for (auto [device_id, device] : devices) {
+        auto benchmark_args = {SHARDED_PAGE_SIZES, buffer_type_args, {1}, {device_id}};
+
         benchmark::RegisterBenchmark("Write", BM_write, device)->ArgsProduct(benchmark_args)->UseRealTime();
         benchmark::RegisterBenchmark("Read", BM_read, device)->ArgsProduct(benchmark_args)->UseRealTime();
     }
