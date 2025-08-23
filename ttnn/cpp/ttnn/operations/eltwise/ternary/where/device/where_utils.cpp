@@ -17,6 +17,10 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 reader_kernel = KernelName::ReaderColBcastTTT;
                 compute_kernel = KernelName::ComputeColBcastTTT;
                 writer_kernel = KernelName::WriterColBcastTTT;  // Use binary_ng compatible writer
+            } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
+                reader_kernel = KernelName::ReaderOuterBcastTTT;
+                compute_kernel = KernelName::ComputeNoBcastTTT;
+                writer_kernel = KernelName::WriterNoBcastTTT;
             } else {
                 reader_kernel = KernelName::ReaderNoBcastTTT;
                 compute_kernel = KernelName::ComputeNoBcastTTT;
@@ -51,6 +55,7 @@ std::string get_kernel_file_path(KernelName kernel_name) {
 
     switch (kernel_name) {
         case KernelName::ReaderNoBcastTTT: return fmt::format(dataflow, root, "ternary_reader_nobcast_ttt.cpp");
+        case KernelName::ReaderOuterBcastTTT: return fmt::format(dataflow, root, "ternary_reader_nobcast_ttt_nd.cpp");
         case KernelName::ReaderNoBcastTST: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
         case KernelName::ReaderNoBcastTTS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tst_tts.cpp");
         case KernelName::ReaderNoBcastTSS: return fmt::format(dataflow, root, "ternary_reader_nobcast_tss.cpp");
@@ -168,34 +173,30 @@ std::map<std::string, std::string> make_dataflow_defines(
 }
 
 WhereBroadcastType get_broadcast_type(
-    const ttnn::Shape& predicate_shape, const ttnn::Shape& value_true_shape, const ttnn::Shape& value_false_shape) {
+    const ttnn::Shape& predicate_shape, const ttnn::Shape& true_shape, const ttnn::Shape& false_shape) {
     // Check for column broadcast pattern:
     // Examples: (1,1,32,32), (1,1,32,1), (1,1,32,32) or (1,1,32,1), (1,1,32,1), (1,1,32,32)
     // Column broadcast means one or more tensors have last dimension = 1 while at least one has full width
 
-    auto pred_shape = predicate_shape;
-    auto true_shape = value_true_shape;
-    auto false_shape = value_false_shape;
-
-    if ((predicate_shape == value_true_shape) && (predicate_shape == value_false_shape)) {
+    if ((predicate_shape == true_shape) && (predicate_shape == false_shape)) {
         return WhereBroadcastType::NONE;
     }
 
-    // All shapes must have same rank
-    if (pred_shape.rank() != true_shape.rank() || pred_shape.rank() != false_shape.rank()) {
+    if ((predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]) &&
+        (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2])) {
+        return WhereBroadcastType::OUTER_BCAST;
+    }
+
+    bool same_width = (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
+    bool same_height = (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2]);
+
+    // Row Bcast is not supported for now
+    if (!same_height) {
         return WhereBroadcastType::INVALID_BCAST;
     }
 
-    // this will allow only COL bcast - to remove later after adding other bcast support
-    // Check if all dimensions except last are the same
-    for (int i = 0; i < static_cast<int>(pred_shape.rank()) - 1; ++i) {
-        if (pred_shape[i] != true_shape[i] || pred_shape[i] != false_shape[i]) {
-            return WhereBroadcastType::INVALID_BCAST;
-        }
-    }
-
     // Get last dimension sizes
-    auto pred_w = pred_shape[-1];
+    auto pred_w = predicate_shape[-1];
     auto true_w = true_shape[-1];
     auto false_w = false_shape[-1];
 

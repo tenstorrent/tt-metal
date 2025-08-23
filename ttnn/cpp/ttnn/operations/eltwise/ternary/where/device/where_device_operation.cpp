@@ -35,7 +35,12 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
     const auto& value_false_tensor = tensor_args.value_false;
     const auto& optional_output_tensor = tensor_args.optional_output_tensor;
 
+    auto& predicate_shape = predicate_tensor.logical_shape();
+
     auto out_memory_config = args.memory_config;
+    // For TTT, allow exact shape match or broadcast-compatible shapes
+    auto broadcast_type = args.broadcast_type;
+
     if (optional_output_tensor.has_value()) {
         out_memory_config = optional_output_tensor->memory_config();
     }
@@ -55,28 +60,26 @@ void WhereDeviceOperation::validate_on_program_cache_miss(
         static_cast<int>(predicate_tensor.memory_config().memory_layout()),
         static_cast<int>(out_memory_config.memory_layout()));
 
+    TT_FATAL(
+        broadcast_type != ttnn::operations::ternary::WhereBroadcastType::INVALID_BCAST,
+        "Invalid broadcast type for Where device operation. Supported bcast dims: -5, -4, -3, -1");
+
     // Validate tensor shapes based on variant
     if (args.where_variant == WhereVariant::TTT) {
-        // For TTT, allow exact shape match or broadcast-compatible shapes
-        auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
-            predicate_tensor.logical_shape(),
-            value_true_tensor.value().logical_shape(),
-            value_false_tensor.value().logical_shape());
-
-        if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::NONE) {
+        auto& true_shape = value_true_tensor.value().logical_shape();
+        auto& false_shape = value_false_tensor.value().logical_shape();
+        if (broadcast_type == ttnn::operations::ternary::WhereBroadcastType::NONE ||
+            broadcast_type == ttnn::operations::ternary::WhereBroadcastType::OUTER_BCAST) {
+            const bool is_W_same = (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
+            const bool is_H_same = (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2]);
             // Check for exact shape match as fallback
             TT_FATAL(
-                predicate_tensor.logical_shape() == value_true_tensor.value().logical_shape(),
-                "Where TTT operation requires predicate and value_true to have same shape or broadcast-compatible "
-                "shapes. Predicate: {}, Value true: {}",
-                predicate_tensor.logical_shape(),
-                value_true_tensor.value().logical_shape());
-            TT_FATAL(
-                predicate_tensor.logical_shape() == value_false_tensor.value().logical_shape(),
-                "Where TTT operation requires predicate and value_false to have same shape or broadcast-compatible "
-                "shapes. Predicate: {}, Value false: {}",
-                predicate_tensor.logical_shape(),
-                value_false_tensor.value().logical_shape());
+                (is_H_same && is_W_same),
+                "Where TTT operation requires H and W to match when there is no subtile broadcast. "
+                "Predicate: {}, True_tensor: {}, False_tensor: {}",
+                predicate_shape,
+                true_shape,
+                false_shape);
         }
         // If broadcast_type is not NONE, then shapes are broadcast-compatible, validation passes
     } else if (args.where_variant == WhereVariant::TTS) {
@@ -146,11 +149,12 @@ TensorSpec WhereDeviceOperation::compute_output_specs(
     // For TST/TTS variants, one of the values is a scalar, so we need to handle that case
 
     auto broadcast_type = args.broadcast_type;
+    auto where_variant = args.where_variant;
 
     auto output_shape = tensor_args.predicate.logical_shape();
 
-    // all shapes equal
-    if (broadcast_type == WhereBroadcastType::NONE) {
+    // TST & TTS support only equal shapes
+    if (broadcast_type == WhereBroadcastType::NONE && where_variant != WhereVariant::TTT) {
         return TensorSpec(
             output_shape, tt::tt_metal::TensorLayout(args.dtype.value(), output_layout, args.memory_config));
     }
