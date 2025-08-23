@@ -191,9 +191,9 @@ class CodeGen:
 
     def emit_template_impl(self, struct: Struct, file: TextIO):
         print(
-            f"template <typename T>\n"
-            f"struct {struct.name} : public {self.driver_ns}::BaseStructView<T, {struct.name}<T>> {{\n"
-            f"using BaseStructView = ::tt::tt_metal::detail::BaseStructView<T, {struct.name}<T>>;\n"
+            f"template <bool IsConst>\n"
+            f"struct {struct.name} : public {self.driver_ns}::BaseStructView<IsConst, fields::{struct.name}> {{\n"
+            f"using BaseStructView = ::tt::tt_metal::detail::BaseStructView<IsConst, fields::{struct.name}>;\n"
             f"using fields = fields::{struct.name};",
             file=file,
         )
@@ -207,7 +207,7 @@ class CodeGen:
                 scalar_or_struct = "scalar"
             else:
                 scalar_or_struct = "struct"
-                template_param += "<T>"
+                template_param += "<IsConst>"
                 struct_info_idx = len(struct.fields) + len(struct.array_sizes) + field.struct_idx
                 args.append(struct_info_idx)
             if field.array_size_idx is None:

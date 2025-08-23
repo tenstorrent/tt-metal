@@ -60,17 +60,19 @@ private:
     size_t size_;
 };
 
-template <typename T, typename Derived>
+template <bool IsConst, typename Fields>
 class BaseStructView {
+private:
+    template <typename T>
+    using maybe_const_t = std::conditional_t<IsConst, const T, T>;
+
 public:
-    using byte_type = T;
+    using byte_type = maybe_const_t<std::byte>;
+    using fields_type = Fields;
     BaseStructView(const StructInfo info, byte_type* base) : info_(info), base_(base) {}
     byte_type* data() const { return base_; }
     size_t size() const { return info_.get_size(); }
-    template <typename U = Derived>
-    size_t offset_of(U::fields i) const {
-        return info_.offset_of(static_cast<size_t>(i));
-    }
+    size_t offset_of(Fields i) const { return info_.offset_of(static_cast<size_t>(i)); }
 
 protected:
     byte_type* address_of(size_t i) const { return base_ + info_.offset_of(i); }
@@ -83,30 +85,27 @@ protected:
         return std::span(reinterpret_cast<maybe_const_t<U>*>(address_of(i)), info_.get(array_idx));
     }
     template <typename U>
-        requires std::derived_from<U, BaseStructView<T, U>>
+        requires std::derived_from<U, BaseStructView<IsConst, typename U::fields_type>>
     U struct_field(size_t i, size_t struct_idx) const {
         return {info_.get_info(struct_idx), address_of(i)};
     }
     template <typename U>
-        requires std::derived_from<U, BaseStructView<T, U>>
+        requires std::derived_from<U, BaseStructView<IsConst, typename U::fields_type>>
     StructSpan<U> struct_array(size_t i, size_t struct_idx, size_t array_idx) const {
         return {info_.get_info(struct_idx), address_of(i), info_.get(array_idx)};
     }
 
 private:
-    template <typename U>
-    using maybe_const_t = std::conditional_t<std::is_const_v<T>, const U, U>;
-
     const StructInfo info_;
     byte_type* base_;
 };
 
-template <template <typename> class Impl, typename Derived>
+template <template <bool IsConst> class View, typename Derived>
 class StructStorage {
 public:
     StructStorage(const StructInfo info) : info_(info), storage_(info.get_size()) {}
-    using view = Impl<std::byte>;
-    using const_view = Impl<const std::byte>;
+    using view = View<false>;
+    using const_view = View<true>;
     using fields = view::fields;
     operator view() { return {info_, storage_.data()}; }
     operator const_view() const { return {info_, storage_.data()}; }
