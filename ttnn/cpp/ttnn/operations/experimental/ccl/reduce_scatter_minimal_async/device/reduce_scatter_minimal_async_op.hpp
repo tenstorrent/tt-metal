@@ -33,9 +33,8 @@ struct ReduceScatterMinimalAsync {
     const MemoryConfig output_mem_config;
     const MemoryConfig intermediate_mem_config;
     const ccl::Topology topology;
-    const std::vector<GlobalSemaphore> semaphore;
-    const std::optional<GlobalSemaphore>& barrier_semaphore;
-    bool using_persistent_buffers;
+    const std::optional<std::vector<GlobalSemaphore>>& semaphore;
+    bool do_sync;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
     std::optional<uint32_t> cluster_axis;
     std::optional<uint32_t> chunks_per_sync;
@@ -50,9 +49,8 @@ struct ReduceScatterMinimalAsync {
         MemoryConfig output_mem_config,
         MemoryConfig intermediate_mem_config,
         ccl::Topology topology,
-        std::vector<GlobalSemaphore> semaphore,
-        const std::optional<GlobalSemaphore>& barrier_semaphore,
-        bool using_persistent_buffers,
+        const std::optional<std::vector<GlobalSemaphore>>& semaphore,
+        bool do_sync,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
         std::optional<uint32_t> cluster_axis,
         std::optional<uint32_t> chunks_per_sync,
@@ -66,8 +64,7 @@ struct ReduceScatterMinimalAsync {
         intermediate_mem_config(intermediate_mem_config),
         topology(topology),
         semaphore(semaphore),
-        barrier_semaphore(barrier_semaphore),
-        using_persistent_buffers(using_persistent_buffers),
+        do_sync(do_sync),
         sub_device_id(sub_device_id),
         cluster_axis(cluster_axis),
         chunks_per_sync(chunks_per_sync),
@@ -86,8 +83,7 @@ struct ReduceScatterMinimalAsync {
         attrs.emplace_back("intermediate_mem_config", intermediate_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
-        attrs.emplace_back("barrier_semaphore", barrier_semaphore);
-        attrs.emplace_back("using_persistent_buffers", using_persistent_buffers);
+        attrs.emplace_back("do_sync", do_sync);
         attrs.emplace_back("cluster_axis", cluster_axis);
         attrs.emplace_back("chunks_per_sync", chunks_per_sync);
         attrs.emplace_back("num_worker_per_link", num_workers_per_link);
@@ -105,7 +101,9 @@ struct ReduceScatterMinimalAsync {
     tt::tt_metal::operation::ProgramWithCallbacks create_program_at(
         const ttnn::MeshCoordinate& coord,
         const std::vector<Tensor>& input_tensors,
-        std::vector<Tensor>& output_tensors) const;
+        std::vector<Tensor>& output_tensors,
+        const std::vector<GlobalSemaphore>& op_semaphores,
+        const GlobalSemaphore& barrier_semaphore) const;
     std::vector<Tensor> create_output_tensors(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<Tensor>>& optional_output_tensors) const;
@@ -125,8 +123,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
@@ -146,8 +144,8 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -169,8 +167,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -192,8 +190,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     uint32_t ring_index,
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore,
-    bool using_persistent_buffers,
+    const GlobalSemaphore& barrier_semaphore,
+    bool do_sync,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -209,8 +207,8 @@ Tensor reduce_scatter_minimal_async(
     const Tensor& input_tensor,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     uint32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const std::optional<GlobalSemaphore>& barrier_semaphore = std::nullopt,
+    const std::optional<std::vector<GlobalSemaphore>>& multi_device_global_semaphore = std::nullopt,
+    bool do_sync = false,
     uint32_t num_links = 1,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<MemoryConfig>& intermeidate_memory_config = std::nullopt,
