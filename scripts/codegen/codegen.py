@@ -156,7 +156,8 @@ class CodeGen:
         print("namespace types {", file=file)
         for struct in self.structs:
             print(
-                f"struct {struct.name} : public {self.driver_ns}::StructStorage<template_impl::{struct.name}, {struct.name}> {{",
+                f"struct {struct.name} : public {self.driver_ns}::StructStorage<template_impl::{struct.name}, fields::{struct.name}> {{\n"
+                f"using SturctStorage = {self.driver_ns}::StructStorage<template_impl::{struct.name}, fields::{struct.name}>;",
                 file=file,
             )
             for field in struct.fields:
@@ -192,9 +193,8 @@ class CodeGen:
     def emit_template_impl(self, struct: Struct, file: TextIO):
         print(
             f"template <bool IsConst>\n"
-            f"struct {struct.name} : public {self.driver_ns}::BaseStructView<IsConst, fields::{struct.name}> {{\n"
-            f"using BaseStructView = ::tt::tt_metal::detail::BaseStructView<IsConst, fields::{struct.name}>;\n"
-            f"using fields = fields::{struct.name};",
+            f"struct {struct.name} : public {self.driver_ns}::BaseStructView<IsConst, fields::{struct.name}, {struct.name}> {{\n"
+            f"using BaseStructView = ::tt::tt_metal::detail::BaseStructView<IsConst, fields::{struct.name}, {struct.name}>;",
             file=file,
         )
         print(f"using BaseStructView::BaseStructView;", file=file)

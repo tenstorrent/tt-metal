@@ -60,7 +60,7 @@ private:
     size_t size_;
 };
 
-template <bool IsConst, typename Fields>
+template <bool IsConst, typename Fields, template <bool> typename Derived>
 class BaseStructView {
 private:
     template <typename T>
@@ -68,11 +68,15 @@ private:
 
 public:
     using byte_type = maybe_const_t<std::byte>;
-    using fields = Fields;
+    using field_type = Fields;
     BaseStructView(const StructInfo info, byte_type* base) : info_(info), base_(base) {}
+
+    // Allow getting const view from non-const view
+    operator Derived<true>() const { return {info_, base_}; }
+
     byte_type* data() const { return base_; }
     size_t size() const { return info_.get_size(); }
-    size_t offset_of(Fields i) const { return info_.offset_of(static_cast<size_t>(i)); }
+    size_t offset_of(field_type i) const { return info_.offset_of(static_cast<size_t>(i)); }
 
 protected:
     byte_type* address_of(size_t i) const { return base_ + info_.offset_of(i); }
@@ -98,19 +102,24 @@ private:
     byte_type* base_;
 };
 
-template <template <bool> typename View, typename Derived>
+template <template <bool> typename View, typename Fields>
 class StructStorage {
 public:
     StructStorage(const StructInfo info) : info_(info), storage_(info.get_size()) {}
     using view = View<false>;
     using const_view = View<true>;
-    using fields = view::fields;
-    operator view() { return {info_, storage_.data()}; }
-    operator const_view() const { return {info_, storage_.data()}; }
+    using field_type = Fields;
+
+    operator view() { return get_view(); }
+    operator const_view() const { return get_view(); }
+    view get_view() { return {info_, data()}; }
+    const_view get_view() const { return {info_, data()}; }
+
     std::byte* data() { return storage_.data(); }
     const std::byte* data() const { return storage_.data(); }
+
     size_t size() const { return info_.get_size(); }
-    size_t offset_of(fields i) const { return info_.offset_of(static_cast<size_t>(i)); }
+    size_t offset_of(field_type i) const { return info_.offset_of(static_cast<size_t>(i)); }
 
 protected:
     const StructInfo info_;
