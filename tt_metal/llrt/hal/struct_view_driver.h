@@ -115,10 +115,7 @@ public:
     std::byte* data() { return storage_.data(); }
     const std::byte* data() const { return storage_.data(); }
     size_t size() const { return info_.get_size(); }
-    template <typename T = Derived>
-    size_t offset_of(T::fields i) const {
-        return info_.offset_of(static_cast<size_t>(i));
-    }
+    size_t offset_of(fields i) const { return info_.offset_of(static_cast<size_t>(i)); }
 
 protected:
     const StructInfo info_;
