@@ -106,7 +106,7 @@ private:
 template <template <typename> class Impl, typename Derived>
 class StructStorage {
 public:
-    StructStorage(const ::tt::tt_metal::detail::StructInfo info) : info_(info), storage_(info.get_size()) {}
+    StructStorage(const StructInfo info) : info_(info), storage_(info.get_size()) {}
     using view = Impl<std::byte>;
     using const_view = Impl<const std::byte>;
     using fields = view::fields;
@@ -121,7 +121,7 @@ public:
     }
 
 protected:
-    const ::tt::tt_metal::detail::StructInfo info_;
+    const StructInfo info_;
     std::vector<std::byte> storage_;
 };
 
