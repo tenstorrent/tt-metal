@@ -15,9 +15,9 @@ class TtBlock(nn.Module):
         self.device = device
         self.config = config
 
-        self.beta_1 = ttnn.load_tensor(tt_cache_path + base_address + ".ln_1.bias" + str(dtype) + ".bin")
+        self.beta_1 = ttnn.load_tensor(tt_cache_path + base_address + ".ln_1.bias" + str(dtype) + ".tensorbin")
 
-        self.gamma_1 = ttnn.load_tensor(tt_cache_path + base_address + ".ln_1.weight" + str(dtype) + ".bin")
+        self.gamma_1 = ttnn.load_tensor(tt_cache_path + base_address + ".ln_1.weight" + str(dtype) + ".tensorbin")
 
         self.ln_1 = ttnn.layer_norm
 
@@ -25,9 +25,9 @@ class TtBlock(nn.Module):
             config, f"{base_address}.attn", device, tt_cache_path, dtype
         )
 
-        self.beta_2 = ttnn.load_tensor(tt_cache_path + base_address + ".ln_2.bias" + str(dtype) + ".bin")
+        self.beta_2 = ttnn.load_tensor(tt_cache_path + base_address + ".ln_2.bias" + str(dtype) + ".tensorbin")
 
-        self.gamma_2 = ttnn.load_tensor(tt_cache_path + base_address + ".ln_2.weight" + str(dtype) + ".bin")
+        self.gamma_2 = ttnn.load_tensor(tt_cache_path + base_address + ".ln_2.weight" + str(dtype) + ".tensorbin")
 
         self.ln_2 = ttnn.layer_norm
 

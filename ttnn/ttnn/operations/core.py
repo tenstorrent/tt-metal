@@ -533,7 +533,7 @@ def load_tensor(file_name: Union[str, pathlib.Path], *, device: ttnn.MeshDevice 
 
     Example:
         >>> device = ttnn.open_device(0)
-        >>> tensor = ttnn.load_tensor(file_name=str(tensor.bin), device=device)
+        >>> tensor = ttnn.load_tensor(file_name=str(tensor.tensorbin), device=device)
     """
     file_name = pathlib.Path(file_name)
     _validate_file_extension(file_name)
@@ -559,7 +559,7 @@ def dump_tensor(file_name: Union[str, pathlib.Path], tensor: ttnn.Tensor) -> Non
 
     Example:
         >>> tensor = ttnn.ones([2, 3], bfloat16, ttnn.ROW_MAJOR_LAYOUT)
-        >>> dump_tensor(file_name=str(tensor.bin), tensor=tensor)
+        >>> dump_tensor(file_name=str(tensor.tensorbin), tensor=tensor)
     """
     file_name = pathlib.Path(file_name)
     _validate_file_extension(file_name)
