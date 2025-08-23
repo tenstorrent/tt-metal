@@ -356,7 +356,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
         case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
-        case RSUB: return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+        case RSUB:
+            if (dtype == DataType::INT32) {
+                return {"rsub_int32_tile_init();", "rsub_int32_tile"};
+            } else {
+                return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+            }
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LEFT_SHIFT:

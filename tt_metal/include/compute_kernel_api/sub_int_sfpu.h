@@ -7,6 +7,7 @@
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
 #include "llk_math_eltwise_binary_sfpu_sub_int.h"
+#include "llk_math_eltwise_binary_sfpu_rsub_int32.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -42,9 +43,15 @@ ALWI void sub_uint16_tile(uint32_t idst0, uint32_t idst1) {
     MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::LO16, false>(idst0, idst1)));
 }
 
+ALWI void rsub_int32_tile(uint32_t idst0, uint32_t idst1) {
+    MATH((llk_math_eltwise_binary_sfpu_rsub_int32<APPROX>(idst0, idst1)));
+}
+
 /**
  * Please refer to documentation for any_init.
  */
 ALWI void sub_int_tile_init() { MATH((llk_math_eltwise_binary_sfpu_sub_int_init<APPROX>())); }
+
+ALWI void rsub_int32_tile_init() { MATH((llk_math_eltwise_binary_sfpu_rsub_int32_init<APPROX>())); }
 
 }  // namespace ckernel

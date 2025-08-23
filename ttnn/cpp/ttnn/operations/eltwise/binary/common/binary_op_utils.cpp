@@ -226,8 +226,13 @@ std::map<std::string, std::string> get_defines_fp32(
             }
             break;
         case BinaryOpType::RSUB:
-            new_defines.insert({"BINOP_INIT", fmt::format("rsub_binary_tile_init();")});
-            op_name = "rsub_binary_tile";
+            if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
+                new_defines.insert({"BINOP_INIT", fmt::format("rsub_int32_tile_init();")});
+                op_name = "rsub_int32_tile";
+            } else {
+                new_defines.insert({"BINOP_INIT", fmt::format("rsub_binary_tile_init();")});
+                op_name = "rsub_binary_tile";
+            }
             break;
         case BinaryOpType::POWER:
             new_defines.insert({"BINOP_INIT", fmt::format("power_binary_tile_init();")});
@@ -326,7 +331,7 @@ std::map<std::string, std::string> get_defines_fp32(
             } else {
                 op_name = "sub_binary_tile";
             }
-            new_defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "0", idst1));
+            new_defines.merge(get_defines(UnaryOpType::SQUARE, std::nullopt, "0", idst1, input_a_dtype));
             break;
         case BinaryOpType::BIAS_GELU:
             new_defines.insert({"BINOP_INIT", fmt::format("add_binary_tile_init();")});
