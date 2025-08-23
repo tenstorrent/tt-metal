@@ -7,7 +7,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tilize.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -74,8 +74,8 @@ void MAIN {
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      window_size_hw <= FACE_HEIGHT && !last_tile_is_partial;
     tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
-        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, out_cb_id, num_faces_in_input_tile, face_r_dim);
-    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id, num_out_sticks, num_faces_in_output_tile);
+        in_cb_id_0, in_scalar_cb_id_0, max_tiles_per_iter, tmp_cb_id, num_faces_in_input_tile, face_r_dim);
+    pack_untilize_dest_init<max_tiles_per_iter>(tmp_cb_id, num_out_sticks, num_faces_in_output_tile);
 
     constexpr uint32_t remaining_elems = window_size_hw % max_sticks_for_reduction;
     constexpr uint32_t interm_reduction_chunks =
@@ -134,6 +134,8 @@ void MAIN {
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
                 cb_wait_front(curr_in_cb_id, 1);
+                DPRINT << "tile number: " << chunk << ENDL();
+                // UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id, 0));
                 unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                     curr_in_cb_id,
                     curr_scalar_cb_id,
@@ -156,6 +158,8 @@ void MAIN {
                 if (last_c_block) {
                     tilize_stick_counter++;
                 }
+                DPRINT << "packed row no: " << temp_cb_row_offset - 1 << ENDL();
+                // PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
                 tile_regs_release();
 
                 // Perform tilization when TILE_HEIGHT sticks are accumulated
@@ -167,6 +171,12 @@ void MAIN {
                     PACK(pack_reconfig_data_format(out_cb_id));
                     reconfig_data_format_srca(tmp_cb_id);
 
+#if DEBUG_PRINT == 1
+                    DPRINT << "=== BEFORE TILIZATION ===" << ENDL();
+                    DPRINT << "Tile 0 in temp CB (ROW_MAJOR, BF16):" << ENDL();
+                    PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
+#endif
+
                     tilize_init(tmp_cb_id, in_ntiles_c, out_cb_id);
                     cb_wait_front(tmp_cb_id, in_ntiles_c);
                     cb_reserve_back(out_cb_id, in_ntiles_c);
@@ -174,6 +184,12 @@ void MAIN {
                     cb_pop_front(tmp_cb_id, in_ntiles_c);
                     cb_push_back(out_cb_id, in_ntiles_c);
                     tilize_uninit(tmp_cb_id, out_cb_id);
+
+#if DEBUG_PRINT == 1
+                    DPRINT << "=== AFTER TILIZATION ===" << ENDL();
+                    DPRINT << "Tile 0 in output CB (TILED, BF8_B):" << ENDL();
+                    PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
+#endif
 
                     // Reinitialize unpack when tilization disrupts hardware state
                     // This happens with wide reductions or certain tensor configurations
