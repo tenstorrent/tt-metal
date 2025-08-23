@@ -83,7 +83,7 @@ def test_qwen_attention_inference_prefill(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = Attention(args=model_args, llama3=True)  # Enable QK norm with llama3=True
+    reference_model = Attention(args=model_args, llama3=False)  # Enable QK norm with llama3=True
     reference_model.load_state_dict(partial_state_dict)
 
     # pre-compute the rotational embedding matrix and send to device
