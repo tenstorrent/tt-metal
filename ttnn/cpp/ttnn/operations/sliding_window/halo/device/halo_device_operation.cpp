@@ -109,6 +109,19 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     Program program = CreateProgram();
 
     if (this->in_place_) {
+        const DataType dtype = input_tensor.dtype();
+        const tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
+        const uint32_t nbytes = datum_size(data_format);
+        const uint32_t channels_padded = input_tensor.padded_shape()[3];
+        const uint32_t num_shards_c = this->config_.num_cores_c;
+        const uint32_t stick_size = channels_padded / num_shards_c * nbytes;
+        uint32_t aligned_delta_size = align_buffer(this->max_out_nsticks_per_core_ * stick_size) / stick_size -
+                                      align_buffer(this->in_nsticks_per_core_ * stick_size) / stick_size;
+        int32_t in_out_shard_size_delta = (this->in_place_ && is_in_tiled)
+                                              ? 0
+                                              : aligned_delta_size;  // for in place with tilized data we untilize
+                                                                     // directly into the output buffer so delta is zero
+
         auto kernel_config = sliding_window::generate_inplace_halo_kernel_config_tensors(
             tensor_metadata,
             shard_boundaries,
@@ -119,7 +132,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             device,
             max_out_nsticks_per_core_,
             in_nsticks_per_core_,
-            this->in_place_);
+            this->in_place_,
+            in_out_shard_size_delta);
 
         const auto& pad_config1 = std::get<0>(kernel_config)[0];
         const auto& local_config1 = std::get<0>(kernel_config)[2];
@@ -152,6 +166,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
             config_.num_cores_c,
             max_out_nsticks_per_core_,
             max_ref_size,
+            in_out_shard_size_delta,
             pad_config_device_tensor1,
             local_config_device_tensor1,
             remote_config_device_tensor1,

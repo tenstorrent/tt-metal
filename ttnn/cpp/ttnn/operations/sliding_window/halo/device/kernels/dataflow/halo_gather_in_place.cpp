@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "compile_time_args.h"
+#include "c_tensix_core.h"
 #include "dataflow_api.h"
 
 #define ENABLE_DEBUG 0
@@ -168,6 +169,7 @@ void copy_sticks_async_local(
             const uint16_t src_local_idx = config_data[i + j + 0];
             const uint16_t dst_local_idx = config_data[i + j + 1];
             const uint16_t nsticks = config_data[i + j + 2];
+
             const uint32_t size = nsticks * stick_nbytes;
             const uint32_t dst_offset = dst_local_idx * stick_nbytes;
             const uint32_t src_offset = src_local_idx * input_aligned_page_size;
