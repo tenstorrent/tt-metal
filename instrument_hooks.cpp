@@ -148,6 +148,8 @@ static void* processing_thread_func(void* arg) {
                     char file_path_buf[1024];
                     char line_num_buf[32];
 
+                    const char* mangled_name = caller_info.dli_sname ? caller_info.dli_sname : "??";
+
                     get_source_info(
                         caller_info,
                         caller_addr,
@@ -162,8 +164,9 @@ static void* processing_thread_func(void* arg) {
                         strstr(file_path_buf, "/home/ubuntu/tt-metal/ttnn")) {
                         dprintf(
                             g_log_fd,
-                            "{\"event\":\"enter\",\"func\":\"%s\",\"file\":\"%s:%s\"}\n",
+                            "{\"event\":\"enter\",\"func\":\"%s\",\"func_mangled\":\"%s\",\"file\":\"%s:%s\"}\n",
                             func_name_buf,
+                            mangled_name,
                             file_path_buf,
                             line_num_buf);
                     }
