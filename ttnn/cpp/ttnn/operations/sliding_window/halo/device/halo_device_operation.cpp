@@ -109,7 +109,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     Program program = CreateProgram();
 
     if (this->in_place_) {
-        const DataType dtype = input_tensor.dtype();
+        // after untilize bfloat8 is converted to bfloat16
+        const DataType dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
         const tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
         const uint32_t nbytes = datum_size(data_format);
         const uint32_t channels_padded = input_tensor.padded_shape()[3];
