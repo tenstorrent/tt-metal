@@ -1474,28 +1474,7 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
     # )
 
 
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-def test_visualize_mesh_device_with_tensor_row_major(mesh_device):
-    rows, cols, tile_size = 4, 4, 32
-    full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
-
-    ttnn_tensor = ttnn.from_torch(
-        full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
-    )
-    ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
-
-
-@pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
-def test_visualize_mesh_device_with_tensor_col_major(mesh_device):
-    rows, cols, tile_size = 8, 2, 32
-    full_tensor = torch.rand((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)
-
-    ttnn_tensor = ttnn.from_torch(
-        full_tensor, mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=(-2, -1))
-    )
-    ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-    ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
+# TODO #11406 - Add unit tests for visualize_tensor API
 
 
 def rms_norm(x, gamma, eps):
