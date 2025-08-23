@@ -1136,7 +1136,7 @@ class TtQwenModelArgs(TtModelArgs):
                 # in0_shape=(1, 1, 32, 2048),
                 in0_shape=(1, 1, 32, 1280),
                 # in1_shape=(1, 1, 2048, 16384),
-                in1_shape=(1, 1, 2048, 196608 // 8),
+                in1_shape=(1, 1, 1280, 18992),
                 grid=ttnn.CoreGrid(x=7, y=7),  # (7,10) leads to hangs
                 act=None,
                 is_fp32_accumulate=False,

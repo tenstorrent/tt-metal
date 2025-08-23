@@ -93,11 +93,7 @@ def test_qwen_lm_head_inference_prefill(seq_len, batch_size, mesh_device, reset_
 
         logger.info("Run Qwen_LM_Head")
         # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
-        if mode == "prefill":
-            tt_outputs = tt_model.forward_prefill(tt_input, prefetcher_setup.worker_sub_device_id)
-        else:
-            tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(tt_ccl.tt_lm_head_buffer, tt_ccl.lm_head_buffer_mem_cfg)
-            tt_outputs = tt_model(tt_input, prefetcher_setup.worker_sub_device_id, mode=mode)
+        tt_outputs = tt_model.forward(tt_input, prefetcher_setup.worker_sub_device_id, mode="prefill")
 
         tt_outputs = [
             ttnn.to_torch(
