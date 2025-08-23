@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "tt_memory.h"
+#include "llrt/hal/generated_headers/dev_msgs.hpp"
 
 #include <tt_stl/overloaded.hpp>
 
@@ -95,6 +96,7 @@ private:
     std::vector<uint32_t> eth_fw_mailbox_msgs_;
     bool supports_cbs_ = false;
     bool supports_receiving_multicast_cmds_ = false;
+    dev_msgs::Factory dev_msgs_factory_;
 
 public:
     HalCoreInfoType(
@@ -105,7 +107,8 @@ public:
         const std::vector<uint32_t>& mem_map_sizes,
         const std::vector<uint32_t>& eth_fw_mailbox_msgs,
         bool supports_cbs,
-        bool supports_receiving_multicast_cmds);
+        bool supports_receiving_multicast_cmds,
+        dev_msgs::Factory dev_msgs_factory);
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalL1MemAddrType addr_type) const;
@@ -113,6 +116,7 @@ public:
     uint32_t get_processor_classes_count() const;
     uint32_t get_processor_types_count(uint32_t processor_class_idx) const;
     const HalJitBuildConfig& get_jit_build_config(uint32_t processor_class_idx, uint32_t processor_type_idx) const;
+    const dev_msgs::Factory& get_dev_msgs_factory() const;
 };
 
 template <typename T>
@@ -143,6 +147,8 @@ inline const HalJitBuildConfig& HalCoreInfoType::get_jit_build_config(
     TT_ASSERT(processor_type_idx < this->processor_classes_[processor_class_idx].size());
     return this->processor_classes_[processor_class_idx][processor_type_idx];
 }
+
+inline const dev_msgs::Factory& HalCoreInfoType::get_dev_msgs_factory() const { return this->dev_msgs_factory_; }
 
 // HalJitBuildQueryInterface is an interface for querying arch-specific build options.
 // These are generated on demand instead of stored in HalJitBuildConfig,
@@ -356,6 +362,12 @@ public:
     const HalJitBuildQueryInterface& get_jit_build_query() const {
         TT_ASSERT(jit_build_query_ != nullptr);
         return *jit_build_query_;
+    }
+
+    const dev_msgs::Factory& get_dev_msgs_factory(HalProgrammableCoreType programmable_core_type) const {
+        auto index = get_programmable_core_type_index(programmable_core_type);
+        TT_ASSERT(index < this->core_info_.size());
+        return this->core_info_[index].get_dev_msgs_factory();
     }
 };
 
