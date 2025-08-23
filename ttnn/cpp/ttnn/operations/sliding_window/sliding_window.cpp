@@ -806,7 +806,8 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
     IDevice* device,
     uint32_t max_out_nsticks_per_core,
     uint32_t in_nsticks_per_core,
-    bool in_place) {
+    bool in_place,
+    uint32_t in_out_shard_size_delta) {
     auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
         auto num_cores_x = device->compute_with_storage_grid_size().x;
         auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
@@ -920,8 +921,9 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         return flattened_config;
     };
 
-    auto flatten_local_config = [in_place, max_out_nsticks_per_core, in_nsticks_per_core, is_in_tiled](
-                                    auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
+    auto flatten_local_config =
+        [in_place, max_out_nsticks_per_core, in_nsticks_per_core, is_in_tiled, in_out_shard_size_delta](
+            auto& config) -> std::vector<std::vector<std::vector<uint16_t>>> {
         // find max length
         size_t max_len = 0;
         for (const auto& [_, data] : config) {
@@ -935,11 +937,6 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
         max_len += 6;  // account for the key tuple and null plug
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
-        int32_t in_out_shard_size_delta =
-            (in_place && is_in_tiled)
-                ? 0
-                : max_out_nsticks_per_core - in_nsticks_per_core;  // for in place with tilized data we untilize
-                                                                   // directly into the output buffer so delta is zero
         for (const auto& [key, data] : config) {
             auto [nocx, nocy, len] = key;
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
@@ -1015,6 +1012,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
         int max_ref_size = 0;  // track the max remote ref size for sizing the remote temp tensor
+        int core = 0;
         for (const auto& core_config : config) {
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
             uint32_t idx1 = 0, idx2 = 0;
@@ -1052,6 +1050,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
                 idx2 = flat_data[1][len_idx2] ? idx2 : idx2 - 3;
             }
 
+            core++;
             flattened_config[0].emplace_back(std::move(flat_data[0]));
             flattened_config[1].emplace_back(std::move(flat_data[1]));
             max_ref_size = std::max(max_ref_size, ref_size);
@@ -1285,6 +1284,12 @@ Tensor move_config_tensor_to_device(
     MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, shard_spec};
     return config_tensor.to_device(device, memory_config);
 }
+
+uint32_t align_buffer(uint32_t size) {
+    uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t factor = (size + alignment_bytes - 1) / alignment_bytes;
+    return factor * alignment_bytes;
+};
 
 std::string SlidingWindowConfig::to_string() const {
     return std::to_string(batch_size) + "_" + std::to_string(channels) + "_" + std::to_string(std::get<0>(input_hw)) +
