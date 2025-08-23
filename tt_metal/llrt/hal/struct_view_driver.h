@@ -4,9 +4,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <ostream>
 #include <span>
 #include <type_traits>
-#include <utility>
 
 namespace tt::tt_metal::detail {
 
@@ -55,6 +55,15 @@ public:
     };
     iterator begin() const { return {info_, base_}; }
     iterator end() const { return {info_, base_ + size_ * info_.get_size()}; }
+    friend std::ostream& operator<<(std::ostream& os, const StructSpan& span) {
+        const char* sep = "{";
+        for (size_t i = 0; i < span.size(); ++i) {
+            os << sep << span[i];
+            sep = ", ";
+        }
+        os << "}";
+        return os;
+    }
 
 private:
     StructInfo info_;
@@ -134,5 +143,23 @@ protected:
     StructInfo info_;
     std::unique_ptr<std::byte[]> storage_;
 };
+
+namespace stream_suppliments {
+
+// dump char in numeric value, not characters
+inline std::ostream& operator<<(std::ostream& os, unsigned char c) { return os << static_cast<unsigned>(c); }
+
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::span<T>& span) {
+    const char* sep = "{ ";
+    for (const auto& elem : span) {
+        os << sep << elem;
+        sep = ", ";
+    }
+    os << " }";
+    return os;
+}
+
+}  // namespace stream_suppliments
 
 }  // namespace tt::tt_metal::detail

@@ -222,6 +222,17 @@ class CodeGen:
                 f"decltype(auto) {field.name}() const {{ return BaseStructView::template {scalar_or_struct}_{field_or_array}<{template_param}>({args}); }}",
                 file=file,
             )
+        print(
+            f"friend std::ostream& operator<<(std::ostream& os, const {struct.name}& view) {{\n"
+            f"using {self.driver_ns}::stream_suppliments::operator<<;\n"
+            "return os",
+            file=file,
+        )
+        sep = "{ "
+        for field_id, field in enumerate(struct.fields):
+            print(f'<< "{sep}.{field.name} = " << view.{field.name}() ', file=file)
+            sep = ", "
+        print('<< " }";\n}', file=file)
         print("};", file=file)
 
     def generate_impl_header(self, file: TextIO, include_filename: str):
