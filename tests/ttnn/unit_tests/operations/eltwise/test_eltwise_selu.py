@@ -88,13 +88,34 @@ def test_eltwise_selu(input_shape, dtype, dlayout, in_mem_config, out_mem_config
     run_eltwise_selu_tests(input_shape, dtype, dlayout, in_mem_config, out_mem_config, data_seed, device)
 
 
+def test_selu_arange(device):
+    # Generate all possible bit pattersn for bf16
+    all_bitpatterns = torch.arange(0, 2**16, dtype=torch.int32).to(torch.uint16)
+    input_tensor = all_bitpatterns.view(torch.bfloat16)
+    input_tensor = input_tensor.to(torch.float32)
+
+    tt_in = ttnn.from_torch(
+        input_tensor,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    golden_function = ttnn.get_golden_function(ttnn.selu)
+    golden = golden_function(input_tensor, device=device)
+
+    tt_result = ttnn.selu(tt_in)
+    result = ttnn.to_torch(tt_result)
+    assert_with_ulp(golden, result, 1)
+
+
 @pytest.mark.parametrize(
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
-        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 1, 64, 64])),
         (torch.Size([1, 3, 320, 384])),
-        (torch.Size([3, 2, 1024, 1024])),
     ),
 )
 @pytest.mark.parametrize(
@@ -124,7 +145,7 @@ def test_unary_composite_selu_ttnn(input_shapes, low, high, device):
     result = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.selu)
     golden_tensor = golden_function(torch_input)
-    assert_with_ulp(golden_tensor, result)
+    assert_with_ulp(golden_tensor, result, 1)
 
 
 @pytest.mark.parametrize(
@@ -135,18 +156,19 @@ def test_unary_composite_selu_ttnn(input_shapes, low, high, device):
     "input_val, scale, alpha",
     [
         (0.3, 0.5, 1),
-        (0.0, 1.0507, 1.6732),
-        (1.0, 1.0507, 1.6732),
         (-1.0, 1.0507, 1.6732),
-        (-5.0, 1.0507, 1.6732),
         (-0.5, 1.0, 1.5),
         (float("inf"), 1.0, float("inf")),
         (2.0, 1.2, 1.7),
         (float("-inf"), 1.0507, 1.6732),
         (float("inf"), 1.0507, 1.6732),
+        (-0.36719, 0.5, 1),
+        (-0.0, 1.0507, 1.6732),
+        (0.0, 1.0507, 1.6732),
+        (1.0, 1.0507, 1.6732),
+        (-5.0, 1.0507, 1.6732),
         (20.0, 1.0507, 1.6732),
         (-20.0, 1.0507, 1.6732),
-        (-0.36719, 0.5, 1),
     ],
 )
 def test_selu_fill_val_bf16(input_shapes, input_val, scale, alpha, device):
@@ -166,40 +188,7 @@ def test_selu_fill_val_bf16(input_shapes, input_val, scale, alpha, device):
     tt_result = ttnn.selu(tt_in, scale=scale, alpha=alpha)
     result = ttnn.to_torch(tt_result)
 
-    comp_pass = compare_all_close([tt_result], [golden], atol=0.5, rtol=0)
+    # comp_pass = compare_all_close([tt_result], [golden], atol=0.5, rtol=0)
 
-    assert comp_pass
-
-
-@pytest.mark.parametrize(
-    "input_shapes",
-    ((torch.Size([1, 1, 1, 1])),),
-)
-@pytest.mark.parametrize(
-    "input_val, scale, alpha",
-    [
-        (0.0, 1.0507, 1.6732),
-        (1.0, 1.0507, 1.6732),
-        (-5.0, 1.0507, 1.6732),
-        (20.0, 1.0507, 1.6732),
-        (-20.0, 1.0507, 1.6732),
-    ],
-)
-def test_selu_fill_val_bf16_assert_with_ulp(input_shapes, input_val, scale, alpha, device):
-    torch_input = torch.ones(input_shapes, dtype=torch.bfloat16) * input_val
-
-    golden_function = ttnn.get_golden_function(ttnn.selu)
-    golden = golden_function(torch_input, scale, alpha, device=device)
-
-    tt_in = ttnn.from_torch(
-        torch_input,
-        dtype=ttnn.bfloat16,
-        device=device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    tt_result = ttnn.selu(tt_in, scale=scale, alpha=alpha)
-    result = ttnn.to_torch(tt_result)
-
-    assert assert_with_ulp(golden, result)
+    # assert comp_pass
+    assert_with_ulp(golden, result, 1)
