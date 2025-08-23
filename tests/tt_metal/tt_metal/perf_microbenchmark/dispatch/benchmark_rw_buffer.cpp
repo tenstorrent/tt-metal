@@ -61,20 +61,51 @@ static const int64_t TRANSFER_SIZE = 64 * MB;
 
 // This is page sizes for non-sharded (interleaved) buffers
 static const std::vector<int64_t> PAGE_SIZES = benchmark::CreateRange(32, 2048, 2);
-// This is page sizes for sharded buffers, because we need to specify the page dimension, and we would like to mirror
-// real-world usage of such functionalities, we need the page size to align with tile size (32x32). With a realworld
-// data type (e.g. float16/32), this means the minimum page size would be 2048.
-static const std::vector<int64_t> SHARDED_PAGE_SIZES = {2048, 4096};
+// This is page sizes we test for sharded buffers
+static const std::vector<int64_t> SHARDED_PAGE_SIZES = {4096};
 static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, BufferType::L1};
 // Interleaved is the default sharding config.
-static constexpr std::array<TensorMemoryLayout, 2> SHARD_ORIENTATIONS = {
-    TensorMemoryLayout::INTERLEAVED, TensorMemoryLayout::HEIGHT_SHARDED};
+static constexpr std::array<TensorMemoryLayout, 3> SHARD_ORIENTATIONS = {
+    TensorMemoryLayout::INTERLEAVED, TensorMemoryLayout::HEIGHT_SHARDED, TensorMemoryLayout::WIDTH_SHARDED};
 
 static std::shared_ptr<MeshBuffer> create_device_buffer(
     std::shared_ptr<MeshDevice> mesh_device, int64_t page_size, BufferType buffer_type, TensorMemoryLayout sharding) {
+    // float32 of 4096x4096 is 64MB (transfer size)
+    static constexpr std::uint32_t ELEMENT_SHAPE_SIDE = 4096;
+    static_assert(ELEMENT_SHAPE_SIDE * ELEMENT_SHAPE_SIDE * sizeof(float) == TRANSFER_SIZE);
+
+    static constexpr std::uint32_t PAGE_SIDE = 32;
+
     BufferShardingArgs sharding_args;
+
     if (sharding != TensorMemoryLayout::INTERLEAVED) {
-        // TODO: Create customized sharding args;
+        auto grid_size = buffer_type == BufferType::L1 ? mesh_device->compute_with_storage_grid_size()
+                                                       : mesh_device->dram_grid_size();
+        CoreRangeSet core_range_set({CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1))});
+        auto total_num_cores = core_range_set.num_cores();
+
+        // Rounding up to the nearest multiple of PAGE_HEIGHT
+        auto shard_side = ELEMENT_SHAPE_SIDE / total_num_cores;
+        shard_side += (ELEMENT_SHAPE_SIDE % total_num_cores > 0 ? 1 : 0);
+        shard_side += (PAGE_SIDE - shard_side % PAGE_SIDE);
+
+        std::array<uint32_t, 2> shard_shape;
+        if (sharding == TensorMemoryLayout::HEIGHT_SHARDED) {
+            shard_shape = {shard_side, ELEMENT_SHAPE_SIDE};
+        } else {  // width sharded
+            shard_shape = {ELEMENT_SHAPE_SIDE, shard_side};
+        }
+
+        ShardSpec shard_spec(core_range_set, shard_shape);
+
+        log_info(LogTest, "shard_shape: {}", shard_shape);
+
+        std::array<uint32_t, 2> tensor2d_shape_in_pages{ELEMENT_SHAPE_SIDE / PAGE_SIDE, ELEMENT_SHAPE_SIDE / PAGE_SIDE};
+        ShardSpecBuffer shard_spec_buffer(shard_spec, {PAGE_SIDE, PAGE_SIDE}, tensor2d_shape_in_pages);
+
+        log_info(LogTest, "tensor2d_shape_in_pages: {}", tensor2d_shape_in_pages);
+
+        sharding_args = BufferShardingArgs(shard_spec_buffer, TensorMemoryLayout::HEIGHT_SHARDED);
     }
 
     DeviceLocalBufferConfig device_local_config{
@@ -169,7 +200,8 @@ int main(int argc, char** argv) {
 
     // Benchmark with customized sharding config
     for (auto [device_id, device] : devices) {
-        auto benchmark_args = {SHARDED_PAGE_SIZES, buffer_type_args, {1}, {device_id}};
+        auto sharding_args = benchmark::CreateDenseRange(0, SHARD_ORIENTATIONS.size() - 1, 1);
+        auto benchmark_args = {SHARDED_PAGE_SIZES, buffer_type_args, sharding_args, {device_id}};
 
         benchmark::RegisterBenchmark("Write", BM_write, device)->ArgsProduct(benchmark_args)->UseRealTime();
         benchmark::RegisterBenchmark("Read", BM_read, device)->ArgsProduct(benchmark_args)->UseRealTime();
