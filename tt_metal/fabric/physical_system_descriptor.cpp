@@ -55,7 +55,7 @@ std::pair<tray_id_t, n_id_t> get_asic_position(
     chip_id_t chip_id, const std::set<uint32_t, std::greater<uint32_t>>& sorted_pcie_slots) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto cluster_desc = cluster.get_cluster_desc();
-    if (cluster_desc->get_board_type(chip_id) == BoardType::GALAXY) {
+    if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
         return get_ubb_id(chip_id);
     } else if (cluster_desc->get_board_type(chip_id) == BoardType::N300) {
         uint32_t n_id = cluster_desc->is_chip_mmio_capable(chip_id) ? 1 : 2;
