@@ -108,7 +108,8 @@ std::optional<ParallelConfig> determine_valid_parallel_config(
 
 FactoryParameters get_factory_parameters(
     uint32_t num_shards_c,
-    const Tensor& input,
+    const DataType& input_dtype,
+    const DataType& output_dtype,
     uint32_t kernel_h,
     uint32_t kernel_w,
     uint32_t in_channels,
@@ -116,8 +117,9 @@ FactoryParameters get_factory_parameters(
     uint32_t multi_buffering_factor = 2;
     bool split_reader = true;
 
-    auto dtype = input.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input.dtype();
+    auto dtype = input_dtype == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_dtype;
     tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
+    tt::DataFormat output_data_format = datatype_to_dataformat_converter(output_dtype);
     uint32_t nbytes = datum_size(data_format);
 
     uint32_t kernel_size_hw = kernel_h * kernel_w;  // number of valid rows, to read
@@ -144,6 +146,7 @@ FactoryParameters get_factory_parameters(
         .split_reader = split_reader,
         .nbytes = nbytes,
         .data_format = data_format,
+        .output_data_format = output_data_format,
         .in_ntiles_c = in_ntiles_c,
         .out_ntiles_c = out_ntiles_c,
         .is_avg_pool = is_avg_pool,
@@ -171,7 +174,9 @@ uint32_t calculate_L1_usage(
     const MemoryConfig& output_memory,
     Pool2DType pool_type,
     bool count_include_pad,
-    std::optional<int32_t> divisor_override) {
+    std::optional<int32_t> divisor_override,
+    const Layout& output_layout,
+    const DataType& output_dtype) {
     const auto grid_size = input_memory.shard_spec().value().grid.bounding_box().grid_size();
     uint32_t num_shards_c = 0;
     if (input_memory.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -184,7 +189,8 @@ uint32_t calculate_L1_usage(
         num_shards_c = grid_size.x;
     }
 
-    FactoryParameters params = get_factory_parameters(num_shards_c, input, kernel_h, kernel_w, in_channels, pool_type);
+    FactoryParameters params =
+        get_factory_parameters(num_shards_c, input.dtype(), output_dtype, kernel_h, kernel_w, in_channels, pool_type);
 
     bool one_scalar_per_core = is_pool_op_one_scalar_per_core(
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
@@ -218,11 +224,21 @@ uint32_t calculate_L1_usage(
         in_cb_config_1_size = in_cb_npages * in_cb_pagesize;
     }
 
-    // after reduction
-    uint32_t out_cb_pagesize =
-        std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_memory.shard_spec().value().shape[1]) *
-        params.nbytes;
-    uint32_t out_cb_npages = output_memory.shard_spec().value().shape[0] * params.out_ntiles_c;
+    // after reduction - layout-aware CB allocation (matches actual CB allocation logic)
+    uint32_t out_cb_pagesize;
+    uint32_t out_cb_npages;
+    const bool is_output_tiled = (output_layout == Layout::TILE);
+
+    if (is_output_tiled) {
+        out_cb_pagesize = tt::tile_size(datatype_to_dataformat_converter(output_dtype));
+        out_cb_npages = output_memory.shard_spec().value().shape[0] * output_memory.shard_spec().value().shape[1] /
+                        tt::constants::TILE_HW;
+    } else {
+        out_cb_pagesize =
+            std::min(static_cast<uint32_t>(tt::constants::FACE_WIDTH), output_memory.shard_spec().value().shape[1]) *
+            params.nbytes;
+        out_cb_npages = output_memory.shard_spec().value().shape[0] * params.out_ntiles_c;
+    }
     uint32_t out_cb_config_size = out_cb_npages * out_cb_pagesize;
 
     uint32_t alignment_bytes = tt::tt_metal::hal::get_dram_alignment();
@@ -231,8 +247,16 @@ uint32_t calculate_L1_usage(
         return factor * alignment_bytes;
     };
 
+    uint32_t temp_cb_size = 0;
+
+    if (is_output_tiled) {
+        const uint32_t temp_cb_pagesize = params.in_ntiles_c * tt::constants::TILE_HW * params.nbytes;
+        const uint32_t temp_cb_npages = 1;
+        temp_cb_size = temp_cb_pagesize * temp_cb_npages;
+    }
+
     return in_scalar_cb_size_0 + in_scalar_cb_size_1 + clear_value_cb_size + in_cb_config_0_size + in_cb_config_1_size +
-           align(out_cb_config_size) /* global, involved */;
+           temp_cb_size + align(out_cb_config_size) /* global, involved */;
 }
 
 std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
@@ -241,7 +265,9 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
     uint32_t channels,
     Pool2DType pool_type,
     bool count_include_pad,
-    std::optional<int32_t> divisor_override) {
+    std::optional<int32_t> divisor_override,
+    const Layout& output_layout,
+    const DataType& output_dtype) {
     uint32_t batch_size = sliding_window_config.batch_size;
     auto output_shape = sliding_window_config.get_output_shape();
     auto compute_grid_size = input_tensor.device()->compute_with_storage_grid_size();
@@ -294,7 +320,9 @@ std::optional<ParallelConfig> determine_pool_config_for_auto_shard(
             get_memconfig(input_parallel_config.value()),
             pool_type,
             count_include_pad,
-            divisor_override);
+            divisor_override,
+            output_layout,
+            output_dtype);
 
         return {.l1_usage = l1_usage, .config = input_parallel_config};
     };

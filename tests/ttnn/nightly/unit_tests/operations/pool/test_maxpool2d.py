@@ -46,6 +46,8 @@ def run_max_pool(
     ceil_mode=False,
     in_place=False,
     nightly_skips=True,
+    output_data_format=None,
+    output_layout=None,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -66,6 +68,10 @@ def run_max_pool(
         pad_w = pad_l + pad_r
     else:
         raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
+
+    # Skip unsupported BFLOAT8_B + ROW_MAJOR combination
+    if output_data_format == ttnn.bfloat8_b and output_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("BFLOAT8_B output data format is not supported with ROW_MAJOR layout")
 
     # skips to avoid unimportant combinations
     if ceil_mode:
@@ -114,12 +120,16 @@ def run_max_pool(
 
     torch.manual_seed(0)
     torch_input = randomize_torch_tensor(tensor_map, input_shape)
-    # act = torch.zeros(input_shape, dtype=torch.bfloat16)
+    # torch_input = torch.zeros(input_shape, dtype=torch.bfloat16)
+    # count = 0
     # for n in range(input_shape[0]):
     #     for c in range(input_shape[1]):
     #         for h in range(input_shape[2]):
     #             for w in range(input_shape[3]):
-    #                 act[n, c, h, w] = h * in_w + w
+    #                 torch_input[n, c, h, w] = h * in_w + w
+    #                 count += 1
+
+    # print(torch_input)
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
@@ -152,6 +162,13 @@ def run_max_pool(
         ttnn_input = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
 
     # run ttnn maxpool2d
+
+    # Use default values if None is provided
+    if output_data_format is None:
+        output_data_format = ttnn.bfloat16
+    if output_layout is None:
+        output_layout = ttnn.ROW_MAJOR_LAYOUT
+
     ttnn_output = ttnn.max_pool2d(
         input_tensor=ttnn_input,
         batch_size=in_n,
@@ -168,6 +185,8 @@ def run_max_pool(
         in_place_halo=in_place,
         deallocate_input=True,
         reallocate_halo_output=True,
+        output_data_format=output_data_format,
+        output_layout=output_layout,
     )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -304,6 +323,74 @@ def test_run_max_pool_height_shard(
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",  ## NCHW
+    (
+        (  # resnet shapes
+            [1, 256, 16, 16],
+            [1, 320, 64, 64],
+            [4, 32, 12, 12],
+        )
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    (
+        (3, 3),  # 1 face 1 chunk
+        (5, 5),  # 2 faces 1 chunk
+        (7, 7),  # 2 chunks
+        (9, 9),  # 3 chunks
+    ),
+)
+@pytest.mark.parametrize(
+    "padding",
+    (
+        (0, 0),
+        (1, 1),
+        (1, 4, 3, 2),
+    ),
+)
+@pytest.mark.parametrize(
+    "stride",
+    (
+        (1, 1),
+        (2, 2),
+    ),
+)
+@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "ceil_mode",
+    [
+        False,
+        True,
+    ],
+)
+def test_run_max_pool_height_shard_tile(
+    input_shape, kernel_size, padding, stride, dilation, device, tensor_map, dtype, ceil_mode
+):
+    run_max_pool(
+        input_shape,
+        kernel_size,
+        padding,
+        stride,
+        dilation,
+        device,
+        tensor_map,
+        dtype,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ceil_mode=ceil_mode,
+        output_layout=ttnn.TILE_LAYOUT,
     )
 
 
@@ -572,3 +659,55 @@ def test_run_max_pool_squeeze_net_model(
         dtype,
         ceil_mode=ceil_mode,
     )
+
+
+# Simplified test for new API parameters: output_data_format and output_layout
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("output_data_format", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_max_pool2d_output_formats_and_layouts(device, tensor_map, output_data_format, output_layout):
+    """
+    Simplified test that iterates through different output_data_format and output_layout combinations.
+    Currently all combinations fallback to default behavior (BF16, ROW_MAJOR) for backward compatibility.
+    """
+    # # Skip unsupported BF8_B + ROW_MAJOR combination
+    # if output_data_format == ttnn.bfloat8_b and output_layout == ttnn.ROW_MAJOR_LAYOUT:
+    #     pytest.skip("BFLOAT8_B output data format is not supported with ROW_MAJOR layout")
+
+    input_shape = [1, 64, 64, 64]
+    kernel_size = (2, 2)
+    padding = (0, 0)
+    stride = (2, 2)
+    dilation = (1, 1)
+
+    print(f"Testing output_data_format={output_data_format}, output_layout={output_layout}")
+
+    # Run maxpool with the specified output format and layout
+    run_max_pool(
+        input_shape,
+        kernel_size,
+        padding,
+        stride,
+        dilation,
+        device,
+        tensor_map,
+        ttnn.bfloat16,  # input dtype
+        output_data_format=output_data_format,
+        output_layout=output_layout,
+        nightly_skips=False,  # Don't skip for our API tests
+    )
+    print(f"✓ Completed successfully with {output_data_format} and {output_layout}")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_max_pool2d_api_documentation(device, tensor_map):
+    """Test that the API documentation includes new parameters"""
+    # Check that help text contains new parameters
+    help_text = ttnn.max_pool2d.__doc__
+
+    assert "output_data_format" in help_text, "output_data_format should be documented"
+    assert "output_layout" in help_text, "output_layout should be documented"
+    assert "ttnn.bfloat16" in help_text, "Default data format should be documented"
+    assert "ttnn.ROW_MAJOR_LAYOUT" in help_text, "Default layout should be documented"
+
+    print("✓ API documentation includes new parameters")

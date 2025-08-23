@@ -40,9 +40,11 @@ static Tensor pool2d_invoke(
     const std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
     bool in_place_halo = false,
     bool deallocate_input = false,
-    bool reallocate_halo_output = true) {
+    bool reallocate_halo_output = true,
+    const DataType output_data_format = DataType::BFLOAT16,
+    const Layout output_layout = Layout::ROW_MAJOR) {
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
-    bool is_out_tiled = false;  // pool output is row major
+    bool is_out_tiled = output_layout == Layout::TILE;
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
     validate_input_params(
         input_tensor,
@@ -100,14 +102,21 @@ static Tensor pool2d_invoke(
                 input_tensor.device()->compute_with_storage_grid_size(),
                 ShardOrientation::ROW_MAJOR,
                 false,
-                false,
+                is_out_tiled,
                 is_in_tiled,  // if input is tiled we need to choose num_cores_c to make the shard width to be a tile
                               // multiple, it cannot be 16
                 0);
         } else {  // auto-sharding
             std::optional<sliding_window::ParallelConfig> sw_parallel_config =
                 pool::determine_pool_config_for_auto_shard(
-                    input_tensor, sliding_window_config, channels, pool_type, count_include_pad, divisor_override);
+                    input_tensor,
+                    sliding_window_config,
+                    channels,
+                    pool_type,
+                    count_include_pad,
+                    divisor_override,
+                    output_layout,
+                    output_data_format);
             TT_FATAL(
                 sw_parallel_config.has_value(),
                 "autosharding could not determine valid shard scheme, please check tensor dimensions");
@@ -190,7 +199,7 @@ static Tensor pool2d_invoke(
         .num_cores_nhw = num_cores_nhw,
         .num_cores_c = num_cores_c,
         .core_range_set = parallel_config.grid,
-        .snap_to_tile = false,
+        .snap_to_tile = is_out_tiled,
         .ceil_mode = ceil_mode,
         .is_avg_pool = pool_type == Pool2DType::AVG_POOL2D,
     };
@@ -223,7 +232,8 @@ static Tensor pool2d_invoke(
         haloed_tensor,
         sliding_window_config,
         pool_type,
-        DataType::BFLOAT16,  // input_tensor.dtype(), // currently only bfp16 output is supported
+        output_data_format,
+        output_layout,
         out_memory_config,
         count_include_pad,
         divisor_override,
@@ -252,7 +262,16 @@ Tensor MaxPool2DOp::invoke(
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     bool in_place_halo,
     bool deallocate_input,
-    bool reallocate_halo_output) {
+    bool reallocate_halo_output,
+    const DataType output_data_format,
+    const Layout output_layout) {
+    TT_FATAL(
+        output_data_format == DataType::BFLOAT16 || output_data_format == DataType::BFLOAT8_B,
+        "Currently only BFLOAT16 and BFLOAT8_B output data formats are supported");
+    TT_FATAL(
+        !(output_data_format == DataType::BFLOAT8_B && output_layout == Layout::ROW_MAJOR),
+        "BFLOAT8_B output data format is not supported with ROW_MAJOR layout");
+
     return pool2d_invoke(
         queue_id,
         input_tensor,
@@ -272,7 +291,9 @@ Tensor MaxPool2DOp::invoke(
         applied_shard_scheme,
         in_place_halo,
         deallocate_input,
-        reallocate_halo_output);
+        reallocate_halo_output,
+        output_data_format,
+        output_layout);
 }
 
 Tensor AvgPool2DOp::invoke(
@@ -312,7 +333,9 @@ Tensor AvgPool2DOp::invoke(
         applied_shard_scheme,
         in_place_halo,
         deallocate_input,
-        reallocate_halo_output);
+        reallocate_halo_output,
+        DataType::BFLOAT16,  // AvgPool always uses BFLOAT16 output
+        Layout::ROW_MAJOR);  // AvgPool maintains ROW_MAJOR for now
 }
 
 }  // namespace operations::pool
