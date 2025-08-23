@@ -43,6 +43,8 @@ jobs:
             cmd: ./build/test/tt_metal/unit_tests_eth
           - name: ccl nightly tests
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/nightly
+          - name: lite fabric tests
+            cmd: ./build/test/tt_metal/unit_tests_tunneling
           # - name: t3000 fast fabric tests
           #   cmd: "source tests/scripts/t3000/run_t3000_unit_tests.sh && run_t3000_ttfabric_tests"
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}

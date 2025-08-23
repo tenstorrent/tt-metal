@@ -5,10 +5,12 @@
 #pragma once
 
 #include <stdint.h>
+#include "risc_attribs.h"
 #include "noc_parameters.h"
 #include "dev_msgs.h"
 #include "noc_overlay_parameters.h"
 #include "debug/assert.h"
+#include "risc_attribs.h"
 
 #if defined(COMPILE_FOR_BRISC)
 constexpr std::underlying_type_t<TensixProcessorTypes> proc_type =

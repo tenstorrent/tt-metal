@@ -2378,6 +2378,7 @@ void kernel_main() {
 
     // initialize the local sender channel worker interfaces
     if constexpr (is_sender_channel_serviced[0]) {
+        DPRINT << "Sender channel servied" << ENDL();
         init_local_sender_channel_worker_interfaces(
             local_sender_connection_live_semaphore_addresses,
             local_sender_connection_info_addresses,
@@ -2392,6 +2393,7 @@ void kernel_main() {
         edm_to_local_chip_noc,
         edm_to_downstream_noc>
         receiver_channel_0_trid_tracker;
+    receiver_channel_0_trid_tracker.init();
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1],
         NUM_TRANSACTION_IDS,
@@ -2399,6 +2401,7 @@ void kernel_main() {
         edm_to_local_chip_noc,
         edm_to_downstream_noc>
         receiver_channel_1_trid_tracker;
+    receiver_channel_1_trid_tracker.init();
 
 #ifdef ARCH_BLACKHOLE
     // A Blackhole hardware bug requires all noc inline writes to be non-posted so we hardcode to false here
@@ -2422,10 +2425,13 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
+        DPRINT << "enable_ethernet_handshake" << ENDL();
         if constexpr (is_handshake_sender) {
+            DPRINT << "handhake sender" << ENDL();
             erisc::datamover::handshake::sender_side_handshake(
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
+            DPRINT << "handhake receiver" << ENDL();
             erisc::datamover::handshake::receiver_side_handshake(
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }

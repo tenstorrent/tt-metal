@@ -4,7 +4,12 @@
 
 #pragma once
 
+#if !defined(COMPILE_FOR_LITE_FABRIC)
+
 #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
+
+#endif
+
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 
