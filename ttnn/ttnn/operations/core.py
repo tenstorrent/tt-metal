@@ -746,7 +746,7 @@ def as_tensor(
                         layout=layout,
                         device=None,
                         memory_config=memory_config,
-                        mesh_mapper=mesh_mapper,
+                        mesh_mapper=None if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
                     )
                     multihost_cache_path.parent.mkdir(parents=True, exist_ok=True)
                     ttnn._ttnn.tensor.dump_tensor_flatbuffer(str(multihost_cache_path), tensor_to_dump)
