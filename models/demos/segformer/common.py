@@ -33,7 +33,7 @@ def load_torch_model(reference_model, target_prefix, module="semantic_sub", mode
                 model_location_generator(
                     "vision-models/segformer-classification", model_subdir="", download_if_ci_v2=True
                 )
-                / "pytorch_model.bin"
+                / "pytorch_model.tensorbin"
             )
         elif module == "semantic_sub":
             weights = (
