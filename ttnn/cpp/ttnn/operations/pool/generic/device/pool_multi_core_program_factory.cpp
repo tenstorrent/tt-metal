@@ -445,7 +445,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_nbytes_c,                    // 25
         in_nbytes_padded_c,             // 26
         params.multi_buffering_factor,  // 27
-        stride_w};                      // 28
+        stride_w,                       // 28
+        out_cb_id};                     // 29 - output CB ID for clearing
     std::vector<uint32_t> reader1_ct_args = reader0_ct_args;
     reader1_ct_args[8] = 1;  // split reader id for reader1
 

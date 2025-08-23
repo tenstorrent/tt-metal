@@ -242,6 +242,7 @@ void kernel_main() {
     constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(26);
     constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(27);
     constexpr uint32_t stride_w = get_compile_time_arg_val(28);
+    constexpr uint32_t out_cb_id = get_compile_time_arg_val(29);  // output CB ID for clearing
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0 && in_c % TILE_WIDTH <= FACE_WIDTH;
 
     if constexpr (last_tile_is_partial) {
@@ -283,6 +284,26 @@ void kernel_main() {
         if constexpr (!is_avg_pool || !is_large_kernel) {
             clear_out_tiles<in_cb_id, clear_value_cb_id>();
         }
+    }
+
+    // Clear output CB for avg pool to avoid stale data when memory is reused
+    if constexpr (is_avg_pool && reader_id == 0) {
+        // Wait for clear value to be ready
+        cb_wait_front(clear_value_cb_id, 1);
+
+        // Get the output CB info
+        const uint32_t out_tile_size = get_tile_size(out_cb_id);
+        const uint32_t out_num_pages = get_local_cb_interface(out_cb_id).fifo_num_pages;
+        const uint32_t out_num_tiles = get_local_cb_interface(out_cb_id).fifo_page_size / out_tile_size;
+        const uint64_t clear_value_addr = get_noc_addr(get_read_ptr(clear_value_cb_id));
+        uint64_t out_write_addr = get_noc_addr(get_write_ptr(out_cb_id));
+
+        // Clear all tiles in output CB
+        for (uint32_t i = 0; i < out_num_tiles * out_num_pages; ++i) {
+            noc_async_read(clear_value_addr, out_write_addr, out_tile_size);
+            out_write_addr += out_tile_size;
+        }
+        noc_async_read_barrier();
     }
 
     // initialize the scalar CB

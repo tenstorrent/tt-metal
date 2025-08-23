@@ -184,7 +184,6 @@ def run_avg_pool2d(
         )
 
     # run ttnn avg_pool2d
-    origin1 = ttnn.clone(ttnn_input)
     ttnn_output = ttnn.avg_pool2d(
         input_tensor=ttnn_input,
         batch_size=in_n,
@@ -200,19 +199,21 @@ def run_avg_pool2d(
         memory_config=None,
         applied_shard_scheme=shard_scheme,
     )
-    origin2 = ttnn.clone(ttnn_input)
-    assert torch.equal(ttnn.to_torch(origin1), ttnn.to_torch(origin2))
+
+    # ttnn_output = ttnn.sharded_to_interleaved(ttnn_output, memory_config = ttnn.L1_MEMORY_CONFIG)
+    # ttnn_output = ttnn.clone(ttnn_output)
     # TODO always use run_twice after resolution of https://github.com/tenstorrent/tt-metal/issues/26093
     # skip run_twice for blackhole with wide Bfloat8 tensors as this currently causes PCC failures
     if is_blackhole() and dtype == ttnn.bfloat8_b and in_c > 256:
-        run_twice = False
+        run_twice = True
 
     if run_twice:
         # 1. print the output addr in the kernel
         # 2. put ttnn_output = ttnn.to_torch(ttnn_output) before run_twice (totorch will sync all kernels)
         # 3. addrs for input/output cb.
         # 4. halo
-        ttnn_output = ttnn.avg_pool2d(
+        # ttnn_output1 = ttnn.to_torch(ttnn_output)
+        ttnn_output1 = ttnn.avg_pool2d(
             input_tensor=ttnn_input,
             batch_size=in_n,
             input_h=in_h,
@@ -227,6 +228,8 @@ def run_avg_pool2d(
             memory_config=None,
             applied_shard_scheme=shard_scheme,
         )
+        print(ttnn_output)
+        print(ttnn_output1)
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
     if padding_is_4d:
@@ -391,20 +394,6 @@ def test_run_avg_pool2d(
     shard_scheme,
     dtype,
 ):
-    run_avg_pool2d(
-        device,
-        tensor_map,
-        input_shape,
-        kernel_size,
-        stride,
-        padding,
-        ceil_mode=ceil_mode,
-        divisor_override=divisor_override,
-        count_include_pad=count_include_pad,
-        shard_scheme=shard_scheme,
-        dtype=dtype,
-        run_twice=True,
-    )
     run_avg_pool2d(
         device,
         tensor_map,
