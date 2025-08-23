@@ -223,10 +223,6 @@ class RowParallelLinear:
         Expects x to be column fractured.
         Return output fractured on columns.
         """
-        import traceback
-
-        call_stack = traceback.extract_stack()
-        is_ff2_call = any("ff2" in str(frame) for frame in call_stack)
 
         output = ttnn.linear(
             x,
