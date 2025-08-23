@@ -18,11 +18,13 @@
 // TODO: w/ the hal, this can come from core specific defines
 constexpr static std::uint32_t MAX_RISCV_PER_CORE = 5;
 
+#ifndef CODEGEN  // can't codegen for templates / 2d arrays
 template <uint32_t RiscCount>
 struct profiler_msg_template_t {
     uint32_t control_vector[kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE];
     uint32_t buffer[RiscCount][kernel_profiler::PROFILER_L1_VECTOR_SIZE];
 };  // struct profiler_msg_template_t
+#endif
 
 // TODO: move these to processor specific files
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -56,7 +58,7 @@ static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(EthProcess
 static constexpr uint32_t PROFILER_RISC_COUNT = static_cast<uint32_t>(TensixProcessorTypes::COUNT);
 #endif
 using profiler_msg_t = profiler_msg_template_t<PROFILER_RISC_COUNT>;
-#else
+#elif !defined(CODEGEN)
 using profiler_msg_t = profiler_msg_template_t<MAX_RISCV_PER_CORE>;
 #endif
 
@@ -84,6 +86,7 @@ struct ncrisc_halt_msg_t {
     volatile uint32_t stack_save;
 };
 
+#ifndef CODEGEN
 enum dispatch_mode {
     DISPATCH_MODE_DEV,
     DISPATCH_MODE_HOST,
@@ -121,6 +124,7 @@ enum noc_mode : uint8_t {
     DM_DYNAMIC_NOC = 1,
     DM_INVALID_NOC = 2,
 };
+#endif
 
 // Address offsets to kernel runtime configuration components
 // struct to densely packs values used by each processor
@@ -132,9 +136,11 @@ struct rta_offset_t {
 // Maximums across all archs
 constexpr auto NUM_PROGRAMMABLE_CORE_TYPES = 3u;
 constexpr auto NUM_PROCESSORS_PER_CORE_TYPE = 5u;
+#ifndef CODEGEN
 enum dispatch_enable_flags : uint8_t {
     DISPATCH_ENABLE_FLAG_PRELOAD = 1 << 7,
 };
+#endif
 
 struct kernel_config_msg_t {
     volatile uint16_t watcher_kernel_ids[DISPATCH_CLASS_MAX];
@@ -232,6 +238,7 @@ struct debug_insert_delays_msg_t {
     volatile uint8_t feedback = 0;                 // Stores the feedback about delays (used for testing)
 };
 
+#ifndef CODEGEN
 enum debug_sanitize_noc_return_code_enum {
     // 0 and 1 are a common stray values to write, so don't use those
     DebugSanitizeNocOK = 2,
@@ -247,6 +254,7 @@ enum debug_sanitize_noc_return_code_enum {
     DebugSanitizeNocAddrMailbox = 12,
     DebugSanitizeNocLinkedTransactionViolation = 13,
 };
+#endif
 
 struct debug_assert_msg_t {
     volatile uint16_t line_num;
@@ -254,6 +262,7 @@ struct debug_assert_msg_t {
     volatile uint8_t which;
 };
 
+#ifndef CODEGEN
 enum debug_assert_type_t {
     DebugAssertOK = 2,
     DebugAssertTripped = 3,
@@ -277,6 +286,7 @@ enum riscv_id_t {
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
+#endif
 
 struct debug_pause_msg_t {
     volatile uint8_t flags[DebugNumUniqueRiscs];
@@ -290,18 +300,22 @@ struct debug_ring_buf_msg_t {
     uint32_t data[DEBUG_RING_BUFFER_ELEMENTS];
 };
 
-struct debug_stack_usage_t {
-    struct usage_t {
-        // min free stack, offset by +1 (0 == unset)
-        volatile uint16_t min_free;
-        volatile uint16_t watcher_kernel_id;
-    } cpu[DebugNumUniqueRiscs];
+struct debug_stack_usage_per_cpu_t {
+    // min free stack, offset by +1 (0 == unset)
+    volatile uint16_t min_free;
+    volatile uint16_t watcher_kernel_id;
 };
 
+struct debug_stack_usage_t {
+    debug_stack_usage_per_cpu_t cpu[DebugNumUniqueRiscs];
+};
+
+#ifndef CODEGEN
 enum watcher_enable_msg_t {
     WatcherDisabled = 2,
     WatcherEnabled = 3,
 };
+#endif
 
 // TODO: w/ the hal, this can come from core specific defines
 constexpr static std::uint32_t MAX_NUM_NOCS_PER_CORE = 2;
@@ -319,16 +333,19 @@ struct watcher_msg_t {
     struct debug_ring_buf_msg_t debug_ring_buf;
 };
 
+#ifndef CODEGEN  // TODO: DebugPrintMemLayout not visible by codegen
 struct dprint_buf_msg_t {
     DebugPrintMemLayout data[DPRINT_BUFFERS_COUNT];
     uint32_t pad;  // to 1024 bytes
 };
+#endif
 
 // NOC aligment max from BH
 static constexpr uint32_t TT_ARCH_MAX_NOC_WRITE_ALIGNMENT = 16;
 
 static constexpr uint32_t PROFILER_NOC_ALIGNMENT_PAD_COUNT = 4;
 
+#ifndef CODEGEN
 enum class AddressableCoreType : uint8_t {
     TENSIX = 0,
     ETH = 1,
@@ -338,10 +355,12 @@ enum class AddressableCoreType : uint8_t {
     UNKNOWN = 5,
     COUNT = 6,
 };
+#endif
 
 struct addressable_core_t {
-    volatile uint8_t x, y;
-    volatile AddressableCoreType type;
+    volatile uint8_t x;
+    volatile uint8_t y;
+    volatile AddressableCoreType type;  // CODEGEN:skip - AddressableCoreType
 };
 
 // TODO: This can move into the hal eventually.
@@ -360,8 +379,8 @@ struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_end;
     volatile uint64_t noc_dram_addr_base;
     volatile uint64_t noc_dram_addr_end;
-    addressable_core_t non_worker_cores[MAX_PHYSICAL_NON_WORKER_CORES];
-    addressable_core_t virtual_non_worker_cores[MAX_VIRTUAL_NON_WORKER_CORES];
+    addressable_core_t non_worker_cores[MAX_PHYSICAL_NON_WORKER_CORES];         // CODEGEN:skip
+    addressable_core_t virtual_non_worker_cores[MAX_VIRTUAL_NON_WORKER_CORES];  // CODEGEN:skip
     volatile uint8_t harvested_coords[MAX_HARVESTED_ON_AXIS];
     volatile uint8_t virtual_harvested_coords[MAX_HARVESTED_ON_AXIS];
     volatile uint8_t noc_size_x;
@@ -388,11 +407,11 @@ struct mailboxes_t {
     uint32_t pads_1[3];
     volatile uint32_t go_message_index;  // Index into go_messages to use. Always 0 on unicast cores.
     struct watcher_msg_t watcher;
-    struct dprint_buf_msg_t dprint_buf;
+    struct dprint_buf_msg_t dprint_buf;  // CODEGEN:skip
     struct core_info_msg_t core_info;
     // Keep profiler last since it's size is dynamic per core type
     uint32_t pads_2[PROFILER_NOC_ALIGNMENT_PAD_COUNT];
-    profiler_msg_t profiler;
+    profiler_msg_t profiler;  // CODEGEN:skip
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
@@ -407,12 +426,14 @@ struct eth_word_t {
     uint32_t reserved_1;
 };
 
+#ifndef CODEGEN
 enum class SyncCBConfigRegion : uint8_t {
     DB_TENSIX = 0,
     TENSIX = 1,
     ROUTER_ISSUE = 2,
     ROUTER_COMPLETION = 3,
 };
+#endif
 
 struct routing_info_t {
     volatile uint32_t routing_enabled;
