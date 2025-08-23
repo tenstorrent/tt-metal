@@ -13,35 +13,6 @@ from ...layers.feedforward import ColParallelLinear, ParallelFeedForward
 from loguru import logger
 
 
-"""
-CLIP Text Encoder Model
-
-Architecture:
-├── CLIPConfig
-└── CLIPEncoder
-    ├── TextEmbeddings
-    │   ├── Token Embeddings
-    │   └── Absolute Position Embeddings
-    │
-    ├── CLIPStack
-    │   └── CLIPEncoderLayer[0..num_layers-1]
-    │       ├── Self Attention
-    │       │   ├── Layer Norm 1
-    │       │   ├── QKV Projections
-    │       │   ├── Multi-Head Attention with Causal Mask
-    │       │   └── Output Projection
-    │       └── Feed Forward
-    │           ├── Layer Norm 2
-    │           ├── MLP
-    │           └── Residual Connection
-    │
-    ├── Final Layer Norm
-    ├── EOS Token Pooling
-    └── Text Projection (Optional)
-        - Projects pooled output to match image embeddings
-"""
-
-
 class CLIPConfig:
     """
     Configuration class to store the configuration of a `CLIPEncoder` model.

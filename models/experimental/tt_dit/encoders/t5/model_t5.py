@@ -13,45 +13,6 @@ from ...layers.feedforward import ColParallelLinear
 import math
 from ...layers.normalization import RMSNorm
 
-"""
-T5 Text Encoder Model
-
-Architecture:
-├── T5Config
-└── T5Encoder
-    ├── RelativeTextEmbeddings
-    │   ├── token_embeddings
-    │   └── relative_attention_bias
-    │
-    ├── T5Stack
-    │   └── T5EncoderLayer[0..num_layers-1]
-    │       ├── T5Attention
-    │       │   ├── RMSNorm (pre-norm)
-    │       │   ├── Projections
-    │       │   │   ├── q_proj (ColParallelLinear)
-    │       │   │   ├── k_proj (ColParallelLinear)
-    │       │   │   ├── v_proj (ColParallelLinear)
-    │       │   │   └── o_proj (ColParallelLinear)
-    │       │   └── Operations
-    │       │       ├── QKV Split & Reshape
-    │       │       ├── Scaled Dot-Product Attention
-    │       │       └── Position Bias Addition
-    │       │
-    │       ├── First Residual Connection
-    │       │
-    │       ├── T5FF
-    │       │   ├── RMSNorm (pre-norm)
-    │       │   └── T5DenseGatedActDense
-    │       │       ├── wi0 (ColParallelLinear)
-    │       │       ├── wi1 (ColParallelLinear)
-    │       │       ├── GELU Activation
-    │       │       └── wo (ColParallelLinear)
-    │       │
-    │       └── Second Residual Connection
-    │
-    └── RMSNorm (final layer norm)
-"""
-
 
 class T5Config:
     """
