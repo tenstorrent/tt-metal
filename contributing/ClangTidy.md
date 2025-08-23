@@ -1,5 +1,33 @@
 # Scan the repo for clang-tidy violations
+## Using TT Infra
 This is done automatically in post-commit, or can be run manually via [Code analysis · Workflow runs · tenstorrent/tt-metal](https://github.com/tenstorrent/tt-metal/actions/workflows/code-analysis.yaml)
+
+## Local Spot Checks
+The full clang-tidy run takes a while (25 minutes on a good day on our runners), so you may want to do a spot check locally. This is not a comprehensive scan, but can be used to catch several issues locally before committing the resources to the full scan. Sample for convenience:
+
+```sh
+# from your tt-metal checkout directory
+mkdir build
+cd build
+
+# clang-tidy needs the compile_commands.json to get a lay of the land on what to scan
+# PCHs can mess with the scan, so just disable them
+CC=clang-17 CXX=clang++-17 cmake -DCMAKE_BUILD_TYPE=Release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -G Ninja ..
+
+# go back up to your top level tt-metal checkout directory
+cd ..
+
+# run clang-tidy using the helper from clang-tools (sometimes called clang-tools-extra in package managers)
+# -jN : run N clang-tidy instances
+# -p ./build : specify the directory compile_commands.json is located
+# -quiet : makes the output less noisy
+# -use-color : makes the output pretty
+# -header-filter "`pwd`" : only scan header files located under the current filetree (suppresses system and other dependency headers located elsewhere)
+# -source-filter "`pwd`" : only scan source files located under the current filetree (suppresses system and other dependency sources located elsewhere)
+# -exclude-header-filter "(.*CPM.*|.*tt-train.*|.*third_party.*)" : don't report on headers from CPM, tt-train, and third_party. Uses regular-expression syntax.
+# -export-fixes fixes.yaml : dump the scan results into a yaml file for use with other tools
+run-clang-tidy -p ./build -quiet -use-color -header-filter "`pwd`" -source-filter "`pwd`" -exclude-header-filter "(.*CPM.*|.*tt-train.*|.*third_party.*)" -export-fixes fixes.yaml ./path/to/file(s)/you/want/to/scan.cpp
+```
 
 # Enable a check
 Delete the line from [tt-metal/.clang-tidy](../.clang-tidy) that disables the check.  Check [Clang-Tidy Checks](https://clang.llvm.org/extra/clang-tidy/checks/list.html) and see if another check is an alias for the same.  If so, then delete the other name, too.  Now fix all the diagnostics that are now flagged!
