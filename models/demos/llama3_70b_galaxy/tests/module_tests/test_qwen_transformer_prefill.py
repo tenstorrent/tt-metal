@@ -11,13 +11,11 @@ import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     get_prefill_rot_mat,
     HostEmbedding,
-    encode_prompt_llama_instruct,
     PagedAttentionConfig,
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs, QwenOptimizations
+from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -57,13 +55,6 @@ from models.utility_functions import skip_for_grayskull
     (128,),
 )
 @pytest.mark.parametrize(
-    "optimizations",
-    [
-        pytest.param(QwenOptimizations.accuracy, id="accuracy"),
-        # pytest.param(QwenOptimizations.performance, id="performance"),
-    ],
-)
-@pytest.mark.parametrize(
     "device_params",
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
@@ -72,7 +63,6 @@ def test_qwen_transformer_inference_prefill(
     seq_len,
     paged_attention,
     page_params,
-    optimizations,
     mesh_device,
     reset_seeds,
     ensure_gc,
@@ -84,22 +74,12 @@ def test_qwen_transformer_inference_prefill(
     dtype = ttnn.bfloat8_b
     batch_size = 1  # For prefill we only support batch_size = 1
 
-    # This sets the minimum PCC for each iteration based on optimization mode
-    if optimizations == QwenOptimizations.accuracy:
-        pcc = 0.915  # TODO Look on improving PCC
-    else:  # performance mode
-        assert optimizations == QwenOptimizations.performance
-        pcc = 0.915  # TODO Look on improving PCC
+    pcc = 0.915  # TODO Look on improving PCC
 
-    # Use instruct weights instead of general weights
-    instruct = True
-
-    model_args = TtQwenModelArgs(
-        mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len, dummy_weights=False
-    )
+    model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len, dummy_weights=False)
     model_args.use_prefetcher = False
     model_args.n_layers = 1
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.tokenizer
 
     logger.info("Loading weights...")
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
@@ -126,13 +106,10 @@ def test_qwen_transformer_inference_prefill(
     with bz2.open(prompt_file, "rt", encoding="utf-8") as f:
         prompt = f.read()
 
-    if instruct:
-        encoded_prompt = encode_prompt_llama_instruct(tokenizer, prompt)[:seq_len]
-    else:
-        encoded_prompt = tokenizer.encode(prompt, bos=True, eos=False)[:seq_len]
+    encoded_prompt = tokenizer.encode(prompt)[:seq_len]
 
     if run_ref_pt:
-        reference_model = Transformer(model_args, llama3=True)  # Enable QK norm with llama3=True
+        reference_model = Transformer(model_args, llama3=False)
         reference_model.load_state_dict(reference_state_dict)
     # Embedding on host
     embd = HostEmbedding(model_args)
