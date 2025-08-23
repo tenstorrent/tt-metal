@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <enchantum/iostream.hpp>
 
+#include "llrt/hal/generated_headers/dev_msgs.hpp"
 #include "hal_types.hpp"
 #include <umd/device/types/arch.h>
 
@@ -72,7 +73,8 @@ HalCoreInfoType::HalCoreInfoType(
     const std::vector<uint32_t>& mem_map_sizes,
     const std::vector<uint32_t>& eth_fw_mailbox_msgs,
     bool supports_cbs,
-    bool supports_receiving_multicast_cmds) :
+    bool supports_receiving_multicast_cmds,
+    dev_msgs::Factory dev_msgs_factory) :
     programmable_core_type_(programmable_core_type),
     core_type_(core_type),
     processor_classes_(processor_classes),
@@ -80,7 +82,8 @@ HalCoreInfoType::HalCoreInfoType(
     mem_map_sizes_(mem_map_sizes),
     eth_fw_mailbox_msgs_{eth_fw_mailbox_msgs},
     supports_cbs_(supports_cbs),
-    supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds) {}
+    supports_receiving_multicast_cmds_(supports_receiving_multicast_cmds),
+    dev_msgs_factory_(std::move(dev_msgs_factory)) {}
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base) {
     // Options for handling brisc fw not starting at mem[0]:
