@@ -12,7 +12,7 @@ import hashlib
 import json
 
 from framework.permutations import *
-from framework.serialize import serialize, serialize_for_postgres
+from framework.serialize import serialize, serialize_structured
 from framework.statuses import VectorValidity, VectorStatus
 from framework.sweeps_logger import sweeps_logger as logger
 
@@ -65,10 +65,7 @@ def export_suite_vectors_json(module_name, suite_name, vectors):
     for i in range(len(vectors)):
         vector = dict()
         for elem in vectors[i].keys():
-            if DATABASE == "postgres":
-                vector[elem] = serialize_for_postgres(vectors[i][elem], warnings)
-            else:
-                vector[elem] = serialize(vectors[i][elem], warnings)
+            vector[elem] = serialize_structured(vectors[i][elem], warnings)
         input_hash = hashlib.sha224(str(vector).encode("utf-8")).hexdigest()
         vector["timestamp"] = current_time
         vector["input_hash"] = input_hash
@@ -220,12 +217,6 @@ if __name__ == "__main__":
         action="store_true",
         help="If set, dumps the results to disk in JSON instead of using ES",
     )
-    parser.add_argument(
-        "--database",
-        required=False,
-        default="elastic",
-        help="To specify which database the test results will be stored in. Affects serialization of test vectors.",
-    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -239,9 +230,6 @@ if __name__ == "__main__":
         DUMP_FILE = False
     else:
         DUMP_FILE = True
-
-    global DATABASE
-    DATABASE = args.database
 
     global SWEEPS_TAG
     SWEEPS_TAG = args.tag
