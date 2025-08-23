@@ -68,7 +68,7 @@ private:
 
 public:
     using byte_type = maybe_const_t<std::byte>;
-    using fields_type = Fields;
+    using fields = Fields;
     BaseStructView(const StructInfo info, byte_type* base) : info_(info), base_(base) {}
     byte_type* data() const { return base_; }
     size_t size() const { return info_.get_size(); }
@@ -76,22 +76,20 @@ public:
 
 protected:
     byte_type* address_of(size_t i) const { return base_ + info_.offset_of(i); }
-    template <typename U>
-    auto& scalar_field(size_t i) const {
-        return *reinterpret_cast<maybe_const_t<U>*>(address_of(i));
+    template <typename U, typename element_type = maybe_const_t<U>>
+    element_type& scalar_field(size_t i) const {
+        return *reinterpret_cast<element_type*>(address_of(i));
     }
-    template <typename U>
-    auto scalar_array(size_t i, size_t array_idx) const {
-        return std::span(reinterpret_cast<maybe_const_t<U>*>(address_of(i)), info_.get(array_idx));
+    template <typename U, typename element_type = maybe_const_t<U>>
+    std::span<element_type> scalar_array(size_t i, size_t array_idx) const {
+        return {reinterpret_cast<element_type*>(address_of(i)), info_.get(array_idx)};
     }
-    template <typename U>
-        requires std::derived_from<U, BaseStructView<IsConst, typename U::fields_type>>
-    U struct_field(size_t i, size_t struct_idx) const {
+    template <template <bool> typename View>
+    View<IsConst> struct_field(size_t i, size_t struct_idx) const {
         return {info_.get_info(struct_idx), address_of(i)};
     }
-    template <typename U>
-        requires std::derived_from<U, BaseStructView<IsConst, typename U::fields_type>>
-    StructSpan<U> struct_array(size_t i, size_t struct_idx, size_t array_idx) const {
+    template <template <bool> typename View>
+    StructSpan<View<IsConst>> struct_array(size_t i, size_t struct_idx, size_t array_idx) const {
         return {info_.get_info(struct_idx), address_of(i), info_.get(array_idx)};
     }
 
@@ -100,7 +98,7 @@ private:
     byte_type* base_;
 };
 
-template <template <bool IsConst> class View, typename Derived>
+template <template <bool> typename View, typename Derived>
 class StructStorage {
 public:
     StructStorage(const StructInfo info) : info_(info), storage_(info.get_size()) {}

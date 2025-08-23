@@ -207,7 +207,6 @@ class CodeGen:
                 scalar_or_struct = "scalar"
             else:
                 scalar_or_struct = "struct"
-                template_param += "<IsConst>"
                 struct_info_idx = len(struct.fields) + len(struct.array_sizes) + field.struct_idx
                 args.append(struct_info_idx)
             if field.array_size_idx is None:
