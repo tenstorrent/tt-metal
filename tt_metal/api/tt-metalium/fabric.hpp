@@ -65,6 +65,19 @@ void append_fabric_connection_rt_args(
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER);
 
+// Appends connection manager RT args for one or more routes.
+// next_hop_nodes: vector of next-hop nodes, one per route.
+// connection_link_indices: optional per-route link indices; if empty, a valid link is auto-selected.
+void append_routing_plane_connection_manager_rt_args(
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<FabricNodeId>& next_hop_nodes,
+    tt::tt_metal::Program& worker_program,
+    tt::tt_metal::KernelHandle& kernel_id,
+    const CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type = CoreType::WORKER,
+    const std::vector<uint32_t>& connection_link_indices = std::vector<uint32_t>{});
+
 // returns which links on a given src chip are available for forwarding the data to a dst chip
 // these link indices can then be used to establish connection with the fabric routers
 std::vector<uint32_t> get_forwarding_link_indices(
