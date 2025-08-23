@@ -411,7 +411,7 @@ struct mailboxes_t {
     struct core_info_msg_t core_info;
     // Keep profiler last since it's size is dynamic per core type
     uint32_t pads_2[PROFILER_NOC_ALIGNMENT_PAD_COUNT];
-    profiler_msg_t profiler;  // CODEGEN:skip
+    profiler_msg_t profiler;  // CODEGEN:skip - too much magic here; can be made per core and use HAL later
 };
 
 // Watcher struct needs to be 32b-divisible, since we need to write it from host using write_core().
