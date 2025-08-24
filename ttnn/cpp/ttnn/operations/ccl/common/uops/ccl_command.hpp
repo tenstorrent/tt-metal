@@ -13,7 +13,6 @@
 
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 // For command dest type
-#include <tt-metalium/fabric_edm_packet_header.hpp>
 
 namespace ttnn {
 namespace ccl {
@@ -576,12 +575,10 @@ enum class CclCommandCode : uint8_t {
 
 
 enum CclCommandDestType : uint8_t {
-    CHIP_UNICAST = tt::tt_fabric::CHIP_UNICAST,
-    CHIP_MULTICAST = tt::tt_fabric::CHIP_MULTICAST,
+    CHIP_UNICAST = 0,
+    CHIP_MULTICAST = 1,
     CHIP_LOCAL_ONLY = 2
 };
-static_assert(tt::tt_fabric::CHIP_UNICAST < 2);
-static_assert(tt::tt_fabric::CHIP_MULTICAST < 2);
 struct DestTypeArgsNull {};
 static_assert(sizeof(DestTypeArgsNull) <= 2);
 struct UnicastCommandDestArgs {
