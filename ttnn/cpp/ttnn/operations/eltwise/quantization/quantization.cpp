@@ -365,44 +365,42 @@ Tensor RequantOp::invoke(
         const ttnn::Shape& input_shape = input_tensor.logical_shape();
         const int32_t rank = input_shape.rank();
 
-        const bool in_scale_is_per_channel = in_scale_p && in_scale_p->logical_volume() == input_shape[axis_v];
-        const bool in_zero_point_is_per_channel =
-            in_zero_point_p && in_zero_point_p->logical_volume() == input_shape[axis_v];
-        const bool out_scale_is_per_channel = out_scale_p && out_scale_p->logical_volume() == input_shape[axis_v];
-        const bool out_zero_point_is_per_channel =
-            out_zero_point_p && out_zero_point_p->logical_volume() == input_shape[axis_v];
+        const bool in_scale_is_full_size = in_scale_p->logical_volume() == input_shape[axis_v];
+        const bool in_zero_point_is_full_size = in_zero_point_p->logical_volume() == input_shape[axis_v];
+        const bool out_scale_is_full_size = out_scale_p->logical_volume() == input_shape[axis_v];
+        const bool out_zero_point_is_full_size = out_zero_point_p->logical_volume() == input_shape[axis_v];
 
         TT_FATAL(
-            in_scale_is_per_channel == in_zero_point_is_per_channel,
+            in_scale_is_full_size == in_zero_point_is_full_size,
             "Input scale and input zero-point must both be per-channel or both be per-tensor, but got: "
             "input scale {} per-channel, input zero-point {} per-channel",
-            in_scale_is_per_channel ? "is" : "is not",
-            in_zero_point_is_per_channel ? "is" : "is not");
+            in_scale_is_full_size ? "is" : "is not",
+            in_zero_point_is_full_size ? "is" : "is not");
 
         TT_FATAL(
-            out_scale_is_per_channel == out_zero_point_is_per_channel,
+            out_scale_is_full_size == out_zero_point_is_full_size,
             "Output scale and output zero-point must both be per-channel or both be per-tensor, but got: "
             "output scale {} per-channel, output zero-point {} per-channel",
-            out_scale_is_per_channel ? "is" : "is not",
-            out_zero_point_is_per_channel ? "is" : "is not");
+            out_scale_is_full_size ? "is" : "is not",
+            out_zero_point_is_full_size ? "is" : "is not");
 
         // Validate tensor shapes.
-        check_scale_tensor_args(input_tensor, in_scale_p, axis_v, rank, in_scale_is_per_channel);
-        check_zero_point_tensor_args(input_tensor, in_zero_point_p, axis_v, rank, in_zero_point_is_per_channel);
-        check_scale_tensor_args(input_tensor, out_scale_p, axis_v, rank, out_scale_is_per_channel);
-        check_zero_point_tensor_args(input_tensor, out_zero_point_p, axis_v, rank, out_zero_point_is_per_channel);
+        check_scale_tensor_args(input_tensor, in_scale_p, axis_v, rank, in_scale_is_full_size);
+        check_zero_point_tensor_args(input_tensor, in_zero_point_p, axis_v, rank, in_zero_point_is_full_size);
+        check_scale_tensor_args(input_tensor, out_scale_p, axis_v, rank, out_scale_is_full_size);
+        check_zero_point_tensor_args(input_tensor, out_zero_point_p, axis_v, rank, out_zero_point_is_full_size);
 
         // Shape expansion and typecasting for the scale and zero-point tensors.
         auto expand_or_cast = [&](const Tensor& v, bool is_per_channel, DataType dt) -> Tensor {
-            return is_per_channel ? reshape_per_channel_vector_args(v, input_shape, axis_v, dt) : ttnn::typecast(v, dt);
+            return is_full_size ? reshape_per_channel_vector_args(v, input_shape, axis_v, dt) : ttnn::typecast(v, dt);
         };
 
-        const Tensor in_scale_full = expand_or_cast(*in_scale_p, in_scale_is_per_channel, DataType::FLOAT32);
+        const Tensor in_scale_full = expand_or_cast(*in_scale_p, in_scale_is_full_size, DataType::FLOAT32);
         const Tensor in_zero_point_full =
-            expand_or_cast(*in_zero_point_p, in_zero_point_is_per_channel, DataType::FLOAT32);
-        const Tensor out_scale_full = expand_or_cast(*out_scale_p, out_scale_is_per_channel, DataType::FLOAT32);
+            expand_or_cast(*in_zero_point_p, in_zero_point_is_full_size, DataType::FLOAT32);
+        const Tensor out_scale_full = expand_or_cast(*out_scale_p, out_scale_is_full_size, DataType::FLOAT32);
         const Tensor out_zero_point_full =
-            expand_or_cast(*out_zero_point_p, out_zero_point_is_per_channel, DataType::FLOAT32);
+            expand_or_cast(*out_zero_point_p, out_zero_point_is_full_size, DataType::FLOAT32);
 
         const Tensor scale_recip_full = ttnn::divide(
             queue_id, in_scale_full, out_scale_full, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
