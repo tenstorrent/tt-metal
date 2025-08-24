@@ -5,7 +5,7 @@
 
 set -e
 
-TT_SMI_VERSION="3.0.27"
+TT_SMI_VERSION="3.0.28"
 TT_SMI_WHEEL="tt_smi-${TT_SMI_VERSION}-py3-none-any.whl"
 
 wget -O ${TT_SMI_WHEEL} \
