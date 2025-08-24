@@ -193,9 +193,11 @@ def _create_ds1_model_parameters(conv_args, resolution):
 
 
 def create_ds1_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
+
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
     parameters["resolution"] = resolution
@@ -266,9 +268,11 @@ def _create_ds2_model_parameters(conv_args, resolution):
 
 
 def create_ds2_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
+
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
     parameters["resolution"] = resolution
@@ -339,9 +343,11 @@ def _create_ds3_model_parameters(conv_args, resolution):
 
 
 def create_ds3_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
+
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
     parameters["resolution"] = resolution
@@ -416,9 +422,11 @@ def _create_ds4_model_parameters(conv_args, resolution):
 
 
 def create_ds4_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
+
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
     parameters["resolution"] = resolution
@@ -495,9 +503,11 @@ def _create_ds5_model_parameters(conv_args, resolution):
 
 
 def create_ds5_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
+
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
     parameters["resolution"] = resolution
@@ -672,9 +682,11 @@ def _create_neck_model_parameters(conv_args, resolution):
 
 
 def create_neck_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
+
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
     parameters["resolution"] = resolution
@@ -828,11 +840,14 @@ def _create_head_model_parameters(conv_args, resolution):
 
 
 def create_head_model_parameters(model: yolov4.Yolov4, input_tensor: torch.Tensor, resolution, device):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
+
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=custom_preprocessor,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
         device=device,
     )
+    parameters["resolution"] = resolution
     parameters.conv_args = {}
     parameters.conv_args = infer_ttnn_module_args(
         model=model, run_model=lambda model: model(input_tensor[0], input_tensor[1], input_tensor[2]), device=None
