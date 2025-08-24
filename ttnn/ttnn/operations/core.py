@@ -659,6 +659,7 @@ def as_tensor(
                 layout=layout,
                 device=None,
                 memory_config=memory_config,
+                # For fully replicated tensors, cache unsharded tensor, so that it can be loaded on any device.
                 mesh_mapper=None if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
             )
             assert tensor.storage_type() == ttnn.StorageType.HOST, "tensor should be on host"
