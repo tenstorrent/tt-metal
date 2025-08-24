@@ -187,305 +187,108 @@ std::string get_connector_str(chip_id_t chip_id, CoreCoord eth_core, uint32_t ch
     return str.str();
 }
 
-std::string get_mobo_name() {
-    std::ifstream file("/sys/class/dmi/id/board_name");
-    std::string motherboard;
+TEST(Cluster, TestPhysicalSystemDescriptor) {
+    using namespace tt::tt_metal::distributed::multihost;
+    auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
 
-    if (file.is_open()) {
-        std::getline(file, motherboard);
-        file.close();
-    }
+    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor();
 
-    return motherboard;
-}
-
-void dump_to_yaml(const SystemDescriptor& descriptor) {
-    YAML::Node root;
-
-    // Build hosts section
-    YAML::Node asic_info_map;
-
-    for (const auto& compute_node_desc : descriptor.compute_nodes) {
-        const std::string& hostname = compute_node_desc.host_name;
-        const std::string& mobo_name = compute_node_desc.mobo_name;
-        const std::vector<ASICDescriptor>& asics = compute_node_desc.asic_descriptors;
-
-        // Group ASICs by tray_id and board_type
-        std::map<uint32_t, std::vector<ASICDescriptor>> grouped_asics;
+    auto hostnames = physical_system_desc.get_all_hostnames();
+    // Validate number of hosts discovered
+    EXPECT_EQ(hostnames.size(), *(distributed_context.size()));
+    // Validate Graph Nodes
+    const auto& asic_descs = physical_system_desc.get_asic_descriptors();
+    for (const auto& host : hostnames) {
+        auto asics = physical_system_desc.get_asics_connected_to_host(host);
+        // Ensure that the number of asics discovered per host is consistent
+        // with tt_cluster
+        EXPECT_EQ(asics.size(), cluster.get_unique_chip_ids().size());
 
         for (const auto& asic : asics) {
-            grouped_asics[asic.tray_id].push_back(asic);
-        }
-
-        YAML::Node host_node;
-        YAML::Node tray_groups;
-        host_node["motherboard"] = get_mobo_name();
-        // Create array of tray groups
-        for (const auto& group : grouped_asics) {
-            YAML::Node tray_group;
-
-            // Set tray_id and board_type
-            tray_group["tray_id"] = group.first;  // tray_id
-            tray_group["board_type"] = enchantum::to_string(group.second.front().board_type);
-
-            std::vector<ASICDescriptor> sorted_asics = group.second;
-            std::sort(sorted_asics.begin(), sorted_asics.end(), [](const ASICDescriptor& a, const ASICDescriptor& b) {
-                return a.n_id < b.n_id;
-            });
-            // Create asics array
-            YAML::Node asics_array;
-            for (const auto& asic : sorted_asics) {
-                YAML::Node asic_node;
-                asic_node["nid"] = asic.n_id;
-                asic_node["asic_id"] = asic.unique_id;
-                asics_array.push_back(asic_node);
+            // Ensure that descriptors were correctly populated for each asic
+            EXPECT_NE(asic_descs.find(asic), asic_descs.end());
+            EXPECT_EQ(physical_system_desc.get_host_name_for_asic(asic), host);
+            for (auto neighbor : physical_system_desc.get_asic_neighbors(asic)) {
+                // Ensure that neighbors were correctly populated for each asic
+                EXPECT_NE(asic_descs.find(neighbor), asic_descs.end());
             }
-            tray_group["asics"] = asics_array;
-            tray_groups.push_back(tray_group);
         }
-        host_node["asic_info"] = tray_groups;
-        asic_info_map[hostname] = host_node;
+        // All to All connectivity for hosts
+        auto neighbors = physical_system_desc.get_host_neighbors(host);
+        EXPECT_EQ(neighbors.size(), hostnames.size() - 1);
+
+        for (const auto& neighbor : neighbors) {
+            EXPECT_NE(std::find(hostnames.begin(), hostnames.end(), neighbor), hostnames.end());
+        }
     }
 
-    root["node_specs"] = asic_info_map;
+    // Validate Graph Edges
+    auto local_eth_links = cluster.get_ethernet_connections();
+    auto cross_host_eth_links = cluster.get_ethernet_connections_to_remote_devices();
+    auto my_host = physical_system_desc.my_host_name();
+    auto my_host_neighbors = physical_system_desc.get_host_neighbors(my_host);
 
-    YAML::Node local_eth_connections(YAML::NodeType::Sequence);
+    auto unique_chip_ids = cluster.get_unique_chip_ids();
+    std::unordered_map<asic_id_t, chip_id_t> asic_id_to_chip_id;
 
-    for (const auto& conn_desc : descriptor.eth_connectivity_descs) {
-        const auto& local_host_name = conn_desc.host_name;
-        std::set<std::pair<std::string, std::string>> processed_connections;
+    for (const auto& [chip_id, asic_id] : unique_chip_ids) {
+        asic_id_to_chip_id[asic_id] = chip_id;
+    }
 
-        for (const auto& local_conn : conn_desc.local_eth_connections) {
-            const EthChanDescriptor& src = local_conn.first;
-            const EthChanDescriptor& dst = local_conn.second;
+    // Local Connectivity
+    for (auto asic : physical_system_desc.get_asics_connected_to_host(my_host)) {
+        auto chip_id = asic_id_to_chip_id.at(asic);
+        auto eth_links = local_eth_links.at(chip_id);
+        auto neighbors = physical_system_desc.get_asic_neighbors(asic);
 
-            std::string src_id = std::to_string(src.board_id) + ":" + std::to_string(src.chan_id);
-            std::string dst_id = std::to_string(dst.board_id) + ":" + std::to_string(dst.chan_id);
-            auto connection_key = std::make_pair(std::min(src_id, dst_id), std::max(src_id, dst_id));
-
-            if (processed_connections.find(connection_key) != processed_connections.end()) {
+        for (auto neighbor : neighbors) {
+            if (physical_system_desc.get_host_name_for_asic(neighbor) != my_host) {
+                // Skip exit nodes
                 continue;
             }
-            processed_connections.insert(connection_key);
-            YAML::Node connection_pair(YAML::NodeType::Sequence);
-            connection_pair.SetStyle(YAML::EmitterStyle::Flow);
-            YAML::Node src_conn_node;
-            YAML::Node dst_conn_node;
-            src_conn_node["host_name"] = local_host_name;
-            dst_conn_node["host_name"] = local_host_name;
-
-            for (const auto& compute_node_desc : descriptor.compute_nodes) {
-                for (const auto& asic_desc : compute_node_desc.asic_descriptors) {
-                    if (asic_desc.unique_id == src.board_id) {
-                        src_conn_node["tray_id"] = asic_desc.tray_id;
-                        src_conn_node["nid"] = asic_desc.n_id;
-                    }
-                    if (asic_desc.unique_id == dst.board_id) {
-                        dst_conn_node["tray_id"] = asic_desc.tray_id;
-                        dst_conn_node["nid"] = asic_desc.n_id;
-                    }
-                }
+            // Ensure that local eth links are populated correctly on the current host
+            // This is done by cross referencing eth connectivity returned by the physical
+            // descriptor with tt_cluster
+            auto dst_chip = asic_id_to_chip_id.at(neighbor);
+            auto eth_conns = physical_system_desc.get_eth_connections(asic, neighbor);
+            for (const auto& eth_conn : eth_conns) {
+                auto [remote_chip, remote_chan] = eth_links.at(eth_conn.src_chan);
+                EXPECT_NE(eth_links.find(eth_conn.src_chan), eth_links.end());
+                EXPECT_EQ(dst_chip, remote_chip);
+                EXPECT_EQ(eth_conn.dst_chan, remote_chan);
             }
-            src_conn_node["chan_id"] = src.chan_id;
-            dst_conn_node["chan_id"] = dst.chan_id;
-            connection_pair.push_back(src_conn_node);
-            connection_pair.push_back(dst_conn_node);
-            local_eth_connections.push_back(connection_pair);
-        }
-    }
-    root["local_connections"] = local_eth_connections;
-
-    // Global ethernet connections (avoid duplicates)
-    YAML::Node global_connections;
-    std::set<std::pair<std::string, std::string>> processed_connections;
-
-    for (const auto& conn_desc : descriptor.eth_connectivity_descs) {
-        const auto& local_host_name = conn_desc.host_name;
-        for (const auto& remote_conn : conn_desc.remote_eth_connections) {
-            const EthChanDescriptor& src = remote_conn.first;
-            const auto& dst_desc = remote_conn.second;
-
-            if (dst_desc.first == "UNKNOWN") {
-                continue;
-            }
-
-            std::string src_id = std::to_string(src.board_id) + ":" + std::to_string(src.chan_id);
-            std::string dst_id =
-                std::to_string(dst_desc.second.board_id) + ":" + std::to_string(dst_desc.second.chan_id);
-            auto connection_key = std::make_pair(std::min(src_id, dst_id), std::max(src_id, dst_id));
-
-            if (processed_connections.find(connection_key) != processed_connections.end()) {
-                continue;
-            }
-            processed_connections.insert(connection_key);
-            YAML::Node connection_pair(YAML::NodeType::Sequence);
-            connection_pair.SetStyle(YAML::EmitterStyle::Flow);
-            YAML::Node src_conn_node;
-            YAML::Node dst_conn_node;
-            src_conn_node["host_name"] = local_host_name;
-            dst_conn_node["host_name"] = dst_desc.first;
-            for (const auto& compute_node_desc : descriptor.compute_nodes) {
-                for (const auto& asic_desc : compute_node_desc.asic_descriptors) {
-                    if (asic_desc.unique_id == src.board_id) {
-                        src_conn_node["tray_id"] = asic_desc.tray_id;
-                        src_conn_node["nid"] = asic_desc.n_id;
-                        break;
-                    }
-                }
-            }
-            for (const auto& compute_node_desc : descriptor.compute_nodes) {
-                for (const auto& asic_desc : compute_node_desc.asic_descriptors) {
-                    if (asic_desc.unique_id == dst_desc.second.board_id) {
-                        dst_conn_node["tray_id"] = asic_desc.tray_id;
-                        dst_conn_node["nid"] = asic_desc.n_id;
-                        break;
-                    }
-                }
-            }
-            src_conn_node["chan_id"] = src.chan_id;
-            dst_conn_node["chan_id"] = dst_desc.second.chan_id;
-            connection_pair.push_back(src_conn_node);
-            connection_pair.push_back(dst_conn_node);
-            global_connections.push_back(connection_pair);
-        }
-    }
-    root["global_connections"] = global_connections;
-
-    // Output to console
-    std::cout << "# ASIC Ethernet Connectivity Configuration" << std::endl;
-    std::cout << root << std::endl;
-}
-
-TEST(Cluster, GetLocalEthernetConnectivity) {
-    using namespace tt::tt_metal::distributed::multihost;
-    std::cout << "Creating system descriptor..." << std::endl;
-    auto physical_system_desc = tt::tt_metal::PhysicalSystemDescriptor();
-    std::cout << "Done creating system descriptor" << std::endl;
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-
-    const auto& chip_unique_ids = cluster.get_unique_chip_ids();
-    const auto& eth_connections = cluster.get_ethernet_connections();
-    auto cross_host_eth_connections = cluster.get_ethernet_connections_to_remote_devices();
-    auto cluster_desc = cluster.get_cluster_desc();
-
-    auto my_rank = *(distributed_context.rank());
-    char hostname[HOST_NAME_MAX + 1];
-    gethostname(hostname, sizeof(hostname));
-    std::string hostname_str = std::string(hostname) + "_" + std::to_string(my_rank);
-
-    tt::tt_fabric::EthConnectivityDescriptor eth_connectivity_desc;
-    std::vector<tt::tt_fabric::ASICDescriptor> asic_descriptors;
-
-    eth_connectivity_desc.host_name = hostname_str;
-    std::set<uint32_t, std::greater<uint32_t>> sorted_pcie_slots = {};
-
-    for (const auto& [chip_id, unique_id] : chip_unique_ids) {
-        sorted_pcie_slots.insert(cluster.get_physical_slot(chip_id).value());
-    }
-
-    // Populate local ethernet connections and ASIC descriptors
-    for (const auto& [src, conn] : eth_connections) {
-        auto src_unique_id = chip_unique_ids.at(src);
-        uint32_t n_id = cluster_desc->is_chip_mmio_capable(src) ? 1 : 2;
-        uint32_t tray_id =
-            1 +
-            std::distance(sorted_pcie_slots.begin(), sorted_pcie_slots.find(cluster.get_physical_slot(src).value()));
-        asic_descriptors.push_back(
-            tt::tt_fabric::ASICDescriptor(src_unique_id, tray_id, n_id, cluster_desc->get_board_type(src)));
-        for (auto& [chan, dst] : conn) {
-            eth_connectivity_desc
-                .local_eth_connections[tt::tt_fabric::EthChanDescriptor{.board_id = src_unique_id, .chan_id = chan}] =
-                tt::tt_fabric::EthChanDescriptor{
-                    .board_id = chip_unique_ids.at(std::get<0>(dst)), .chan_id = std::get<1>(dst)};
         }
     }
 
-    for (const auto& [local_chip_id, eth_link_info] : cross_host_eth_connections) {
-        auto local_asic_id = chip_unique_ids.at(local_chip_id);
-        for (const auto& [eth_chan, remote_info] : eth_link_info) {
-            eth_connectivity_desc.remote_eth_connections[tt::tt_fabric::EthChanDescriptor{
-                .board_id = local_asic_id, .chan_id = eth_chan}] =
-                std::make_pair(
-                    "UNKNOWN",
-                    tt::tt_fabric::EthChanDescriptor{
-                        .board_id = std::get<0>(remote_info), .chan_id = std::get<1>(remote_info)});
+    // Host to Host Connectivity
+    for (const auto& host : hostnames) {
+        if (host == my_host) {
+            continue;
         }
-    }
-
-    tt::tt_fabric::SystemDescriptor system_desc;
-    system_desc.compute_nodes.push_back(
-        tt::tt_fabric::ComputeNodeDescriptor{hostname_str, get_mobo_name(), std::move(asic_descriptors)});
-    system_desc.eth_connectivity_descs.push_back(std::move(eth_connectivity_desc));
-
-    auto serialized_sys_desc = serialize_system_descriptor_to_bytes(system_desc);
-
-    constexpr uint32_t controller_rank = 0;
-    std::vector<uint8_t> serialized_peer_desc;
-
-    // if (my_rank != controller_rank) {
-    //     std::size_t local_desc_size_bytes = serialized_sys_desc.size();
-    //     distributed_context.send(
-    //         tt::stl::Span<std::byte>(
-    //             reinterpret_cast<std::byte*>(&local_desc_size_bytes), sizeof(local_desc_size_bytes)),
-    //         Rank{controller_rank},
-    //         Tag{0});
-    //     distributed_context.send(
-    //         tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_sys_desc.data(),
-    //         serialized_sys_desc.size())), Rank{controller_rank}, Tag{0});
-    // } else {
-    //     for (std::size_t rank = 0; rank < *(distributed_context.size()); rank++) {
-    //         if (rank != controller_rank) {
-    //             std::size_t peer_descriptor_size = 0;
-    //             distributed_context.recv(
-    //                 tt::stl::Span<std::byte>(
-    //                     reinterpret_cast<std::byte*>(&peer_descriptor_size), sizeof(peer_descriptor_size)),
-    //                 Rank{rank},
-    //                 Tag{0});
-    //             serialized_peer_desc.clear();
-    //             serialized_peer_desc.resize(peer_descriptor_size);
-    //             distributed_context.recv(
-    //                 tt::stl::as_writable_bytes(
-    //                     tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
-    //                 Rank{rank},
-    //                 Tag{0});
-    //             auto peer_desc = deserialize_system_descriptor_from_bytes(serialized_peer_desc);
-    //             system_desc.compute_nodes.insert(
-    //                 system_desc.compute_nodes.end(), peer_desc.compute_nodes.begin(), peer_desc.compute_nodes.end());
-    //             system_desc.eth_connectivity_descs.insert(
-    //                 system_desc.eth_connectivity_descs.end(),
-    //                 std::make_move_iterator(peer_desc.eth_connectivity_descs.begin()),
-    //                 std::make_move_iterator(peer_desc.eth_connectivity_descs.end()));
-    //         }
-    //     }
-    // }
-    distributed_context.barrier();
-    if (my_rank == controller_rank) {
-        for (auto& conn_desc : system_desc.eth_connectivity_descs) {
-            for (auto& [local_chan, remote_pair] : conn_desc.remote_eth_connections) {
-                for (auto& candidate_desc : system_desc.eth_connectivity_descs) {
-                    for (auto& [candidate_chan, candidate_remote_pair] : candidate_desc.remote_eth_connections) {
-                        auto& curr_host_name = conn_desc.host_name;
-                        auto& candidate_remote_host_name = candidate_desc.host_name;
-                        if (remote_pair.second.board_id == candidate_chan.board_id &&
-                            remote_pair.second.chan_id == candidate_chan.chan_id) {
-                            TT_FATAL(
-                                candidate_remote_pair.second.board_id == local_chan.board_id &&
-                                    candidate_remote_pair.second.chan_id == local_chan.chan_id,
-                                "Remote channel {}:{} does not match local channel {}:{} for host {}",
-                                candidate_remote_pair.second.board_id,
-                                candidate_remote_pair.second.chan_id,
-                                local_chan.board_id,
-                                local_chan.chan_id,
-                                curr_host_name);
-                            remote_pair.first = candidate_remote_host_name;
-                            candidate_remote_pair.first = curr_host_name;
-                        }
-                    }
-                }
-            }
+        // Ensure that exit nodes are populated correctly on the current host
+        // This is done by cross-referencing exit nodes in the physical descriptor with
+        // tt_cluster
+        auto exit_nodes = physical_system_desc.get_connecting_exit_nodes(my_host, host);
+        for (const auto& exit_node : exit_nodes) {
+            auto src_asic = exit_node.src_exit_node;
+            auto src_chip = asic_id_to_chip_id.at(src_asic);
+            auto src_chan = exit_node.eth_conn.src_chan;
+            auto dst_asic = exit_node.dst_exit_node;
+            auto dst_chan = exit_node.eth_conn.dst_chan;
+            auto [remote_asic, remote_chan] = cross_host_eth_links.at(src_chip).at(src_chan);
+            auto remote_host = physical_system_desc.get_host_name_for_asic(remote_asic);
+            // Verify that the exit node asic is marked as a chip with cross host links
+            EXPECT_NE(cross_host_eth_links.find(src_chip), cross_host_eth_links.end());
+            // Verify that the exit node channel is marked as a cross host link
+            EXPECT_NE(cross_host_eth_links.at(src_chip).find(src_chan), cross_host_eth_links.at(src_chip).end());
+            // Verify that the remote asic/chan from tt_cluster and the physical descriptor match
+            EXPECT_EQ(remote_asic, dst_asic);
+            EXPECT_EQ(remote_chan, dst_chan);
+            // Verify that remote asic belongs to a neighbor host
+            EXPECT_NE(
+                std::find(my_host_neighbors.begin(), my_host_neighbors.end(), remote_host), my_host_neighbors.end());
         }
-        // dump_to_yaml(system_desc);
     }
 }
 

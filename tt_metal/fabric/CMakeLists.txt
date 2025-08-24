@@ -52,7 +52,6 @@ target_sources(
 include(flatbuffers)
 set(FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/intermesh_link_table.fbs
-    ${CMAKE_CURRENT_SOURCE_DIR}/serialization/system_descriptor.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/serialization/exit_node_connection.fbs
 )
 

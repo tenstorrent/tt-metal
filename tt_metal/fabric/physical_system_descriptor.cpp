@@ -152,6 +152,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
                 .eth_conn = EthConnection(eth_chan, dst_chan, false)});
         }
     }
+    system_graph_.host_connectivity_graph[hostname] = {};
 }
 
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
@@ -178,6 +179,13 @@ void PhysicalSystemDescriptor::remove_unresolved_nodes() {
             std::erase_if(
                 edges, [&](const auto& pair) { return asic_descriptors_.find(pair.first) == asic_descriptors_.end(); });
         }
+    }
+
+    for (auto& [host, exit_nodes] : exit_node_connection_table_) {
+        std::erase_if(exit_nodes, [&](const auto& exit_node) {
+            return asic_descriptors_.find(exit_node.src_exit_node) == asic_descriptors_.end() ||
+                   asic_descriptors_.find(exit_node.dst_exit_node) == asic_descriptors_.end();
+        });
     }
 }
 
@@ -463,6 +471,20 @@ std::vector<ExitNodeConnection> PhysicalSystemDescriptor::get_connecting_exit_no
 
 const HostTopology& PhysicalSystemDescriptor::get_host_topology() const {
     return system_graph_.host_connectivity_graph;
+}
+
+std::vector<std::string> PhysicalSystemDescriptor::get_all_hostnames() const {
+    std::vector<std::string> hostnames;
+    hostnames.reserve(system_graph_.asic_connectivity_graph.size());
+    for (const auto& [host, _] : system_graph_.asic_connectivity_graph) {
+        hostnames.push_back(host);
+    }
+    return hostnames;
+}
+
+std::string PhysicalSystemDescriptor::my_host_name() const {
+    auto my_rank = *(tt::tt_metal::MetalContext::instance().global_distributed_context().rank());
+    return get_host_name() + "_" + std::to_string(my_rank);
 }
 
 std::string PhysicalSystemDescriptor::get_host_name_for_asic(asic_id_t asic_id) const {

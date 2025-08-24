@@ -156,6 +156,8 @@ public:
     rack_id_t get_rack_id(const std::string& hostname);
     aisle_id_t get_aisle_id(const std::string& hostname);
     hall_id_t get_hall_id(const std::string& hostname);
+    std::vector<std::string> get_all_hostnames() const;
+    std::string my_host_name() const;
 
     const PhysicalConnectivityGraph& get_system_graph() const { return system_graph_; }
     const std::unordered_map<asic_id_t, ASICDescriptor>& get_asic_descriptors() const { return asic_descriptors_; }
