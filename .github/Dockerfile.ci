@@ -2,18 +2,31 @@ ARG FROM_TAG=latest
 FROM ghcr.io/tenstorrent/tt-llk/tt-llk-base-ubuntu-22-04:${FROM_TAG} AS ci-build
 SHELL ["/bin/bash", "-c"]
 
-ENV PATH="/root/.cargo/bin:${PATH}"
+ENV GITHUB_ACTIONS="true" \
+    PYTEST_RUN_PATH="tests/python_tests"
 
-# Copy scripts into the image
-COPY .github/scripts/ /home/
-
+# Copy only necessary files
 COPY tests/requirements.txt /tmp/requirements_tests.txt
+COPY .github/scripts/install-tests-dependencies.sh \
+     .github/scripts/install-exalens.sh \
+     .github/scripts/install-smi.sh \
+     /tmp/scripts/
 
-# Install pytest dependencies
-RUN ./home/install-tests-dependencies.sh
-
-# Install tt-exalens
-RUN ./home/install-exalens.sh
-
-# Install tt-smi
-RUN ./home/install-smi.sh
+# Install all dependencies in a single layer and clean up
+RUN set -e \
+    # Make scripts executable
+    && chmod +x /tmp/scripts/*.sh \
+    # Install pytest dependencies
+    && /tmp/scripts/install-tests-dependencies.sh \
+    # Install tt-exalens
+    && /tmp/scripts/install-exalens.sh \
+    # Install tt-smi
+    && /tmp/scripts/install-smi.sh \
+    # Clean up temporary files and caches
+    && rm -rf /tmp/* \
+    && rm -rf /root/.cache/pip \
+    && rm -rf /root/.cache/* \
+    && rm -rf /usr/share/doc/* \
+    && rm -rf /usr/share/man/* \
+    && find /usr/local -name "*.pyc" -delete \
+    && find /usr/local -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
