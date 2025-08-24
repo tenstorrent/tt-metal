@@ -641,7 +641,8 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
             }
             break;
         case UnaryOpType::ALT_COMPLEX_ROTATE90:
-            op_init_and_name = {"alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
+            op_init_and_name = {
+                "alt_complex_rotate90_tile_init();", fmt::format("alt_complex_rotate90_tile({});", idst)};
             break;
         case UnaryOpType::HARDSIGMOID:
             op_init_and_name = {"hardsigmoid_tile_init();", fmt::format("hardsigmoid_tile({});", idst)};
@@ -680,49 +681,64 @@ bool get_op_approx_mode(UnaryOpType op_type) {
 }
 
 UnaryWithParam string_to_unary_with_param(const std::string& name) {
-    if (name == "relu") {
+    // Parse name for dash-separated parameters
+    std::string op_name = name;
+    std::string param_str = "";
+    size_t dash_pos = name.find('-');
+    if (dash_pos != std::string::npos) {
+        op_name = name.substr(0, dash_pos);
+        param_str = name.substr(dash_pos + 1);
+    }
+
+    if (op_name == "relu") {
         return UnaryWithParam(UnaryOpType::RELU);
-    } else if (name == "relu6") {
+    } else if (op_name == "relu6") {
         return UnaryWithParam(UnaryOpType::RELU6);
-    } else if (name == "gelu") {
+    } else if (op_name == "leaky_relu") {
+        if (!param_str.empty()) {
+            float param = std::stof(param_str);
+            return UnaryWithParam(UnaryOpType::LEAKY_RELU, param);
+        }
+        return UnaryWithParam(UnaryOpType::LEAKY_RELU);
+    } else if (op_name == "gelu") {
         return UnaryWithParam(UnaryOpType::GELU, static_cast<float>(true));
-    } else if (name == "silu") {
+    } else if (op_name == "silu") {
         return UnaryWithParam(UnaryOpType::SILU);
-    } else if (name == "sigmoid") {
+    } else if (op_name == "sigmoid") {
         return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), static_cast<float>(false)});
-    } else if (name == "sigmoid_approx") {
+    } else if (op_name == "sigmoid_approx") {
         return UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), static_cast<float>(true)});
-    } else if (name == "sqrt") {
+    } else if (op_name == "sqrt") {
         return UnaryWithParam(UnaryOpType::SQRT);
-    } else if (name == "exp") {
+    } else if (op_name == "exp") {
         return UnaryWithParam(UnaryOpType::EXP, static_cast<float>(true));
-    } else if (name == "recip") {
+    } else if (op_name == "recip") {
         return UnaryWithParam(UnaryOpType::RECIP);
-    } else if (name == "log") {
+    } else if (op_name == "log") {
         return UnaryWithParam(UnaryOpType::LOG, static_cast<float>(true));
-    } else if (name == "log1p") {
+    } else if (op_name == "log1p") {
         return UnaryWithParam(UnaryOpType::LOG1P, static_cast<float>(true));
-    } else if (name == "tanh") {
+    } else if (op_name == "tanh") {
         return UnaryWithParam(UnaryOpType::TANH);
-    } else if (name == "log2") {
+    } else if (op_name == "log2") {
         return UnaryWithParam(UnaryOpType::LOG2, static_cast<float>(true));
-    } else if (name == "log10") {
+    } else if (op_name == "log10") {
         return UnaryWithParam(UnaryOpType::LOG10, static_cast<float>(true));
-    } else if (name == "sin") {
+    } else if (op_name == "sin") {
         return UnaryWithParam(UnaryOpType::SIN);
-    } else if (name == "cos") {
+    } else if (op_name == "cos") {
         return UnaryWithParam(UnaryOpType::COS);
-    } else if (name == "abs") {
+    } else if (op_name == "abs") {
         return UnaryWithParam(UnaryOpType::ABS);
-    } else if (name == "abs_int32") {
+    } else if (op_name == "abs_int32") {
         return UnaryWithParam(UnaryOpType::ABS_INT32);
-    } else if (name == "sign") {
+    } else if (op_name == "sign") {
         return UnaryWithParam(UnaryOpType::SIGN);
-    } else if (name == "square") {
+    } else if (op_name == "square") {
         return UnaryWithParam(UnaryOpType::SQUARE);
-    } else if (name == "softplus") {
+    } else if (op_name == "softplus") {
         return UnaryWithParam(UnaryOpType::SOFTPLUS);
-    } else if (name == "alt_complex_rotate90") {
+    } else if (op_name == "alt_complex_rotate90") {
         return UnaryWithParam(UnaryOpType::ALT_COMPLEX_ROTATE90);
     }
     TT_THROW("Unknown unary op: {}", name);

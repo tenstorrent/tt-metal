@@ -47,118 +47,35 @@ class TtNeck:
     def __init__(self, device, parameters, conv_args) -> None:
         self.conv_args = conv_args
         self.parameters = parameters
-        self.conv1 = Conv(
-            device,
-            conv_args.c1,
-            parameters.c1,
-        )
-        self.conv2 = Conv(
-            device,
-            conv_args.c2,
-            parameters.c2,
-        )
-        self.conv3 = Conv(
-            device,
-            conv_args.c3,
-            parameters.c3,
-        )
-        self.conv4 = Conv(
-            device,
-            conv_args.c4,
-            parameters.c4,
-        )
-        self.conv5 = Conv(
-            device,
-            conv_args.c5,
-            parameters.c5,
-        )
-        self.conv6 = Conv(
-            device,
-            conv_args.c6,
-            parameters.c6,
-        )
-        self.conv7 = Conv(
-            device,
-            conv_args.c7,
-            parameters.c7,
-        )
-        self.conv7_2 = Conv(
-            device,
-            conv_args.c7_2,
-            parameters.c7_2,
-        )
-        self.conv7_3 = Conv(
-            device,
-            conv_args.c7_3,
-            parameters.c7_3,
-        )
-        self.conv8 = Conv(
-            device,
-            conv_args.c8,
-            parameters.c8,
-        )
-        self.conv7_4 = Conv(
-            device,
-            conv_args.c7_4,
-            parameters.c7_4,
-        )
-        self.conv8_2 = Conv(
-            device,
-            conv_args.c8_2,
-            parameters.c8_2,
-        )
-        self.conv7_5 = Conv(
-            device,
-            conv_args.c7_5,
-            parameters.c7_5,
-        )
+        self.conv1 = Conv(device, conv_args.c1, parameters.c1, activation="leaky_relu-0.1")
+        self.conv2 = Conv(device, conv_args.c2, parameters.c2, activation="leaky_relu-0.1")
+        self.conv3 = Conv(device, conv_args.c3, parameters.c3, activation="leaky_relu-0.1")
+        self.conv4 = Conv(device, conv_args.c4, parameters.c4, activation="leaky_relu-0.1")
+        self.conv5 = Conv(device, conv_args.c5, parameters.c5, activation="leaky_relu-0.1")
+        self.conv6 = Conv(device, conv_args.c6, parameters.c6, activation="leaky_relu-0.1")
+        self.conv7 = Conv(device, conv_args.c7, parameters.c7, activation="leaky_relu-0.1")
+        self.conv7_2 = Conv(device, conv_args.c7_2, parameters.c7_2, activation="leaky_relu-0.1")
+        self.conv7_3 = Conv(device, conv_args.c7_3, parameters.c7_3, activation="leaky_relu-0.1")
+        self.conv8 = Conv(device, conv_args.c8, parameters.c8, activation="leaky_relu-0.1")
+        self.conv7_4 = Conv(device, conv_args.c7_4, parameters.c7_4, activation="leaky_relu-0.1")
+        self.conv8_2 = Conv(device, conv_args.c8_2, parameters.c8_2, activation="leaky_relu-0.1")
+        self.conv7_5 = Conv(device, conv_args.c7_5, parameters.c7_5, activation="leaky_relu-0.1")
 
-        self.conv9 = Conv(
-            device,
-            conv_args.c9,
-            parameters.c9,
-        )
-        self.conv9_2 = Conv(
-            device,
-            conv_args.c9_2,
-            parameters.c9_2,
-        )
-        self.conv9_3 = Conv(
-            device,
-            conv_args.c9_3,
-            parameters.c9_3,
-        )
-        self.conv10 = Conv(
-            device,
-            conv_args.c10,
-            parameters.c10,
-        )
+        self.conv9 = Conv(device, conv_args.c9, parameters.c9, activation="leaky_relu-0.1")
+        self.conv9_2 = Conv(device, conv_args.c9_2, parameters.c9_2, activation="leaky_relu-0.1")
+        self.conv9_3 = Conv(device, conv_args.c9_3, parameters.c9_3, activation="leaky_relu-0.1")
+        self.conv10 = Conv(device, conv_args.c10, parameters.c10, activation="leaky_relu-0.1")
 
-        self.conv9_4 = Conv(
-            device,
-            conv_args.c9_4,
-            parameters.c9_4,
-        )
-        self.conv10_2 = Conv(
-            device,
-            conv_args.c10_2,
-            parameters.c10_2,
-        )
-        self.conv9_5 = Conv(
-            device,
-            conv_args.c9_5,
-            parameters.c9_5,
-        )
+        self.conv9_4 = Conv(device, conv_args.c9_4, parameters.c9_4, activation="leaky_relu-0.1")
+        self.conv10_2 = Conv(device, conv_args.c10_2, parameters.c10_2, activation="leaky_relu-0.1")
+        self.conv9_5 = Conv(device, conv_args.c9_5, parameters.c9_5, activation="leaky_relu-0.1")
 
     def __call__(self, input_tensor):
         output_tensor = self.conv1(input_tensor[0])[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv2(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv3(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor_pool_in = output_tensor
 
@@ -210,16 +127,12 @@ class TtNeck:
         output_tensor = ttnn.concat([pool_all, output_tensor], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = self.conv4(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv5(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv6(output_tensor)[0]
-        output_tensor_left_1 = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
+        output_tensor_left_1 = self.conv6(output_tensor)[0]
 
         output_tensor = self.conv7(output_tensor_left_1)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_shape = output_tensor.shape
         output_tensor = ttnn.untilize_with_unpadding(
@@ -295,7 +208,6 @@ class TtNeck:
         outDowSample5 = input_tensor[1]
 
         output_tensor = self.conv7_2(outDowSample5)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
 
@@ -305,19 +217,14 @@ class TtNeck:
         ttnn.deallocate(output_tensor_upsample_1)
 
         output_tensor = self.conv7_3(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv8(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv7_4(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv8_2(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
-        output_tensor = self.conv7_5(output_tensor)[0]
-        output_tensor_left_2 = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
+        output_tensor_left_2 = self.conv7_5(output_tensor)[0]
 
         if self.parameters.resolution[0] == 320:
             shard_grid = ttnn.CoreRangeSet(
@@ -335,7 +242,6 @@ class TtNeck:
             output_tensor_left_2 = ttnn.to_memory_config(output_tensor_left_2, memory_config=in_sharded_mem_config)
 
         output_tensor = self.conv9(output_tensor_left_2)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_shape = output_tensor.shape
         output_tensor = ttnn.untilize_with_unpadding(
@@ -412,7 +318,6 @@ class TtNeck:
         outDowSample3 = input_tensor[2]
 
         output_tensor = self.conv9_2(outDowSample3)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.concat(
@@ -421,19 +326,14 @@ class TtNeck:
         ttnn.deallocate(output_tensor_upsample_2)
 
         output_tensor = self.conv9_3(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv10(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv9_4(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv10_2(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = self.conv9_5(output_tensor)[0]
-        output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         ttnn.deallocate(input_tensor[0])
         ttnn.deallocate(input_tensor[1])
