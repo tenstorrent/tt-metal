@@ -8,7 +8,7 @@
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 #include "tt_metal/hw/inc/dataflow_api.h"
 #include "tt_metal/hw/inc/dataflow_api_addrgen.h"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 
