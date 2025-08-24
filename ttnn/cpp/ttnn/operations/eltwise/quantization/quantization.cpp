@@ -386,29 +386,11 @@ Tensor RequantOp::invoke(
             out_scale_is_per_channel ? "is" : "is not",
             out_zero_point_is_per_channel ? "is" : "is not");
 
-        if (in_scale_p) {
-            check_scale_tensor_args(input_tensor, in_scale_p, axis_v, rank, in_scale_is_per_channel);
-        }
-        if (in_zero_point_p) {
-            check_zero_point_tensor_args(input_tensor, in_zero_point_p, axis_v, rank, in_zero_point_is_per_channel);
-        }
-        if (out_scale_p) {
-            check_scale_tensor_args(input_tensor, out_scale_p, axis_v, rank, out_scale_is_per_channel);
-        }
-        if (out_zero_point_p) {
-            check_zero_point_tensor_args(input_tensor, out_zero_point_p, axis_v, rank, out_zero_point_is_per_channel);
-        }
-
-        if (in_scale_is_per_channel && in_zero_point_is_per_channel) {
-            TT_FATAL(
-                in_scale_p->logical_shape() == in_zero_point_p->logical_shape(),
-                "Per-channel input scale & zero-point tensors must have matching shapes");
-        }
-        if (out_scale_is_per_channel && out_zero_point_is_per_channel) {
-            TT_FATAL(
-                out_scale_p->logical_shape() == out_zero_point_p->logical_shape(),
-                "Per-channel output scale & zero-point tensors must have matching shapes");
-        }
+        // Validate tensor shapes.
+        check_scale_tensor_args(input_tensor, in_scale_p, axis_v, rank, in_scale_is_per_channel);
+        check_zero_point_tensor_args(input_tensor, in_zero_point_p, axis_v, rank, in_zero_point_is_per_channel);
+        check_scale_tensor_args(input_tensor, out_scale_p, axis_v, rank, out_scale_is_per_channel);
+        check_zero_point_tensor_args(input_tensor, out_zero_point_p, axis_v, rank, out_zero_point_is_per_channel);
 
         // Shape expansion and typecasting for the scale and zero-point tensors.
         auto expand_or_cast = [&](const Tensor& v, bool is_per_channel, DataType dt) -> Tensor {
@@ -499,7 +481,6 @@ Tensor RequantOp::invoke(
                     post_activation);
             },
             [&](const auto& in_scale, const auto& in_zero_point, const auto& out_scale, const auto& out_zero_point) {
-                // The composite op fallback, generic but uses more ops and has worse accuracy.
                 // Pass axis only to operations that have tensor parameters.
                 constexpr bool has_tensor_in_scale = std::is_same_v<std::decay_t<decltype(in_scale)>, Tensor>;
                 constexpr bool has_tensor_out_scale = std::is_same_v<std::decay_t<decltype(out_scale)>, Tensor>;
