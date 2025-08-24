@@ -24,6 +24,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -192,24 +193,25 @@ bool check_is_close(std::vector<uint32_t>& packed_golden, std::vector<uint32_t>&
     return result;
 }
 
-auto CreateDramBuffer(tt_metal::IDevice* device, tt::DataFormat dformat, uint32_t num_tiles) {
+auto CreateDramBuffer(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, tt::DataFormat dformat, uint32_t num_tiles) {
     uint32_t single_tile_size = tile_size(dformat);
     uint32_t dram_buffer_size = single_tile_size * num_tiles;
-    tt_metal::InterleavedBufferConfig dram_config{
-        .device = device,
-        .size = dram_buffer_size,
-        .page_size = dram_buffer_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dram_config{
+        .page_size = dram_buffer_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig buffer_config{.size = dram_buffer_size};
 
-    return CreateBuffer(dram_config);
+    return distributed::MeshBuffer::create(buffer_config, dram_config, mesh_device.get());
 }
 
 CBHandle CreateCircularBufferHelper(
-    Program& program, CoreCoord& core, uint32_t num_pages, tt::DataFormat dformat, uint32_t id) {
+    distributed::MeshWorkload& workload, CoreCoord& core, uint32_t num_pages, tt::DataFormat dformat, uint32_t id) {
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     uint32_t page_size = tile_size(dformat);
     tt_metal::CircularBufferConfig l1_cb_config =
         tt_metal::CircularBufferConfig(num_pages * page_size, {{id, dformat}}).set_page_size(id, page_size);
-    return tt_metal::CreateCircularBuffer(program, core, l1_cb_config);
+    return tt_metal::CreateCircularBuffer(workload.get_programs().at(device_range), core, l1_cb_config);
 }
 
 void get_packed_tilized_input_output_pair(
@@ -239,9 +241,16 @@ void get_packed_tilized_input_output_pair(
     }
 }
 
-void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroadcastConfig& test_config) {
+void run_single_core_unary_broadcast(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const UnaryBroadcastConfig& test_config) {
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = tt_metal::CreateProgram();
-
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    const auto device = mesh_device->get_devices()[0];
     CoreCoord core = {0, 0};
 
     constexpr uint32_t num_tiles = 32;
@@ -252,41 +261,41 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
     tt::DataFormat in1_t = test_config.in1_t;
     tt::DataFormat out1_t = test_config.out1_t;
 
-    auto src_dram_buffer_0 = CreateDramBuffer(device, in0_t, num_tiles);
-    auto dst_dram_buffer_0 = CreateDramBuffer(device, out0_t, num_tiles);
-    auto src_dram_buffer_1 = CreateDramBuffer(device, in1_t, num_tiles);
-    auto dst_dram_buffer_1 = CreateDramBuffer(device, out1_t, num_tiles);
-    CreateCircularBufferHelper(program, core, block_size * 2, in0_t, 0);
-    CreateCircularBufferHelper(program, core, block_size * 2, out0_t, 16);
-    CreateCircularBufferHelper(program, core, block_size * 2, in1_t, 1);
-    CreateCircularBufferHelper(program, core, block_size * 2, out1_t, 17);
+    auto src_dram_buffer_0 = CreateDramBuffer(mesh_device, in0_t, num_tiles);
+    auto dst_dram_buffer_0 = CreateDramBuffer(mesh_device, out0_t, num_tiles);
+    auto src_dram_buffer_1 = CreateDramBuffer(mesh_device, in1_t, num_tiles);
+    auto dst_dram_buffer_1 = CreateDramBuffer(mesh_device, out1_t, num_tiles);
+    CreateCircularBufferHelper(workload, core, block_size * 2, in0_t, 0);
+    CreateCircularBufferHelper(workload, core, block_size * 2, out0_t, 16);
+    CreateCircularBufferHelper(workload, core, block_size * 2, in1_t, 1);
+    CreateCircularBufferHelper(workload, core, block_size * 2, out1_t, 17);
 
     std::map<std::string, std::string> defines = {
         {"BCAST_DIM_0", broadcast_dim_to_type.at(test_config.broadcast_dim_0)},
         {"BCAST_DIM_1", broadcast_dim_to_type.at(test_config.broadcast_dim_1)}};
 
     auto reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_dual_unary.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = {num_blocks, block_size}, .defines = defines});
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         reader_kernel,
         core,
         {
@@ -298,7 +307,7 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
         });
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         writer_kernel,
         core,
         {
@@ -312,19 +321,19 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
     std::vector<uint32_t> packed_tilized_input_0, golden_packed_tilized_output_0;
     get_packed_tilized_input_output_pair(
         in0_t, out0_t, num_tiles, test_config.broadcast_dim_0, packed_tilized_input_0, golden_packed_tilized_output_0);
-    tt_metal::detail::WriteToBuffer(src_dram_buffer_0, packed_tilized_input_0);
+    distributed::WriteShard(cq, src_dram_buffer_0, packed_tilized_input_0, zero_coord);
 
     std::vector<uint32_t> packed_tilized_input_1, golden_packed_tilized_output_1;
     get_packed_tilized_input_output_pair(
         in1_t, out1_t, num_tiles, test_config.broadcast_dim_1, packed_tilized_input_1, golden_packed_tilized_output_1);
-    tt_metal::detail::WriteToBuffer(src_dram_buffer_1, packed_tilized_input_1);
+    distributed::WriteShard(cq, src_dram_buffer_1, packed_tilized_input_1, zero_coord);
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> dest_buffer_data_0;
-    tt_metal::detail::ReadFromBuffer(dst_dram_buffer_0, dest_buffer_data_0);
+    distributed::ReadShard(cq, dest_buffer_data_0, dst_dram_buffer_0, zero_coord);
     std::vector<uint32_t> dest_buffer_data_1;
-    tt_metal::detail::ReadFromBuffer(dst_dram_buffer_1, dest_buffer_data_1);
+    distributed::ReadShard(cq, dest_buffer_data_1, dst_dram_buffer_1, zero_coord);
 
     bool result = check_is_close(golden_packed_tilized_output_0, dest_buffer_data_0, out0_t);
     result &= check_is_close(golden_packed_tilized_output_1, dest_buffer_data_1, out1_t);
@@ -335,7 +344,7 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
 
 using namespace unit_tests::compute::broadcast;
 
-TEST_F(DeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
+TEST_F(MeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
     if (this->arch_ == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();
     }
