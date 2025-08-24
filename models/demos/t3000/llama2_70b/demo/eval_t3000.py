@@ -41,16 +41,12 @@ def main(args, eval_data_args):
     # Load the model and tokenizer
     model, tokenizer = generator.model, generator.tokenizer
 
-    # datasets creates a lock https://github.com/huggingface/datasets/blob/2.9.0/src/datasets/builder.py#L362
-    # and HF_HOME is read-only in CI, so explicitly specifying cache_dir
-    cache_dir = "~/.cache/huggingface/datasets" if os.getenv("CI") == "true" else None
     # Dataset preparation
     dataset = datasets.load_dataset(
         eval_data_args.dataset,
         eval_data_args.config,
         split=eval_data_args.split,
         ignore_verifications=True,
-        cache_dir=cache_dir,
     )
     text = wikitext_detokenizer("\n".join(dataset["text"]))
     encodings = tokenizer.encode(text, bos=True, eos=False)  # not prepending bos

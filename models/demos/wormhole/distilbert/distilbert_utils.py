@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import os
 from typing import Any
 
 from datasets import load_dataset
@@ -92,10 +91,7 @@ def squad_divide_chunks(dataset_question, dataset_context, dataset_reference, ba
 
 
 def squadv2_1K_samples_input(tokenizer, seq_len, attention_mask, token_type_ids, microbatch=8):
-    # datasets creates a lock https://github.com/huggingface/datasets/blob/2.9.0/src/datasets/builder.py#L362
-    # and HF_HOME is read-only in CI, so explicitly specifying cache_dir
-    cache_dir = "~/.cache/huggingface/datasets" if os.getenv("CI") == "true" else None
-    squadv2_dataset = load_dataset("squad_v2", use_auth_token=False, streaming=True, cache_dir=cache_dir)["validation"]
+    squadv2_dataset = load_dataset("squad_v2", use_auth_token=False, streaming=True)["validation"]
     dataset_iter = iter(squadv2_dataset)
     dataset_question = []
     dataset_context = []
