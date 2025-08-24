@@ -43,14 +43,6 @@ class MLP(LightweightModule):
 
         def torch_weight(name):
             # For 2-projection MLP, skip w1 (gate projection)
-            print(f"mlp_structure: {self.mlp_structure}")
-            print(f"state_dict_prefix: {state_dict_prefix}")
-            print(f"name: {name}")
-            # print(f"state_dict: {state_dict}")
-            # print(f"key: {f"{state_dict_prefix}.{name}.weight"}")
-            # print(f"key in state_dict: {f"{state_dict_prefix}.{name}.weight" in state_dict}")
-            # print(f"state_dict[key]: {state_dict[f"{state_dict_prefix}.{name}.weight"]}")
-            # print(f"state_dict[key].shape: {state_dict[f"{state_dict_prefix}.{name}.weight"].shape}")
             if name == "w1" and self.mlp_structure == "2_projection":
                 raise KeyError(f"w1 weight not available for 2-projection MLP structure")
             key = f"{state_dict_prefix}.{name}.weight"
