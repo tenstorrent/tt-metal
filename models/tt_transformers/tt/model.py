@@ -297,7 +297,9 @@ class Transformer(LightweightModule):
         Input is ttnn host tensor of logits if is_tokens=False, otherwise tokens. Output is the corresponding torch tensor.
         """
         if is_tokens:
-            return self.concat_host_output(tt_out)[0, 0, :B, 0]
+            tokens = self.concat_host_output(tt_out)[0, 0, :B, 0]
+            # Ensure token ids are within the configured vocab size to avoid tokenizer overflow
+            return torch.clamp(tokens, 0, self.vocab_size - 1)
 
         if self.args.num_devices > 1:
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()

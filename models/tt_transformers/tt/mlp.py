@@ -33,10 +33,30 @@ class MLP(LightweightModule):
         self.model_config = model_config
         self.layer_num = layer_num
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
-        torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+        # torch_weight = lambda name: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
         pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
         # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
         hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
+
+        self.mlp_structure = getattr(self.args, "mlp_structure", "3_projection")
+        # mlp_structure = getattr(args, "mlp_structure", "3_projection")
+
+        def torch_weight(name):
+            # For 2-projection MLP, skip w1 (gate projection)
+            print(f"mlp_structure: {self.mlp_structure}")
+            print(f"state_dict_prefix: {state_dict_prefix}")
+            print(f"name: {name}")
+            # print(f"state_dict: {state_dict}")
+            # print(f"key: {f"{state_dict_prefix}.{name}.weight"}")
+            # print(f"key in state_dict: {f"{state_dict_prefix}.{name}.weight" in state_dict}")
+            # print(f"state_dict[key]: {state_dict[f"{state_dict_prefix}.{name}.weight"]}")
+            # print(f"state_dict[key].shape: {state_dict[f"{state_dict_prefix}.{name}.weight"].shape}")
+            if name == "w1" and self.mlp_structure == "2_projection":
+                raise KeyError(f"w1 weight not available for 2-projection MLP structure")
+            key = f"{state_dict_prefix}.{name}.weight"
+            if key not in state_dict:
+                raise KeyError(f"Weight key '{key}' not found in state_dict")
+            return torch.transpose(state_dict[key], -2, -1)
 
         if args.dummy_weights:
             cache_name = lambda _: None
@@ -73,12 +93,19 @@ class MLP(LightweightModule):
         ff2_dtype = self.model_config["DECODERS_OPTIMIZATIONS"].get_tensor_dtype(
             decoder_id=layer_num, tensor=TensorGroup.FF2
         )
+        self.mlp_structure = getattr(self.args, "mlp_structure", "3_projection")
 
-        self.w1 = as_sharded_tensor(
-            "w1_sharded", ff1_3_dtype, dims=w1_dims
-        )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
-        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+        if self.mlp_structure == "2_projection":
+            # AFM: only up (w3) and down (w2) projections
+            self.w1 = None
+            self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
+            self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
+        else:
+            self.w1 = as_sharded_tensor(
+                "w1_sharded", ff1_3_dtype, dims=w1_dims
+            )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
+            self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
+            self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
         # Default activation is SILU
         self.activation_type = self.args.mlp_activation_type
@@ -120,15 +147,18 @@ class MLP(LightweightModule):
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
-        w1_out = ttnn.linear(
-            x,
-            self.w1,
-            dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
-            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
-            compute_kernel_config=li_ff1_3_compute_kernel_cfg,
-            program_config=pc_1,
-            memory_config=memory_config,
-        )
+        if self.mlp_structure != "2_projection":
+            w1_out = ttnn.linear(
+                x,
+                self.w1,
+                dtype=ttnn.bfloat8_b if TG else activation_dtype or ttnn.bfloat16,
+                core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
+                compute_kernel_config=li_ff1_3_compute_kernel_cfg,
+                program_config=pc_1,
+                memory_config=memory_config,
+            )
+        else:
+            w1_out = None
 
         w3_out = ttnn.linear(
             x,
@@ -141,29 +171,38 @@ class MLP(LightweightModule):
         )
         ttnn.deallocate(x)
 
+        if self.activation_type == "relu2" or str(self.activation_type).lower() == "relu2":
+            relu_out = ttnn.relu(w3_out)
+            act_out = ttnn.mul(
+                relu_out, relu_out, dtype=activation_dtype or ttnn.bfloat8_b, memory_config=w3_out.memory_config()
+            )
+        else:
+            act_out = ttnn.unary(w3_out, self.activation_type)
+
         if TG:
             # if mode == "decode" and self.dim!=8192:
             #     w1_out = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
             #     w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
             if self.dim == 8192 or mode == "prefill":
-                input_mem_cfg = w1_out.memory_config()
+                input_mem_cfg = w1_out.memory_config() if w1_out is not None else w3_out.memory_config()
 
                 cluster_axis = 1
-                w1_out = ttnn.experimental.reduce_scatter_minimal_async(
-                    w1_out,
-                    persistent_output_buffers=None,
-                    dim=3,
-                    multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
-                    barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
-                    num_links=self.args.num_reduce_scatter_links,
-                    cluster_axis=cluster_axis,
-                    memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
-                    intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    topology=ttnn.Topology.Linear,
-                    chunks_per_sync=10,
-                    num_workers_per_link=2,
-                    num_buffers_per_channel=2,
-                )
+                if w1_out is not None:
+                    w1_out = ttnn.experimental.reduce_scatter_minimal_async(
+                        w1_out,
+                        persistent_output_buffers=None,
+                        dim=3,
+                        multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis),
+                        barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                        num_links=self.args.num_reduce_scatter_links,
+                        cluster_axis=cluster_axis,
+                        memory_config=self.model_config["FF1_OUT_REDUCE_SCATTER_MEMCFG"] if mode == "decode" else None,
+                        intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        topology=ttnn.Topology.Linear,
+                        chunks_per_sync=10,
+                        num_workers_per_link=2,
+                        num_buffers_per_channel=2,
+                    )
 
                 w3_out = ttnn.experimental.reduce_scatter_minimal_async(
                     w3_out,
@@ -181,16 +220,17 @@ class MLP(LightweightModule):
                     num_buffers_per_channel=2,
                 )
             else:
-                w1_out = tt_all_reduce(
-                    w1_out,
-                    self.mesh_device,
-                    self.tt_ccl,
-                    cluster_axis=1,
-                    num_all_gather_links=2,
-                    sharded=True if mode == "decode" else False,
-                    topology=self.args.ccl_topology(),
-                    memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
-                )
+                if w1_out is not None:
+                    w1_out = tt_all_reduce(
+                        w1_out,
+                        self.mesh_device,
+                        self.tt_ccl,
+                        cluster_axis=1,
+                        num_all_gather_links=2,
+                        sharded=True if mode == "decode" else False,
+                        topology=self.args.ccl_topology(),
+                        memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
+                    )
                 w3_out = tt_all_reduce(
                     w3_out,
                     self.mesh_device,
@@ -202,20 +242,24 @@ class MLP(LightweightModule):
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
 
-        w2_in = ttnn.mul(
-            w1_out,
-            w3_out,
-            input_tensor_a_activations=[self.activation_type],
-            dtype=activation_dtype or ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
-        )
+        if self.mlp_structure == "2_projection":
+            w2_in = act_out
+        else:
+            w2_in = ttnn.mul(
+                w1_out,
+                w3_out,
+                input_tensor_a_activations=[self.activation_type],
+                dtype=activation_dtype or ttnn.bfloat8_b,
+                memory_config=w1_out.memory_config(),
+            )
 
         if mode == "decode" and not TG:
             # w2 may use a different core grid, this is a no-op if they already match
             w2_in = ttnn.to_memory_config(w2_in, self.model_config["SHARDED_MLP2_INPUT_MEMCFG"])
 
         ttnn.deallocate(w3_out)
-        ttnn.deallocate(w1_out)
+        if w1_out is not None:
+            ttnn.deallocate(w1_out)
 
         if TG and (self.dim == 8192 or mode == "prefill"):
             cluster_axis = 1
