@@ -167,7 +167,7 @@
         },
         "ScaledDotProductAttentionDecode_0": {
             "op_name": "SDPA",
-            "kernel_duration": 10201.086805555555,
+            "kernel_duration": 8974.138888888889,
             "op_to_op": 679.3686868686868,
             "first_to_last_start": 2828.5808080808083,
             "non-overlapped-dispatch-time": 9201.7,
@@ -262,8 +262,8 @@
         },
         "PlusOne_0": {
             "op_name": "PlusOne_0",
-            "kernel_duration": 981.2485795454545,
-            "op_to_op": 2001.9545454545455,
+            "kernel_duration": 497.4375,
+            "op_to_op": 713.0,
             "non-overlapped-dispatch-time": 2060.25,
             "kernel_duration_relative_margin": 0.2,
             "op_to_op_duration_relative_margin": 0.4,

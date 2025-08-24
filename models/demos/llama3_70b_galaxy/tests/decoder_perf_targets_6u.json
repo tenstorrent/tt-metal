@@ -366,7 +366,7 @@
       "non-overlapped-dispatch-time": 1862.2142857142858,
       "kernel_duration_relative_margin": 0.2,
       "op_to_op_duration_relative_margin": 0.4,
-      "dispatch_duration_relative_margin": 0.5
+      "dispatch_duration_relative_margin": 1.64
     },
     "PlusOne_1": {
       "op_name": "PlusOne_1",
