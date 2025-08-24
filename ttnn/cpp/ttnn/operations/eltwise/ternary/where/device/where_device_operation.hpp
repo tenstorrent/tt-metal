@@ -19,7 +19,8 @@ enum class WhereVariant {
 
 enum class WhereBroadcastType {
     NONE,
-    COL_BCAST,
+    OUTER_BCAST,    // bcast for outer dims -5, -4, -3, no subtile bcast.
+    COL_BCAST,      // bcast for W-dim and outer dims -5, -4, -3.
     INVALID_BCAST,  // All other unsupported bcast cases go here for now
 };
 
