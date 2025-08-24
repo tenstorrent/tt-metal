@@ -7,8 +7,8 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import skip_for_grayskull
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.utility_functions import skip_for_grayskull
 
 
 @torch.no_grad()

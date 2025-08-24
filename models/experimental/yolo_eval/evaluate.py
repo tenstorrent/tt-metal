@@ -18,7 +18,7 @@ from ultralytics import YOLO
 
 import ttnn
 from models.demos.yolov4.post_processing import gen_yolov4_boxes_confs
-from models.utility_functions import disable_persistent_kernel_cache
+from models.common.utility_functions import disable_persistent_kernel_cache
 
 from models.experimental.yolo_eval.utils import (
     LoadImages,

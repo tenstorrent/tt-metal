@@ -12,11 +12,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, load_coco_class_names
 from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE
 from models.demos.yolov4.post_processing import plot_boxes_cv2, post_processing
 from models.demos.yolov4.runner.performant_runner import YOLOv4PerformantRunner
-from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
 
 def preprocess_image(im, resolution):

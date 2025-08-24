@@ -8,7 +8,7 @@ from loguru import logger
 import ttnn
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from models.utility_functions import (
+from models.common.utility_functions import (
     tt_to_torch_tensor,
     torch_to_tt_tensor_rm,
     comp_pcc,

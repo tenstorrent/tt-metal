@@ -6,7 +6,7 @@ import ttnn
 import torch.nn as nn
 from typing import Optional
 from models.experimental.bert_tiny.bert_tiny_helper_funcs import Linear as TtLinear
-from models.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
+from models.common.utility_functions import tt_to_torch_tensor, torch_to_tt_tensor_rm
 
 
 class TtBertoutput(nn.Module):

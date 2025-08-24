@@ -9,7 +9,7 @@ import ttnn
 from models.experimental.swin_v2.demo.demo_utils import get_batch, get_data_loader
 from models.experimental.swin_v2.runner.performant_runner import SwinV2PerformantRunner
 from tqdm import tqdm
-from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
+from models.common.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 from models.experimental.swin_v2.common import SWIN_V2_L1_SMALL_SIZE
 from loguru import logger
 

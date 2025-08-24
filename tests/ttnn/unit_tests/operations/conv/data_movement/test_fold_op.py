@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     pad_and_fold_conv_activation_for_unity_stride,
     _nearest_y,
     is_wormhole_b0,

@@ -8,7 +8,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import run_for_wormhole_b0
+from models.common.utility_functions import run_for_wormhole_b0
 from models.experimental.efficientnetb0.demo.demo_utils import get_data_loader, get_batch
 from models.experimental.efficientnetb0.runner.performant_runner import EfficientNetb0PerformantRunner
 from models.experimental.efficientnetb0.common import load_torch_model, EFFICIENTNETB0_L1_SMALL_SIZE

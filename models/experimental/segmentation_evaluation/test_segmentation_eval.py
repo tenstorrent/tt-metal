@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 from skimage import io
 import cv2
 from loguru import logger
-from models.utility_functions import disable_persistent_kernel_cache
+from models.common.utility_functions import disable_persistent_kernel_cache
 import math
 
 

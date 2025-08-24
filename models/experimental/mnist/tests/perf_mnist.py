@@ -10,13 +10,13 @@ import ttnn
 import pytest
 
 from models.experimental.mnist.tt.mnist_model import mnist_model
-from models.utility_functions import (
+from models.common.utility_functions import (
     torch2tt_tensor,
     disable_persistent_kernel_cache,
     enable_persistent_kernel_cache,
 )
 
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 from models.perf.perf_utils import prep_perf_report
 
 

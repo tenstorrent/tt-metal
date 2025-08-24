@@ -9,7 +9,7 @@ from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
 )
 from loguru import logger
-from models.utility_functions import skip_for_blackhole
+from models.common.utility_functions import skip_for_blackhole
 
 
 @skip_for_blackhole("Mismatching on BH, see #12349")

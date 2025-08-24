@@ -9,7 +9,7 @@ import numpy as np
 import torch
 
 import ttnn
-from models.utility_functions import is_grayskull, comp_pcc
+from models.common.utility_functions import is_grayskull, comp_pcc
 
 
 def unpadding_test(

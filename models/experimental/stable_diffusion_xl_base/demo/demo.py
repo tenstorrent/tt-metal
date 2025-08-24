@@ -27,7 +27,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     warmup_tt_text_encoders,
 )
 import os
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 
 
 @torch.no_grad()

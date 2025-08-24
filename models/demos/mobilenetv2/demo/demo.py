@@ -8,6 +8,7 @@ from loguru import logger
 from tqdm import tqdm
 
 import ttnn
+from models.common.utility_functions import profiler, run_for_wormhole_b0
 from models.demos.mobilenetv2.common import load_torch_model
 from models.demos.mobilenetv2.demo.demo_utils import get_batch
 from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
@@ -24,7 +25,6 @@ from models.tt_cnn.tt.pipeline import (
     create_pipeline_from_config,
     get_memory_config_for_persistent_dram_tensor,
 )
-from models.utility_functions import profiler, run_for_wormhole_b0
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 

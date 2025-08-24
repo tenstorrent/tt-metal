@@ -7,14 +7,14 @@ import pytest
 import math
 from loguru import logger
 
-from models.utility_functions import (
+from models.common.utility_functions import (
     skip_for_wormhole_b0,
     comp_allclose_and_pcc,
     comp_pcc,
     comp_allclose,
 )
 
-from models.utility_functions import tt2torch_tensor, skip_for_grayskull
+from models.common.utility_functions import tt2torch_tensor, skip_for_grayskull
 
 PREFETCHER_NOC1_GRID = [
     (6, 6),

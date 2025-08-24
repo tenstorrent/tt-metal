@@ -7,7 +7,7 @@ import ttnn
 import torch
 
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
-from models.utility_functions import (
+from models.common.utility_functions import (
     skip_for_grayskull,
     skip_for_blackhole,
 )

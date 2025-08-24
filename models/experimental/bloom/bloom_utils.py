@@ -6,7 +6,7 @@ import torch
 import json
 import ttnn
 
-from models.generation_utils import get_logits_processor
+from models.common.generation_utils import get_logits_processor
 
 mem_config = ttnn.L1_MEMORY_CONFIG
 

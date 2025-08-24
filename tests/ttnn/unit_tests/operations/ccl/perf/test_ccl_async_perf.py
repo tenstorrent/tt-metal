@@ -4,7 +4,7 @@
 
 import pytest
 import ttnn
-from models.utility_functions import skip_for_grayskull
+from models.common.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_new_all_gather import (
     run_all_gather_impl,
 )
