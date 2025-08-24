@@ -217,7 +217,7 @@ struct FabricEriscDatamoverConfig {
     static constexpr uint32_t DEFAULT_NOC_VC = 2;
     static constexpr uint32_t NUM_EDM_NOC_VCS = 2;
 
-    static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 1;
+    static constexpr uint32_t DEFAULT_RECEIVER_FORWARDING_NOC = 0;
     static constexpr uint32_t DEFAULT_RECEIVER_LOCAL_WRITE_NOC = 1;
     static constexpr uint32_t DEFAULT_SENDER_ACK_NOC = 0;
 
@@ -382,6 +382,8 @@ struct FabricEriscDatamoverConfig {
     std::size_t edm_noc_vc = 0;
 
 private:
+    void initialize_noc_command_buffer_assignments(Topology topology);
+
     void configure_buffer_slots_helper(
         Topology topology,
         const FabricEriscDatamoverOptions& options,
