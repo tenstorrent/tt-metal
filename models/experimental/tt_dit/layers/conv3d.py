@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import torch
 import ttnn
 
 from typing import Tuple
@@ -93,6 +94,34 @@ def prepare_conv3d_weights(mesh_device, weight, bias, conv_config, ALIGNMENT=16)
     return tt_weight, tt_bias
 
 
+def prepare_conv3d_mask_proj(mesh_device, context_size, N, C, T, H, W):
+    num_devices = mesh_device.get_num_devices()
+    torch_mask = torch.zeros(N, context_size * num_devices, H, W, C)
+    torch_mask[:, 0:context_size, :, :, :] = 1
+    tt_mask = ttnn.from_torch(
+        torch_mask,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, 1]),
+    )
+
+    torch_proj = torch.zeros(context_size * num_devices, context_size * num_devices)
+    for i in range(1, num_devices):
+        torch_proj[context_size * i, context_size * (i - 1)] = 1
+        torch_proj[context_size * i + 1, context_size * (i - 1) + 1] = 1
+    tt_proj = ttnn.from_torch(
+        torch_proj,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=[None, 0]),
+    )
+    return tt_mask, tt_proj
+
+
 class ContextParallelConv3d:
     def __init__(
         self,
@@ -102,6 +131,7 @@ class ContextParallelConv3d:
         kernel_size: Tuple[int, int, int] = None,
         stride: Tuple[int, int, int] = (1, 1, 1),
         causal: bool = True,
+        input_shape=None,
         context_parallel: bool = True,
         groups: int = 1,
         torch_ref=None,
@@ -160,6 +190,8 @@ class ContextParallelConv3d:
         self.weight, self.bias = prepare_conv3d_weights(
             self.mesh_device, self.torch_weight, self.torch_bias, conv_config
         )
+        N, C, T, H, W = input_shape
+        self.mask, self.proj = prepare_conv3d_mask_proj(self.mesh_device, self.kernel_size[0] - 1, N, C, T, H, W)
 
     @classmethod
     def from_torch(cls, torch_ref, mesh_device):
@@ -213,37 +245,35 @@ class ContextParallelConv3d:
             """
             Disaggregate tensors. First device pre-pads. Each device needs `context_size` frames from the previous.
             """
-            device_tensors = ttnn.get_device_tensors(x_NTHWC)
             # Pad on first device
-            device_tensors[0] = self._causal_pad_input(device_tensors[0], pad_front, pad_back)
-            halo_tensors = []
-            for i in range(len(device_tensors)):
-                halo_tensors.append(device_tensors[i][:, -context_size:, :, :, :])
-            halos = ttnn.combine_device_tensors(halo_tensors)
+            front_slice = x_NTHWC[:, 0:1, :, :, :]
+            device_tensors_front_pad = ttnn.concat([front_slice] * 2, dim=1)
+            device_tensors_front_pad = ttnn.multiply(device_tensors_front_pad, self.mask)
+            halo_tensor = x_NTHWC[:, -context_size:, :, :, :]
             halos = ttnn.all_gather(  # TODO change to fabric all gather
-                halos,
+                halo_tensor,
                 dim=1,
                 topology=ttnn.Topology.Linear,
             )
-            halo_tensors = ttnn.get_device_tensors(halos)
-            ttnn.deallocate(halo_tensors[0])
+            halos_orig_shape = halos.shape
+            halos_permute = ttnn.permute(halos, (0, 2, 3, 4, 1))
+            halos_reshape = ttnn.reshape(halos_permute, (-1, halos_orig_shape[1]))
+            halos_reshape_back = ttnn.permute(halos_reshape, (1, 0))
 
-            for i in range(1, len(device_tensors)):
-                N, T, H, W, C = device_tensors[i].shape
-                halo_index = i - 1
-                local_halo = halo_tensors[i][:, halo_index * context_size : (halo_index + 1) * context_size, :, :, :]
-                ttnn.deallocate(halo_tensors[i])
-                local_padded_tensor = ttnn.concat(
-                    [
-                        local_halo,
-                        device_tensors[i],
-                    ],
-                    dim=1,
-                )
-                ttnn.deallocate(device_tensors[i])
-                device_tensors[i] = local_padded_tensor
+            intermediates_halos_reshape_back = ttnn.chunk(halos_reshape_back, halos_orig_shape[1], 1)
+            split_tiles = [
+                ttnn.to_layout(intermediate, layout=ttnn.TILE_LAYOUT)
+                for intermediate in intermediates_halos_reshape_back
+            ]
+            halos_reshape_back = ttnn.concat(split_tiles, 1)
 
-            x_pad_NTHWC = ttnn.combine_device_tensors(device_tensors)
+            shifted_halos = ttnn.matmul(self.proj, halos_reshape_back)
+            shifted_halos = ttnn.reshape(shifted_halos, device_tensors_front_pad.shape)
+            total_halos = ttnn.add(device_tensors_front_pad, shifted_halos)
+
+            total_halos = ttnn.to_layout(total_halos, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+            x_pad_NTHWC = ttnn.concat([total_halos, x_NTHWC], dim=1)
 
         out_NTHWC = ttnn.experimental.conv3d(
             input_tensor=x_pad_NTHWC,
