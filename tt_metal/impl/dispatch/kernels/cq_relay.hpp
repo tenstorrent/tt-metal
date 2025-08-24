@@ -7,7 +7,6 @@
 #include <cstdint>
 #include "dataflow_api.h"
 #include "cq_common.hpp"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
