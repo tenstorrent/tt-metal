@@ -438,6 +438,30 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             value_false_data_format);  // Using actual false tensor format
         value_false_tensor_cb = cb2;
         value_false_tensor_cb_handle = cb2_handle;
+    } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // TTT with row broadcast: use row broadcast reader with pred→CB0, true→CB1, false→CB2
+
+        // CB1 = value_true tensor
+        auto [cb1, cb1_handle] = create_cb(
+            tt::CBIndex::c_1,
+            program,
+            all_device_cores,
+            value_true_single_tile_size,
+            num_tiles_per_cb,
+            value_true_data_format);
+        value_true_tensor_cb = cb1;
+        value_true_tensor_cb_handle = cb1_handle;
+
+        // CB2 = false tensor (ROW_BCAST reader now reads all 3 tensors: predicate→CB0, true→CB1, false→CB2)
+        auto [cb2, cb2_handle] = create_cb(
+            tt::CBIndex::c_2,
+            program,
+            all_device_cores,
+            value_false_single_tile_size,
+            num_tiles_per_cb,
+            value_false_data_format);
+        value_false_tensor_cb = cb2;
+        value_false_tensor_cb_handle = cb2_handle;
     } else {
         TT_THROW("Unsupported Where variant in WhereDeviceOperation. Supported: TTS, TST, TTT");
     }
@@ -451,6 +475,34 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         output_single_tile_size,
         num_tiles_per_cb,
         output_data_format);  // output
+
+    // Create additional CBs for broadcast operations (used by compute kernel)
+    // CB4 for predicate broadcast
+    auto [pred_bcast_cb, pred_bcast_cb_handle] = create_cb(
+        tt::CBIndex::c_4,
+        program,
+        all_device_cores,
+        predicate_single_tile_size,
+        num_tiles_per_cb,
+        predicate_data_format);
+
+    // CB5 for true tensor broadcast
+    auto [true_bcast_cb, true_bcast_cb_handle] = create_cb(
+        tt::CBIndex::c_5,
+        program,
+        all_device_cores,
+        value_true_single_tile_size,
+        num_tiles_per_cb,
+        value_true_data_format);
+
+    // CB6 for false tensor broadcast
+    auto [false_bcast_cb, false_bcast_cb_handle] = create_cb(
+        tt::CBIndex::c_6,
+        program,
+        all_device_cores,
+        value_false_single_tile_size,
+        num_tiles_per_cb,
+        value_false_data_format);
 
     auto predicate_is_dram =
         static_cast<uint32_t>(predicate_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
@@ -487,6 +539,19 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         pred_is_bcast = (pred_w == 1 && (true_w > 1 || false_w > 1));
         true_is_bcast = (true_w == 1 && (pred_w > 1 || false_w > 1));
         false_is_bcast = (false_w == 1 && (pred_w > 1 || true_w > 1));
+    } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // Row broadcast detection based on height dimension (second-to-last)
+        auto pred_shape = predicate_tensor.logical_shape();
+        auto true_shape = value_true_tensor.value().logical_shape();
+        auto false_shape = value_false_tensor.value().logical_shape();
+
+        auto pred_h = pred_shape[pred_shape.rank() - 2];  // height dim
+        auto true_h = true_shape[true_shape.rank() - 2];
+        auto false_h = false_shape[false_shape.rank() - 2];
+
+        pred_is_bcast = (pred_h == 1 && (true_h > 1 || false_h > 1));
+        true_is_bcast = (true_h == 1 && (pred_h > 1 || false_h > 1));
+        false_is_bcast = (false_h == 1 && (pred_h > 1 || true_h > 1));
     }
 
     // READER KERNEL - Use kernel path from utils
@@ -513,6 +578,27 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         reader_defines["SRC_BCAST_FALSE"] = false_is_bcast ? "1" : "0";
 
         // Add BCAST_LLK define (set to 0 for now, can be optimized later)
+        reader_defines["BCAST_LLK"] = "0";
+    } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
+        // ROW_BCAST: need dataflow defines for FILL_TILE_WITH_FIRST_ROW_B etc.
+        reader_defines = make_dataflow_defines(
+            predicate_tensor.dtype(),
+            value_true_tensor.value().dtype(),
+            value_false_tensor.value().dtype());  // For predicate (a) and value_true (b)
+
+        bool predicate_sharded = predicate_tensor.memory_config().is_sharded();
+        bool value_true_sharded = value_true_tensor.value().memory_config().is_sharded();
+        bool value_false_sharded = value_false_tensor.value().memory_config().is_sharded();
+        reader_defines["SRC_SHARDED"] = predicate_sharded ? "1" : "0";      // CB0 sharding
+        reader_defines["SRC_SHARDED_B"] = value_true_sharded ? "1" : "0";   // CB1 sharding
+        reader_defines["SRC_SHARDED_C"] = value_false_sharded ? "1" : "0";  // CB2 sharding
+
+        // Set broadcast defines to match ternary reader kernel expectations
+        // CB0 = predicate, CB1 = true tensor, CB2 = false tensor
+        reader_defines["SRC_BCAST"] = pred_is_bcast ? "1" : "0";     // First tensor (CB0)
+        reader_defines["SRC_BCAST_B"] = true_is_bcast ? "1" : "0";   // Second tensor (CB1)
+        reader_defines["SRC_BCAST_C"] = false_is_bcast ? "1" : "0";  // Third tensor (CB2)
+
         reader_defines["BCAST_LLK"] = "0";
     }
     if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::OUTER_BCAST) {
