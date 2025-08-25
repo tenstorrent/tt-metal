@@ -151,26 +151,29 @@ def get_failure_signature_and_description_from_annotations(
     if job_id in github_job_id_to_annotations:
         annotation_info = github_job_id_to_annotations[job_id]
 
+        # First, look for test failures (prioritize these over infrastructure failures)
         for _annot in annotation_info:
-            if _annot["annotation_level"] == "failure":
-                # Unit test failure: a failure exists where the annotation path is not .github
-                if _annot["path"] != ".github":
-                    failure_description = _annot["path"]
-                    if ".py" in failure_description:
-                        failure_signature = str(TestErrorV1.PY_TEST_FAILURE)
-                    elif ".cpp" in failure_description:
-                        failure_signature = str(TestErrorV1.CPP_TEST_FAILURE)
-                    else:
-                        failure_signature = str(TestErrorV1.UNKNOWN_TEST_FAILURE)
-                    return failure_signature, failure_description
+            # Unit test failure: a failure exists where the annotation path is not .github
+            if _annot["annotation_level"] == "failure" and _annot["path"] != ".github":
+                failure_description = _annot["path"]
+                if ".py" in failure_description:
+                    failure_signature = str(TestErrorV1.PY_TEST_FAILURE)
+                elif ".cpp" in failure_description:
+                    failure_signature = str(TestErrorV1.CPP_TEST_FAILURE)
                 else:
-                    # Infrastructure error
-                    failure_description = _annot.get("message")
-                    if failure_description:
-                        failure_signature = get_job_failure_signature_(
-                            github_job, failure_description, workflow_outputs_dir
-                        )
-                        return failure_signature, failure_description
+                    failure_signature = str(TestErrorV1.UNKNOWN_TEST_FAILURE)
+                return failure_signature, failure_description
+
+        # If no test failures found, fall back to infrastructure failures
+        for _annot in annotation_info:
+            # Infrastructure error
+            if _annot["annotation_level"] == "failure" and _annot["path"] == ".github":
+                failure_description = _annot.get("message")
+                if failure_description:
+                    failure_signature = get_job_failure_signature_(
+                        github_job, failure_description, workflow_outputs_dir
+                    )
+                    return failure_signature, failure_description
     return failure_signature, failure_description
 
 
