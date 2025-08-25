@@ -87,7 +87,7 @@ static void get_source_info(
 
     // Construct the addr2line command. -f shows function name, -e specifies the executable.
     char command[2048];
-    snprintf(command, sizeof(command), "llvm-addr2line-17 -f -e %s %p", info.dli_fname, relative_addr);
+    snprintf(command, sizeof(command), "llvm-addr2line-17 -f -i -e %s %p", info.dli_fname, relative_addr);
 
     FILE* pipe = popen(command, "r");
     if (!pipe) {

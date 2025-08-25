@@ -104,6 +104,28 @@ list(APPEND IMPL_SRC ${GENERATED_HEADERS})
 add_library(impl OBJECT ${IMPL_SRC})
 add_library(Metalium::Metal::Impl ALIAS impl)
 
+target_compile_options(
+    impl
+    PRIVATE
+        -g
+        -fsanitize-coverage=func,trace-pc-guard
+        -fsanitize-coverage-allowlist=${PROJECT_SOURCE_DIR}/sanitizer_allowlist.txt
+        -fno-omit-frame-pointer
+        -fno-inline
+        -fno-inline-functions
+        -fno-optimize-sibling-calls
+        -fno-lto
+)
+target_link_options(impl PRIVATE -rdynamic)
+
+target_link_options(impl PRIVATE -fsanitize-coverage=func,trace-pc-guard)
+target_link_libraries(
+    impl
+    PRIVATE
+        dl
+        tt_cov_hooks
+)
+
 target_link_libraries(
     impl
     PUBLIC
