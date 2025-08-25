@@ -35,8 +35,7 @@ class FeedForward:
         self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation=activation_fn, init=init)
         self.ff2 = Linear(inner_dim, dim_out, bias=bias, mesh_device=mesh_device, init=init)
 
-    def load_state_dict(self, state_dict, transform=None):
-        assert transform is None, "Haven't figured out how to pass two transformations yet"
+    def load_state_dict(self, state_dict):
         self.ff1.load_state_dict(substate(state_dict, "ff1"))
         self.ff2.load_state_dict(substate(state_dict, "ff2"))
 
@@ -101,8 +100,7 @@ class ParallelFeedForward:
             init=init,
         )
 
-    def load_state_dict(self, state_dict, transform=None):
-        assert transform is None, "Haven't figured out how to pass two transformations yet"
+    def load_state_dict(self, state_dict):
         self.ff1.load_state_dict(substate(state_dict, "ff1"))
         self.ff2.load_state_dict(substate(state_dict, "ff2"))
 
