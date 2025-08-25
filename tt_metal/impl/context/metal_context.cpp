@@ -242,12 +242,17 @@ MetalContext& MetalContext::instance() {
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
+    std::unique_ptr<tt_ClusterDescriptor> cluster_desc;
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     }
 
+    if (rtoptions_.get_mock_enabled()) {
+        cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
+    }
+
     bool is_base_routing_fw_enabled =
-        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
+        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_, cluster_desc.get()));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
