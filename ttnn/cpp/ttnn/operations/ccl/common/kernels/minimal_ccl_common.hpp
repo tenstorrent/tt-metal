@@ -137,8 +137,8 @@ void scatter_write_for_fabric_write(
     uint32_t second_id,
     volatile PACKET_HEADER_TYPE* pkt_hdr,
     tt::tt_fabric::WorkerToFabricMuxSender<FABRIC_MUX_CHANNEL_NUM_BUFFERS>& fabric_mux_connection,
-    size_t& l1_read_addr) {
-    uint32_t page_size_bytes = tt::tt_fabric::linear::addrgen_detail::get_page_size(addrgen);
+    size_t& l1_read_addr,
+    uint32_t page_size_bytes) {
     tt::tt_fabric::linear::to_noc_unicast_scatter_write(page_size_bytes, pkt_hdr, first_id, second_id, addrgen);
     tt::tt_fabric::fabric_async_write(fabric_mux_connection, pkt_hdr, l1_read_addr, page_size_bytes * 2);
     noc_async_writes_flushed();
