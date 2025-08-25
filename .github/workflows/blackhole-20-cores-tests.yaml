@@ -22,7 +22,7 @@ on:
         description: 'Runner label'
         required: false
         type: string
-        default: "BH"
+        default: "P150b"
 
 jobs:
   blackhole-20-cores-unit-tests:
@@ -33,13 +33,9 @@ jobs:
           - name: "test_sharding_on_bh_20_cores_test1"
             cmd:  tests/ttnn/unit_tests/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
     name: ${{ matrix.test-group.name }}
-    runs-on: >-
-      ${{
-        (github.event.pull_request.head.repo.fork == true || contains('P150b', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
-      }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', inputs.runner-label) }}
     container:
-      image: ${{ inputs.docker-image }}
+      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         ARCH_NAME: ${{ matrix.test-group.arch }}
         LOGURU_LEVEL: INFO
