@@ -5,7 +5,6 @@
 #include <vector>
 #include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
 #include "intermesh_link_table_generated.h"
-#include "exit_node_connection_generated.h"
 
 namespace tt::tt_fabric {
 

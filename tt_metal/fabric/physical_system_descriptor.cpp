@@ -306,7 +306,7 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
     }
 }
 
-void PhysicalSystemDescriptor::dump_to_yaml(const std::string& path_to_yaml) {
+void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& path_to_yaml) {
     YAML::Node root;
     YAML::Node compute_nodes;
     YAML::Node local_eth_connections(YAML::NodeType::Sequence);
@@ -394,8 +394,12 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::string& path_to_yaml) {
     root["local_eth_connections"] = local_eth_connections;
     root["global_eth_connections"] = global_eth_connections;
 
-    // for (const auto& )
-    std::cout << root << std::endl;
+    if (path_to_yaml.has_value()) {
+        std::ofstream fout(path_to_yaml.value());
+        fout << root;
+    } else {
+        std::cout << root << std::endl;
+    }
 }
 
 std::vector<asic_id_t> PhysicalSystemDescriptor::get_asic_neighbors(asic_id_t asic_id) const {

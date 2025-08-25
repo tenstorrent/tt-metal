@@ -93,7 +93,7 @@ class PhysicalSystemDescriptor {
 public:
     PhysicalSystemDescriptor(bool run_discovery = true);
     void run_discovery(bool run_global_discovery = true);
-    void dump_to_yaml(const std::string& path_to_yaml);
+    void dump_to_yaml(const std::optional<std::string>& path_to_yaml = std::nullopt);
 
     // ASIC Topology Query APIs
     std::vector<asic_id_t> get_asic_neighbors(asic_id_t asic_id) const;
@@ -115,6 +115,7 @@ public:
     hall_id_t get_hall_id(const std::string& hostname);
     std::vector<std::string> get_all_hostnames() const;
     std::string my_host_name() const;
+    // uint32_t get_rank_for_hostname() const;
 
     const PhysicalConnectivityGraph& get_system_graph() const { return system_graph_; }
     const std::unordered_map<asic_id_t, ASICDescriptor>& get_asic_descriptors() const { return asic_descriptors_; }
@@ -133,9 +134,11 @@ private:
     void exchange_metadata(bool issue_gather);
     void generate_cross_host_connections();
     void remove_unresolved_nodes();
+
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<asic_id_t, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
+    std::unordered_map<std::string, uint32_t> host_to_rank_;
     ExitNodeConnectionTable exit_node_connection_table_;
 };
 

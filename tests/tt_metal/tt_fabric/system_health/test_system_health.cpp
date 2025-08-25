@@ -317,6 +317,10 @@ TEST(Cluster, TestPhysicalSystemDescriptor) {
                 std::find(my_host_neighbors.begin(), my_host_neighbors.end(), remote_host), my_host_neighbors.end());
         }
     }
+
+    if (*(distributed_context.rank()) == 0) {
+        physical_system_desc.dump_to_yaml();
+    }
 }
 
 TEST(Cluster, ReportIntermeshLinks) {
