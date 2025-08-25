@@ -6,8 +6,6 @@ import torch
 import ttnn
 
 from ..utils.tensor import bf16_tensor
-from loguru import logger
-import math
 
 
 class RMSNorm:
@@ -203,7 +201,7 @@ class GroupNorm:
         mesh_device=None,
         mesh_axis=None,
         core_grid=None,
-        num_out_blocks=None,
+        num_out_blocks=-1,
         torch_ref=None,
     ):
         self.eps = eps or torch_ref.eps
@@ -217,7 +215,6 @@ class GroupNorm:
         self.bias = None
         self.mask = None
         self.core_grid = core_grid or self.mesh_device.core_grid
-        self.num_block_devisor = 256 * 256 * (self.core_grid.x * self.core_grid.y)
 
         # Assert group norm parameters
         assert (
@@ -228,7 +225,7 @@ class GroupNorm:
             self.load_state_dict(torch_ref.state_dict())
 
     @classmethod
-    def from_torch(cls, torch_ref, num_output_blocks=None, mesh_device=None, mesh_axis=None, core_grid=None):
+    def from_torch(cls, torch_ref, num_output_blocks=-1, mesh_device=None, mesh_axis=None, core_grid=None):
         layer = cls(
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
@@ -237,20 +234,6 @@ class GroupNorm:
             torch_ref=torch_ref,
         )
         return layer
-
-    def group_norm_weight_bias_rm_sharded(self, tensor):
-        if self.num_devices > 1:
-            torch_sharded_lst = [
-                ttnn.create_group_norm_weight_bias_rm(t, self.num_channels, self.core_grid.y)
-                for t in tensor.chunk(self.num_devices)
-            ]
-            tensor_to_shard = torch.cat(torch_sharded_lst, dim=0)
-            shard_dim = 0
-        else:
-            tensor_to_shard = ttnn.create_group_norm_weight_bias_rm(tensor, self.num_channels, self.core_grid.y)
-            shard_dim = None
-
-        return tensor_to_shard, shard_dim
 
     def load_state_dict(self, state_dict):
         [self.weight, self.bias], self.mask = ttnn.group_norm_params_from_torch(
@@ -262,19 +245,7 @@ class GroupNorm:
             return_mask=True,
         )
 
-    # @classmethod
-    def get_num_out_blocks(self, x_shape):
-        logger.info(
-            f"x_shape: {x_shape}, product: {x_shape[1] * x_shape[2] * x_shape[3]}, num_block_devisor: {self.num_block_devisor}, div: {((x_shape[1] * x_shape[2] * x_shape[3]) // self.num_block_devisor)}"
-        )
-        req = ((x_shape[1] * x_shape[2] * x_shape[3]) // self.num_block_devisor) or 1
-        num_blocks = 2 ** (math.ceil(math.log2(req)))
-        return self.default_num_out_blocks.setdefault(x_shape, num_blocks)
-
     def __call__(self, x):
-        # num_out_blocks = -1 #min(256, self.num_out_blocks or self.get_num_out_blocks(tuple(x.shape)))
-        # logger.info(f"shape: {x.shape} , num_out_blocks: {num_out_blocks}")
-
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
         x = ttnn.group_norm(
@@ -286,7 +257,7 @@ class GroupNorm:
             epsilon=self.eps,
             core_grid=self.core_grid,
             inplace=False,
-            num_out_blocks=-1,
+            num_out_blocks=self.num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,
         )
         x = x.reshape([batch_size, height, width, channels])

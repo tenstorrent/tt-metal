@@ -177,13 +177,13 @@ def determine_expected_group_norm_sharded_config_and_grid_size(
     ), ttnn.CoreGrid(y=grid_size[1], x=grid_size[0])
 
 
-def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_core_x):
+def create_group_norm_weight_bias_rm(input_tensor, num_channels, num_cores_x):
     import torch
 
     def find_ceil_divisible_by_32(n):
         return ((n + 31) // 32) * 32
 
-    values_per_chunk = num_channels // num_core_x
+    values_per_chunk = num_channels // num_cores_x
     zeros_to_insert = find_ceil_divisible_by_32(values_per_chunk) - values_per_chunk
     input_tensor = input_tensor.view(-1, values_per_chunk)
     input_tensor = torch.nn.functional.pad(input_tensor, (0, zeros_to_insert))
