@@ -150,6 +150,8 @@ void kernel_main() {
 
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
+                tile_id,
+                tensor0_addrgen,
                 pkt_hdr_forward,
                 pkt_hdr_backward,
                 fabric_connection,
