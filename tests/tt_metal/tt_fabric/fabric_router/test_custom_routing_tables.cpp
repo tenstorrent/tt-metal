@@ -30,14 +30,14 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
 
 namespace tt::tt_fabric::fabric_router_tests {
 
-TEST_F(ControlPlaneFixture, TestCustomControlPlaneInit) {
+TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInit) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/custom_2x2_mesh_graph_descriptor.yaml";
     [[maybe_unused]] auto control_plane = make_control_plane(mesh_graph_desc_path);
 }
 
-TEST_F(ControlPlaneFixture, TestCustomMeshAPIs) {
+TEST_F(ControlPlaneFixture, TestCustom2x2MeshAPIs) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);
