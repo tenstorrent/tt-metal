@@ -139,6 +139,11 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
         case KernelName::ComputeRowBcastNg:
             return fmt::format(
                 compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp");
+        case KernelName::ComputeRowColBcastNg:
+            return fmt::format(
+                compute,
+                root_ng,
+                is_sfpu ? "eltwise_binary_sfpu_row_col_bcast.cpp" : "eltwise_binary_row_col_bcast.cpp");
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
