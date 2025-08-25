@@ -13,6 +13,7 @@
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <vector>
 #include <umd/device/tt_core_coordinates.h>
+#include <optional>
 
 namespace tt {
 namespace tt_metal {
@@ -50,8 +51,8 @@ size_t get_tt_fabric_max_payload_size_bytes();
 // core_type: core type which the worker will be running on
 //
 // Constraints:
-// 1. Currently the sender and reciever chip should be physically adjacent (for 1D)
-// 2. Currently the sender and reciever chip should be on the same mesh (for 1D)
+// 1. Currently the sender and receiver chip should be physically adjacent (for 1D)
+// 2. Currently the sender and receiver chip should be on the same mesh (for 1D)
 // 3. When connecting with 1D fabric routers, users are responsible for setting up the
 // connection appropriately. The API will not perform any checks to ensure that the
 // connection is indeed a 1D connection b/w all the workers.
@@ -63,6 +64,19 @@ void append_fabric_connection_rt_args(
     const CoreCoord& worker_core,
     std::vector<uint32_t>& worker_args,
     CoreType core_type = CoreType::WORKER);
+
+// Appends connection manager RT args for one or more routes.
+// next_hop_nodes: vector of next-hop nodes, one per route.
+// connection_link_indices: optional per-route link indices; if empty, a valid link is auto-selected.
+void append_routing_plane_connection_manager_rt_args(
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<FabricNodeId>& next_hop_nodes,
+    tt::tt_metal::Program& worker_program,
+    tt::tt_metal::KernelHandle& kernel_id,
+    const CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type = CoreType::WORKER,
+    const std::vector<uint32_t>& connection_link_indices = std::vector<uint32_t>{});
 
 // returns which links on a given src chip are available for forwarding the data to a dst chip
 // these link indices can then be used to establish connection with the fabric routers
@@ -96,7 +110,8 @@ tt::tt_fabric::Topology get_fabric_topology();
 void SetFabricConfig(
     FabricConfig fabric_config,
     FabricReliabilityMode reliability_mode = FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-    std::optional<uint8_t> num_routing_planes = std::nullopt);
+    std::optional<uint8_t> num_routing_planes = std::nullopt,
+    FabricTensixConfig fabric_tensix_config = FabricTensixConfig::DISABLED);
 
 FabricConfig GetFabricConfig();
 
@@ -134,6 +149,9 @@ public:
     // Returns the compile time args to be passed for the mux kernel
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const;
 
+    // Returns the base compile time args without stream IDs (for custom stream ID override)
+    std::vector<uint32_t> get_fabric_mux_compile_time_main_args() const;
+
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router
     std::vector<uint32_t> get_fabric_mux_run_time_args(
         const FabricNodeId& src_fabric_node_id,
@@ -142,6 +160,7 @@ public:
         tt::tt_metal::Program& mux_program,
         const CoreCoord& mux_logical_core) const;
 
+    uint8_t get_num_channels(FabricMuxChannelType channel_type) const;
     uint8_t get_num_buffers(FabricMuxChannelType channel_type) const;
     size_t get_buffer_size_bytes(FabricMuxChannelType channel_type) const;
     size_t get_status_address() const;
@@ -161,7 +180,6 @@ public:
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
 private:
-    uint8_t get_num_channels(FabricMuxChannelType channel_type) const;
     void validate_channel_id(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     uint8_t get_channel_global_offset(FabricMuxChannelType channel_type, uint8_t channel_id) const;
 
@@ -198,15 +216,15 @@ private:
     size_t num_iters_between_teardown_checks_ = default_num_iters_between_teardown_checks;
 
     // memory regions
-    MemoryRegion status_region_;
-    MemoryRegion local_fabric_router_status_region_;
-    MemoryRegion termination_signal_region_;
-    MemoryRegion connection_info_region_;
-    MemoryRegion connection_handshake_region_;
-    MemoryRegion flow_control_region_;
-    MemoryRegion buffer_index_region_;
-    MemoryRegion full_size_channels_region_;
-    MemoryRegion header_only_channels_region_;
+    MemoryRegion status_region_{};
+    MemoryRegion local_fabric_router_status_region_{};
+    MemoryRegion termination_signal_region_{};
+    MemoryRegion connection_info_region_{};
+    MemoryRegion connection_handshake_region_{};
+    MemoryRegion flow_control_region_{};
+    MemoryRegion buffer_index_region_{};
+    MemoryRegion full_size_channels_region_{};
+    MemoryRegion header_only_channels_region_{};
 
     size_t memory_map_end_address_;
 };
@@ -218,5 +236,7 @@ std::optional<eth_chan_directions> get_eth_forwarding_direction(
 bool is_1d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
 
 bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config);
+
+size_t get_num_available_routing_planes_in_direction(FabricNodeId fabric_node_id, RoutingDirection routing_direction);
 
 }  // namespace tt::tt_fabric

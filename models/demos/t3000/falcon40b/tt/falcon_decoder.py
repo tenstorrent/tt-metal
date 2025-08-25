@@ -17,6 +17,7 @@ class TtFalconDecoderLayer:
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         base_url,
         layer_num,
@@ -32,6 +33,7 @@ class TtFalconDecoderLayer:
         self.state_dict = state_dict
         self.base_url = base_url
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.layer_num = layer_num
         self.max_position_embeddings = max_position_embeddings
         self.model_config = model_config
@@ -42,6 +44,7 @@ class TtFalconDecoderLayer:
 
         self.self_attn = TtFalconAttention(
             mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
@@ -54,6 +57,7 @@ class TtFalconDecoderLayer:
 
         self.mlp = TtFalconMLP(
             mesh_device=mesh_device,
+            tt_ccl=tt_ccl,
             state_dict=state_dict,
             base_url=base_url,
             layer_num=layer_num,
@@ -80,6 +84,7 @@ class TtFalconDecoderLayer:
             memory_config=self.model_config["LN_MLP_WEIGHTS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=ln_mlp_weights_path,
+            enable_multihost_format=True,
             preprocess=pad_ln_params,
         )
 
@@ -93,6 +98,7 @@ class TtFalconDecoderLayer:
             memory_config=self.model_config["LN_MLP_BIAS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=ln_mlp_bias_path,
+            enable_multihost_format=True,
             preprocess=pad_ln_params,
         )
 
@@ -111,6 +117,7 @@ class TtFalconDecoderLayer:
             memory_config=self.model_config["LN_ATTN_WEIGHTS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=ln_attn_weights_path,
+            enable_multihost_format=True,
             preprocess=pad_ln_params,
         )
 
@@ -124,6 +131,7 @@ class TtFalconDecoderLayer:
             memory_config=self.model_config["LN_ATTN_BIAS_MEMCFG"],
             mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
             cache_file_name=ln_attn_bias_path,
+            enable_multihost_format=True,
             preprocess=pad_ln_params,
         )
 
@@ -207,11 +215,17 @@ class TtFalconDecoderLayer:
                 replicated_hidden_states, self.model_config["BFP8_DTYPE"], memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
 
-        replicated_hidden_states = ttnn.all_gather(
+        replicated_hidden_states = ttnn.experimental.all_gather_async(
             replicated_hidden_states,
+            persistent_output_buffer=None,
             dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
 
         if self.model_config["LN_INPUT_DTYPE"] != self.model_config["BFP8_DTYPE"]:
@@ -305,12 +319,19 @@ class TtFalconDecoderLayer:
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
 
-        replicated_hidden_states = ttnn.all_gather(
+        replicated_hidden_states = ttnn.experimental.all_gather_async(
             replicated_hidden_states,
+            persistent_output_buffer=None,
             dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
+
         replicated_hidden_states = ttnn.interleaved_to_sharded(
             replicated_hidden_states,
             self.model_config["DECODER_ALL_GATHER_OUTPUT_MEMCFG"],

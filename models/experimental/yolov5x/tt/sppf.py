@@ -39,7 +39,7 @@ class TtnnSPPF:
         y = [cv1]
 
         TILE_WIDTH = 32
-        in_c = self.parameters.cv2.conv.in_channels
+        in_c = self.parameters.cv1.conv.out_channels
         in_c_padded = in_c
         if in_c % TILE_WIDTH != 0 and in_c != 16:
             in_c_padded = in_c + (TILE_WIDTH - in_c % TILE_WIDTH)

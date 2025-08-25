@@ -350,7 +350,7 @@ def create_sharded_memory_config_(
             raise RuntimeError("Invalid sharding scheme")
 
     if tile_layout and shard_shape[0] % 32 != 0 and shard_shape[1] % 32 != 0:
-        raise RuntimeError("Incorrent tensor shape")
+        raise RuntimeError("Incorrect tensor shape")
     shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, shard_orientation)
     memory_config = MemoryConfig(tensor_memory_layout, BufferType.L1, shard_spec)
     return memory_config

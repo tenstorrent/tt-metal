@@ -13,7 +13,7 @@ std::size_t SlidingWindowConfig::get_hash() const { return std::hash<std::string
 
 std::array<uint32_t, 4> get_pair_n4_padding(
     const std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>>& padding) {
-    std::array<uint32_t, 4> ret_padding;
+    std::array<uint32_t, 4> ret_padding{};
     std::visit(
         [&](auto&& value) {
             using T = std::decay_t<decltype(value)>;
@@ -89,6 +89,13 @@ ttnn::Shape SlidingWindowConfig::get_output_shape() const {
     if (ceil_mode) {
         output_h = std::ceil(output_h_float) + 1;
         output_w = std::ceil(output_w_float) + 1;
+        // adjust the output shape if the last kernel position is in the padding region
+        if (((output_h - 1) * stride_hw.first) >= (input_hw.first + padding[0])) {
+            output_h--;
+        }
+        if (((output_w - 1) * stride_hw.second) >= (input_hw.second + padding[2])) {
+            output_w--;
+        }
     } else {
         output_h = std::floor(output_h_float) + 1;
         output_w = std::floor(output_w_float) + 1;
@@ -116,9 +123,13 @@ uint32_t SlidingWindowConfig::get_pad_w() const { return padding[2] + padding[3]
 uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
     uint32_t ceil_padding_h = 0;
     if (ceil_mode) {
-        ttnn::Shape output_shape = get_output_shape();
-        // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
-        ceil_padding_h = stride_hw.first * (output_shape[1] - 1) + window_hw.first - input_hw.first - get_pad_h();
+        // Calculate the output size using the original ceil formula (before adjustment)
+        float output_h_float =
+            (float)(input_hw.first + get_pad_h() - dilation_hw.first * (window_hw.first - 1) - 1) / stride_hw.first;
+        uint32_t output_h = std::ceil(output_h_float) + 1;
+
+        // extra_padding = ceil size - non ceil size
+        ceil_padding_h = stride_hw.first * (output_h - 1) + window_hw.first - input_hw.first - get_pad_h();
     }
 
     return ceil_padding_h;
@@ -127,9 +138,13 @@ uint32_t SlidingWindowConfig::get_ceil_pad_h() const {
 uint32_t SlidingWindowConfig::get_ceil_pad_w() const {
     uint32_t ceil_padding_w = 0;
     if (ceil_mode) {
-        ttnn::Shape output_shape = get_output_shape();
-        // extra_padding=stride×(out_size−1)+kernel_size−input_size−2×padding
-        ceil_padding_w = stride_hw.second * (output_shape[2] - 1) + window_hw.second - input_hw.second - get_pad_w();
+        // Calculate the output size using the original ceil formula (before adjustment)
+        float output_w_float =
+            (float)(input_hw.second + get_pad_w() - dilation_hw.second * (window_hw.second - 1) - 1) / stride_hw.second;
+        uint32_t output_w = std::ceil(output_w_float) + 1;
+
+        // extra_padding = ceil size - non ceil size
+        ceil_padding_w = stride_hw.second * (output_w - 1) + window_hw.second - input_hw.second - get_pad_w();
     }
 
     return ceil_padding_w;
@@ -320,7 +335,11 @@ std::vector<ShardBoundary> generate_shard_boundaries(
     }
 
     for (auto& boundary : shard_boundaries) {
-        log_debug(tt::LogOp, "shard_boundary={}", boundary);
+        log_trace(
+            tt::LogOp,
+            "shard_boundary={}, input_size = {}",
+            boundary,
+            boundary.input_range.end - boundary.input_range.start);
     };
 
     return shard_boundaries;
@@ -379,7 +398,7 @@ struct GatherTransfer {
 };
 
 struct GatherRoute {
-    GatherHeader header;
+    GatherHeader header{};
     std::vector<GatherTransfer> transfers;
 };
 
@@ -483,7 +502,7 @@ static GatherConfig reduce_flattened_transfers(const std::vector<DestinationTran
             current_route.header.noc_y = t.noc_y;
         }
 
-        GatherTransfer transfer;
+        GatherTransfer transfer{};
         transfer.src_id = t.src_id;
         transfer.dst_id = t.dst_id;
         transfer.size = t.size;
@@ -1260,15 +1279,16 @@ Tensor move_config_tensor_to_device(
 }
 
 std::string SlidingWindowConfig::to_string() const {
-    return std::to_string(batch_size) + "_" + std::to_string(std::get<0>(input_hw)) + "_" +
-           std::to_string(std::get<1>(input_hw)) + "_" + std::to_string(std::get<0>(window_hw)) + "_" +
+    return std::to_string(batch_size) + "_" + std::to_string(channels) + "_" + std::to_string(std::get<0>(input_hw)) +
+           "_" + std::to_string(std::get<1>(input_hw)) + "_" + std::to_string(std::get<0>(window_hw)) + "_" +
            std::to_string(std::get<1>(window_hw)) + "_" + std::to_string(std::get<0>(stride_hw)) + "_" +
            std::to_string(std::get<1>(stride_hw)) + "_" + std::to_string(padding[0]) + "_" +
            std::to_string(padding[1]) + "_" + std::to_string(padding[2]) + "_" + std::to_string(padding[3]) + "_" +
+           std::to_string(std::get<0>(output_pad_hw)) + "_" + std::to_string(std::get<1>(output_pad_hw)) + "_" +
            std::to_string(std::get<0>(dilation_hw)) + "_" + std::to_string(std::get<1>(dilation_hw)) + "_" +
            std::to_string(num_cores_nhw) + "_" + std::to_string(num_cores_c) + "_" + core_range_set.str() +
            (snap_to_tile ? "_snap_to_tile" : "") + (is_bilinear ? "_bilinear" : "") +
-           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "");
+           (is_transpose ? "_transpose" : "") + (ceil_mode ? "_ceil_mode" : "") + (is_avg_pool ? "_avg_pool" : "");
 }
 
 }  // namespace ttnn::operations::sliding_window

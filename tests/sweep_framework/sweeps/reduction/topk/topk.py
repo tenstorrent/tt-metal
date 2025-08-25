@@ -11,7 +11,7 @@ import ttnn
 from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_topk_simmilarity
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_topk_similarity
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
@@ -164,7 +164,7 @@ def run(
     output_values, output_indices = ttnn.to_torch(output_values), ttnn.to_torch(output_indices).to(torch.int64)
     output_gathered_values = torch.gather(torch_input_tensor_a, dim, output_indices)
 
-    passing, output_str = comp_topk_simmilarity(
+    passing, output_str = comp_topk_similarity(
         [torch_output_values, torch_output_indices], [output_values, output_gathered_values]
     )
 

@@ -58,7 +58,7 @@ public:
 
 protected:
     CoreCoord logical_core_;
-    uint32_t worker_id_;
+    uint32_t worker_id_{};
     std::string kernel_src_;
     TestDevice* test_device_ptr_;
 };
@@ -493,8 +493,8 @@ inline void TestDevice::create_sync_kernel() {
     log_info(tt::LogTest, "creating sync kernel on node: {}", fabric_node_id_);
 
     // TODO: fetch these dynamically
-    const bool is_2d_fabric = this->device_info_provider_->is_2d_fabric();
-    const bool use_dynamic_routing = this->device_info_provider_->use_dynamic_routing();
+    const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
+    const bool is_dynamic_routing_enabled = this->device_info_provider_->is_dynamic_routing_enabled();
 
     // Assuming single sync core per device for now
     TT_FATAL(
@@ -506,8 +506,8 @@ inline void TestDevice::create_sync_kernel() {
 
     // Compile-time args
     std::vector<uint32_t> ct_args = {
-        is_2d_fabric,
-        use_dynamic_routing,
+        is_2D_routing_enabled,
+        is_dynamic_routing_enabled,
         sync_sender.sync_fabric_connections_.size(),        /* num sync fabric connections */
         static_cast<uint32_t>(senders_.size() + 1),         /* num local sync cores (all senders + sync core) */
         sender_memory_map_->common.get_kernel_config_size() /* kernel config buffer size */
@@ -574,8 +574,8 @@ inline void TestDevice::create_sync_kernel() {
 
 inline void TestDevice::create_sender_kernels() {
     // TODO: fetch these dynamically
-    const bool is_2d_fabric = this->device_info_provider_->is_2d_fabric();
-    const bool use_dynamic_routing = this->device_info_provider_->use_dynamic_routing();
+    const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
+    const bool is_dynamic_routing_enabled = this->device_info_provider_->is_dynamic_routing_enabled();
 
     // all local senders + one sync core
     uint32_t num_local_sync_cores = static_cast<uint32_t>(this->senders_.size()) + 1;
@@ -587,8 +587,8 @@ inline void TestDevice::create_sender_kernels() {
 
         // Compile-time args
         std::vector<uint32_t> ct_args = {
-            is_2d_fabric,
-            use_dynamic_routing,
+            is_2D_routing_enabled,
+            is_dynamic_routing_enabled,
             sender.fabric_connections_.size(),                  /* num fabric connections */
             sender.configs_.size(),                             /* num traffic configs */
             (uint32_t)benchmark_mode_,                          /* benchmark mode */

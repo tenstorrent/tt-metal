@@ -99,10 +99,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-
     bool output_sharded = is_sharded(output.buffer()->buffer_layout());
 
     uint32_t input_element_size_bytes = a.element_size();
@@ -223,13 +219,13 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_fused(
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)in0_is_dram,
         (std::uint32_t)input_page_size,
-        (std::uint32_t)weights_is_dram,
         (std::uint32_t)weight_page_size,
         (std::uint32_t)weight_block_size,
         (std::uint32_t)num_tiles_per_block,
         (std::uint32_t)input_block_size_bytes};
+    TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
+    TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
     std::map<std::string, std::string> embedding_defines = {
         {enchantum::to_string(embeddings_type).data(), "1"},
@@ -391,10 +387,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-
     bool output_sharded = is_sharded(output.buffer()->buffer_layout());
 
     uint32_t input_element_size_bytes = a.element_size();
@@ -495,12 +487,12 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         (std::uint32_t)out_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)in0_is_dram,
         (std::uint32_t)input_page_size,
-        (std::uint32_t)weights_is_dram,
         (std::uint32_t)weight_page_size,
         (std::uint32_t)block_height,
         (std::uint32_t)block_height * input_element_size_bytes};
+    TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
+    TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -518,10 +510,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_rm(
         "ttnn/cpp/ttnn/operations/embedding/device/kernels/dataflow/embeddings.cpp",
         all_cores,
         tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
-
-    bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
-    uint32_t output_log2_stick_size =
-        output_stick_size_is_power_of_two ? (std::uint32_t)std::log2(output_page_size) : 0;
 
     // Tilized writer
     KernelHandle writer_kernel_id = 0;
@@ -635,10 +623,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = output.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-
     uint32_t input_element_size_bytes = a.element_size();
     uint32_t weights_element_size_bytes = weights.element_size();
     uint32_t output_element_size_bytes = output.element_size();
@@ -715,12 +699,12 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)in0_is_dram,
         (std::uint32_t)input_page_size,
-        (std::uint32_t)weights_is_dram,
         (std::uint32_t)weight_page_size,
         (std::uint32_t)a.logical_shape()[-1],  // width/length of a row
         (std::uint32_t)FACE_HEIGHT};
+    TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
+    TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
     EmbeddingsIndexType embeddings_index_type;
     if (a.dtype() == DataType::BFLOAT16) {
@@ -739,9 +723,6 @@ tt::tt_metal::operation::ProgramWithCallbacks embeddings_tilized_indices(
         all_cores,
         tt_metal::ReaderDataMovementConfig(embedding_compile_time_args, embedding_defines));
 
-    bool output_stick_size_is_power_of_two = is_power_of_two_at_least_32(output_page_size);
-    uint32_t output_log2_stick_size =
-        output_stick_size_is_power_of_two ? (std::uint32_t)std::log2(output_page_size) : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index, (std::uint32_t)output_page_size};
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 

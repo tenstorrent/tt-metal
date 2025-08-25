@@ -13,7 +13,6 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric_edm_types.hpp>
 
@@ -25,14 +24,13 @@ struct AllToAllCombineDeviceOperation {
         const std::optional<uint32_t> axis;
         const uint32_t num_links;
         const tt::tt_fabric::Topology topology;
-        const tt::tt_metal::GlobalSemaphore cross_device_semaphore;
         const bool locally_reduced;
         const std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
-        static constexpr auto attribute_names = std::forward_as_tuple(
-            "output_mem_config", "axis", "num_links", "topology", "cross_device_semaphore", "subdevice_id");
+        const CoreRangeSet worker_core_range_set;
+        static constexpr auto attribute_names =
+            std::forward_as_tuple("output_mem_config", "axis", "num_links", "topology", "subdevice_id");
         auto attribute_values() const {
-            return std::forward_as_tuple(
-                output_mem_config, axis, num_links, topology, cross_device_semaphore, subdevice_id);
+            return std::forward_as_tuple(output_mem_config, axis, num_links, topology, subdevice_id);
         };
     };
     struct tensor_args_t {
@@ -51,7 +49,9 @@ struct AllToAllCombineDeviceOperation {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle ternary_reader_kernel_id;
             tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            CoreCoord core;
+            std::vector<CoreCoord> cores;
+            const GlobalSemaphore init_semaphore;
+            const GlobalSemaphore cross_device_semaphore;
         };
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
@@ -66,7 +66,9 @@ struct AllToAllCombineDeviceOperation {
             const ttnn::MeshCoordinate& mesh_coordinate,
             const std::vector<ttnn::MeshCoordinate>& all_mesh_coordinates,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            tensor_return_value_t& tensor_return_value,
+            const GlobalSemaphore& init_semaphore,
+            const GlobalSemaphore& cross_device_semaphore);
 
         static void override_runtime_arguments(
             cached_mesh_workload_t& cached_program,
@@ -101,11 +103,10 @@ struct AllToAllCombineDeviceOperation {
         uint32_t num_links,
         tt::tt_fabric::Topology topology,
         const ttnn::MemoryConfig& memory_config,
-        const GlobalSemaphore& global_semaphore,
         const std::optional<uint32_t>& axis,
-        const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
         const std::optional<ttnn::Tensor>& optional_output_tensor,
-        bool locally_reduced=false);
+        bool locally_reduced,
+        const CoreRangeSet& worker_core_range_set);
 };
 }  // namespace ttnn::operations::ccl
 

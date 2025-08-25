@@ -88,7 +88,7 @@ std::vector<T> get_broadcasted_vec(std::vector<T>& src, const std::vector<uint32
             int tile_offset = tile_elem_count * t;
             for (int i = 0; i < num_rows; i++) {
                 for (int j = 0; j < num_cols; j++) {
-                    T broadcast_value;
+                    T broadcast_value{};
                     switch (dim) {
                         case BroadcastDim::ROW: {
                             broadcast_value = src[tile_offset + j];
@@ -256,10 +256,10 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
     auto dst_dram_buffer_0 = CreateDramBuffer(device, out0_t, num_tiles);
     auto src_dram_buffer_1 = CreateDramBuffer(device, in1_t, num_tiles);
     auto dst_dram_buffer_1 = CreateDramBuffer(device, out1_t, num_tiles);
-    auto l1_src_cb_0 = CreateCircularBufferHelper(program, core, block_size * 2, in0_t, 0);
-    auto l1_dst_cb_0 = CreateCircularBufferHelper(program, core, block_size * 2, out0_t, 16);
-    auto l1_src_cb_1 = CreateCircularBufferHelper(program, core, block_size * 2, in1_t, 1);
-    auto l1_dst_cb_1 = CreateCircularBufferHelper(program, core, block_size * 2, out1_t, 17);
+    CreateCircularBufferHelper(program, core, block_size * 2, in0_t, 0);
+    CreateCircularBufferHelper(program, core, block_size * 2, out0_t, 16);
+    CreateCircularBufferHelper(program, core, block_size * 2, in1_t, 1);
+    CreateCircularBufferHelper(program, core, block_size * 2, out1_t, 17);
 
     std::map<std::string, std::string> defines = {
         {"BCAST_DIM_0", broadcast_dim_to_type.at(test_config.broadcast_dim_0)},
@@ -279,7 +279,7 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
-    auto binary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/unary_bcast.cpp",
         core,

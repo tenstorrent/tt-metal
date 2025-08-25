@@ -68,7 +68,6 @@ public:
         const BankMapping& l1_bank_remap,
         size_t worker_l1_size,
         bool minimal = false);
-    void reinitialize();
     void teardown();
 
     // Control plane accessors
@@ -82,11 +81,17 @@ public:
         tt_fabric::FabricConfig fabric_config,
         tt_fabric::FabricReliabilityMode reliability_mode =
             tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
-        std::optional<uint8_t> num_routing_planes = std::nullopt);
+        std::optional<uint8_t> num_routing_planes = std::nullopt,
+        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED);
     void initialize_fabric_config();
+    void initialize_fabric_tensix_datamover_config();
     tt_fabric::FabricConfig get_fabric_config() const;
 
-    distributed::multihost::DistributedContext& get_distributed_context();
+    distributed::multihost::DistributedContext& global_distributed_context();
+
+    // Fabric tensix configuration
+    void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
+    tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
@@ -146,6 +151,7 @@ private:
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
     tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
+    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
 
     // Strict system health mode requires (expects) all links/devices to be live. When enabled, it

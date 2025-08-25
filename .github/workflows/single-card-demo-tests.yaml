@@ -2,7 +2,15 @@ name: "(Single-card) Demo tests"
 
 on:
   workflow_dispatch:
-  workflow_call:
+    inputs:
+      requested-models:
+        description: "List of requested models as JSON array, for example: [\"resnet\", \"sdxl\"]. Default is 'all'"
+        default: "all"
+        type: string
+      run-perf-tests:
+        description: "Run perf variants"
+        type: boolean
+        default: true
   schedule:
     - cron: "0 */6 * * 1,2,3,4,5"
     - cron: "0 */4 * * 0,6"
@@ -25,3 +33,8 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       arch: wormhole_b0
+      requested-models: ${{ inputs.requested-models || 'all' }}
+      # Using || true after is dangerous since that will always be passed in if first value is falsy
+      # which it can be if inputs.run-perf-tests isn't clicked. So, scope the default true to only
+      # when we're not using workflow_dispatch and can't possibly have an input anyway
+      run-perf-tests: ${{ inputs.run-perf-tests || (github.event_name != 'workflow_dispatch' && true) }}

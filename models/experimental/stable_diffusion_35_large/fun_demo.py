@@ -62,7 +62,11 @@ def test_sd3(
     no_prompt,
     model_location_generator,
     traced,
+    galaxy_type,
 ) -> None:
+    if galaxy_type == "4U":
+        pytest.skip("4U is not supported for this test")
+
     cfg_factor, cfg_axis = cfg
     sp_factor, sp_axis = sp
     tp_factor, tp_axis = tp

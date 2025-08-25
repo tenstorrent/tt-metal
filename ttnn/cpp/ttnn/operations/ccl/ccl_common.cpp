@@ -80,11 +80,11 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
     return workload_with_callbacks;
 }
 
-SenderRecieverConfig get_device_sender_receiver_config(
+SenderReceiverConfig get_device_sender_receiver_config(
     const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology) {
     uint32_t num_devices = devices.size();
     bool is_linear = topology == ttnn::ccl::Topology::Linear;
-    SenderRecieverConfig config;
+    SenderReceiverConfig config;
     for (uint32_t i = 0; i < num_devices; ++i) {
         if (devices.at(i) == target_device) {
             config.device_index = i;
@@ -105,12 +105,12 @@ SenderRecieverConfig get_device_sender_receiver_config(
     return config;
 }
 
-SenderRecieverConfig get_device_sender_receiver_config_in_ring(
+SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord,
     const distributed::MeshDevice* mesh_device,
     uint32_t cluster_axis,
     int ring_size) {
-    SenderRecieverConfig config;
+    SenderReceiverConfig config;
     const auto& mesh_view = mesh_device->get_view();
     TT_FATAL(
         mesh_view.is_mesh_2d(),
@@ -351,11 +351,10 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     }
 }
 
-template <typename EDMBuilder>
-tt::tt_metal::KernelHandle generate_edm_kernel_impl(
+static tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     Program& program,
     const IDevice* device,
-    const EDMBuilder& edm_builder,
+    const ccl::EriscDatamoverBuilder& edm_builder,
     const std::string& kernel_path,
     const CoreCoord& eth_core,
     tt::tt_metal::DataMovementProcessor risc_id,
@@ -368,7 +367,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     const std::vector<uint32_t> eth_sender_ct_args = edm_builder.get_compile_time_args((uint32_t)risc_id);
     log_trace(tt::LogOp, "EDM core (x={},y={}):", eth_core.x, eth_core.y);
     log_trace(tt::LogOp, "CT ARGS:");
-    for (auto const& s : eth_sender_ct_args) {
+    for ([[maybe_unused]] const auto& s : eth_sender_ct_args) {
         log_trace(tt::LogOp, "\t{}", s);
     }
 
@@ -393,24 +392,6 @@ tt::tt_metal::KernelHandle generate_edm_kernel_impl(
     log_trace(tt::LogOp, "{}", ss.str());
 
     return eth_sender_kernel;
-}
-
-tt::tt_metal::KernelHandle generate_edm_kernel(
-    Program& program,
-    const IDevice* device,
-    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
-    const CoreCoord& eth_core,
-    const tt::tt_metal::DataMovementProcessor risc_id,
-    tt::tt_metal::NOC noc_id) {
-    return generate_edm_kernel_impl(
-        program,
-        device,
-        edm_builder,
-        "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
-        eth_core,
-        risc_id,
-        noc_id,
-        tt::tt_metal::KernelBuildOptLevel::O3);
 }
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
@@ -1552,7 +1533,6 @@ std::tuple<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_forward_backwar
     auto fabric_config = tt::tt_fabric::GetFabricConfig();
     if (fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC) {
         TT_FATAL(topology != Topology::Ring, "Fabric 2D dynamic is not supported for ring topology");
-        auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(src_device->id());
         if (forward_device) {
             auto forward_device_fabric_node_id =
                 tt::tt_fabric::get_fabric_node_id_from_physical_chip_id((*forward_device)->id());

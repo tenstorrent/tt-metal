@@ -7,6 +7,7 @@
 #include "index_fill_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/tensor/types.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -101,12 +102,14 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
     // Create Kernels
     // reader
     std::vector<uint32_t> reader_compile_time_args = {
-        (std::uint32_t)in_is_dram,
-        (std::uint32_t)index_is_dram,
         (std::uint32_t)src_cb_index,
         (std::uint32_t)index_cb_index,
         (std::uint32_t)(dim == n - 1),
-        (std::uint32_t)index.physical_volume()};
+        (std::uint32_t)index.physical_volume(),
+        (std::uint32_t)rounded_input_unit_size,
+        (std::uint32_t)rounded_index_unit_size};
+    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(index.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernel_id = CreateKernel(
         program,
@@ -114,7 +117,8 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
         all_cores,
         ReaderDataMovementConfig(reader_compile_time_args));
 
-    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)rounded_output_unit_size};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_kernel_id = CreateKernel(
         program,
@@ -142,17 +146,11 @@ IndexFillOperation::MultiCore::cached_program_t IndexFillOperation::MultiCore::c
             {input.buffer()->address(),
              index.buffer()->address(),
              u_fill_value.u32,
-             input_unit_size,
-             index_unit_size,
              unit_offset,
              num_rows_per_core,
              num_rows_to_fill_per_index,
              input_shape[dim]});
-        SetRuntimeArgs(
-            program,
-            writer_kernel_id,
-            core,
-            {output.buffer()->address(), num_rows_per_core, unit_offset, output_unit_size});
+        SetRuntimeArgs(program, writer_kernel_id, core, {output.buffer()->address(), num_rows_per_core, unit_offset});
 
         unit_offset += num_rows_per_core;
     }

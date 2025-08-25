@@ -64,15 +64,15 @@ void assemble_device_commands(
 using kernel_id_array_t = std::array<std::optional<KernelHandle>, DISPATCH_CLASS_MAX>;
 
 struct KernelGroup {
-    uint32_t programmable_core_type_index;
+    uint32_t programmable_core_type_index{};
     CoreRangeSet core_ranges;
     kernel_id_array_t kernel_ids;
-    uint32_t rta_sizes[DISPATCH_CLASS_MAX];
-    uint32_t total_rta_size;
-    uint32_t kernel_text_offsets[NUM_PROCESSORS_PER_CORE_TYPE];
-    uint32_t kernel_bin_sizes[NUM_PROCESSORS_PER_CORE_TYPE];
-    launch_msg_t launch_msg;
-    go_msg_t go_msg;
+    uint32_t rta_sizes[DISPATCH_CLASS_MAX]{};
+    uint32_t total_rta_size{};
+    uint32_t kernel_text_offsets[NUM_PROCESSORS_PER_CORE_TYPE]{};
+    uint32_t kernel_bin_sizes[NUM_PROCESSORS_PER_CORE_TYPE]{};
+    launch_msg_t launch_msg{};
+    go_msg_t go_msg{};
 
     KernelGroup();
     KernelGroup(
@@ -114,8 +114,8 @@ struct ProgramOffsetsState {
     // Unique RTA offset.
     uint32_t rta_offset = 0;
     // Common RTA offsets and sizes.
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets;
-    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes;
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_offsets{};
+    std::array<uint32_t, DISPATCH_CLASS_MAX> crta_sizes{};
     // Semaphore offsets and sizes.
     uint32_t sem_offset = 0;
     uint32_t sem_size = 0;

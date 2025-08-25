@@ -18,7 +18,7 @@ namespace fabric_router_tests {
 
 class ControlPlaneFixture : public ::testing::Test {
    protected:
-       tt::ARCH arch_;
+       tt::ARCH arch_{tt::ARCH::Invalid};
        void SetUp() override {
            auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
            if (not slow_dispatch) {
@@ -57,7 +57,9 @@ public:
     }
 
     static void DoSetUpTestSuite(
-        tt_fabric::FabricConfig fabric_config, std::optional<uint8_t> num_routing_planes = std::nullopt) {
+        tt_fabric::FabricConfig fabric_config,
+        std::optional<uint8_t> num_routing_planes = std::nullopt,
+        tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED) {
         slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch_) {
             log_info(tt::LogTest, "Running fabric api tests with slow dispatch");
@@ -73,7 +75,10 @@ public:
             ids.push_back(id);
         }
         tt::tt_fabric::SetFabricConfig(
-            fabric_config, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE, num_routing_planes);
+            fabric_config,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE,
+            num_routing_planes,
+            fabric_tensix_config);
         devices_map_ = tt::tt_metal::detail::CreateDevices(ids);
         for (auto& [id, device] : devices_map_) {
             devices_.push_back(device);
@@ -111,6 +116,40 @@ public:
 };
 
 class Fabric1DFixture : public BaseFabricFixture {
+protected:
+    static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D); }
+    static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
+};
+
+class Fabric1DTensixFixture : public BaseFabricFixture {
+private:
+    inline static bool should_skip_ = false;
+
+protected:
+    static void SetUpTestSuite() {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
+                tt::tt_metal::ClusterType::GALAXY ||
+            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::TG) {
+            should_skip_ = true;
+            return;
+        }
+        BaseFabricFixture::DoSetUpTestSuite(
+            tt::tt_fabric::FabricConfig::FABRIC_1D, std::nullopt, tt::tt_fabric::FabricTensixConfig::MUX);
+    }
+    static void TearDownTestSuite() {
+        if (!should_skip_) {
+            BaseFabricFixture::DoTearDownTestSuite();
+        }
+    }
+    void SetUp() override {
+        if (should_skip_) {
+            GTEST_SKIP() << "Fabric1DTensixFixture tests are not supported on Galaxy systems";
+        }
+        BaseFabricFixture::SetUp();
+    }
+};
+
+class NightlyFabric1DFixture : public BaseFabricFixture {
 protected:
     static void SetUpTestSuite() { BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D); }
     static void TearDownTestSuite() { BaseFabricFixture::DoTearDownTestSuite(); }
@@ -196,11 +235,7 @@ void RunTestMCastConnAPI(
     uint32_t bwd_hops = 1);
 
 void RunTest2DMCastConnAPI(
-    BaseFabricFixture* fixture,
-    RoutingDirection trunk_dir,
-    uint32_t trunk_hops,
-    uint32_t branch_east_hops,
-    uint32_t branch_west_hops);
+    BaseFabricFixture* fixture, uint32_t north_hops, uint32_t south_hops, uint32_t east_hops, uint32_t west_hops);
 
 void RunTestChipMCast1D(
     BaseFabricFixture* fixture,
@@ -210,6 +245,41 @@ void RunTestChipMCast1D(
     bool enable_fabric_tracing = false);
 
 void RunTestLineMcast(BaseFabricFixture* fixture, const std::vector<McastRoutingInfo>& mcast_routing_info);
+
+enum NocSendType : uint8_t {
+    NOC_UNICAST_WRITE = 0,
+    NOC_UNICAST_INLINE_WRITE = 1,
+    NOC_UNICAST_ATOMIC_INC = 2,
+    NOC_FUSED_UNICAST_ATOMIC_INC = 3,
+    NOC_UNICAST_SCATTER_WRITE = 4,
+    NOC_MULTICAST_WRITE = 5,       // mcast has bug
+    NOC_MULTICAST_ATOMIC_INC = 6,  // mcast has bug
+    NOC_SEND_TYPE_LAST = NOC_UNICAST_SCATTER_WRITE
+};
+
+void FabricUnicastCommon(
+    BaseFabricFixture* fixture,
+    NocSendType noc_send_type,
+    const std::vector<std::tuple<RoutingDirection, uint32_t /*num_hops*/>>& dir_configs,
+    bool with_state = false);
+
+void FabricMulticastCommon(
+    BaseFabricFixture* fixture,
+    NocSendType noc_send_type,
+    const std::vector<std::tuple<RoutingDirection, uint32_t /*start_distance*/, uint32_t /*range*/>>& dir_configs,
+    bool with_state = false);
+
+void RunEDMConnectionStressTest(
+    BaseFabricFixture* fixture,
+    const std::vector<size_t>& stall_durations_cycles,
+    const std::vector<size_t>& message_counts,
+    const std::vector<size_t>& packet_sizes,
+    size_t num_iterations,
+    size_t num_times_to_connect,
+    const std::vector<size_t>& workers_count,
+    const std::vector<size_t>& test_rows);
+
+void RunTestUnicastSmoke(BaseFabricFixture* fixture);
 
 }  // namespace fabric_router_tests
 }  // namespace tt::tt_fabric

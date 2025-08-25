@@ -32,30 +32,26 @@ void kernel_main() {
     constexpr auto cb_id_src = tt::CBIndex::c_0;
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;
 
+    constexpr auto src_args = TensorAccessorArgs<0>();
+    constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+
 #if SRC_SHARDED
     cb_reserve_back(cb_id_src, src_num_tiles);
     cb_push_back(cb_id_src, src_num_tiles);
 #else
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const DataFormat src_data_format = get_dataformat(cb_id_src);
-    const InterleavedAddrGenFast<src_is_dram> src = {
-        .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
+    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 #endif
 #if SRC_SHARDED_B
     cb_reserve_back(cb_id_src_b, src_num_tiles_b);
     cb_push_back(cb_id_src_b, src_num_tiles_b);
 #else
-    constexpr bool src_is_dram_b = get_compile_time_arg_val(2) == 1;
     const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
-    const DataFormat src_data_format_b = get_dataformat(cb_id_src_b);
-
-    const InterleavedAddrGenFast<src_is_dram_b> src_b = {
-        .bank_base_address = src_addr_b, .page_size = src_tile_bytes_b, .data_format = src_data_format_b};
+    const auto src_b = TensorAccessor(src_b_args, src_addr_b, src_tile_bytes_b);
 #endif
 #if !SRC_SHARDED || !SRC_SHARDED_B
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = get_compile_time_arg_val(1) == 1;
+    constexpr bool has_sharding = get_compile_time_arg_val(src_b_args.next_compile_time_args_offset()) == 1;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

@@ -13,15 +13,27 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without
 from models.utility_functions import is_grayskull, is_blackhole, torch_random, skip_for_grayskull
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
+def random_torch_tensor(dtype, shape):
+    if dtype == ttnn.uint16:
+        return torch.randint(0, 100, shape).to(torch.int16)
+    if dtype == ttnn.int32:
+        return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
+    if dtype == ttnn.uint32:
+        return torch.randint(0, 2**31, shape, dtype=torch.int32)
+    return torch.rand(shape).bfloat16().float()
+
+
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("use_pack_untilize", [False, True])
 @pytest.mark.parametrize("H", [32, 512])
 @pytest.mark.parametrize("W", [1024, 256])
 def test_untilize_2D(device, in_dtype, use_multicore, use_pack_untilize, H, W):
+    if in_dtype in [ttnn.uint32, ttnn.int32] and not use_pack_untilize:
+        pytest.skip(f"Skipping: dtype {in_dtype} with use_pack_untilize=False is unsupported")
     torch_input_shape = [H, W]
 
-    torch_input = torch.randn(torch_input_shape, dtype=torch.bfloat16).bfloat16()
+    torch_input = random_torch_tensor(in_dtype, torch_input_shape)
 
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.TILE_LAYOUT)
 
@@ -33,14 +45,14 @@ def test_untilize_2D(device, in_dtype, use_multicore, use_pack_untilize, H, W):
     assert passing
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("H", [128, 2048])
 @pytest.mark.parametrize("W", [32, 1056])
 def test_tilize_2D(device, in_dtype, use_multicore, H, W):
     torch_input_shape = [H, W]
 
-    torch_input = torch.randn(torch_input_shape, dtype=torch.bfloat16).bfloat16()
+    torch_input = random_torch_tensor(in_dtype, torch_input_shape)
 
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
 
@@ -52,15 +64,18 @@ def test_tilize_2D(device, in_dtype, use_multicore, H, W):
     assert passing
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
 @pytest.mark.parametrize("use_multicore", [False, True])
+# Fails on int32 if use_pack_untilize is False AND dtype is uint32/int32
 @pytest.mark.parametrize("use_pack_untilize", [False, True])
 @pytest.mark.parametrize("H", [32, 43])
 @pytest.mark.parametrize("W", [64, 76])
 def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, use_pack_untilize, H, W):
+    if in_dtype in [ttnn.uint32, ttnn.int32] and not use_pack_untilize:
+        pytest.skip(f"Skipping: dtype {in_dtype} with use_pack_untilize=False is unsupported")
     torch_input_shape = [H, W]
 
-    torch_input = torch.randn(torch_input_shape, dtype=torch.bfloat16).bfloat16()
+    torch_input = random_torch_tensor(in_dtype, torch_input_shape)
 
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.TILE_LAYOUT)
 
@@ -74,7 +89,7 @@ def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, use_pack_un
     assert passing
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("pad_value", [2, 1.3])
 @pytest.mark.parametrize("H", [32, 43])
@@ -82,7 +97,7 @@ def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, use_pack_un
 def test_tilize_with_val_padding_2D(device, in_dtype, use_multicore, H, W, pad_value):
     torch_input_shape = [H, W]
 
-    torch_input = torch.randn(torch_input_shape, dtype=torch.bfloat16).bfloat16()
+    torch_input = random_torch_tensor(in_dtype, torch_input_shape)
 
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
 
@@ -94,14 +109,14 @@ def test_tilize_with_val_padding_2D(device, in_dtype, use_multicore, H, W, pad_v
     assert passing
 
 
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("H", [128, 98])
 @pytest.mark.parametrize("W", [78, 1024])
 def test_tilize_with_zero_padding_2D(device, in_dtype, use_multicore, H, W):
     torch_input_shape = [H, W]
 
-    torch_input = torch.randn(torch_input_shape, dtype=torch.bfloat16).bfloat16()
+    torch_input = random_torch_tensor(in_dtype, torch_input_shape)
 
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
 

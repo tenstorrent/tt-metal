@@ -6,7 +6,7 @@ import torch
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
-from models.demos.yolov4.common import get_mesh_mappers
+from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov4.reference import yolov4
 from models.demos.yolov4.reference.resblock import ResBlock
 

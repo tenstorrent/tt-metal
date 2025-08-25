@@ -88,7 +88,7 @@ FORCE_INLINE void print_pkt_header(volatile tt::tt_fabric::LowLatencyPacketHeade
 }
 
 FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
-    if constexpr (enable_ring_support) {
+    if constexpr (enable_deadlock_avoidance) {
         auto start_trid = RX_CH_TRID_STARTS[rx_channel_id];
         auto end_trid = start_trid + NUM_TRANSACTION_IDS;
         for (int i = start_trid; i < end_trid; i++) {
@@ -166,7 +166,7 @@ FORCE_INLINE
         case tt::tt_fabric::NocSendType::NOC_UNICAST_INLINE_WRITE: {
             const auto dest_address = header.command_fields.unicast_inline_write.noc_address;
             const auto value = header.command_fields.unicast_inline_write.value;
-            noc_inline_dw_write<false, true>(
+            noc_inline_dw_write<InlineWriteDst::DEFAULT, true>(
                 dest_address,
                 value,
                 0xF,
@@ -285,16 +285,17 @@ FORCE_INLINE void update_packet_header_for_next_hop(
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
 // This function does a write, so needs to be volatile to avoid compiler optimizations
-template <bool enable_ring_support, bool stateful_api, bool increment_pointers = true, uint8_t NUM_SENDER_BUFFERS>
+template <bool enable_deadlock_avoidance, bool stateful_api, bool increment_pointers = true, uint8_t NUM_SENDER_BUFFERS>
 #ifndef FABRIC_2D
 FORCE_INLINE
 #endif
-void forward_payload_to_downstream_edm(
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
-    uint16_t payload_size_bytes,
-    ROUTING_FIELDS_TYPE cached_routing_fields,
-    tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
-    uint8_t transaction_id) {
+    void
+    forward_payload_to_downstream_edm(
+        volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header,
+        uint16_t payload_size_bytes,
+        ROUTING_FIELDS_TYPE cached_routing_fields,
+        tt::tt_fabric::EdmToEdmSender<NUM_SENDER_BUFFERS>& downstream_edm_interface,
+        uint8_t transaction_id) {
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
     ASSERT(downstream_edm_interface.edm_has_space_for_packet());  // best effort check
 
@@ -304,7 +305,7 @@ void forward_payload_to_downstream_edm(
         update_packet_header_for_next_hop(packet_header, cached_routing_fields);
     }
     downstream_edm_interface.template send_payload_non_blocking_from_address_with_trid<
-        enable_ring_support,
+        enable_deadlock_avoidance,
         tt::tt_fabric::edm_to_downstream_noc,
         stateful_api,
         increment_pointers>(

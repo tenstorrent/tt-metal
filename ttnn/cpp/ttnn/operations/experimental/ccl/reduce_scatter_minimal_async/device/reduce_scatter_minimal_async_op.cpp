@@ -22,6 +22,8 @@ void ReduceScatterMinimalAsync::validate_with_output_tensors(
         page_size % input_tensors[0].buffer()->alignment() == 0,
         "reduce_scatter_minimal_async currently requires aligned pages");
 
+    TT_FATAL(this->dim == 3, "reduce_scatter_minimal_async currently only supports reducing on dim 3");
+
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(
         input_tensor.buffer() != nullptr,
@@ -176,13 +178,13 @@ std::vector<ttnn::TensorSpec> ReduceScatterMinimalAsync::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     // TODO: FIXME!
     const auto& input_tensor = input_tensors[0];
-    auto inter_shape = input_tensor.padded_shape();
+    auto inter_shape = input_tensor.logical_shape();
 
     if (this->topology == ccl::Topology::Linear) {
         inter_shape[0] *= 2;
     }
 
-    auto output_shape = input_tensor.padded_shape();
+    auto output_shape = input_tensor.logical_shape();
     output_shape[this->dim] /= this->ring_size;
     return {
         TensorSpec(
@@ -269,6 +271,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ReduceScatterMinimalAsync::create_
         this->topology,
         this->semaphore,
         this->barrier_semaphore,
+        this->using_persistent_buffers,
         this->sub_device_id,
         this->chunks_per_sync,
         this->num_workers_per_link,
@@ -285,6 +288,7 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         this->intermediate_mem_config,
         this->topology,
         this->barrier_semaphore.has_value(),
+        this->using_persistent_buffers,
         this->sub_device_id,
         this->cluster_axis,
         this->chunks_per_sync,
@@ -318,6 +322,9 @@ Tensor reduce_scatter_minimal_async_impl(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "reduce_scatter_minimal_async op is only supported for Fast Dispatch");
 
+    int32_t rank = input_tensor.logical_shape().rank();
+    int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
+
     // For reduce_scatter_minimal_async_impl, we need to calculate the ring size based on cluster_axis
     // Since we don't have a specific coordinate here, we use the maximum possible devices
     uint32_t num_devices;
@@ -346,15 +353,17 @@ Tensor reduce_scatter_minimal_async_impl(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
+    bool using_persistent_buffers = persistent_output_buffers.has_value();
+
     std::vector<std::optional<Tensor>> optional_output_tensors =
-        persistent_output_buffers
+        using_persistent_buffers
             ? std::vector<std::optional<Tensor>>(persistent_output_buffers->begin(), persistent_output_buffers->end())
             : std::vector<std::optional<Tensor>>{std::nullopt, std::nullopt};
 
     return tt::tt_metal::operation::run(
                ttnn::ReduceScatterMinimalAsync(
                    devices,
-                   dim,
+                   scatter_dim,
                    num_links,
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
@@ -362,6 +371,7 @@ Tensor reduce_scatter_minimal_async_impl(
                    ccl_topology,
                    multi_device_global_semaphore,
                    barrier_semaphore,
+                   using_persistent_buffers,
                    sub_device_id,
                    cluster_axis,
                    chunks_per_sync,

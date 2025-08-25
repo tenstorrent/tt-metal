@@ -40,11 +40,16 @@ class DispatcherCoreData:
     firmware_path: str = combined_field("kernel_path", "Firmware / Kernel Path", collection_serializer("\n"))
     kernel_path: str | None = combined_field()
     kernel_name: str | None = combined_field()
+    subdevice: int = triage_field("Subdevice")
+    go_message: str = triage_field("Go Message")
+    preload: bool = triage_field("Preload")
 
 
 class DispatcherData:
     def __init__(self, inspector_data: InspectorData, context: Context):
         self.inspector_data = inspector_data
+        if inspector_data.kernels is None or len(inspector_data.kernels) == 0:
+            raise TTTriageError("No kernels found in inspector data.")
 
         self._a_kernel_path = next(iter(inspector_data.kernels.values())).path
         brisc_elf_path = DispatcherData.get_firmware_elf_path(self._a_kernel_path, "brisc")
@@ -70,7 +75,7 @@ class DispatcherData:
                 f"Failed to extract DWARF info from ELF file {idle_erisc_elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
             )
 
-        # Acces the value of enumerator for supported blocks
+        # Access the value of enumerator for supported blocks
         self._ProgrammableCoreTypes_TENSIX = self._brisc_elf.enumerators["ProgrammableCoreType::TENSIX"].value
         self._ProgrammableCoreTypes_IDLE_ETH = self._brisc_elf.enumerators["ProgrammableCoreType::IDLE_ETH"].value
 
@@ -149,6 +154,19 @@ class DispatcherData:
         # Refer to tt_metal/api/tt-metalium/dev_msgs.h for struct kernel_config_msg_t
         launch_msg_rd_ptr = mem_access(fw_elf, "mailboxes->launch_msg_rd_ptr", loc_mem_reader)[0][0]
 
+        def get_const_value(name):
+            return mem_access(fw_elf, name, loc_mem_reader)[3]
+
+        # Go message states are constant values in the firmware elf, so we cache them
+        if not hasattr(self, "_go_message_states"):
+            self._go_message_states = {
+                get_const_value("RUN_MSG_INIT"): "INIT",
+                get_const_value("RUN_MSG_GO"): "GO",
+                get_const_value("RUN_MSG_DONE"): "DONE",
+                get_const_value("RUN_MSG_RESET_READ_PTR"): "RESET_READ_PTR",
+                get_const_value("RUN_MSG_RESET_READ_PTR_FROM_HOST"): "RESET_READ_PTR_FROM_HOST",
+            }
+
         try:
             # Indexed with enum ProgrammableCoreType - tt_metal/hw/inc/*/core_config.h
             kernel_config_base = mem_access(
@@ -175,11 +193,22 @@ class DispatcherData:
             )
 
             kernel = self.inspector_data.kernels.get(watcher_kernel_id)
+            go_message_index = mem_access(fw_elf, f"mailboxes->go_message_index", loc_mem_reader)[0][0]
+            go_data = mem_access(fw_elf, f"mailboxes->go_messages[{go_message_index}]", loc_mem_reader)[0][0]
+            preload = (
+                mem_access(fw_elf, f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.preload", loc_mem_reader)[0][
+                    0
+                ]
+                != 0
+            )
         except:
             kernel_config_base = -1
             kernel_text_offset = -1
             watcher_kernel_id = -1
             kernel = None
+            go_message_index = -1
+            go_data = -1
+            preload = False
 
         if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
             firmware_path = self._a_kernel_path + "../../../firmware/idle_erisc/idle_erisc.elf"
@@ -204,6 +233,8 @@ class DispatcherData:
         else:
             kernel_path = None
             kernel_offset = None
+        go_state = (go_data >> 24) & 0xFF
+        go_data_state = self._go_message_states.get(go_state, str(go_state))
 
         return DispatcherCoreData(
             firmware_path=firmware_path,
@@ -214,6 +245,9 @@ class DispatcherData:
             kernel_config_base=kernel_config_base,
             kernel_text_offset=kernel_text_offset,
             watcher_kernel_id=watcher_kernel_id,
+            subdevice=go_message_index,
+            go_message=go_data_state,
+            preload=preload,
         )
 
     @staticmethod

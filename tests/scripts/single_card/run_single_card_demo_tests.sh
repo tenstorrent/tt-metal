@@ -25,7 +25,7 @@ run_qwen25_vl_func() {
   fail=0
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/reference/requirements.txt
+  pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
@@ -35,7 +35,7 @@ run_qwen25_vl_func() {
   # todo)) Qwen2.5-VL-7B-Instruct
 
   # simple generation-accuracy tests for qwen25_vl_3b
-  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 600 || fail=1
+  MESH_DEVICE=N300 HF_MODEL=$qwen25_vl_3b pytest -n auto models/demos/qwen25_vl/demo/combined.py -k tt_vision --timeout 1200 || fail=1
   echo "LOG_METAL: demo/combined.py tests for $qwen25_vl_3b on N300 completed"
 
   # complete demo tests
@@ -65,7 +65,7 @@ run_sentencebert_func() {
   pytest --disable-warnings models/demos/sentence_bert/demo/demo.py --timeout 600; fail+=$?
 
   #SentenceBERT eval
-  # comment out SentenceBERT eval from CI tests for now unitl dataset_evaluation test is available in CIv2 (issue: #25866)
+  # comment out SentenceBERT eval from CI tests for now until dataset_evaluation test is available in CIv2 (issue: #25866)
 
   #pytest --disable-warnings models/demos/sentence_bert/demo/dataset_evaluation.py--timeout 600; fail+=$?
 
@@ -101,15 +101,11 @@ run_llama3_func() {
 
 }
 
-## comment out ufld_v2 from CI tests for now unitl dataset_evaluation test failure is debugged.
 run_ufld_v2_func() {
-  #ufld_v2
-  pytest -n auto models/demos/ufld_v2/demo/demo.py --timeout 600
-  #ufld_v2 eval
-  ## Commenting out UFLDv2 eval since CIv2 does not support dataset download from Kaggle
-  # Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
-  #pytest -n auto models/demos/ufld_v2/demo/dataset_evaluation.py --timeout 1500
+  #ufld_v2 demo
+  pytest models/demos/ufld_v2/demo/demo.py
 }
+
 run_vgg_func() {
 
   #VGG11/VGG16
@@ -189,6 +185,11 @@ run_squeezebert_func() {
 
 }
 
+run_efficientnet_b0_func(){
+
+  pytest models/experimental/efficientnetb0/demo/demo.py
+
+}
 run_roberta_func() {
 
   pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600
@@ -288,12 +289,19 @@ run_yolov8s_world_perf() {
 
 }
 
-#comment out vanilla unet for now unitl data and weights loading issues are resolved.
 run_vanilla_unet_demo() {
+ # vanilla_unet demo
+ pytest models/demos/vanilla_unet/demo/demo.py
+}
 
- pytest -n auto models/experimental/vanilla_unet/demo/demo.py::test_unet_demo_single_image
+# Commenting out the test from CI due to HF issue. TODO demo will be enabled with CIv2 dataset .
+# Created a PR to enable demo with CIv2 dataset soon - https://github.com/tenstorrent/tt-metal/pull/26236
+run_swin_v2_demo() {
+
+  pytest models/experimental/swin_v2/demo/demo.py
 
 }
+
 run_yolov8x_perf() {
 
   pytest -n auto --disable-warnings models/demos/yolov8x/demo/demo.py --timeout 600
@@ -316,6 +324,12 @@ run_yolov7_demo() {
 
 }
 
+run_yolov6l_demo() {
+  # yolov6 demo
+  pytest models/demos/yolov6l/demo/demo.py
+
+}
+
 # Commenting out VGG_Unet Demo since CIv2 does not support dataset download from Kaggle
 # Raised issue to whitelist dataset- https://github.com/tenstorrent/tt-metal/issues/25866
 # run_vgg_unet_demo() {
@@ -325,6 +339,18 @@ run_yolov7_demo() {
 # }
 
 
+run_yolov12x_demo() {
+
+  pytest models/demos/yolov12x/demo/demo.py
+
+}
+
+
+run_vovnet_demo(){
+
+ pytest models/experimental/vovnet/demo/demo.py
+
+}
 
 main() {
   # For CI pipeline - source func commands but don't execute tests if not invoked directly

@@ -17,12 +17,20 @@ enum class WhereVariant {
     TSS,  // tensor-scalar-scalar
 };
 
+enum class WhereBroadcastType {
+    NONE,
+    OUTER_BCAST,    // bcast for outer dims -5, -4, -3, no subtile bcast.
+    COL_BCAST,      // bcast for W-dim and outer dims -5, -4, -3.
+    INVALID_BCAST,  // All other unsupported bcast cases go here for now
+};
+
 struct WhereDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
     struct operation_attributes_t {
         WhereVariant where_variant;
+        WhereBroadcastType broadcast_type;
         tt::tt_metal::MemoryConfig memory_config;
         DataType input_dtype;
         std::optional<DataType> dtype;
@@ -46,9 +54,9 @@ struct WhereDeviceOperation {
 
     struct WhereProgramFactory {
         struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id;
-            tt::tt_metal::KernelHandle writer_kernel_id;
-            tt::tt_metal::KernelHandle compute_kernel_id;
+            tt::tt_metal::KernelHandle reader_kernel_id{};
+            tt::tt_metal::KernelHandle writer_kernel_id{};
+            tt::tt_metal::KernelHandle compute_kernel_id{};
             CoreCoord compute_with_storage_grid_size;
         };
 

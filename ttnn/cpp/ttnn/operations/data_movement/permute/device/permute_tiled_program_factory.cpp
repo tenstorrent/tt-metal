@@ -323,8 +323,6 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
             .set_page_size(src0_cb_index, input_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     uint32_t output_H = input_shape[dims[rank - 2]];
     uint32_t element_size = input_tensor.element_size();
 
@@ -376,7 +374,6 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     }
 
     std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)src_is_dram,
         num_writes,
         padding_val_packed,
         (uint32_t)needs_padding,
@@ -386,6 +383,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
         accumulated_outer_dims,
         tile_shape[1],
         tile_shape[0]};
+    TensorAccessorArgs(*src_buffer).append_to(reader_compile_time_args);
 
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

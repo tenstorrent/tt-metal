@@ -31,6 +31,7 @@
 #include "tt_metal/impl/device/dispatch.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tracy/Tracy.hpp>
+#include <tt_stl/overloaded.hpp>
 
 enum class CoreType;
 
@@ -745,11 +746,10 @@ void write_to_device_buffer(
             initialize_interleaved_buf_dispatch_params(*root_buffer, cq_id, expected_num_workers_completed, region);
 
         InterleavedBufferWriteDispatchParams* dispatch_params = std::visit(
-            [](auto& val) -> InterleavedBufferWriteDispatchParams* {
-                if constexpr (!std::is_same_v<std::decay_t<decltype(val)>, std::monostate>) {
-                    return static_cast<InterleavedBufferWriteDispatchParams*>(&val);
-                }
-                return nullptr;
+            ttsl::overloaded{
+                [](std::derived_from<InterleavedBufferWriteDispatchParams> auto& val)
+                    -> InterleavedBufferWriteDispatchParams* { return &val; },
+                [](std::monostate) -> InterleavedBufferWriteDispatchParams* { return nullptr; },
             },
             dispatch_params_variant);
         TT_ASSERT(dispatch_params != nullptr);

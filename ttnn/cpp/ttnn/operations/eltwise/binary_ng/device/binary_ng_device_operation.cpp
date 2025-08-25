@@ -18,23 +18,24 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
                 (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
                 (a == UINT16 && b == UINT16));
         case SUB:
-        case MUL: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
-        case DIV:
-        case RSUB:
-        case LOGADDEXP:
-        case LOGADDEXP2:
-        case LDEXP:
-        case SQUARED_DIFFERENCE:
-        case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
+        case MUL:
+        case EQ:
+        case NE:
         case LOGICAL_AND:
         case LOGICAL_OR:
         case LOGICAL_XOR:
+            return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
+        case DIV:
+        case LOGADDEXP:
+        case LOGADDEXP2:
+        case LDEXP:
+        case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
+        case SQUARED_DIFFERENCE:
+        case RSUB:
         case GT:
         case LT:
         case GE:
-        case LE:
-        case EQ:
-        case NE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
+        case LE: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32));
         case LCM:
         case GCD: return (a == INT32 && b == INT32);
         case LEFT_SHIFT:
@@ -471,7 +472,8 @@ BinaryNgDeviceOperation::invoke(
             std::nullopt,
             memory_config.value_or(
                 output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
-            input_tensor_a.dtype(),
+            input_tensor_a.dtype(),  // TODO: For mixed dtypes we need to set this value to the appropriate dtype
+                                     // depending on which LLK is meant to be used.
             output_dtype,
             get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor),
             std::nullopt,

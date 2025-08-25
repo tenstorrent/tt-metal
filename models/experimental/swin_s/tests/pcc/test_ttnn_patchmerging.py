@@ -15,7 +15,7 @@ from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.swin_s.reference.patchmerging import PatchMerging
 from models.experimental.swin_s.tt.tt_patchmerging import TtPatchMerging
-from models.experimental.swin_s.common import load_torch_model
+from models.experimental.swin_s.common import load_torch_model, SWIN_S_L1_SMALL_SIZE
 
 
 def create_custom_preprocessor(device):
@@ -35,7 +35,7 @@ def create_custom_preprocessor(device):
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SWIN_S_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size",
     [

@@ -10,7 +10,7 @@ from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
-
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 USE_NON_FUSED = False
 USE_DATACOPY = False
@@ -150,35 +150,37 @@ def run_all_gather_matmul_on_t3000_impl(
 
     ##### Perform the TT ops #####
     def run_op():
-        if USE_NON_FUSED:
-            # all_gather
-            tt_all_gather_out_tensor = ttnn.all_gather(
-                input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config_ag
-            )
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+        pytest.skip(LEGACY_CCL_SKIP)
+        # if USE_NON_FUSED:
+        # # all_gather
+        # tt_all_gather_out_tensor = ttnn.all_gather(
+        #     input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config_ag
+        # )
 
-            # matmul
-            tt_matmul_out_tensor = ttnn.matmul(
-                tt_all_gather_out_tensor,
-                weight_tt,
-                bias_tt,
-                memory_config=mem_config_mm,
-                program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
-            )
-            return tt_all_gather_out_tensor, tt_matmul_out_tensor, None
-        else:
-            return ttnn.experimental.all_gather_matmul(
-                input_tensor_mesh,
-                weight_tt,
-                dim,
-                (0, 4),
-                bias=bias_tt,
-                num_links=num_links,
-                memory_config_ag=mem_config_ag,
-                memory_config_mm=mem_config_mm,
-                program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
-            )
+        # # matmul
+        # tt_matmul_out_tensor = ttnn.matmul(
+        #     tt_all_gather_out_tensor,
+        #     weight_tt,
+        #     bias_tt,
+        #     memory_config=mem_config_mm,
+        #     program_config=program_config,
+        #     compute_kernel_config=compute_kernel_config,
+        # )
+        # return tt_all_gather_out_tensor, tt_matmul_out_tensor, None
+        # else:
+        #     return ttnn.experimental.all_gather_matmul(
+        #         input_tensor_mesh,
+        #         weight_tt,
+        #         dim,
+        #         (0, 4),
+        #         bias=bias_tt,
+        #         num_links=num_links,
+        #         memory_config_ag=mem_config_ag,
+        #         memory_config_mm=mem_config_mm,
+        #         program_config=program_config,
+        #         compute_kernel_config=compute_kernel_config,
+        #     )
 
     if enable_trace:
         # Compile the op

@@ -216,7 +216,7 @@ void GatherProgramFactorySingleRowSingleCore::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto input_tensor_buffer = tensor_args.input_tensor.buffer();
-    auto input_index_tensor_buffer = tensor_args.input_tensor.buffer();
+    auto input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
     auto output_tensor_buffer = output_tensor.buffer();
 
     const auto input_index_shape = tensor_args.input_index_tensor.padded_shape();
@@ -458,7 +458,7 @@ void GatherProgramFactorySingleRowMultiCore::override_runtime_arguments(
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output_tensor) {
     auto input_tensor_buffer = tensor_args.input_tensor.buffer();
-    auto input_index_tensor_buffer = tensor_args.input_tensor.buffer();
+    auto input_index_tensor_buffer = tensor_args.input_index_tensor.buffer();
     auto output_tensor_buffer = output_tensor.buffer();
 
     const auto input_index_shape = tensor_args.input_index_tensor.padded_shape();

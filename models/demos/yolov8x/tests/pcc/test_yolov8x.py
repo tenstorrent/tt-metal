@@ -202,7 +202,7 @@ def test_SPPF(device, input_tensor, reset_seeds, model_location_generator):
     with torch.inference_mode():
         torch_model_output = submodule(input_tensor)
 
-    passing, pcc = assert_with_pcc(ttnn_model_output, torch_model_output, 0.99)
+    passing, pcc = assert_with_pcc(torch_model_output, ttnn_model_output, 0.99)
     logger.info(f"Passing: {passing}, PCC: {pcc}")
 
 

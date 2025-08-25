@@ -15,7 +15,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 #ifdef TEST_ENABLE_FABRIC_TRACING
-#include "tt_metal/tools/profiler/experimental/fabric_event_profiler.hpp"
+#include "tt_metal/tools/profiler/fabric_event_profiler.hpp"
 #endif
 
 // clang-format on
@@ -76,6 +76,9 @@ void set_mcast_header(
         n_hops = trunk_hops;
     } else if (trunk_direction == eth_chan_directions::SOUTH) {
         s_hops = trunk_hops;
+    } else {
+        n_hops = 0;
+        s_hops = 0;
     }
 
     fabric_set_mcast_route((LowLatencyMeshPacketHeader*)packet_header, 0, 0, e_hops, w_hops, n_hops, s_hops);
@@ -94,7 +97,6 @@ void kernel_main() {
     uint32_t time_seed = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t ew_dim = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t my_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t fwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t fwd_mesh_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t north_trunk_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t north_trunk_branch_hops = get_arg_val<uint32_t>(rt_args_idx++);
@@ -102,19 +104,47 @@ void kernel_main() {
     tt::tt_fabric::WorkerToFabricEdmSender north_trunk_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
-    uint32_t bwd_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t south_trunk_hops = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t south_trunk_branch_hops = get_arg_val<uint32_t>(rt_args_idx++);
 
     tt::tt_fabric::WorkerToFabricEdmSender south_trunk_connection =
         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
 
+    uint32_t left_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t right_dev_id = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t direct_hops = get_arg_val<uint32_t>(rt_args_idx++);
+
+    uint16_t left_hops = direct_hops >> 16;
+    uint16_t right_hops = direct_hops & 0xFFFF;
+
+    tt::tt_fabric::WorkerToFabricEdmSender left_connection =
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
+    tt::tt_fabric::WorkerToFabricEdmSender right_connection =
+        tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+
     volatile tt_l1_ptr PACKET_HEADER_TYPE* north_packet_header = PacketHeaderPool::allocate_header();
     volatile tt_l1_ptr PACKET_HEADER_TYPE* south_packet_header = PacketHeaderPool::allocate_header();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* left_packet_header = PacketHeaderPool::allocate_header();
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* right_packet_header = PacketHeaderPool::allocate_header();
 
     uint64_t noc_dest_addr = get_noc_addr_helper(rx_noc_encoding, target_address);
     zero_l1_buf((uint32_t*)north_packet_header, sizeof(PACKET_HEADER_TYPE));
     zero_l1_buf((uint32_t*)south_packet_header, sizeof(PACKET_HEADER_TYPE));
+    zero_l1_buf((uint32_t*)left_packet_header, sizeof(PACKET_HEADER_TYPE));
+    zero_l1_buf((uint32_t*)right_packet_header, sizeof(PACKET_HEADER_TYPE));
+
+    if (left_hops > 0) {
+        // Direct left branch present
+        set_mcast_header(left_packet_header, eth_chan_directions::WEST, 0, 0, left_hops);
+        setup_connection_and_headers(left_connection, left_packet_header, noc_dest_addr, packet_payload_size_bytes);
+    }
+
+    if (right_hops > 0) {
+        // Direct right branch present
+        set_mcast_header(right_packet_header, eth_chan_directions::EAST, 0, right_hops, 0);
+        setup_connection_and_headers(right_connection, right_packet_header, noc_dest_addr, packet_payload_size_bytes);
+    }
 
     if constexpr (mcast_mode & 0x1) {
         // North trunk present
@@ -170,6 +200,26 @@ void kernel_main() {
                 south_trunk_connection);
         }
 
+        if (left_hops > 0) {
+            send_packet(
+                left_packet_header,
+                noc_dest_addr,
+                source_l1_buffer_address,
+                packet_payload_size_bytes,
+                time_seed,
+                left_connection);
+        }
+
+        if (right_hops > 0) {
+            send_packet(
+                right_packet_header,
+                noc_dest_addr,
+                source_l1_buffer_address,
+                packet_payload_size_bytes,
+                time_seed,
+                right_connection);
+        }
+
 #ifndef BENCHMARK_MODE
         noc_dest_addr += packet_payload_size_bytes;
 #endif
@@ -181,6 +231,13 @@ void kernel_main() {
     }
     if constexpr (mcast_mode & 0x2) {
         teardown_connection(south_trunk_connection);
+    }
+
+    if (left_hops > 0) {
+        teardown_connection(left_connection);
+    }
+    if (right_hops > 0) {
+        teardown_connection(right_connection);
     }
 
     noc_async_write_barrier();

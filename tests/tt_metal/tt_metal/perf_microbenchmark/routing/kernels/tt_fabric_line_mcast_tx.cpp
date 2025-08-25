@@ -80,28 +80,6 @@ void kernel_main() {
     fwd_packet_header = PacketHeaderPool::allocate_header();
     zero_l1_buf((uint32_t*)fwd_packet_header, sizeof(PACKET_HEADER_TYPE));
 
-    // the hop counts passed down by the test include the mcast start device.
-    // To account for the starting device, decrement respecive direction count by 1.
-    if (num_hops_n) {
-        // line mcast north, or trunk of 2D mcast.
-        // decrement line/trunk hop by 1.
-        // east/west hops stay intact since mcast is not starting on east/west device.
-        num_hops_n--;
-    } else if (num_hops_s) {
-        // line mcast south, or trunk of 2D mcast.
-        // decrement line/trunk hop by 1.
-        // east/west hops stay intact since mcast is not starting on east/west device.
-        num_hops_s--;
-    } else if (num_hops_e) {
-        // not a 2D mcast.
-        // mcast start device is east of sender, so decrement east hop by 1.
-        num_hops_e--;
-    } else if (num_hops_w) {
-        // not a 2D mcast.
-        // mcast start device is west of sender, so decrement west hop by 1.
-        num_hops_w--;
-    }
-
     fabric_set_mcast_route(
         (MeshPacketHeader*)fwd_packet_header, fwd_dev_id, fwd_mesh_id, num_hops_e, num_hops_w, num_hops_n, num_hops_s);
 

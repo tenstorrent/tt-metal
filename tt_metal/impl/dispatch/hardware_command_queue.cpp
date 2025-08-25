@@ -159,7 +159,10 @@ std::optional<uint32_t> HWCommandQueue::tid() const { return this->tid_; }
 SystemMemoryManager& HWCommandQueue::sysmem_manager() { return this->manager_; }
 
 void HWCommandQueue::reset_worker_state(
-    bool reset_launch_msg_state, uint32_t num_sub_devices, const vector_aligned<uint32_t>& go_signal_noc_data) {
+    bool reset_launch_msg_state,
+    uint32_t num_sub_devices,
+    const vector_aligned<uint32_t>& go_signal_noc_data,
+    const std::vector<std::pair<CoreRangeSet, uint32_t>>& core_go_message_mapping) {
     TT_FATAL(!this->manager_.get_bypass_mode(), "Cannot reset worker state during trace capture");
     cq_shared_state_->sub_device_cq_owner.clear();
     cq_shared_state_->sub_device_cq_owner.resize(num_sub_devices);
@@ -174,6 +177,9 @@ void HWCommandQueue::reset_worker_state(
         reset_launch_msg_state);
     program_dispatch::set_num_worker_sems_on_dispatch(device_, this->manager_, id_, num_sub_devices);
     program_dispatch::set_go_signal_noc_data_on_dispatch(device_, go_signal_noc_data, this->manager_, id_);
+    if (reset_launch_msg_state) {
+        program_dispatch::set_core_go_message_mapping_on_device(device_, core_go_message_mapping, this->manager_, id_);
+    }
     // expected_num_workers_completed is reset on the dispatcher, as part of this step - this must be reflected
     // on host, along with the config_buf_manager being reset, since we wait for all programs across SubDevices
     // to complete as part of resetting the worker state
@@ -624,31 +630,23 @@ void HWCommandQueue::read_completion_queue() {
                 }
 
                 std::visit(
-                    [&](auto&& read_descriptor) {
-                        using T = std::decay_t<decltype(read_descriptor)>;
-                        if constexpr (std::is_same_v<T, ReadBufferDescriptor>) {
+                    ttsl::overloaded{
+                        [&, this](const ReadBufferDescriptor& read_descriptor) {
                             ZoneScopedN("CompletionQueueReadData");
                             buffer_dispatch::copy_completion_queue_data_into_user_space(
-                                read_descriptor,
-                                mmio_device_id,
-                                channel,
-                                this->id_,
-                                this->manager_,
-                                this->exit_condition_);
-                        } else if constexpr (std::is_same_v<T, ReadEventDescriptor>) {
+                                read_descriptor, mmio_device_id, channel, id_, manager_, exit_condition_);
+                        },
+                        [&, this](ReadEventDescriptor& read_descriptor) {
                             ZoneScopedN("CompletionQueueReadEvent");
                             event_dispatch::read_events_from_completion_queue(
-                                read_descriptor, mmio_device_id, channel, this->id_, this->manager_);
-                        } else if constexpr (std::is_same_v<T, ReadCoreDataDescriptor>) {
+                                read_descriptor, mmio_device_id, channel, id_, manager_);
+                        },
+                        [&, this](const ReadCoreDataDescriptor& read_descriptor) {
                             ZoneScopedN("CompletionQueueReadCoreData");
                             device_dispatch::read_core_data_from_completion_queue(
-                                read_descriptor,
-                                mmio_device_id,
-                                channel,
-                                this->id_,
-                                this->manager_,
-                                this->exit_condition_);
-                        }
+                                read_descriptor, mmio_device_id, channel, id_, manager_, exit_condition_);
+                        },
+                        [](std::monostate) {},
                     },
                     read_descriptor);
             }
@@ -727,10 +725,12 @@ void HWCommandQueue::allocate_trace_programs() {
         auto sub_device_index = *sub_device_id;
         uint32_t num_workers = 0;
         if (program.runs_on_noc_multicast_only_cores()) {
-            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
+            num_workers +=
+                calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
         }
         if (program.runs_on_noc_unicast_only_cores()) {
-            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
+            num_workers +=
+                calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
         }
 
         const auto updated_worker_counts =
@@ -779,12 +779,13 @@ void HWCommandQueue::record_end() {
         uint32_t num_workers = 0;
         if (program.runs_on_noc_multicast_only_cores()) {
             this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_multicast++;
-            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
-
+            num_workers +=
+                calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
         }
         if (program.runs_on_noc_unicast_only_cores()) {
             this->trace_ctx_->descriptors[sub_device_id].num_traced_programs_needing_go_signal_unicast++;
-            num_workers += calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
+            num_workers +=
+                calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
         }
         // May be changed below if clear count is needed
         this->trace_ctx_->descriptors[sub_device_id].num_completion_worker_cores += num_workers;

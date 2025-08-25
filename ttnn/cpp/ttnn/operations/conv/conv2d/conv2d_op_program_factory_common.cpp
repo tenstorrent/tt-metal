@@ -116,15 +116,14 @@ std::vector<CBInfo> get_cb_info(
         // ACT and ACT_SECOND_READER CB
         uint32_t act_cb_num_tiles = act_block_num_tiles;
         uint32_t act_block_split_num_tiles = 0;
-        if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED && conv_config.enable_split_reader) {
-            uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles / block_config.out_subblock_h_ntiles;
+        if (sharding_scheme == TensorMemoryLayout::HEIGHT_SHARDED && conv_config.enable_split_reader &&
+            !is_1d_depthwise_conv) {
+            uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
             uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
             uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
 
-            act_cb_num_tiles =
-                act_block_h_nsubblocks_split * block_config.out_subblock_h_ntiles * block_config.act_block_w_ntiles;
-            act_block_split_num_tiles = act_block_h_nsubblocks_split_last * block_config.out_subblock_h_ntiles *
-                                        block_config.act_block_w_ntiles;
+            act_cb_num_tiles = act_block_h_nsubblocks_split * block_config.act_block_w_ntiles;
+            act_block_split_num_tiles = act_block_h_nsubblocks_split_last * block_config.act_block_w_ntiles;
         }
         if (conv_config.enable_act_double_buffer) {
             act_cb_num_tiles *= 2;

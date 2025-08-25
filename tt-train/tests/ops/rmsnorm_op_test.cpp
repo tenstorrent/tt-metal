@@ -11,6 +11,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 
@@ -18,6 +19,7 @@ class RMSNormOpTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
+        ttml::autograd::ctx().set_seed(42);
     }
 
     void TearDown() override {
@@ -39,9 +41,8 @@ protected:
 // ============================================================================
 TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    uint32_t N = 1, C = 1, H = 1, W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -55,9 +56,8 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Forward) {
 
 TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    uint32_t N = 1, C = 1, H = 1, W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -89,7 +89,6 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
 
 TEST_F(RMSNormOpTest, RMSNorm_Forward_Batch) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
     std::array<uint32_t, 4> a_shape = {2, 1, 20, 5};
@@ -128,7 +127,6 @@ TEST_F(RMSNormOpTest, RMSNorm_Forward_Batch) {
 
 TEST_F(RMSNormOpTest, RMSNorm_Backward_Batch) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
     std::array<uint32_t, 4> a_shape = {2, 1, 20, 5};
@@ -166,9 +164,8 @@ TEST_F(RMSNormOpTest, RMSNorm_Backward_Batch) {
 // ============================================================================
 TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Forward) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    uint32_t N = 1, C = 1, H = 1, W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -182,9 +179,8 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Forward) {
 
 TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Backward) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    uint32_t N = 1, C = 1, H = 1, W = 8;
+    [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
@@ -216,7 +212,6 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Small_Backward) {
 
 TEST_F(RMSNormOpTest, CompositeRMSNorm_Forward_Batch) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
     std::array<uint32_t, 4> a_shape = {2, 1, 20, 5};
@@ -255,7 +250,6 @@ TEST_F(RMSNormOpTest, CompositeRMSNorm_Forward_Batch) {
 
 TEST_F(RMSNormOpTest, CompositeRMSNorm_Backward_Batch) {
     using namespace ttml;
-    float eps = 0.0078125F;  // default in PyTorch for bf16
 
     // 2 batches, 1 sequence, 20 tokens, 5-dim'l embedding space.
     std::array<uint32_t, 4> a_shape = {2, 1, 20, 5};
@@ -319,11 +313,16 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     float eps = 0.0078125F;
 
     // Generate random input data
-    xt::random::seed(42);
     std::array<uint32_t, 4> gamma_shape = {1, 1, 1, shape[3]};
-    xt::xarray<float> x_data = xt::random::rand<float>(shape, -1.0F, 1.0F);
+    xt::xarray<float> x_data = xt::empty<float>(shape);
+    auto rng = autograd::ctx().get_generator();
+    uint32_t seed1 = rng();
+    core::parallel_generate<float>(x_data, []() { return std::uniform_real_distribution<float>(-1.0F, 1.0F); }, seed1);
 
-    xt::xarray<float> gamma_data = xt::random::rand<float>(gamma_shape, 0.0F, 1.0F);
+    xt::xarray<float> gamma_data = xt::empty<float>(gamma_shape);
+    uint32_t seed2 = rng();
+    core::parallel_generate<float>(
+        gamma_data, []() { return std::uniform_real_distribution<float>(0.0F, 1.0F); }, seed2);
 
     // Test forward pass - kernel vs composite
     auto x_kernel = autograd::create_tensor(core::from_xtensor(x_data, device));

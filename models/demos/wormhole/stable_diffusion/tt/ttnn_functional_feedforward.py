@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import math
-import os
 
 import torch
 
@@ -51,8 +50,6 @@ class feedforward:
         self.grid_sizes = {8192: (5, 8), 2048: (5, 8), 512: (8, 8), 128: (8, 4)}
         self.out_subblock_hs = {8192: 8, 2048: 8, 512: 2, 128: 1}
 
-        self.slow_mm = os.environ.get("SLOW_MATMULS", "0") == "1"
-
     def __call__(self, config, hidden_states):
         hidden_states = self.geglu(config, hidden_states)
 
@@ -66,7 +63,7 @@ class feedforward:
         out_block_w = math.ceil(N / grid_size[0] / 32)
         out_subblock_h, out_subblock_w = determine_largest_subblock_size(out_block_h, out_block_w)
         # TODO: https://github.com/tenstorrent/tt-metal/issues/7560
-        if size == 512 or self.slow_mm:
+        if size == 512:
             out_subblock_h = 1
             out_subblock_w = 1
         program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(

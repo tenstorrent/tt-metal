@@ -4,13 +4,15 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, final
+from typing import Any
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
+from models.demos.deepseek_v3.tt.ccl_1d import CCL1D
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
+from models.demos.deepseek_v3.utils.composite_ops import mesh_scatter
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, LinearConfig, MeshDeviceStub, OpConfigBase
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
@@ -24,8 +26,10 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     save_and_get_path,
 )
 from models.demos.deepseek_v3.utils.run_config import (
+    MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
+    ModelState,
     RunDecodeConfig,
     RunPrefillConfig,
     WeightConfig,
@@ -36,7 +40,7 @@ class LMHead(AbstractModule):
     """TT implementation of Language model head for Deepseek V3."""
 
     @dataclass
-    class LMHeadProgramConfigData(OpConfigBase):
+    class ProgramConfigData(OpConfigBase):
         """Data class for the data for generating the PC for ttnn.linear."""
 
         hidden_dim: int
@@ -61,81 +65,42 @@ class LMHead(AbstractModule):
     def convert_weights(
         cls,
         hf_config: PretrainedConfig,
-        state_dict: dict[str, torch.Tensor],
+        state_dicts: tuple[dict[str, torch.Tensor], ...],
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        assert cls.is_device_supported(mesh_device)
-        return {
-            "lm_head.weight": {
-                "input_tensor_b": save_and_get_path(
-                    output_path / "lm_head.weight.input_tensor_b",
-                    cls._convert_weight(
-                        hf_config,
-                        state_dict["lm_head.weight"],
-                        mesh_device,
-                    ),
-                )
-            }
-        }
-
-    @final
-    @classmethod
-    def _convert_weight(
-        cls,
-        hf_config: PretrainedConfig,
-        weight_tensor: torch.Tensor,
-        mesh_device: ttnn.Device,
-    ) -> ttnn.Tensor:
-        """
-        Convert a normal weight tensor to a format suitable for TTNN.
-
-        Args:
-            hf_config: HuggingFace model configuration object.
-            weight_tensor: The weight tensor.
-            mesh_device: The mesh device to use for the conversion.
-
-        Returns:
-            The converted TTNN tensor.
-        """
+        assert len(state_dicts) == 1, "Only one non-padding state dict is expected for LMHead conversion"
+        (state_dict,) = state_dicts
 
         hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
-        weight_tensor = weight_tensor.permute(1, 0)  # In torch the weights are in (out_features, in_features) format
 
+        weight_tensor = state_dict["lm_head.weight"].permute(
+            1, 0
+        )  # In torch the weights are in (out_features, in_features) format
         assert weight_tensor.shape == (hidden_dim, vocab_size)
-        per_device_in_features = hidden_dim
-        per_device_out_features = even_int_div(vocab_size, mesh_device.get_num_devices())
-        mesh_sharded_dim = -1
 
-        weight_tensor.unsqueeze_(0).unsqueeze_(0)  # Add batch and sequence dimensions
-
-        weight_memory_config = dram_sharded_weight_config(
-            per_device_in_features,
-            per_device_out_features,
-            mesh_device.dram_grid_size(),
-        )
-        return ttnn.from_torch(
+        weight = ttnn.from_torch(
             weight_tensor,
             dtype=ttnn.bfloat4_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
-            memory_config=weight_memory_config,
-            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, mesh_sharded_dim),
+            memory_config=dram_sharded_weight_config(
+                hidden_dim,
+                even_int_div(vocab_size, mesh_device.get_num_devices()),
+                mesh_device.dram_grid_size(),
+            ),
+            mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, -1),
         )
 
-    @classmethod
-    def is_device_supported(cls, mesh_device: ttnn.Device) -> bool:
-        """
-        Check if the given mesh device is supported by this module.
-        Args:
-            mesh_device: The mesh device to check.
+        return {
+            "linear": {
+                "input_tensor_b": save_and_get_path(
+                    output_path / "linear.input_tensor_b",
+                    weight,
+                )
+            }
+        }
 
-        Returns:
-            True if the device is supported, False otherwise.
-        """
-        return tuple(mesh_device.shape) == (4, 8)
-
-    @final
     @classmethod
     def _get_decode_activation_memory_config(
         cls, per_device_width: int, activation_sharding_num_cores: int, mesh_device: ttnn.Device
@@ -144,7 +109,7 @@ class LMHead(AbstractModule):
         return ttnn.create_sharded_memory_config_(
             shape=(
                 ttnn.core.roundup(MAX_BATCH_SIZE, ttnn.TILE_SIZE),
-                even_int_div(ttnn.core.roundup(per_device_width, ttnn.TILE_SIZE), activation_sharding_num_cores),
+                ttnn.core.roundup(even_int_div(per_device_width, activation_sharding_num_cores), ttnn.TILE_SIZE),
             ),
             core_grid=ttnn.num_cores_to_corerangeset(
                 activation_sharding_num_cores,
@@ -162,6 +127,7 @@ class LMHead(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        input_row_idx: int,
         input_num_cores: int | None = None,
         output_num_cores: int | None = None,
     ) -> ModelDecodeConfig:
@@ -207,7 +173,11 @@ class LMHead(AbstractModule):
 
         # Construct the config
         return {
-            "lm_head.weight": LinearConfig(
+            "mesh_scatter": {
+                "mesh_shape": tuple(mesh_device.shape),
+                "scatter_idx": (input_row_idx, None),
+            },
+            "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
@@ -220,7 +190,9 @@ class LMHead(AbstractModule):
         }
 
     @classmethod
-    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
+    def prefill_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, input_row_idx: int
+    ) -> ModelPrefillConfig:
         """Generate prefill configuration for this module.
 
         Args:
@@ -241,32 +213,44 @@ class LMHead(AbstractModule):
         # Extract dimensions from HF config
         hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
 
-        # Compute the program config for the linear layers
-        linear_op_config = LinearConfig(
-            input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
-        )
-
         # Construct the config
         return {
-            "max_rows": SEQ_LEN_CHUNK_SIZE,  # NOTE: should be 512 for blackhole (in case of future bring-up)
-            "linear_pc_gen": LMHead.LMHeadProgramConfigData(
+            "max_rows": SEQ_LEN_CHUNK_SIZE,
+            "mesh_scatter": {
+                "mesh_shape": tuple(mesh_device.shape),
+                "scatter_idx": (input_row_idx, None),
+            },
+            "linear_pc_gen": LMHead.ProgramConfigData(
                 hidden_dim=hidden_dim,
                 vocab_size=vocab_size,
                 num_devices=num_devices,
                 core_grid_size=matmul_core_grid_size,
             ),
-            "lm_head.weight": linear_op_config,
+            "linear": LinearConfig(
+                input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+            ),
             "input_memory_config": ttnn.DRAM_MEMORY_CONFIG,
             "output_memory_config": ttnn.DRAM_MEMORY_CONFIG,
+        }
+
+    @classmethod
+    def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL1D) -> ModelState:
+        return {
+            MESH_DEVICE_STATE_DICT_KEY: mesh_device,
+            "mesh_scatter": {
+                "semaphores": (ccl.get_gather_sem(0), ccl.get_gather_sem(1)),
+            },
         }
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
-        output = ttnn.linear(x, **cfg["lm_head.weight"])
+        mesh_scatter(x, **cfg["mesh_scatter"])
+
+        output = ttnn.linear(x, **cfg["linear"])
         ttnn.deallocate(x)
         assert output.memory_config() == cfg["output_memory_config"]
         return output
@@ -303,14 +287,15 @@ class LMHead(AbstractModule):
     def forward_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
         assert x.memory_config() == cfg["input_memory_config"], f"{x.memory_config()} != {cfg['input_memory_config']}"
 
+        mesh_scatter(x, **cfg["mesh_scatter"])
+
         _, _, seq_len, _ = x.shape
 
         if seq_len > cfg["max_rows"]:  # For large sequence lengths, process the input in chunks
             x = ttnn.reshape(x, [1, even_int_div(seq_len, cfg["max_rows"]), cfg["max_rows"], -1])
-            seq_len = cfg["max_rows"]
 
         output = ttnn.linear(
-            x, program_config=cls._get_prefill_pc(seq_len=seq_len, **cfg["linear_pc_gen"]), **cfg["lm_head.weight"]
+            x, program_config=cls._get_prefill_pc(seq_len=seq_len, **cfg["linear_pc_gen"]), **cfg["linear"]
         )
         ttnn.deallocate(x)
 
