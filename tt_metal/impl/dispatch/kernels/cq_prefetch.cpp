@@ -1648,6 +1648,7 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
 }
 
 // Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
+// Since the size of the data is less that the size of the cmddat_q, we let the caller return pages to the upstream all at once.
 template <typename RelayInlineState>
 inline void relay_raw_data_to_downstream(
     uint32_t& fence,
@@ -1655,6 +1656,7 @@ inline void relay_raw_data_to_downstream(
     uint32_t length,
     uint32_t& local_downstream_data_ptr,
     uint8_t extra_pages) {
+    ASSERT(length < (cmddat_q_end - cmddat_q_base));
     // Stream data to downstream as it arrives. Acquire upstream pages incrementally.
     uint32_t remaining = length;
 
@@ -1692,9 +1694,6 @@ inline void relay_raw_data_to_downstream(
         } else {
             npages = write_pages_to_dispatcher<0, false>(local_downstream_data_ptr, data_ptr, can_read_now);
         }
-
-        // Ensure previous async writes are committed before proceeding
-        noc_async_writes_flushed();
 
         // Release pages consumed by this chunk; include extra_pages on final chunk
         uint32_t pages_to_release = npages;
@@ -1754,6 +1753,8 @@ inline uint32_t relay_cb_get_cmds(uint32_t& fence, uint32_t& data_ptr, uint32_t&
                 length - sizeof(CQPrefetchHToPrefetchDHeader),
                 downstream_data_ptr,
                 cmd_ptr->header.extra_pages);
+            // Ensure all writes that consumed this payload have completed before releasing upstream pages
+            noc_async_writes_flushed();
             uint32_t pages_to_free = (length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
             relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
         } else {
@@ -1910,6 +1911,8 @@ void kernel_main_d() {
         // TODO: evaluate less costly free pattern (blocks?)
         uint32_t total_length = length + sizeof(CQPrefetchHToPrefetchDHeader);
         uint32_t pages_to_free = (total_length + cmddat_q_page_size - 1) >> cmddat_q_log_page_size;
+        // Ensure all writes that consumed this payload have completed before releasing upstream pages
+        noc_async_writes_flushed();
         relay_client.release_pages<my_noc_index, upstream_noc_xy, upstream_cb_sem_id>(pages_to_free);
 
         // Move to next page
