@@ -73,7 +73,7 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
         mesh_device=device,
         state_dict=state_dict,
         state_dict_prefix="multi_modal_projector",
-        image_size=tt_model_args.vision_chunk_size,
+        image_size=tt_model_args.image_size,
         patch_size=tt_model_args.vision_patch_size,
         hidden_size=tt_model_args.vision_hidden_dim,
         mm_tokens_per_image=tt_model_args.mm_tokens_per_image,
