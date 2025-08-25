@@ -110,6 +110,8 @@ jobs:
           GIT_COMMITTER_NAME: "GitHub Actions"
           GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
+          git checkout -q ${{ inputs.good-commit }}
+          git submodule update --init --recursive --force
           ./build_metal.sh \
           --build-dir build \
           --build-type Release \
