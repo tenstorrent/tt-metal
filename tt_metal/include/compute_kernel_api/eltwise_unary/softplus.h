@@ -34,7 +34,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    MATH(SFPU_UNARY_THREE_PARAM_KERNEL(softplus, RC, APPROX, idst, beta, beta_reciprocal, threshold));
+    MATH(SFPU_UNARY_KERNEL_VARIADIC(softplus, RC, APPROX, idst, beta, beta_reciprocal, threshold));
 }
 
 /**

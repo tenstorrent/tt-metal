@@ -33,7 +33,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void fmod_tile(uint32_t idst, uint32_t param0, uint32_t param1) {
-    MATH(SFPU_UNARY_TWO_PARAM_KERNEL(fmod, RC, APPROX, idst, param0, param1));
+    MATH(SFPU_UNARY_KERNEL_VARIADIC(fmod, RC, APPROX, idst, param0, param1));
 }
 
 /**

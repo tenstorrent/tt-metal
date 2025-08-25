@@ -156,3 +156,8 @@
 #define SFPU_UNARY_NO_PARAM_KERNEL_LOG1P(OP, MODE, APPROXIMATE, FAST_APPROX, DST_IDX) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                \
         ckernel::sfpu::calculate_##OP<APPROXIMATE, FAST_APPROX>, DST_IDX, (int)VectorMode::MODE)
+
+// Generalized variadic macro for unary kernels with any number of extra runtime parameters
+#define SFPU_UNARY_KERNEL_VARIADIC(OP, MODE, APPROXIMATE, DST_IDX, ...) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                  \
+        ckernel::sfpu::calculate_##OP<APPROXIMATE>, DST_IDX, (int)VectorMode::MODE, ##__VA_ARGS__)
