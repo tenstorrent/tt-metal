@@ -476,7 +476,7 @@ run_t3000_qwen25_vl_unit_tests() {
   start_time=$(date +%s)
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/reference/requirements.txt
+  pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"
