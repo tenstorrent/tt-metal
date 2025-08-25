@@ -14,6 +14,10 @@
 #define SFPU_INIT_KERNEL_CALL(OP, INIT_CB, APPROXIMATE) \
     llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>)
 
+// For ops that need a custom init callback with fast_approx template parameter
+#define SFPU_INIT_KERNEL_CALL_FAST_APPROX(OP, INIT_CB, APPROXIMATE, FAST_APPROX) \
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE, FAST_APPROX>)
+
 // For ops that need a custom init callback but takes one extra init-parameter
 #define SFPU_ONE_PARAM_KERNEL_INIT(OP, INIT_CB, APPROXIMATE, PARAM0) \
     llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, PARAM0);
@@ -147,3 +151,8 @@
 #define SFPU_ZERO_KERNEL_TYPE(TYPE_SUFFIX, OP, MODE, APPROXIMATE, DST_IDX) \
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                     \
         ckernel::sfpu::calculate_comp_##TYPE_SUFFIX<APPROXIMATE, SfpuType::OP>, DST_IDX, (int)VectorMode::MODE);
+
+// For log1p op that needs both APPROXIMATE and FAST_APPROX template parameters
+#define SFPU_UNARY_NO_PARAM_KERNEL_LOG1P(OP, MODE, APPROXIMATE, FAST_APPROX, DST_IDX) \
+    _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(                                \
+        ckernel::sfpu::calculate_##OP<APPROXIMATE, FAST_APPROX>, DST_IDX, (int)VectorMode::MODE)
