@@ -71,11 +71,10 @@ def run_mobilenetv2_e2e(
     )
 
     iterations = 32
-    pipe.compile(host_input_tensor)
     host_inputs = [host_input_tensor] * iterations
 
     pipe.preallocate_output_tensors_on_host(
-        iterations, [batch_size_per_device, torch_output_tensor.shape[-1]], ttnn.bfloat16, ttnn.TILE_LAYOUT
+        len(host_inputs),
     )
 
     start = time.time()

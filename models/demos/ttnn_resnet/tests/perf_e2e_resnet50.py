@@ -64,9 +64,6 @@ def _run_model_pipeline(
 
     pipeline.preallocate_output_tensors_on_host(
         num_measurement_iterations,
-        [test_infra.batch_size * test_infra.num_devices, 1, 1, 1000],
-        ttnn.bfloat16,
-        ttnn.ROW_MAJOR_LAYOUT,
     )
 
     logger.info(
@@ -74,9 +71,9 @@ def _run_model_pipeline(
     )
     if use_signpost:
         signpost(header="start")
-    profiler.start(f"run")
+    profiler.start(f"run_model_pipeline_{num_command_queues}cqs")
     outputs = pipeline.enqueue(host_inputs).pop_all()
-    profiler.end(f"run")
+    profiler.end(f"run_model_pipeline_{num_command_queues}cqs")
     if use_signpost:
         signpost(header="stop")
     ttnn.read_device_profiler(device)
@@ -204,10 +201,11 @@ def run_perf_resnet(
         else:
             assert False, f"Model version to run {model_version} not found"
 
-    first_iter_time = profiler.get(f"compile") + profiler.get(f"cache")
+    first_iter_time = profiler.get(f"compile")
 
     # ensuring inference time fluctuations is not noise
-    inference_time_avg = profiler.get("run") / num_measurement_iterations
+    num_cqs = 2 if "2cqs" in model_version else 1
+    inference_time_avg = profiler.get(f"run_model_pipeline_{num_cqs}cqs") / num_measurement_iterations
 
     cpu_time = profiler.get(cpu_key)
     compile_time = first_iter_time - 2 * inference_time_avg
