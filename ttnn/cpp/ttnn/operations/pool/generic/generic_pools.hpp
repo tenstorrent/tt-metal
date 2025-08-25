@@ -15,7 +15,7 @@ namespace ttnn {
 namespace operations::pool {
 
 struct MaxPool2DOp {
-    static Tensor invoke(
+    static std::variant<Tensor, std::pair<Tensor, Tensor>> invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
         uint32_t batch_size,
@@ -31,7 +31,8 @@ struct MaxPool2DOp {
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
         bool in_place_halo = false,
         bool deallocate_input = false,
-        bool reallocate_halo_output = true);
+        bool reallocate_halo_output = true,
+        bool return_indices);
 };
 struct AvgPool2DOp {
     static Tensor invoke(
