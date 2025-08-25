@@ -621,7 +621,7 @@ def run_llama3_demo(
             0,  # start_pos
         ),
         (  # quick 1L demo
-            "random",
+            "instruct",
             1,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode

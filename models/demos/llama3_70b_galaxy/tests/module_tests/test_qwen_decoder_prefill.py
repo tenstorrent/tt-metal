@@ -80,9 +80,7 @@ def test_qwen_decoder_inference_prefill(
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
     partial_state_dict = {
-        k[len(first_layer_prefix) :]: v
-        for k, v in state_dict.items()
-        if (k.startswith(first_layer_prefix) and "q_norm" not in k and "k_norm" not in k)
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
     reference_model = TransformerBlock(layer_id=0, args=model_args, llama3=False)  # Enable QK norm with llama3=True

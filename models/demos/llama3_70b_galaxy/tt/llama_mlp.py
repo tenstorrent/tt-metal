@@ -6,7 +6,6 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
-from loguru import logger
 
 
 def pad_to_next_multiple(tensor):
@@ -54,10 +53,7 @@ class TtLlamaMLP(LightweightModule):
         if args.dummy_weights:
             cache_name = lambda _: None
         else:
-            cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}" + "prefetcher")
-
-        w1_cache_name = cache_name("w1_sharded")
-        logger.info(f"cache_name in MLP: {w1_cache_name}")
+            cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}")
 
         w1_w3_mem_config = self.model_config[
             "W1W3_RING_MEMCFG"
