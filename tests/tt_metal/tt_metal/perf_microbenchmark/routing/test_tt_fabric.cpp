@@ -184,9 +184,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    if (device_opened) {
-        test_context.close_devices();
-    }
+    test_context.close_devices();
 
     // Check if any tests failed validation and throw at the end
     if (test_context.has_test_failures()) {
