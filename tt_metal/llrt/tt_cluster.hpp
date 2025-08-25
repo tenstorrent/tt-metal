@@ -109,7 +109,6 @@ public:
     const std::unordered_map<chip_id_t, uint64_t>& get_unique_chip_ids() const {
         return this->cluster_desc_->get_chip_unique_ids();
     }
-
     std::unordered_map<chip_id_t, eth_coord_t> get_all_chip_ethernet_coordinates() const;
 
     chip_id_t get_physical_chip_id_from_eth_coord(const eth_coord_t& eth_coord) const;

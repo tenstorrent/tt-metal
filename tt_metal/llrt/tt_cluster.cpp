@@ -38,8 +38,6 @@
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "tt_metal/fabric/intermesh_constants.hpp"
-#include <unistd.h>
 #include "tt_metal/llrt/tlb_config.hpp"
 #include <umd/device/cluster.h>
 #include <umd/device/hugepage.h>

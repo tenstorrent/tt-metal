@@ -2068,7 +2068,6 @@ void ControlPlane::generate_local_intermesh_link_table() {
                     .board_id = remote_board_id,
                     .chan_id = remote_chan_id,
                 };
-
                 intermesh_link_table_.intermesh_links[local_eth_chan_desc] = remote_eth_chan_desc;
                 chip_id_to_asic_id_[chip_id] = local_board_id;
             }
