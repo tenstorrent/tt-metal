@@ -316,10 +316,6 @@ Tensor all_gather_async_impl(
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    // create this semaphore for all cores since we don't know which core will be used for teardown draining
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-
     bool using_persistent_buffers = false;
 
     return tt::tt_metal::operation::run(
@@ -385,10 +381,6 @@ Tensor all_gather_async_impl(
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    // create this semaphore for all cores since we don't know which core will be used for teardown draining
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-
     bool using_persistent_buffers = persistent_output_buffer.has_value();
 
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_buffer};
@@ -450,9 +442,6 @@ Tensor all_gather_async_impl(
     bool using_persistent_buffers = persistent_output_tensor.has_value();
 
     std::vector<std::optional<Tensor>> optional_output_tensors = {persistent_output_tensor};
-
-    CoreCoord grid_size = mesh_device.compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
 
     return tt::tt_metal::operation::run(
                ttnn::AllGatherAsync{
