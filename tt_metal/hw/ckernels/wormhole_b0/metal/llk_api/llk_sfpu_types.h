@@ -120,4 +120,5 @@ enum SfpuType {
     where,
     softsign,
     celu,
+    selu,
 };
