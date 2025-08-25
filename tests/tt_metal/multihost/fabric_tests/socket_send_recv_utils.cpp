@@ -237,7 +237,7 @@ bool test_socket_send_recv(
                     recv_data_readback.begin() + idx * data_size / sizeof(uint32_t),
                     recv_data_readback.begin() + (idx + 1) * data_size / sizeof(uint32_t));
                 is_data_match &= (src_vec_per_core == recv_data_readback_per_core);
-                EXPECT_TRUE(is_data_match);
+                EXPECT_EQ(src_vec_per_core, recv_data_readback_per_core);
             }
         }
         // Increment the source vector for the next iteration
