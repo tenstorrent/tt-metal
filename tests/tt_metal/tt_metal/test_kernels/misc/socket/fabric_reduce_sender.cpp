@@ -40,10 +40,9 @@ void kernel_main() {
         for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
             sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
             uint64_t receiver_noc_coord_addr =
-                get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, 0);
+                get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.write_ptr);
             fabric_set_unicast_route(data_packet_header_addr, downstream_enc);
-            data_packet_header_addr->to_noc_unicast_write(
-                NocUnicastCommandHeader{receiver_noc_coord_addr | sender_socket.write_ptr}, page_size);
+            data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{receiver_noc_coord_addr}, page_size);
             sender_fabric_connection.wait_for_empty_write_slot();
             sender_fabric_connection.send_payload_without_header_non_blocking_from_address(data_addr, page_size);
             sender_fabric_connection.send_payload_blocking_from_address(

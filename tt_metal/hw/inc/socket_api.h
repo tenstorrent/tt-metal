@@ -20,7 +20,6 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 
 static_assert(offsetof(receiver_socket_md, bytes_sent) % L1_ALIGNMENT == 0);
-static_assert(offsetof(sender_socket_md, num_downstreams) % L1_ALIGNMENT == 0);
 
 template <typename T>
 constexpr bool always_false = false;

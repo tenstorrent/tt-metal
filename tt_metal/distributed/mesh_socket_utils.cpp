@@ -35,10 +35,8 @@ group_socket_connections(const SocketConfig& config, SocketEndpoint socket_endpo
             grouped_connections;
     uint32_t conn_idx = 0;
     for (const auto& connection : config.socket_connection_config) {
-        auto& device_map = grouped_connections
-            [is_sender ? connection.sender_core.device_coord : connection.receiver_core.device_coord];
-        device_map[is_sender ? connection.sender_core.core_coord : connection.receiver_core.core_coord].push_back(
-            std::make_pair(conn_idx++, connection));
+        auto& core = is_sender ? connection.sender_core : connection.receiver_core;
+        grouped_connections[core.device_coord][core.core_coord].push_back(std::make_pair(conn_idx++, connection));
     }
     return grouped_connections;
 }

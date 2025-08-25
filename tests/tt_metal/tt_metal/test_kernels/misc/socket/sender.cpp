@@ -31,8 +31,7 @@ void kernel_main() {
             sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
             noc_async_write(
                 data_addr,
-                get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, 0) |
-                    sender_socket.write_ptr,
+                get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.write_ptr),
                 page_size);
         }
         data_addr += page_size;

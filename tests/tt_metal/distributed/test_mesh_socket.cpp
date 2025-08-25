@@ -21,6 +21,7 @@
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/system_mesh.hpp>
 #include <cstring>
+#include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -42,10 +43,6 @@ struct ParsedSenderPage {
     std::vector<sender_downstream_encoding> encodings;
 };
 
-static inline uint32_t align_up_local(uint32_t value, uint32_t alignment) {
-    return ((value + alignment - 1) / alignment) * alignment;
-}
-
 static ParsedSenderPage parse_sender_page(
     const uint8_t* page_base, uint32_t l1_alignment, uint32_t max_num_downstreams) {
     ParsedSenderPage parsed;
@@ -53,8 +50,8 @@ static ParsedSenderPage parse_sender_page(
     EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(page_base) % l1_alignment);
     std::memcpy(&parsed.md, page_base, sizeof(sender_socket_md));
 
-    const uint32_t md_size_aligned = align_up_local(sizeof(sender_socket_md), l1_alignment);
-    const uint32_t ack_stride = align_up_local(sizeof(uint32_t), l1_alignment);
+    const uint32_t md_size_aligned = tt::align(sizeof(sender_socket_md), l1_alignment);
+    const uint32_t ack_stride = tt::align(sizeof(uint32_t), l1_alignment);
     const uint32_t ack_base = md_size_aligned;
 
     // copy each of the acked bytes
@@ -68,7 +65,7 @@ static ParsedSenderPage parse_sender_page(
     }
 
     // copy each of the encodings
-    const uint32_t enc_stride = align_up_local(sizeof(sender_downstream_encoding), l1_alignment);
+    const uint32_t enc_stride = tt::align(sizeof(sender_downstream_encoding), l1_alignment);
     const uint32_t enc_base = ack_base + max_num_downstreams * ack_stride;
     parsed.encodings.resize(parsed.md.num_downstreams);
     for (uint32_t i = 0; i < parsed.md.num_downstreams; ++i) {
@@ -127,7 +124,7 @@ void verify_socket_configs(
     EXPECT_EQ(recv_config.upstream_noc_x, sender_virtual_coord.x);
     EXPECT_EQ(
         recv_config.upstream_bytes_acked_addr,
-        send_socket.get_config_buffer()->address() + align_up_local(sizeof(sender_socket_md), l1_alignment));
+        send_socket.get_config_buffer()->address() + tt::align(sizeof(sender_socket_md), l1_alignment));
     EXPECT_EQ(recv_config.upstream_bytes_acked_addr % l1_alignment, 0);
 }
 
@@ -266,7 +263,6 @@ void test_single_connection_single_device_socket(
     AddProgramToMeshWorkload(mesh_workload, std::move(send_recv_program), devices);
     EnqueueMeshWorkload(md0->mesh_command_queue(), mesh_workload, false);
     std::vector<uint32_t> recv_data_readback;
-    Finish(md0->mesh_command_queue());
     ReadShard(md0->mesh_command_queue(), recv_data_readback, recv_data_buffer, MeshCoordinate(0, 0));
     EXPECT_EQ(src_vec, recv_data_readback);
 }

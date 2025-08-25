@@ -116,15 +116,11 @@ private:
 namespace std {
 template <>
 struct hash<tt::tt_metal::distributed::MeshCoreCoord> {
-    size_t operator()(const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(coord.device_coord, coord.core_coord);
-    }
+    size_t operator()(const tt::tt_metal::distributed::MeshCoreCoord& coord) const noexcept;
 };
 template <>
 struct hash<tt::tt_metal::distributed::SocketConnection> {
-    size_t operator()(const tt::tt_metal::distributed::SocketConnection& conn) const noexcept {
-        return tt::stl::hash::hash_objects_with_default_seed(conn.sender_core, conn.receiver_core);
-    }
+    size_t operator()(const tt::tt_metal::distributed::SocketConnection& conn) const noexcept;
 };
 template <>
 struct hash<tt::tt_metal::distributed::SocketConfig> {

@@ -65,12 +65,12 @@ void kernel_main() {
         for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
             sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
             uint64_t receiver_noc_coord_addr =
-                get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, 0);
+                get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.write_ptr);
             fabric_write_any_len(
                 data_packet_header_addr,
                 fabric_connection,
                 data_addr,
-                receiver_noc_coord_addr | sender_socket.write_ptr,
+                receiver_noc_coord_addr,
                 page_size,
                 downstream_enc);
         }
