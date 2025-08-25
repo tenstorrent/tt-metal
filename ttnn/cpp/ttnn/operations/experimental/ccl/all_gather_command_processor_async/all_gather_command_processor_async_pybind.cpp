@@ -37,7 +37,7 @@ void bind_all_gather_command_processor_async(
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
                std::optional<uint32_t> cluster_axis,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
+               std::optional<tt::tt_metal::SubDeviceId> sub_device_id) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -47,7 +47,7 @@ void bind_all_gather_command_processor_async(
                     memory_config,
                     topology,
                     cluster_axis,
-                    subdevice_id);
+                    sub_device_id);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -58,7 +58,7 @@ void bind_all_gather_command_processor_async(
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring,
             py::arg("cluster_axis") = std::nullopt,
-            py::arg("subdevice_id") = std::nullopt});
+            py::arg("sub_device_id") = std::nullopt});
 }
 
 }  // namespace

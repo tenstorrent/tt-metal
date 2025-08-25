@@ -44,7 +44,6 @@ target_sources(
         llama_reduce_scatter_create_heads/device/llama_reduce_scatter_create_heads_program_factory.cpp
         all_gather_async/all_gather_async.cpp
         all_gather_async/device/all_gather_async_op.cpp
-        all_gather_async/device/all_gather_async_program.cpp
         all_gather_async/device/all_gather_async_program_minimal_variants.cpp
         all_gather_command_processor_async/all_gather_command_processor_async.cpp
         all_gather_command_processor_async/device/all_gather_command_processor_async_op.cpp
