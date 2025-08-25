@@ -1,136 +1,224 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
-from ttnn.model_preprocessing import (
-    fold_batch_norm2d_into_conv2d,
-    infer_ttnn_module_args,
-    preprocess_linear_bias,
-    preprocess_linear_weight,
-    preprocess_model_parameters,
-)
+from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, infer_ttnn_module_args, preprocess_model_parameters
 
 import ttnn
-from models.demos.ufld_v2.common import load_torch_model
+from models.demos.ufld_v2.common import UFLD_V2_L1_SMALL_SIZE
 from models.demos.ufld_v2.reference.ufld_v2_model import BasicBlock, TuSimple34
 from models.demos.ufld_v2.ttnn.ttnn_basic_block import TtnnBasicBlock
 from models.demos.ufld_v2.ttnn.ttnn_ufld_v2 import TtnnUFLDv2
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def custom_preprocessor_basic_block(model, name):
+def get_mesh_mappers(device):
+    if device.get_num_devices() > 1:
+        inputs_mesh_mapper = ttnn.shard_tensor_to_mesh_mapper(device, dim=0)
+        weights_mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        output_mesh_composer = ttnn.ConcatMeshToTensor(device, dim=0)
+    else:
+        inputs_mesh_mapper = None
+        weights_mesh_mapper = None
+        output_mesh_composer = None
+    return inputs_mesh_mapper, weights_mesh_mapper, output_mesh_composer
+
+
+def preprocess_linear_weight(weight, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    weight = weight.T.contiguous()
+    weight = ttnn.from_torch(weight, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return weight
+
+
+def preprocess_linear_bias(bias, *, dtype, layout=ttnn.TILE_LAYOUT, mesh_mapper=None):
+    bias = bias.reshape((1, -1))
+    bias = ttnn.from_torch(bias, dtype=dtype, layout=layout, mesh_mapper=mesh_mapper)
+    return bias
+
+
+def create_custom_mesh_preprocessor(mesh_mapper=None, is_basic_block=False):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        if is_basic_block:
+            return custom_preprocessor_basic_block(model, name, mesh_mapper)
+        else:
+            return custom_preprocessor_whole_model(model, name, mesh_mapper)
+
+    return custom_mesh_preprocessor
+
+
+def custom_preprocessor_basic_block(model, name, mesh_mapper=None):
     parameters = {}
     if isinstance(model, BasicBlock):
         weight, bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
         parameters["conv1"] = {}
-        parameters["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.conv2, model.bn2)
         parameters["conv2"] = {}
-        parameters["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
 
     return parameters
 
 
-def custom_preprocessor_whole_model(model, name):
+def custom_preprocessor_whole_model(model, name, mesh_mapper=None):
     parameters = {}
     if isinstance(model, TuSimple34):
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.conv1, model.res_model.bn1)
         parameters["res_model"] = {}
         parameters["res_model"]["conv1"] = {}
-        parameters["res_model"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer1[0].conv1, model.res_model.layer1[0].bn1)
         parameters["res_model"]["layer1_0"] = {}
         parameters["res_model"]["layer1_0"]["conv1"] = {}
-        parameters["res_model"]["layer1_0"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer1_0"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer1_0"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer1_0"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer1[0].conv2, model.res_model.layer1[0].bn2)
         parameters["res_model"]["layer1_0"]["conv2"] = {}
-        parameters["res_model"]["layer1_0"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer1_0"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer1_0"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer1_0"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer1[1].conv1, model.res_model.layer1[1].bn1)
         parameters["res_model"]["layer1_1"] = {}
         parameters["res_model"]["layer1_1"]["conv1"] = {}
-        parameters["res_model"]["layer1_1"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer1_1"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer1_1"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer1_1"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer1[1].conv2, model.res_model.layer1[1].bn2)
         parameters["res_model"]["layer1_1"]["conv2"] = {}
-        parameters["res_model"]["layer1_1"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer1_1"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer1_1"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer1_1"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer1[2].conv1, model.res_model.layer1[2].bn1)
         parameters["res_model"]["layer1_2"] = {}
         parameters["res_model"]["layer1_2"]["conv1"] = {}
-        parameters["res_model"]["layer1_2"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer1_2"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer1_2"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer1_2"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer1[2].conv2, model.res_model.layer1[2].bn2)
         parameters["res_model"]["layer1_2"]["conv2"] = {}
-        parameters["res_model"]["layer1_2"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer1_2"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer1_2"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer1_2"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer2[0].conv1, model.res_model.layer2[0].bn1)
         parameters["res_model"]["layer2_0"] = {}
         parameters["res_model"]["layer2_0"]["conv1"] = {}
-        parameters["res_model"]["layer2_0"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_0"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer2_0"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_0"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer2[0].conv2, model.res_model.layer2[0].bn2)
         parameters["res_model"]["layer2_0"]["conv2"] = {}
-        parameters["res_model"]["layer2_0"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_0"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer2_0"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_0"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer2[1].conv1, model.res_model.layer2[1].bn1)
         parameters["res_model"]["layer2_1"] = {}
         parameters["res_model"]["layer2_1"]["conv1"] = {}
-        parameters["res_model"]["layer2_1"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_1"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer2_1"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_1"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer2[1].conv2, model.res_model.layer2[1].bn2)
         parameters["res_model"]["layer2_1"]["conv2"] = {}
-        parameters["res_model"]["layer2_1"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_1"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer2_1"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_1"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer2[2].conv1, model.res_model.layer2[2].bn1)
         parameters["res_model"]["layer2_2"] = {}
         parameters["res_model"]["layer2_2"]["conv1"] = {}
-        parameters["res_model"]["layer2_2"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_2"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer2_2"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_2"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer2[2].conv2, model.res_model.layer2[2].bn2)
         parameters["res_model"]["layer2_2"]["conv2"] = {}
-        parameters["res_model"]["layer2_2"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_2"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer2_2"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_2"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer2[3].conv1, model.res_model.layer2[3].bn1)
         parameters["res_model"]["layer2_3"] = {}
         parameters["res_model"]["layer2_3"]["conv1"] = {}
-        parameters["res_model"]["layer2_3"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_3"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer2_3"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_3"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer2[3].conv2, model.res_model.layer2[3].bn2)
         parameters["res_model"]["layer2_3"]["conv2"] = {}
-        parameters["res_model"]["layer2_3"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_3"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer2_3"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer2_3"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         if hasattr(model.res_model.layer2[0], "downsample") and model.res_model.layer2[0].downsample is not None:
             downsample = model.res_model.layer2[0].downsample
@@ -140,82 +228,132 @@ def custom_preprocessor_whole_model(model, name):
                 weight, bias = fold_batch_norm2d_into_conv2d(conv_layer, bn_layer)
                 parameters["res_model"]["layer2_0"]["downsample"] = {}
                 parameters["res_model"]["layer2_0"]["downsample"]["weight"] = ttnn.from_torch(
-                    weight, dtype=ttnn.float32
+                    weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
                 )
                 bias = bias.reshape((1, 1, 1, -1))
-                parameters["res_model"]["layer2_0"]["downsample"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+                parameters["res_model"]["layer2_0"]["downsample"]["bias"] = ttnn.from_torch(
+                    bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer3[0].conv1, model.res_model.layer3[0].bn1)
         parameters["res_model"]["layer3_0"] = {}
         parameters["res_model"]["layer3_0"]["conv1"] = {}
-        parameters["res_model"]["layer3_0"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_0"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer3_0"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_0"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer3[0].conv2, model.res_model.layer3[0].bn2)
         parameters["res_model"]["layer3_0"]["conv2"] = {}
-        parameters["res_model"]["layer3_0"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_0"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer3_0"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_0"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer3[1].conv1, model.res_model.layer3[1].bn1)
         parameters["res_model"]["layer3_1"] = {}
         parameters["res_model"]["layer3_1"]["conv1"] = {}
-        parameters["res_model"]["layer3_1"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_1"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer3_1"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_1"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer3[1].conv2, model.res_model.layer3[1].bn2)
         parameters["res_model"]["layer3_1"]["conv2"] = {}
-        parameters["res_model"]["layer3_1"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_1"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer3_1"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_1"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer3[2].conv1, model.res_model.layer3[2].bn1)
         parameters["res_model"]["layer3_2"] = {}
         parameters["res_model"]["layer3_2"]["conv1"] = {}
-        parameters["res_model"]["layer3_2"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_2"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer3_2"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_2"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer3[2].conv2, model.res_model.layer3[2].bn2)
         parameters["res_model"]["layer3_2"]["conv2"] = {}
-        parameters["res_model"]["layer3_2"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_2"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer3_2"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_2"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer3[3].conv1, model.res_model.layer3[3].bn1)
         parameters["res_model"]["layer3_3"] = {}
         parameters["res_model"]["layer3_3"]["conv1"] = {}
-        parameters["res_model"]["layer3_3"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_3"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer3_3"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_3"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer3[3].conv2, model.res_model.layer3[3].bn2)
         parameters["res_model"]["layer3_3"]["conv2"] = {}
-        parameters["res_model"]["layer3_3"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_3"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer3_3"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_3"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer3[4].conv1, model.res_model.layer3[4].bn1)
         parameters["res_model"]["layer3_4"] = {}
         parameters["res_model"]["layer3_4"]["conv1"] = {}
-        parameters["res_model"]["layer3_4"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_4"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer3_4"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_4"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer3[4].conv2, model.res_model.layer3[4].bn2)
         parameters["res_model"]["layer3_4"]["conv2"] = {}
-        parameters["res_model"]["layer3_4"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_4"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer3_4"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_4"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer3[5].conv1, model.res_model.layer3[5].bn1)
         parameters["res_model"]["layer3_5"] = {}
         parameters["res_model"]["layer3_5"]["conv1"] = {}
-        parameters["res_model"]["layer3_5"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_5"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer3_5"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_5"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer3[5].conv2, model.res_model.layer3[5].bn2)
         parameters["res_model"]["layer3_5"]["conv2"] = {}
-        parameters["res_model"]["layer3_5"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_5"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer3_5"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer3_5"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         if hasattr(model.res_model.layer3[0], "downsample") and model.res_model.layer3[0].downsample is not None:
             downsample = model.res_model.layer3[0].downsample
@@ -225,46 +363,72 @@ def custom_preprocessor_whole_model(model, name):
                 weight, bias = fold_batch_norm2d_into_conv2d(conv_layer, bn_layer)
                 parameters["res_model"]["layer3_0"]["downsample"] = {}
                 parameters["res_model"]["layer3_0"]["downsample"]["weight"] = ttnn.from_torch(
-                    weight, dtype=ttnn.float32
+                    weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
                 )
                 bias = bias.reshape((1, 1, 1, -1))
-                parameters["res_model"]["layer3_0"]["downsample"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+                parameters["res_model"]["layer3_0"]["downsample"]["bias"] = ttnn.from_torch(
+                    bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer4[0].conv1, model.res_model.layer4[0].bn1)
         parameters["res_model"]["layer4_0"] = {}
         parameters["res_model"]["layer4_0"]["conv1"] = {}
-        parameters["res_model"]["layer4_0"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer4_0"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer4_0"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer4_0"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer4[0].conv2, model.res_model.layer4[0].bn2)
         parameters["res_model"]["layer4_0"]["conv2"] = {}
-        parameters["res_model"]["layer4_0"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer4_0"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer4_0"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer4_0"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer4[1].conv1, model.res_model.layer4[1].bn1)
         parameters["res_model"]["layer4_1"] = {}
         parameters["res_model"]["layer4_1"]["conv1"] = {}
-        parameters["res_model"]["layer4_1"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer4_1"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer4_1"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer4_1"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer4[1].conv2, model.res_model.layer4[1].bn2)
         parameters["res_model"]["layer4_1"]["conv2"] = {}
-        parameters["res_model"]["layer4_1"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer4_1"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer4_1"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer4_1"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer4[2].conv1, model.res_model.layer4[2].bn1)
         parameters["res_model"]["layer4_2"] = {}
         parameters["res_model"]["layer4_2"]["conv1"] = {}
-        parameters["res_model"]["layer4_2"]["conv1"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer4_2"]["conv1"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer4_2"]["conv1"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer4_2"]["conv1"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         weight, bias = fold_batch_norm2d_into_conv2d(model.res_model.layer4[2].conv2, model.res_model.layer4[2].bn2)
         parameters["res_model"]["layer4_2"]["conv2"] = {}
-        parameters["res_model"]["layer4_2"]["conv2"]["weight"] = ttnn.from_torch(weight, dtype=ttnn.float32)
+        parameters["res_model"]["layer4_2"]["conv2"]["weight"] = ttnn.from_torch(
+            weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
         bias = bias.reshape((1, 1, 1, -1))
-        parameters["res_model"]["layer4_2"]["conv2"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+        parameters["res_model"]["layer4_2"]["conv2"]["bias"] = ttnn.from_torch(
+            bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+        )
 
         if hasattr(model.res_model.layer4[0], "downsample") and model.res_model.layer4[0].downsample is not None:
             downsample = model.res_model.layer4[0].downsample
@@ -274,16 +438,18 @@ def custom_preprocessor_whole_model(model, name):
                 weight, bias = fold_batch_norm2d_into_conv2d(conv_layer, bn_layer)
                 parameters["res_model"]["layer4_0"]["downsample"] = {}
                 parameters["res_model"]["layer4_0"]["downsample"]["weight"] = ttnn.from_torch(
-                    weight, dtype=ttnn.float32
+                    weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper
                 )
                 bias = bias.reshape((1, 1, 1, -1))
-                parameters["res_model"]["layer4_0"]["downsample"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+                parameters["res_model"]["layer4_0"]["downsample"]["bias"] = ttnn.from_torch(
+                    bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper
+                )
 
         parameters["pool"] = {}
-        parameters["pool"]["weight"] = ttnn.from_torch(model.pool.weight, dtype=ttnn.float32)
+        parameters["pool"]["weight"] = ttnn.from_torch(model.pool.weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
         if model.pool.bias is not None:
             bias = model.pool.bias.reshape((1, 1, 1, -1))
-            parameters["pool"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
+            parameters["pool"]["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
         else:
             parameters["pool"]["bias"] = None
 
@@ -311,7 +477,7 @@ def custom_preprocessor_whole_model(model, name):
         (1, 64, 80, 200),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UFLD_V2_L1_SMALL_SIZE}], indirect=True)
 def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
     torch_model = TuSimple34(input_height=height, input_width=width).res_model.layer1[0]
     torch_model.to(torch.bfloat16)
@@ -327,7 +493,7 @@ def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
     ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
-        custom_preprocessor=custom_preprocessor_basic_block,
+        custom_preprocessor=create_custom_mesh_preprocessor(is_basic_block=True),
         device=device,
     )
     parameters.conv_args = {}
@@ -360,17 +526,29 @@ def test_ufld_v2_basic_block(device, batch_size, input_channels, height, width):
         # "pretrained_weight_true",  # uncomment to run the model for real weights
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": UFLD_V2_L1_SMALL_SIZE}], indirect=True)
 def test_ufld_v2_model(device, batch_size, input_channels, height, width, use_pretrained_weight, min_channels=8):
-    torch_model = load_torch_model().to(torch.bfloat16)
+    torch_model = TuSimple34(input_height=height, input_width=width)
+    torch_model.to(torch.bfloat16)
+    torch_model.eval()
     torch_input_tensor = torch.randn((batch_size, input_channels, height, width), dtype=torch.bfloat16)
     torch_output = torch_model(torch_input_tensor)
+    if use_pretrained_weight:
+        weights_path = "models/demos/ufld_v2/tusimple_res34.pth"
+        if not os.path.exists(weights_path):
+            os.system("bash models/demos/ufld_v2/weights_download.sh")
+            state_dict = torch.load(weights_path)
+            new_state_dict = {}
+            for key, value in state_dict["model"].items():
+                new_key = key.replace("model.", "res_model.")
+                new_state_dict[new_key] = value
+            torch_model.load_state_dict(new_state_dict)
     n, c, h, w = torch_input_tensor.shape
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
     ttnn_input_tensor = ttnn_input_tensor.to(device, ttnn.L1_MEMORY_CONFIG)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model,
-        custom_preprocessor=custom_preprocessor_whole_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(),
         device=device,
     )
     parameters.conv_args = {}

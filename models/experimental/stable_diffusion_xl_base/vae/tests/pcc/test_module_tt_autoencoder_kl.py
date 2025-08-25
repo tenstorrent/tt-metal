@@ -23,13 +23,16 @@ from loguru import logger
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
-def test_vae(device, input_shape, pcc, is_ci_env, reset_seeds):
+def test_vae(device, input_shape, pcc, is_ci_env, reset_seeds, is_ci_v2_env, model_location_generator):
+    model_location = model_location_generator(
+        "stable-diffusion-xl-base-1.0/vae", download_if_ci_v2=True, ci_v2_timeout_in_s=1800
+    )
     vae = AutoencoderKL.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        "stabilityai/stable-diffusion-xl-base-1.0" if not is_ci_v2_env else model_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        subfolder="vae",
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_env or is_ci_v2_env,
+        subfolder="vae" if not is_ci_v2_env else None,
     )
     vae.eval()
     state_dict = vae.state_dict()

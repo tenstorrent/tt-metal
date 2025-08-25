@@ -18,120 +18,7 @@
 
 constexpr uint32_t DEFAULT_ETH_TXQ = 0;
 
-// STREAM REGISTER ASSIGNMENT
-// senders update this stream
-constexpr uint32_t to_receiver_0_pkts_sent_id = 0;
-// senders update this stream
-constexpr uint32_t to_receiver_1_pkts_sent_id = 1;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_0_pkts_acked_id = 2;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_1_pkts_acked_id = 3;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_2_pkts_acked_id = 4;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_3_pkts_acked_id = 5;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_4_pkts_acked_id = 6;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_0_pkts_completed_id = 7;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_1_pkts_completed_id = 8;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_2_pkts_completed_id = 9;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_3_pkts_completed_id = 10;
-// receivers updates the reg on this stream
-constexpr uint32_t to_sender_4_pkts_completed_id = 11;
-
-/*
-Receiver channel side registers are defined here to receive free-slot credits from downstream sender channels.
-
-                                North Router
-                        ┌───────────────────────────────────┐
-                        │                                   │
-                        │  ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
-                        │  │    │ │    │ │    │ │    │      │
-                        │  │    │ │    │ │    │ │    │      │
-                        │  └────┘ └────┘ └────┘ └────┘      │
-                        │  ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
-                        │  │    │ │    │ │    │ │    │      │
-                        │  │    │ │    │ │    │ │    │      │
-                        │  │    │ │    │ │    │ │    │      │
-                        │  │    │ │    │ │    │ │    │      │
-                        │  └────┘ └─┬──┘ └────┘ └────┘      │
-    West Router         └───────────┼───────────────────────┘        East Router
- ┌─────────────────────┐            │                             ┌────────────────────────────┐
- │                     │            │                             │                            │
- │                     │            │                             │                            │
- │               ┌────┐│ (increment)│    Acks From East           │┌──────────────┐ ┌────┐     │
- │   Free Slots  │    ◄┼────────────┼───────────────────┐         ││              │ │    │ E   │
- │     East      │    ││            │                   │         ││              │ │    │     │
- │               └────┘│            │                   │         │└──────────────┘ └────┘     │
- │                 12  │            │                   │         │                            │
- │               ┌────┐│            │                   │         │┌──────────────┐ ┌────┐     │
- │   Free Slots  │    ││            │                   │         ││              │ │    │ W   │
- │     West      │    ││            │                   └─────────┼┼              │ │    │     │
- │               └────┘│            │                             │└──────────────┘ └────┘     │
- │                 13  │            │                             │                            │
- │               ┌────┐│ (increment)│                             │┌──────────────┐ ┌────┐     │
- │   Free Slots  │    │◄────────────┘                             ││              │ │    │ N   │
- │     North     │    ││  Acks From North                         ││              │ │    │     │
- │               └────┘│                                          │└──────────────┘ └────┘     │
- │                 14  │                                          │                            │
- │               ┌────┐│  Acks From South                         │┌──────────────┐ ┌────┐     │
- │   Free Slots  │    │◄────────────────┐                         ││              │ │    │ S   │
- │     South     │    ││ (increment)    │                         ││              │ │    │     │
- │               └────┘│                │                         │└──────────────┘ └────┘     │
- │                 15  │                │                         │                            │
- │                     │                │                         │                            │
- │                     │                │                         │                            │
- └─────────────────────┘  ┌─────────────┼───────────────────┐     └────────────────────────────┘
-                          │   ┌────┐ ┌──┼─┐ ┌────┐ ┌────┐   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   └────┘ └────┘ └────┘ └────┘   │
-                          │   ┌────┐ ┌────┐ ┌────┐ ┌────┐   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   │    │ │    │ │    │ │    │   │
-                          │   └────┘ └────┘ └────┘ └────┘   │
-                          │                                 │
-                          └─────────────────────────────────┘
-                                   South Router
-*/
 constexpr size_t NUM_ROUTER_CARDINAL_DIRECTIONS = 4;
-constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
-constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
-constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
-constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
-
-// For post-dateline connection. We only have one counter here because if we are
-// post-dateline, there is only one other possible post-dateline consumer that we
-// can forward to (the consumer in the same direction). Switching directions/turning
-// requires directing back to pre-dateline consumer channels (in those cases, we'd
-// use the receiver_channel_0_free_slots_* location). For the time being, this is
-// placeholder until 2D torus is implemented
-constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
-
-// These are the
-// Slot 17 is defined in the edm_fabric_worker_adapter
-constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
-constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
-constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
-constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
-constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
-
-// For multi-RISC router implementations, the two risc cores must coordinate
-// on the teardown process.
-// The teardown process is as follows:
-// Every RISC core must increment this counter when it is ready to teardown.
-// each waits for the counter to reach the active RISC core count before proceeding
-// One of the RISC cores is designated as the master to complete the teardown (RISC0)
-constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = 31;
 
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 constexpr size_t MAX_NUM_SENDER_CHANNELS = 5;
@@ -139,7 +26,48 @@ constexpr size_t MAX_NUM_SENDER_CHANNELS = 5;
 // Compile Time args
 
 constexpr bool SPECIAL_MARKER_CHECK_ENABLED = true;
-constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = 0;
+
+// Stream IDs from compile time arguments (first 23 arguments)
+constexpr size_t STREAM_ID_ARGS_START_IDX = 0;
+constexpr uint32_t to_receiver_0_pkts_sent_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 0);
+constexpr uint32_t to_receiver_1_pkts_sent_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 1);
+constexpr uint32_t to_sender_0_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 2);
+constexpr uint32_t to_sender_1_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 3);
+constexpr uint32_t to_sender_2_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 4);
+constexpr uint32_t to_sender_3_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 5);
+constexpr uint32_t to_sender_4_pkts_acked_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 6);
+constexpr uint32_t to_sender_0_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 7);
+constexpr uint32_t to_sender_1_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 8);
+constexpr uint32_t to_sender_2_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 9);
+constexpr uint32_t to_sender_3_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 10);
+constexpr uint32_t to_sender_4_pkts_completed_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 11);
+constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 12);
+constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 13);
+constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 14);
+constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 15);
+constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id =
+    get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 16);
+constexpr uint32_t sender_channel_1_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 17);
+constexpr uint32_t sender_channel_2_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 18);
+constexpr uint32_t sender_channel_3_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 19);
+constexpr uint32_t sender_channel_4_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 20);
+constexpr uint32_t vc1_sender_channel_free_slots_stream_id = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 21);
+constexpr uint32_t MULTI_RISC_TEARDOWN_SYNC_STREAM_ID = get_compile_time_arg_val(STREAM_ID_ARGS_START_IDX + 22);
+
+// Special marker after stream IDs
+constexpr size_t STREAM_IDS_END_MARKER_IDX = STREAM_ID_ARGS_START_IDX + 23;
+constexpr size_t STREAM_IDS_END_MARKER = 0xFFEE0001;
+static_assert(
+    !SPECIAL_MARKER_CHECK_ENABLED || get_compile_time_arg_val(STREAM_IDS_END_MARKER_IDX) == STREAM_IDS_END_MARKER,
+    "Stream IDs end marker not found. This implies some arguments were misaligned between host and device. Double "
+    "check the CT args.");
+
+// Main configuration arguments (after stream IDs and marker)
+constexpr size_t SENDER_CHANNEL_NOC_CONFIG_START_IDX = STREAM_IDS_END_MARKER_IDX + 1;
 constexpr size_t NUM_SENDER_CHANNELS = get_compile_time_arg_val(SENDER_CHANNEL_NOC_CONFIG_START_IDX);
 constexpr size_t NUM_RECEIVER_CHANNELS_CT_ARG_IDX = SENDER_CHANNEL_NOC_CONFIG_START_IDX + 1;
 constexpr size_t NUM_RECEIVER_CHANNELS = get_compile_time_arg_val(NUM_RECEIVER_CHANNELS_CT_ARG_IDX);
@@ -158,11 +86,13 @@ static_assert(
 static_assert(
     NUM_SENDER_CHANNELS <= MAX_NUM_SENDER_CHANNELS,
     "NUM_SENDER_CHANNELS must be less than or equal to MAX_NUM_SENDER_CHANNELS");
-static_assert(wait_for_host_signal_IDX == 3, "wait_for_host_signal_IDX must be 3");
+static_assert(
+    wait_for_host_signal_IDX == 27, "wait_for_host_signal_IDX must be 27 (23 stream IDs + 1 marker + 3 config args)");
 static_assert(
     get_compile_time_arg_val(wait_for_host_signal_IDX) == 0 || get_compile_time_arg_val(wait_for_host_signal_IDX) == 1,
     "wait_for_host_signal must be 0 or 1");
-static_assert(MAIN_CT_ARGS_START_IDX == 4, "MAIN_CT_ARGS_START_IDX must be 4");
+static_assert(
+    MAIN_CT_ARGS_START_IDX == 28, "MAIN_CT_ARGS_START_IDX must be 28 (23 stream IDs + 1 marker + 4 config args)");
 
 constexpr uint32_t SWITCH_INTERVAL =
 #ifndef DEBUG_PRINT_ENABLED

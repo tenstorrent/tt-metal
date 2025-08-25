@@ -20,10 +20,18 @@
 #include <vector>
 #include <array>
 #include <cstddef>
+#include <variant>
+#include <functional>
 
 namespace tt::tt_fabric {
 
 struct FabricRiscConfig;
+class FabricEriscDatamoverBuilder;
+class FabricTensixDatamoverBuilder;
+
+// Type alias for any fabric datamover builder
+using FabricDatamoverBuilder = std::
+    variant<std::reference_wrapper<FabricEriscDatamoverBuilder>, std::reference_wrapper<FabricTensixDatamoverBuilder>>;
 
 /**
  * Specify the EDM types—Default, Dateline, DatelineUpstream, and DatelineUpstreamAdjacentDevice—used to configure
@@ -61,8 +69,7 @@ enum class FabricEriscDatamoverType {
     Dateline = 1,
     DatelineUpstream = 2,
     DatelineUpstreamAdjacentDevice = 3,
-    DatelineUpstreamAdjacentDeviceUpstream = 4,
-    Invalid = 5,
+    Invalid = 4,
 };
 
 enum class FabricEriscDatamoverAxis : std::size_t {
@@ -76,6 +83,123 @@ enum class FabricEriscDatamoverContextSwitchType : uint8_t {
     WAIT_FOR_IDLE = 0,
     // Context switch every interval
     INTERVAL = 1,
+};
+
+/*
+Receiver channel side registers are defined here to receive free-slot credits from downstream sender channels.
+
+                                North Router
+                        ┌───────────────────────────────────┐
+                        │                                   │
+                        │  ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  └────┘ └────┘ └────┘ └────┘      │
+                        │  ┌────┐ ┌────┐ ┌────┐ ┌────┐      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  │    │ │    │ │    │ │    │      │
+                        │  └────┘ └─┬──┘ └────┘ └────┘      │
+    West Router         └───────────┼───────────────────────┘        East Router
+ ┌─────────────────────┐            │                             ┌────────────────────────────┐
+ │                     │            │                             │                            │
+ │                     │            │                             │                            │
+ │               ┌────┐│ (increment)│    Acks From East           │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    ◄┼────────────┼───────────────────┐         ││              │ │    │ E   │
+ │     East      │    ││            │                   │         ││              │ │    │     │
+ │               └────┘│            │                   │         │└──────────────┘ └────┘     │
+ │                 12  │            │                   │         │                            │
+ │               ┌────┐│            │                   │         │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    ││            │                   │         ││              │ │    │ W   │
+ │     West      │    ││            │                   └─────────┼┼              │ │    │     │
+ │               └────┘│            │                             │└──────────────┘ └────┘     │
+ │                 13  │            │                             │                            │
+ │               ┌────┐│ (increment)│                             │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    │◄────────────┘                             ││              │ │    │ N   │
+ │     North     │    ││  Acks From North                         ││              │ │    │     │
+ │               └────┘│                                          │└──────────────┘ └────┘     │
+ │                 14  │                                          │                            │
+ │               ┌────┐│  Acks From South                         │┌──────────────┐ ┌────┐     │
+ │   Free Slots  │    │◄────────────────┐                         ││              │ │    │ S   │
+ │     South     │    ││ (increment)    │                         ││              │ │    │     │
+ │               └────┘│                │                         │└──────────────┘ └────┘     │
+ │                 15  │                │                         │                            │
+ │                     │                │                         │                            │
+ │                     │                │                         │                            │
+ └─────────────────────┘  ┌─────────────┼───────────────────┐     └────────────────────────────┘
+                          │   ┌────┐ ┌──┼─┐ ┌────┐ ┌────┐   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   └────┘ └────┘ └────┘ └────┘   │
+                          │   ┌────┐ ┌────┐ ┌────┐ ┌────┐   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   │    │ │    │ │    │ │    │   │
+                          │   └────┘ └────┘ └────┘ └────┘   │
+                          │                                 │
+                          └─────────────────────────────────┘
+                                   South Router
+*/
+struct StreamRegAssignments {
+    // Packet send/ack/complete stream IDs
+    static constexpr uint32_t to_receiver_0_pkts_sent_id = 0;
+    static constexpr uint32_t to_receiver_1_pkts_sent_id = 1;
+    static constexpr uint32_t to_sender_0_pkts_acked_id = 2;
+    static constexpr uint32_t to_sender_1_pkts_acked_id = 3;
+    static constexpr uint32_t to_sender_2_pkts_acked_id = 4;
+    static constexpr uint32_t to_sender_3_pkts_acked_id = 5;
+    static constexpr uint32_t to_sender_4_pkts_acked_id = 6;
+    static constexpr uint32_t to_sender_0_pkts_completed_id = 7;
+    static constexpr uint32_t to_sender_1_pkts_completed_id = 8;
+    static constexpr uint32_t to_sender_2_pkts_completed_id = 9;
+    static constexpr uint32_t to_sender_3_pkts_completed_id = 10;
+    static constexpr uint32_t to_sender_4_pkts_completed_id = 11;
+    // Receiver channel free slots stream IDs
+    static constexpr uint32_t receiver_channel_0_free_slots_from_east_stream_id = 12;
+    static constexpr uint32_t receiver_channel_0_free_slots_from_west_stream_id = 13;
+    static constexpr uint32_t receiver_channel_0_free_slots_from_north_stream_id = 14;
+    static constexpr uint32_t receiver_channel_0_free_slots_from_south_stream_id = 15;
+    static constexpr uint32_t receiver_channel_1_free_slots_from_downstream_stream_id = 16;
+    // Sender channel free slots stream IDs
+    static constexpr uint32_t sender_channel_1_free_slots_stream_id = 18;
+    static constexpr uint32_t sender_channel_2_free_slots_stream_id = 19;
+    static constexpr uint32_t sender_channel_3_free_slots_stream_id = 20;
+    static constexpr uint32_t sender_channel_4_free_slots_stream_id = 21;
+    static constexpr uint32_t vc1_sender_channel_free_slots_stream_id = 22;
+    // Multi-RISC teardown synchronization stream ID
+    static constexpr uint32_t multi_risc_teardown_sync_stream_id = 31;
+
+    static const auto& get_all_stream_ids() {
+        static constexpr std::array stream_ids = {
+            to_receiver_0_pkts_sent_id,
+            to_receiver_1_pkts_sent_id,
+            to_sender_0_pkts_acked_id,
+            to_sender_1_pkts_acked_id,
+            to_sender_2_pkts_acked_id,
+            to_sender_3_pkts_acked_id,
+            to_sender_4_pkts_acked_id,
+            to_sender_0_pkts_completed_id,
+            to_sender_1_pkts_completed_id,
+            to_sender_2_pkts_completed_id,
+            to_sender_3_pkts_completed_id,
+            to_sender_4_pkts_completed_id,
+            receiver_channel_0_free_slots_from_east_stream_id,
+            receiver_channel_0_free_slots_from_west_stream_id,
+            receiver_channel_0_free_slots_from_north_stream_id,
+            receiver_channel_0_free_slots_from_south_stream_id,
+            receiver_channel_1_free_slots_from_downstream_stream_id,
+            sender_channel_1_free_slots_stream_id,
+            sender_channel_2_free_slots_stream_id,
+            sender_channel_3_free_slots_stream_id,
+            sender_channel_4_free_slots_stream_id,
+            vc1_sender_channel_free_slots_stream_id,
+            multi_risc_teardown_sync_stream_id};
+        return stream_ids;
+    }
 };
 
 struct FabricRouterBufferConfig {
@@ -115,6 +239,12 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t dateline_upstream_sender_channel_skip_idx = 1;
     static constexpr std::size_t dateline_upstream_receiver_channel_skip_idx = 1;
     static constexpr std::size_t dateline_upstream_adjcent_sender_channel_skip_idx = 2;
+
+    // num sender channels based on more accurate topology
+    static constexpr std::size_t num_sender_channels_1d_linear = 2;
+    static constexpr std::size_t num_sender_channels_2d_mesh = 4;
+    static constexpr std::size_t num_sender_channels_1d_ring = 3;
+    static constexpr std::size_t num_sender_channels_2d_torus = 5;
 
     static constexpr std::size_t num_sender_channels_1d = 3;
     static constexpr std::size_t num_sender_channels_2d = 5;
@@ -266,8 +396,7 @@ private:
         std::array<size_t, num_sender_channels>& num_sender_buffer_slots,
         std::array<size_t, num_sender_channels>& num_remote_sender_buffer_slots,
         std::array<size_t, num_receiver_channels>& num_receiver_buffer_slots,
-        std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots,
-        std::array<size_t, num_downstream_sender_channels>& num_downstream_sender_buffer_slots);
+        std::array<size_t, num_receiver_channels>& num_remote_receiver_buffer_slots);
 
     FabricEriscDatamoverConfig(Topology topology = Topology::Linear);
 };
@@ -290,8 +419,8 @@ private:
     bool enable_handshake_ = false;
     bool enable_context_switch_ = false;
     bool enable_interrupts_ = false;
-    std::array<bool, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced_;
-    std::array<bool, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced_;
+    std::array<bool, FabricEriscDatamoverConfig::num_sender_channels> is_sender_channel_serviced_{};
+    std::array<bool, FabricEriscDatamoverConfig::num_receiver_channels> is_receiver_channel_serviced_{};
 };
 
 struct SenderWorkerAdapterSpec {
@@ -368,7 +497,7 @@ public:
         const FabricEriscDatamoverConfig& config,
         eth_chan_directions direction,
         bool build_in_worker_connection_mode = false,
-        bool dateline_connection = false);
+        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default);
 
     static FabricEriscDatamoverBuilder build(
         tt::tt_metal::IDevice* device,
@@ -378,7 +507,7 @@ public:
         const FabricNodeId& peer_fabric_node_id,
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
-        bool dateline_connection = false,
+        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
     static FabricEriscDatamoverBuilder build(
@@ -389,7 +518,7 @@ public:
         chip_id_t peer_physical_chip_id,
         const FabricEriscDatamoverConfig& config,
         bool build_in_worker_connection_mode = false,
-        bool dateline_connection = false,
+        FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default,
         eth_chan_directions direction = eth_chan_directions::EAST);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
@@ -402,7 +531,7 @@ public:
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
-    void connect_to_downstream_edm(FabricEriscDatamoverBuilder& downstream_edm);
+    void connect_to_downstream_edm(FabricDatamoverBuilder downstream_builder);
 
     eth_chan_directions get_direction() const;
     size_t get_configured_risc_count() const;
@@ -488,8 +617,14 @@ public:
     FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
     bool enable_first_level_ack = false;
     bool fuse_receiver_flush_and_completion_ptr = true;
+    FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default;
     bool dateline_connection = false;
     bool wait_for_host_signal = false;
+
+private:
+    // Shared helper for setting up VC connections
+    template <typename BuilderType>
+    void setup_downstream_vc_connection(BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id);
 };
 
 }  // namespace tt::tt_fabric

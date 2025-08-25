@@ -942,6 +942,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
         src_sharded ? a.buffer() : nullptr);
 
     uint32_t num_output_tiles = out_sharded ? (unpad_tensor_w_16 ? 16 : ntiles_per_batch * 2) : ntiles_per_block * 2;
+    auto aligned_page_size = output.buffer()->aligned_page_size();
     auto [output_cb_index, cb_output] = create_cb(
         tt::CBIndex::c_16, program, all_cores, output_single_tile_size, num_output_tiles, output_cb_data_format);
 
@@ -973,7 +974,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
      */
     KernelHandle unary_writer_kernel_id;
     if (out_sharded) {
-        std::vector<uint32_t> writer_ct_args = {(uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index};
+        std::vector<uint32_t> writer_ct_args = {
+            (uint32_t)output_cb_index, (uint32_t)sharded_output_cb_index, aligned_page_size};
         unary_writer_kernel_id = CreateKernel(
             program,
             unpad_tensor_w_16

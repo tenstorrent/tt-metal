@@ -4,7 +4,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mesh_trace.hpp"
 
-#include <boost/move/utility_core.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_coord.hpp>
 #include <stdint.h>

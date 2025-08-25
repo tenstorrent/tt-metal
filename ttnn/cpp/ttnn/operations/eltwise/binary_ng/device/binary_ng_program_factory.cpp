@@ -128,10 +128,10 @@ uint32_t get_shards_per_width(const ShardSpec& shard_spec, TensorMemoryLayout me
 
 class ShardShapeGenerator {
     CoreCoord end_core;
-    bool row_major;
-    TensorMemoryLayout memory_layout;
-    std::array<uint32_t, 2> shard_shape;
-    std::array<uint32_t, 2> last_shard_shape;
+    bool row_major{};
+    TensorMemoryLayout memory_layout{TensorMemoryLayout::INTERLEAVED};
+    std::array<uint32_t, 2> shard_shape{};
+    std::array<uint32_t, 2> last_shard_shape{};
 
 public:
     ShardShapeGenerator() = default;

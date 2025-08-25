@@ -16,6 +16,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/compute_throttle_utils.hpp"
 
 namespace ttnn::operations::conv {
@@ -726,6 +727,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         writer_compile_time_args.insert(
             writer_compile_time_args.end(), split_reader_args.begin(), split_reader_args.end());
     }
+    tt::tt_metal::TensorAccessorArgs(b.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias ? bias->buffer() : nullptr).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_kernel_args = {
         act_block_w_ntiles,

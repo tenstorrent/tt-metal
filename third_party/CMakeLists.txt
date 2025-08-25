@@ -49,13 +49,6 @@ ensureboosttarget(container)
 ensureboosttarget(smart_ptr)
 ensureboosttarget(interprocess)
 
-add_library(small_vector INTERFACE)
-target_link_libraries(
-    small_vector
-    INTERFACE
-        "$<BUILD_INTERFACE:Boost::container>" # FIXME: this is a hack so we do not need to package up Boost
-)
-
 ############################################################################################################################
 # yaml-cpp
 ############################################################################################################################

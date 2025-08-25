@@ -80,6 +80,8 @@ struct WorkerToFabricEdmSenderImpl {
         uint16_t buffer_size_bytes;
         uint32_t edm_copy_of_wr_counter_addr;
         volatile uint32_t* writer_send_sem_addr;
+        uint32_t worker_free_slots_stream_id;  // used to update the available buffer slot on the receiving router
+                                               // (decrement by 1 from the sending side for each packet)
 
         // TODO: https://github.com/tenstorrent/tt-metal/issues/24959
         // remove redundant nested constructor to avoid copy
@@ -101,6 +103,7 @@ struct WorkerToFabricEdmSenderImpl {
             edm_copy_of_wr_counter_addr = conn->buffer_index_semaphore_id;
             writer_send_sem_addr = reinterpret_cast<volatile uint32_t*>(
                 reinterpret_cast<uintptr_t>(&aligned_conn->worker_flow_control_semaphore));
+            worker_free_slots_stream_id = static_cast<uint32_t>(conn->worker_free_slots_stream_id);
         } else {
             // TODO: will be deprecated. currently for ethernet dispatch case
             //       ethernet core need to have same memory mapping as worker
@@ -118,6 +121,7 @@ struct WorkerToFabricEdmSenderImpl {
             auto writer_send_sem_id = get_arg_val<uint32_t>(arg_idx++);
             writer_send_sem_addr =
                 reinterpret_cast<volatile uint32_t*>(get_semaphore<my_core_type>(writer_send_sem_id));
+            worker_free_slots_stream_id = sender_channel_0_free_slots_stream_id;
         }
 
         // DEAD CODE
@@ -143,7 +147,7 @@ struct WorkerToFabricEdmSenderImpl {
             writer_send_sem_addr,
             worker_teardown_sem_addr,
             worker_buffer_index_semaphore_addr,
-            sender_channel_0_free_slots_stream_id,
+            worker_free_slots_stream_id,
             my_fc_stream_channel_id,
             write_reg_cmd_buf,
             write_at_cmd_buf);

@@ -140,6 +140,7 @@ def test_forward_pass(
     mesh_device,
     model_path,
     ccl,
+    reset_seeds,
 ):
     num_module_layers, _ = mesh_device.shape
 
