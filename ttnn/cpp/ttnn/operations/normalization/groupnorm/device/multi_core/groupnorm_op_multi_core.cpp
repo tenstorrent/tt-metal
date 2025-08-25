@@ -2521,7 +2521,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         }
     }
     auto override_runtime_args_callback =
-        [writer_kernel_ids, reader_sender_kernel_ids, reader_receiver_kernel_ids, num_cores, grid_size, mcast_groups](
+        [writer_kernel_ids, reader_sender_kernel_ids, reader_receiver_kernel_ids, core_coords, grid_size, mcast_groups](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -2533,8 +2533,8 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
             const auto& mask_tensor = optional_input_tensors.at(2);
             auto dst_buffer = output_tensors.at(0).buffer()->address();
 
-            for (uint32_t i = 0; i < num_cores; ++i) {
-                CoreCoord core = {i % grid_size.x, i / grid_size.x};
+            for (uint32_t i = 0; i < core_coords.size(); ++i) {
+                CoreCoord core = core_coords[i];
 
                 auto writer_kernel_id = writer_kernel_ids.at(i);
                 auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);

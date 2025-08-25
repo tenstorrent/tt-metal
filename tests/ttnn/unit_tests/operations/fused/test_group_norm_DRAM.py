@@ -97,20 +97,22 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     )
 
     # groupnorm
-    output_tensor = ttnn.group_norm(
-        input_tensor_tilized,
-        num_groups=num_groups,
-        input_mask=input_mask_tensor,
-        weight=gamma_t,
-        bias=beta_t,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        output_layout=ttnn.TILE_LAYOUT,
-        core_grid=grid_size,
-        inplace=False,
-        num_out_blocks=num_out_blocks,
-    )
+    num_itr = 2  # second iteration to help catch potential runtime args issue.
+    for _ in range(num_itr):
+        output_tensor = ttnn.group_norm(
+            input_tensor_tilized,
+            num_groups=num_groups,
+            input_mask=input_mask_tensor,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_layout=ttnn.TILE_LAYOUT,
+            core_grid=grid_size,
+            inplace=False,
+            num_out_blocks=num_out_blocks,
+        )
+        ttnn.synchronize_device(device)
 
-    ttnn.synchronize_device(device)
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
