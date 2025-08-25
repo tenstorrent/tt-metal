@@ -240,7 +240,7 @@ class TtC2f:
         bfloat8=True,
         block_shard=False,
         deallocate_activation=False,
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        output_layout=ttnn.TILE_LAYOUT,
     ):
         self.device = device
         self.parameters = parameters
