@@ -1503,7 +1503,7 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs) {
     this->device_arch = device->arch();
     this->device_core_frequency =
         tt::tt_metal::MetalContext::instance().get_cluster().get_device_aiclk(this->device_id);
-    this->output_dir = std::filesystem::path(get_profiler_logs_dir());
+    this->output_dir = std::filesystem::path(MetalContext::instance().rtoptions().get_profiler_logs_dir());
     std::filesystem::create_directories(this->output_dir);
     std::filesystem::path log_path = this->output_dir / DEVICE_SIDE_LOG;
 

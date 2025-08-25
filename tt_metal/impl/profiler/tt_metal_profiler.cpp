@@ -128,7 +128,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     tt_metal::detail::LaunchProgram(
         device, sync_program, false /* wait_until_cores_done */, /* force_slow_dispatch */ true);
 
-    std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
+    std::filesystem::path output_dir =
+        std::filesystem::path(::tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_logs_dir());
     std::filesystem::path log_path = output_dir / "sync_device_info.csv";
     std::ofstream log_file;
 
@@ -289,7 +290,8 @@ void setShift(int device_id, int64_t shift, double scale, const SyncInfo& root_s
         device_profiler_it->second.shift = shift;
         device_profiler_it->second.setSyncInfo(root_sync_info);
 
-        std::filesystem::path output_dir = std::filesystem::path(get_profiler_logs_dir());
+        std::filesystem::path output_dir =
+            std::filesystem::path(::tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_logs_dir());
         std::filesystem::path log_path = output_dir / "sync_device_info.csv";
         std::ofstream log_file;
         log_file.open(log_path, std::ios_base::app);
