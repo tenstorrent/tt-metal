@@ -83,7 +83,9 @@ void benchmark_all_args_combinations_single_core(
     const auto input_shard_view = input_mesh_buffer->get_device_buffer(mesh_coordinate);
     const auto local_device = input_shard_view->device();
 
-    tt::tt_metal::detail::SetDeviceProfilerDir(res_path + "/" + params.test_name);
+    auto profiler_dir = res_path + "/" + params.test_name;
+    tt::tt_metal::detail::SetDeviceProfilerDir(profiler_dir);
+    log_info(tt::LogTest, "Setting profiler dir to: {}", profiler_dir);
     tt::tt_metal::detail::FreshProfilerDeviceLog();
     auto all_args_combinations = get_all_sharded_args_configs();
     for (const auto& arg_config : all_args_combinations) {

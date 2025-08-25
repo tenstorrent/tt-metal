@@ -808,6 +808,7 @@ void ProcessDeviceProfilerResults(
 
         if (pushToTracyMidRun(state)) {
             profiler.pushTracyDeviceResults();
+            profiler.dumpDeviceResults();
         }
     }
 #endif
