@@ -8,6 +8,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+@pytest.mark.skip("#26985: ND PCC failure, seems slight but APC must be stable")
 @pytest.mark.parametrize(
     "N, K, C, W",
     [

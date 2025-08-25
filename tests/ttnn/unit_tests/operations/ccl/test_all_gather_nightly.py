@@ -7,12 +7,16 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import (
     is_unsupported_case,
     run_all_gather_on_t3000_impl,
 )
 from ttnn import ShardTensorToMesh
+
+
+pytestmark = pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 
 
 # Enumerate the post-commit cases explicitly
@@ -179,11 +183,13 @@ def run_line_all_gather_instances(
     result_mesh_tensors = []
     for loop in range(num_iters):
         for i, devices in enumerate(t3000_device_rows):
-            tt_out_tensor = ttnn.all_gather(
-                input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
-            )
-            result_mesh_tensors.append(tt_out_tensor)
-
+            pytest.skip(LEGACY_CCL_SKIP)
+            # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+            # tt_out_tensor = ttnn.all_gather(
+            #     input_tensor_mesh, dim, num_links=num_links, memory_config=mem_config, topology=ttnn.Topology.Linear
+            # )
+            # result_mesh_tensors.append(tt_out_tensor)
+            assert False, "Legacy ccl call removed until new implementation is done"
     for loop in range(num_iters):
         ## Wait for completion
         ttnn.synchronize_device(t3k_mesh_device)

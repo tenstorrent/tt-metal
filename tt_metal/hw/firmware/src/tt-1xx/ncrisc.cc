@@ -111,7 +111,7 @@ int main(int argc, char* argv[]) {
 
     signal_ncrisc_completion();
 
-    // Cleanup profiler buffer incase we never get the go message
+    DeviceProfilerInit();
     while (1) {
         WAYPOINT("W");
         notify_brisc_and_wait();

@@ -49,6 +49,7 @@ def set_env_vars(**kwargs):
         "doDispatchCores": "TT_METAL_DEVICE_PROFILER_DISPATCH=1 ",
         "slowDispatch": "TT_METAL_SLOW_DISPATCH_MODE=1 ",
         "enable_noc_tracing": "TT_METAL_DEVICE_PROFILER_NOC_EVENTS=1 ",
+        "doDeviceTrace": "TT_METAL_TRACE_PROFILER=1 ",
     }
     envVarsStr = " "
     for arg, argVal in kwargs.items():
@@ -77,6 +78,7 @@ def run_gtest_profiler_test(testbin, testname, doSync=False, enable_noc_tracing=
 def run_device_profiler_test(
     testName=None,
     setupAutoExtract=False,
+    doDeviceTrace=False,
     slowDispatch=False,
     doSync=False,
     doDispatchCores=False,
@@ -86,7 +88,12 @@ def run_device_profiler_test(
     if testName:
         testCommand = testName
     clear_profiler_runtime_artifacts()
-    envVars = set_env_vars(slowDispatch=slowDispatch, doSync=doSync, doDispatchCores=doDispatchCores)
+    envVars = set_env_vars(
+        doDeviceTrace=doDeviceTrace,
+        slowDispatch=slowDispatch,
+        doSync=doSync,
+        doDispatchCores=doDispatchCores,
+    )
     testCommand = f"cd {TT_METAL_HOME} && {envVars} {testCommand}"
     print()
     logger.info(f"Running: {testCommand}")
@@ -212,45 +219,75 @@ def test_full_buffer():
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
 
 
+def verify_stats(devicesData, statTypes, allowedRange, refCountDict):
+    verifiedStat = []
+    for _, deviceData in devicesData["data"]["devices"].items():
+        for ref, counts in refCountDict.items():
+            if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
+                verifiedStat.append(ref)
+                res = False
+                readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
+                for count in counts:
+                    if count - allowedRange <= readCount <= count + allowedRange:
+                        res = True
+                        break
+                assert (
+                    res
+                ), f"Wrong tensix zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
+
+    statTypesSet = set(statTypes)
+    for statType in statTypes:
+        for stat in verifiedStat:
+            if statType in stat and statType in statTypesSet:
+                statTypesSet.remove(statType)
+    assert (
+        len(statTypesSet) == 0
+    ), f"Not all required stats (i.e. {statTypesSet}) were found in the device stats (i.e. {verifiedStat})"
+
+
+def test_device_trace_run():
+    verify_stats(
+        run_device_profiler_test(
+            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops",
+            setupAutoExtract=False,
+            doDeviceTrace=True,
+        ),
+        statTypes=["kernel", "fw"],
+        allowedRange=0,
+        refCountDict={
+            "trace_fw_duration": [5],
+            "trace_kernel_duration": [5],
+        },
+    )
+    verify_stats(
+        run_device_profiler_test(
+            testName=f"pytest {TRACY_TESTS_DIR}/test_trace_runs.py::test_with_ops_single_core",
+            setupAutoExtract=False,
+            doDeviceTrace=True,
+        ),
+        statTypes=["kernel", "fw"],
+        allowedRange=0,
+        refCountDict={
+            "trace_fw_duration": [5],
+            "trace_kernel_duration": [5],
+        },
+    )
+
+
 @skip_for_blackhole()
 def test_dispatch_cores():
-    OP_COUNT = 1
-    RISC_COUNT = 1
-    ZONE_COUNT = 37
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch": [600, 760, 1310, 2330],
         "Tensix CQ Prefetch": [900, 1440, 3870, 5000],
-        "dispatch_total_cq_cmd_op_time": [103],
-        "dispatch_go_send_wait_time": [103],
+        "dispatch_total_cq_cmd_op_time": [206],
+        "dispatch_go_send_wait_time": [206],
     }
-
-    def verify_stats(devicesData, statTypes, allowedRange):
-        verifiedStat = []
-        for device, deviceData in devicesData["data"]["devices"].items():
-            for ref, counts in REF_COUNT_DICT.items():
-                if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
-                    verifiedStat.append(ref)
-                    res = False
-                    readCount = deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"]
-                    for count in counts:
-                        if count - allowedRange <= readCount <= count + allowedRange:
-                            res = True
-                            break
-                    assert (
-                        res
-                    ), f"Wrong tensix dispatch zone count for {ref}, read {readCount} which is not within {allowedRange} cycle counts of any of the limits {counts}"
-
-        statTypesSet = set(statTypes)
-        for statType in statTypes:
-            for stat in verifiedStat:
-                if statType in stat and statType in statTypesSet:
-                    statTypesSet.remove(statType)
-        assert len(statTypesSet) == 0
 
     verify_stats(
         run_device_profiler_test(setupAutoExtract=True, doDispatchCores=True),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=150,
+        refCountDict=REF_COUNT_DICT,
     )
 
     verify_stats(
@@ -261,6 +298,7 @@ def test_dispatch_cores():
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
+        refCountDict=REF_COUNT_DICT,
     )
 
     verify_stats(
@@ -271,6 +309,7 @@ def test_dispatch_cores():
         ),
         statTypes=["Dispatch", "Prefetch"],
         allowedRange=1000,
+        refCountDict=REF_COUNT_DICT,
     )
 
     verify_stats(
@@ -281,6 +320,7 @@ def test_dispatch_cores():
         ),
         statTypes=["dispatch_total_cq_cmd_op_time", "dispatch_go_send_wait_time"],
         allowedRange=0,  # This test is basically counting ops and should be exact regardless of changes to dispatch code or harvesting.
+        refCountDict=REF_COUNT_DICT,
     )
 
 
@@ -662,7 +702,7 @@ def test_sub_device_profiler():
     ARCH_NAME = os.getenv("ARCH_NAME")
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",
-        "CommandQueueSingleCardFixture.TensixTestSubDeviceBasicPrograms",
+        "UnitMeshCQSingleCardFixture.TensixTestSubDeviceBasicPrograms",
     )
     run_gtest_profiler_test(
         "./build/test/tt_metal/unit_tests_dispatch",

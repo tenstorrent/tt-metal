@@ -78,8 +78,9 @@ uint32_t firmware_config_init(
 FORCE_INLINE
 void wait_for_go_message() {
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+    uint32_t go_message_index = mailboxes->go_message_index;
 
-    while (mailboxes->go_message.signal != RUN_MSG_GO) {
+    while (mailboxes->go_messages[go_message_index].signal != RUN_MSG_GO) {
         invalidate_l1_cache();
     }
 }
@@ -117,8 +118,9 @@ FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_
 FORCE_INLINE
 bool is_message_go() {
     tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
+    uint32_t go_message_index = mailboxes->go_message_index;
 
-    return mailboxes->go_message.signal == RUN_MSG_GO;
+    return mailboxes->go_messages[go_message_index].signal == RUN_MSG_GO;
 }
 
 #define EARLY_RETURN_FOR_DEBUG \

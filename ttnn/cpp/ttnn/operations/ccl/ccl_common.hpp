@@ -21,6 +21,16 @@
 namespace ttnn {
 namespace ccl {
 
+struct SyncModeSpec {
+    uint32_t num_signals = 0;
+    CoreCoord core;
+    std::vector<uint32_t> sem_ids;
+    std::vector<uint32_t> wait_counts;
+
+    void add_signal(uint32_t sem_id, uint32_t wait_count);
+};
+
+
 enum class LineDirection: uint8_t {
     FORWARD,
     BACKWARD,
@@ -34,18 +44,18 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
     const std::function<tt::tt_metal::operation::ProgramWithCallbacks(const ttnn::MeshCoordinate&)>& create_program);
 
 // Configuration structure for a device, containing its receiver and sender device ids.
-struct SenderRecieverConfig {
+struct SenderReceiverConfig {
     uint32_t device_index = 0;
     std::optional<chip_id_t> sender_device_id;
     std::optional<chip_id_t> receiver_device_id;
 };
 
-// Returns `SenderRecieverConfig` for a given device, given topology.
-SenderRecieverConfig get_device_sender_receiver_config(
+// Returns `SenderReceiverConfig` for a given device, given topology.
+SenderReceiverConfig get_device_sender_receiver_config(
     const IDevice* target_device, const std::vector<IDevice*>& devices, ttnn::ccl::Topology topology);
 
-// Returns `SenderRecieverConfig` for a given device in a ring topology with a given cluster axis.
-SenderRecieverConfig get_device_sender_receiver_config_in_ring(
+// Returns `SenderReceiverConfig` for a given device in a ring topology with a given cluster axis.
+SenderReceiverConfig get_device_sender_receiver_config_in_ring(
     const MeshCoordinate& mesh_coord, const distributed::MeshDevice* mesh_device, uint32_t cluster_axis, int ring_size);
 
 // Returns a vector of devices that the given tensor is stored on.
@@ -55,15 +65,6 @@ std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor);
 // Each `tensor_shard` is assumed to be allocated on a 1x1 "unit-mesh"; the function returns the devices that the shards
 // to run a CCL over the unit-meshes.
 std::vector<IDevice*> get_active_physical_devices(const std::vector<Tensor>& tensor_shards);
-
-struct SyncModeSpec {
-    uint32_t num_signals = 0;
-    CoreCoord core;
-    std::vector<uint32_t> sem_ids;
-    std::vector<uint32_t> wait_counts;
-
-    void add_signal(uint32_t sem_id, uint32_t wait_count);
-};
 
 class EriscDatamoverBuilder;
 
@@ -167,8 +168,8 @@ class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
     tt::tt_metal::ShardSpec const& get_shard_spec() const;
 
    private:
-    uint32_t page_size;
-    tt::tt_metal::ShardSpec const shard_spec;
+       uint32_t page_size{};
+       tt::tt_metal::ShardSpec const shard_spec;
 };
 
 struct CclTensorSlicer {
@@ -298,7 +299,7 @@ struct TensorSlice {
     ords_t tensor_slice_offset;
     ords_t worker_slice_shape;
     ords_t worker_slice_offset;
-    std::size_t dim;
+    std::size_t dim{};
 };
 };
 
@@ -568,14 +569,6 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
 
 tt::tt_metal::KernelHandle generate_edm_kernel(
     tt::tt_metal::Program& program,
-    const tt::tt_metal::IDevice* device,
-    const tt::tt_fabric::FabricEriscDatamoverBuilder& edm_builder,
-    const CoreCoord& eth_core,
-    tt::tt_metal::DataMovementProcessor risc_id,
-    tt::tt_metal::NOC noc_id);
-
-tt::tt_metal::KernelHandle generate_edm_kernel(
-    tt::tt_metal::Program& program,
     const IDevice* device,
     const EriscDatamoverBuilder& edm_builder,
     const CoreCoord& eth_core,
@@ -656,13 +649,13 @@ private:
     // Class member variables
     tt_xy_pair flattened_tensor_shape;
     tt_xy_pair tensor_slice_shape;
-    Shape4D<uint32_t> tensor_slice_offset;
+    Shape4D<uint32_t> tensor_slice_offset{};
     std::vector<tt_xy_pair> worker_slice_shapes;
     std::vector<tt_xy_pair> worker_slice_offsets;
-    uint32_t input_page_size;
-    bool row_major;
-    uint32_t partition_index;
-    uint32_t partition_size;
+    uint32_t input_page_size{};
+    bool row_major{};
+    uint32_t partition_index{};
+    uint32_t partition_size{};
 };
 
 
@@ -697,15 +690,15 @@ private:
     Shape4D<uint32_t> calculate_tensor_slice_offset(Shape4D<uint32_t> const& tensor_shape, int slice_dim, uint32_t partition_index);
 
     // Class member variables
-    Shape4D<uint32_t> tensor_shape;
-    Shape4D<uint32_t> tensor_slice_shape;
-    Shape4D<uint32_t> tensor_slice_offset;
+    Shape4D<uint32_t> tensor_shape{};
+    Shape4D<uint32_t> tensor_slice_shape{};
+    Shape4D<uint32_t> tensor_slice_offset{};
     std::vector<Shape4D<uint32_t>> worker_slice_shapes;
     std::vector<Shape4D<uint32_t>> worker_slice_offsets;
-    uint32_t input_page_size;
-    bool row_major;
-    uint32_t partition_index;
-    uint32_t partition_size;
+    uint32_t input_page_size{};
+    bool row_major{};
+    uint32_t partition_index{};
+    uint32_t partition_size{};
 };
 
 std::tuple<size_t, size_t, bool> get_forward_backward_configuration(size_t ring_size, size_t ring_index, Topology topology);

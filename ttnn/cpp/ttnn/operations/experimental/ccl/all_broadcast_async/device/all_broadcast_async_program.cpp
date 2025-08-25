@@ -49,13 +49,13 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const std::optional<GlobalSemaphore>& barrier_semaphore) {
+    const GlobalSemaphore& barrier_semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
     tt::tt_metal::Program program{};
 
     auto mesh_device = input_tensor.mesh_device();
-    bool is_first_chip = ring_index == 0;
-    bool is_last_chip = ring_index == ring_size - 1;
+    [[maybe_unused]] bool is_first_chip = ring_index == 0;
+    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
@@ -254,12 +254,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             drain_sync_core.x,                               // out_ready_sem_noc0_x
             drain_sync_core.y,                               // out_ready_sem_noc0_y
             out_ready_sem_wait_value,                        // out_ready_sem_wait_value
-            barrier_semaphore.has_value(),                   // use_barrier
-            barrier_semaphore.has_value()                    // barrier_sem
-                ? barrier_semaphore.value().address()
-                : 0,
-            barrier_core.x,  // barrier_sem_noc0_x
-            barrier_core.y   // barrier_sem_noc0_y
+            barrier_semaphore.address(),                     // barrier_sem
+            barrier_core.x,                                  // barrier_sem_noc0_x
+            barrier_core.y                                   // barrier_sem_noc0_y
         };
         if (sharded) {
             shard_builder::extend_sharding_run_time_args(input_tensor, writer_rt_args);
@@ -287,7 +284,12 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
     }
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore, sender_worker_cores, ring_index](
+        [worker_sender_reader_kernel_id,
+         worker_sender_writer_kernel_id,
+         semaphore,
+         barrier_semaphore,
+         sender_worker_cores,
+         ring_index](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -295,10 +297,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
 
-            auto semaphore = static_cast<const ttnn::AllBroadcastAsync*>(operation)->semaphore;
-            auto barrier_semaphore = static_cast<const ttnn::AllBroadcastAsync*>(operation)->barrier_semaphore;
-
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
+            log_trace(tt::LogOp, "DEBUG: barrier_semaphore: {}", barrier_semaphore.address());
 
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
@@ -311,10 +311,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output_tensors[ring_index].buffer()->address();
                 worker_writer_sender_runtime_args[1] = semaphore.address();
-
-                if (barrier_semaphore.has_value()) {
-                    worker_writer_sender_runtime_args[10] = barrier_semaphore.value().address();
-                }
+                worker_writer_sender_runtime_args[9] = barrier_semaphore.address();
             }
         };
 

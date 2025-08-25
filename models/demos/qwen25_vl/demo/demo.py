@@ -29,6 +29,19 @@ from models.tt_transformers.tt.generator import SamplingParams
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
 
+def create_tt_page_table(paged_attention_config, tt_model_args):
+    if paged_attention_config is None:
+        return None
+
+    # Implied shuffling of blocks
+    permutation = torch.randperm(paged_attention_config.max_num_blocks)
+    # Page table which maps virtual blocks to physical
+    reverse_permutation = torch.argsort(permutation)
+    return reverse_permutation.reshape(
+        tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
+    )
+
+
 def create_tt_model(
     mesh_device,
     instruct,
@@ -48,26 +61,14 @@ def create_tt_model(
     )
     state_dict = tt_model_args.load_state_dict()
 
-    page_table = None
-    paged_attention_config = None
-    tt_kv_cache = None
-
-    if use_paged_kv_cache:
-        paged_attention_config = PagedAttentionConfig(
+    paged_attention_config = (
+        PagedAttentionConfig(
             block_size=page_params["page_block_size"],
             max_num_blocks=page_params["page_max_num_blocks"],
         )
-        # Implied shuffling of blocks
-        permutation = torch.randperm(paged_attention_config.max_num_blocks)
-        # Page table which maps virtual blocks to physical
-        reverse_permutation = torch.argsort(permutation)
-        page_table = reverse_permutation.reshape(
-            tt_model_args.max_batch_size, paged_attention_config.max_num_blocks // tt_model_args.max_batch_size
-        )
-        paged_attention_config = PagedAttentionConfig(
-            block_size=page_params["page_block_size"],
-            max_num_blocks=page_params["page_max_num_blocks"],
-        )
+        if use_paged_kv_cache
+        else None
+    )
 
     model = Transformer(
         args=tt_model_args,
@@ -78,10 +79,9 @@ def create_tt_model(
         paged_attention_config=paged_attention_config,
     )
 
-    if use_paged_kv_cache:
-        tt_kv_cache = [l.attention.layer_past for l in model.layers]
+    tt_kv_cache = [l.attention.layer_past for l in model.layers] if use_paged_kv_cache else None
 
-    return tt_model_args, model, page_table, tt_kv_cache
+    return tt_model_args, model, paged_attention_config, tt_kv_cache
 
 
 # List of supported Parameters for demo.py
@@ -115,21 +115,8 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
-            True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users with the same prompt
-            4096,  # max_seq_len, allow for image tokens
-            4,  # batch_size -- samples to load from the prompt JSON
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # ci_only
-        ),
-        (
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",  # real multi-user prompts
+        (  # Batch-32 run (Throughput) - 32 users, small prompts
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -141,21 +128,8 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
-        (  # Batch-2 run with single decoder layer (CI only) - two users
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
-            True,  # instruct mode
-            1,  # repeat_batches to simulate multiple users with the same prompt
-            4096,  # max_seq_len, allow for image tokens
-            2,  # batch_size -- samples to load from the prompt JSON
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
-            True,  # ci_only
-        ),
-        (  # Batch-2 run with single decoder layer (CI only) - single user repeated batch
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",  # real multi-user prompts
+        (  # Batch-1 run with single decoder layer in vision model (CI only) - single user repeated batch
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts.json",
             True,  # instruct mode
             4,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -167,8 +141,8 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-32 run with single decoder layer (CI only) - 32 users
-            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",  # real multi-user prompts
+        (  # Batch-32 run with single decoder layer in vision model (CI only) - 32 users
+            "models/demos/qwen25_vl/demo/sample_prompts/multi_prompts_32.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
@@ -180,12 +154,25 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-32 run with single decoder layer (CI only) - 32 users
-            "models/demos/qwen25_vl/demo/sample_prompts/test_bleu_score.json",  # real multi-user prompts
+        (  # Batch-32 run with single decoder layer in vision model (CI only) - 32 users
+            "models/demos/qwen25_vl/demo/sample_prompts/test_bleu_score.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
             32,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+        ),
+        (  # Batch-1 run with single decoder layer in vision model (CI only) - one users
+            "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users with the same prompt
+            4096,  # max_seq_len, allow for image tokens
+            1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
@@ -196,28 +183,25 @@ def create_tt_model(
     ],
     ids=[
         "batch-1",  # latency
-        "batch-4",  # multi-user
         "batch-32",  # 32 users (special because it fills tile size)
-        "ci-only-two-users",  # ci_only batch-2 for faster testing coverage in CI pipelines
         "ci-only-repeated-batch",  # ci_only repeated batch for faster testing coverage in CI pipelines
         "ci-only-32-users",  # ci_only batch-32 for faster testing coverage in CI pipelines
         "ci-only-bleu-score",  # ci_only batch-bleu-score for faster testing coverage in CI pipelines
+        "ci-only-text-only",  # ci_only batch-text-only for faster testing coverage in CI pipelines
     ],
 )
 @pytest.mark.parametrize(
     "optimizations",
     [
         lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
-        # lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
     ids=[
         "performance",
-        # "accuracy",
     ],
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"trace_region_size": 28467200, "num_command_queues": 1}],
+    [{"fabric_config": True, "trace_region_size": 28467200, "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -334,7 +318,7 @@ def test_demo(
     for i in range(repeat_batches):
         repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    model_args, model, page_table, tt_kv_cache = create_tt_model(
+    model_args, model, paged_attention_config, tt_kv_cache = create_tt_model(
         mesh_device,
         instruct=instruct,
         max_batch_size=batch_size,
@@ -381,6 +365,10 @@ def test_demo(
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
         logger.info(f"Processing batch {batch_idx}")
+
+        # Create new page table for each batch
+        page_table = create_tt_page_table(paged_attention_config, model_args)
+
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
         text = processor.apply_chat_template(input_prompts, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(input_prompts)
@@ -391,9 +379,13 @@ def test_demo(
             padding=True,
             return_tensors="pt",
         )
-        merge_length = processor.image_processor.merge_size**2
-        num_image_tokens.append([inputs.image_grid_thw[i].prod().item() // merge_length for i in range(batch_size)])
-        logger.info(f"num_image_tokens: {num_image_tokens[-1]}")
+        if image_inputs:
+            merge_length = processor.image_processor.merge_size**2
+            num_image_tokens.append([inputs.image_grid_thw[i].prod().item() // merge_length for i in range(batch_size)])
+            logger.info(f"num_image_tokens: {num_image_tokens[-1]}")
+        else:
+            # text-only
+            num_image_tokens.append([0] * batch_size)
 
         # Vision prefill
         logger.info(f"Vision model prefill batch {batch_idx}")
@@ -426,13 +418,14 @@ def test_demo(
         )
         # Get user-specific rotary position embeddings
         cos, sin = multimodal_rope_from_hf(inputs, input_embeds, reference_model, model_args, pad_token_id=pad_token_id)
-        model.rope_setup.set_cos_sin(cos, sin)
         profiler.end(f"preprocess_prefill_inputs", iteration=batch_idx)
 
         logger.info("Starting prefill warmup...")
         profiler.start(f"compile_prefill", iteration=batch_idx)
+        # [INFO] prefill_forward_text is read-only of the cos/sin matrices
         logits = generator.prefill_forward_text(
             input_prefill_pt[0].unsqueeze(0),  # Just warmup prefill for 1 user
+            rot_mats=(cos, sin),
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
@@ -444,10 +437,13 @@ def test_demo(
         profiler.start(f"inference_prefill", iteration=batch_idx)
         logits = generator.prefill_forward_text(
             input_prefill_pt,
+            rot_mats=(cos, sin),
             page_table=page_table,
             kv_cache=tt_kv_cache,
             prompt_lens=decoding_pos,
         )
+        # [INFO] update the cos/sin matrices in the rope_setup to get ready for decode
+        generator.update_cos_sin(cos_matrix_pt=cos, sin_matrix_pt=sin)
         # torch.save(logits, f"ttnn_logits.pt")
         prefilled_token = torch.argmax(logits, dim=-1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
@@ -458,8 +454,7 @@ def test_demo(
 
         # Start decoding
         iteration = 0
-        # TODO Argmax on device is only supported for batch_size=1
-        argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+        argmax_on_device = sampling_params["temperature"] == 0
         if argmax_on_device:
             device_sampling_params = SamplingParams(temperature=0.0, top_k=-1, top_p=1.0)
         else:

@@ -5,10 +5,11 @@
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 
 
-def test_tanh_range(device):
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
+def test_tanh_range(device, torch_dtype, ttnn_dtype):
     torch_input_tensor_a = torch.tensor(
         [
             [
@@ -50,13 +51,13 @@ def test_tanh_range(device):
                 ]
             ]
         ],
-        dtype=torch.bfloat16,
+        dtype=torch_dtype,
     )
     torch_output_tensor = torch.tanh(torch_input_tensor_a)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn_dtype,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
@@ -64,12 +65,15 @@ def test_tanh_range(device):
 
     output_tensor = ttnn.to_torch(output_tensor)
 
-    pcc, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
+    assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=0.012)
+    pcc, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
     # pcc_msg 0.9999663646890817, accuracy=False pcc 0.9978378297942829
     # pcc_msg 0.9999583453515977 - fpu arithmetic, pcc_msg 0.9999669593009368 sfpu arithmetic
+    # fp32 pcc_msg 0.9999829606828651 (accuracy=True) , 0.9977552960423647 (accuracy=False)
     assert pcc
 
 
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
 @pytest.mark.parametrize(
     "high, low",
     [
@@ -78,25 +82,27 @@ def test_tanh_range(device):
         (4, -4),
     ],
 )
-def test_tanh_inplace(device, high, low):
+def test_tanh_inplace(device, high, low, torch_dtype, ttnn_dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor_a = torch.rand([1, 9, 8192], dtype=torch.bfloat16) * (high - low) + low
+    torch_input_tensor_a = torch.rand([1, 9, 8192], dtype=torch_dtype) * (high - low) + low
     torch_output_tensor = torch.tanh(torch_input_tensor_a)
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn_dtype,
         device=device,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ttnn.tanh(input_tensor_a, accuracy=True, memory_config=ttnn.DRAM_MEMORY_CONFIG, output_tensor=input_tensor_a)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
+    assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=0.016)
     pcc, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
     assert pcc
 
 
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
 @pytest.mark.parametrize(
     "input_shapes",
     (
@@ -115,21 +121,24 @@ def test_tanh_inplace(device, high, low):
         (4, -4),  # pcc_msg 0.999985108313941
     ],
 )
-def test_tanh_accuracy(device, input_shapes, high, low):
+def test_tanh_accuracy(device, input_shapes, high, low, torch_dtype, ttnn_dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((input_shapes), dtype=torch.bfloat16) * (high - low) + low
+    torch_input_tensor = torch.rand((input_shapes), dtype=torch_dtype) * (high - low) + low
     golden_function = ttnn.get_golden_function(ttnn.tanh)
     torch_output_tensor = golden_function(torch_input_tensor)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.tanh(input_tensor, accuracy=True)
     output_tensor = ttnn.to_torch(output)
+
+    assert_allclose(output_tensor, torch_output_tensor, rtol=1e-05, atol=0.016)
     pcc, pcc_msg = assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
     # pcc_msg 0.9999 or above
     assert pcc
 
 
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16)])
 @pytest.mark.parametrize(
     "input_shapes",
     ((torch.Size([1, 1, 89600, 32])),),
@@ -143,10 +152,10 @@ def test_tanh_accuracy(device, input_shapes, high, low):
         (4, -4),
     ],
 )
-def test_tanh_height_sharded(device, input_shapes, high, low):
+def test_tanh_height_sharded(device, input_shapes, high, low, torch_dtype, ttnn_dtype):
     torch.manual_seed(0)
 
-    in_data = torch.rand((input_shapes), dtype=torch.bfloat16) * (high - low) + low
+    in_data = torch.rand((input_shapes), dtype=torch_dtype) * (high - low) + low
     shard_grid = ttnn.CoreRangeSet(
         {
             ttnn.CoreRange(
@@ -163,7 +172,7 @@ def test_tanh_height_sharded(device, input_shapes, high, low):
     )
     input_tensor1 = ttnn.from_torch(
         in_data,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=input_mem_config,
@@ -173,6 +182,7 @@ def test_tanh_height_sharded(device, input_shapes, high, low):
     golden_function = ttnn.get_golden_function(ttnn.tanh)
     golden_tensor = golden_function(in_data)
 
+    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.016)
     pcc, pcc_msg = assert_with_pcc(golden_tensor, output_tensor, 0.999)
     # (-4,4) pcc_msg 0.9992087814894364, accuracy: pcc_msg 0.9999851389543495
     assert pcc
@@ -230,6 +240,7 @@ def return_mem_config(mem_config_string):
     raise ("Input mem_config_string is not valid!")
 
 
+@pytest.mark.parametrize("torch_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32)])
 @pytest.mark.parametrize(
     "high, low",
     [
@@ -250,14 +261,14 @@ def return_mem_config(mem_config_string):
         "l1_block_sharded_cm",
     ],
 )
-def test_tanh_sharded(device, high, low, input_mem_config):
+def test_tanh_sharded(device, high, low, input_mem_config, torch_dtype, ttnn_dtype):
     torch.manual_seed(0)
 
-    in_data = torch.rand([1, 1, 512, 512], dtype=torch.bfloat16) * (high - low) + low
+    in_data = torch.rand([1, 1, 512, 512], dtype=torch_dtype) * (high - low) + low
 
     input_tensor1 = ttnn.from_torch(
         in_data,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
         memory_config=return_mem_config(input_mem_config),
@@ -267,5 +278,6 @@ def test_tanh_sharded(device, high, low, input_mem_config):
     golden_function = ttnn.get_golden_function(ttnn.tanh)
     golden_tensor = golden_function(in_data)
 
+    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=0.016)
     pcc, pcc_msg = assert_with_pcc(golden_tensor, output_tensor, 0.999)
     assert pcc

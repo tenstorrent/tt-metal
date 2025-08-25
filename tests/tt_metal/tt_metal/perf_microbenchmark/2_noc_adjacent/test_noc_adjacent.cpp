@@ -36,6 +36,7 @@
 #include "test_common.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
+#include <tt-metalium/distributed.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -158,9 +159,9 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
-        int clock_freq_mhz = get_tt_npu_clock(device);
+        int clock_freq_mhz = get_tt_npu_clock(device->get_devices()[0]);
         auto grid_coord = device->compute_with_storage_grid_size();
         num_cores_c = (num_cores_c == 0) ? grid_coord.x : num_cores_c;
         num_cores_r = (num_cores_r == 0) ? grid_coord.y : num_cores_r;
@@ -182,14 +183,14 @@ int main(int argc, char** argv) {
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_src0_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_src0_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
         uint32_t cb_src1_index = 1;
         uint32_t cb_src1_addr = cb_src0_addr + cb_tiles * single_tile_size;
         tt_metal::CircularBufferConfig cb_src1_config =
             tt_metal::CircularBufferConfig(cb_tiles * single_tile_size, {{cb_src1_index, tt::DataFormat::Float16_b}})
                 .set_page_size(cb_src1_index, single_tile_size);
-        auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+        tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
         auto noc_kernel = tt_metal::CreateKernel(
             program,
@@ -237,13 +238,15 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execute Application
         ////////////////////////////////////////////////////////////////////////////
-        tt_metal::detail::CompileProgram(device, program);
-
         log_info(LogTest, "Num tests {}", num_tests);
+        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        tt_metal::distributed::AddProgramToMeshWorkload(
+            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
-            EnqueueProgram(device->command_queue(), program, false);
-            Finish(device->command_queue());
+            tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
+            tt_metal::distributed::Finish(device->mesh_command_queue());
             auto t_end = std::chrono::steady_clock::now();
             unsigned long elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             unsigned long elapsed_cc = clock_freq_mhz * elapsed_us;
@@ -251,7 +254,8 @@ int main(int argc, char** argv) {
             log_info(LogTest, "Time elapsed for NOC transfers: {}us ({}cycles)", elapsed_us, elapsed_cc);
 
             if (use_device_profiler) {
-                elapsed_cc = get_t0_to_any_riscfw_end_cycle(device, program);
+                elapsed_cc = get_t0_to_any_riscfw_end_cycle(
+                    device->get_devices()[0], mesh_workload.get_programs().begin()->second);
                 elapsed_us = (double)elapsed_cc / clock_freq_mhz;
                 log_info(LogTest, "Time elapsed using device profiler: {}us ({}cycles)", elapsed_us, elapsed_cc);
             }
@@ -263,7 +267,7 @@ int main(int argc, char** argv) {
             log_info(LogTest, "Measured NOC bandwidth: {:.3f}B/cc", measured_bandwidth[i]);
         }
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
     } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());

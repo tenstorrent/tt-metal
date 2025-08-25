@@ -5,6 +5,7 @@
 #include "moreh_norm_backward_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_norm_backward {
 
@@ -164,12 +165,12 @@ MorehNormBackwardOperation::ProgramFactory::cached_program_t MorehNormBackwardOp
         "ttnn/cpp/ttnn/operations/moreh/moreh_norm_backward/device/kernels/"
         "writer_moreh_norm_backward.cpp";
 
-    std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(is_dram(input)),
-        static_cast<uint32_t>(is_dram(output)),
-        static_cast<uint32_t>(is_dram(output_grad)),
-        static_cast<uint32_t>(input_grad_rank)};
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(is_dram(input_grad))};
+    std::vector<uint32_t> reader_compile_time_args = {static_cast<uint32_t>(input_grad_rank)};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*output.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*output_grad.buffer()).append_to(reader_compile_time_args);
+    std::vector<uint32_t> writer_compile_time_args = {};
+    TensorAccessorArgs(*input_grad.buffer()).append_to(writer_compile_time_args);
     const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_compile_time_args);
     const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_compile_time_args);
 

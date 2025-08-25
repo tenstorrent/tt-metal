@@ -111,6 +111,7 @@ def get_accuracy_thresholds(model_args, optimizations):
         pytest.param(False, id="reference_text"),
     ],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_tt_model_acc(
     prefill_len,
     decode_len,
@@ -252,7 +253,7 @@ def test_tt_model_acc(
         tt_out = tt_model(
             prefill_input,
             current_pos=None,
-            rot_mats=rot_mats_prefill,
+            rot_mats_global=rot_mats_prefill,
             user_id=batch_id,
             mode="prefill",
             page_table=page_table_tt,
@@ -310,23 +311,29 @@ def test_tt_model_acc(
         tt_out = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats,
             mode="decode",
             page_table=page_table_tt,
         )
 
         if tt_model.args.num_devices > 1:
-            if tt_model.args.is_galaxy:
-                tt_out_gathered = ttnn.all_gather(
-                    tt_out,
-                    dim=3,
-                    num_links=tt_model.args.num_all_gather_links,
-                    cluster_axis=0,
-                    mesh_device=mesh_device,
-                    topology=tt_model.args.ccl_topology(),
-                )
-            else:
-                tt_out_gathered = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+            cluster_axis = 0 if tt_model.args.is_galaxy else None
+            num_links = tt_model.args.num_all_gather_links if tt_model.args.is_galaxy else 1
+            tt_out_gathered = ttnn.experimental.all_gather_async(
+                tt_out,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=tt_model.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=num_links,
+                memory_config=tt_out.memory_config(),
+                cluster_axis=cluster_axis,
+                topology=tt_model.args.ccl_topology() if tt_model.args.is_galaxy else ttnn.Topology.Linear,
+                barrier_semaphore=tt_model.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
+            )
+
             ttnn.deallocate(tt_out)
         else:
             tt_out_gathered = tt_out

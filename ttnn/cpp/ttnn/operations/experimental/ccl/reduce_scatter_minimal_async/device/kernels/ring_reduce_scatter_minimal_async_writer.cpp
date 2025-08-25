@@ -13,7 +13,7 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
-#include "minimal_ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -82,8 +82,6 @@ void kernel_main() {
     uint32_t start_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
-    const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
 
     bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     uint32_t termination_sync_address = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
@@ -188,17 +186,16 @@ void kernel_main() {
 
     tt::tt_fabric::fabric_client_connect(mux_connection_handle);
 
-    // Due to the existing direction of fabric connections, forward writers will signal to backward writers
-    // and backward writers will signal to forward writers
     if (use_barrier_sem) {
+        // multicast to entire ring of workers going in the same direction
         uint64_t barrier_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+            safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
         pkt_hdr_seminc->to_noc_unicast_atomic_inc(
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, static_cast<uint16_t>(1), 32});
-        ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr_seminc, unicast_route_info);
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, multicast_route_info);
         tt::tt_fabric::fabric_atomic_inc(mux_connection_handle, pkt_hdr_seminc);
 
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 1);
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
 
@@ -273,12 +270,8 @@ void kernel_main() {
                                     pages_read_in_row = 0;
                                 }
 
-                                uint64_t remote_noc0_dest_noc_addr_tile_one =
-                                    get_noc_addr(tile_one_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-                                uint64_t remote_noc0_dest_noc_addr_tile_two =
-                                    get_noc_addr(tile_two_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
-                                scatter_write_and_advance_local_read_address_for_fabric<
+                                scatter_write_for_fabric_write<
+                                    true,
                                     fabric_mux_num_buffers_per_channel>(
                                     intermediate_addrgen,
                                     tile_one_id,
@@ -299,10 +292,7 @@ void kernel_main() {
                                     pages_read_in_row = 0;
                                 }
 
-                                uint64_t remote_noc0_dest_noc_addr =
-                                    get_noc_addr(tile_id, intermediate_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
-                                write_and_advance_local_read_address_for_fabric<fabric_mux_num_buffers_per_channel>(
+                                write_for_fabric_write<true,fabric_mux_num_buffers_per_channel>(
                                     intermediate_addrgen,
                                     tile_id,
                                     pkt_hdr,
@@ -431,6 +421,9 @@ void kernel_main() {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);
     }
+
+    noc_async_write_barrier();
+    noc_async_atomic_barrier();
 
     tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
     if constexpr (is_termination_master) {

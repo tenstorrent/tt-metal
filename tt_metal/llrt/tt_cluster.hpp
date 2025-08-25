@@ -134,6 +134,10 @@ public:
         return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().pci_bus;
     }
 
+    std::optional<int> get_physical_slot(chip_id_t chip) const {
+        return this->driver_->get_chip(chip)->get_tt_device()->get_pci_device()->get_device_info().physical_slot;
+    }
+
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
 
@@ -148,10 +152,50 @@ public:
         const void* mem_ptr, uint32_t sz_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
     void read_dram_vec(void* mem_ptr, uint32_t size_in_bytes, chip_id_t device_id, int dram_view, uint64_t addr) const;
 
-    // Accepts physical noc coordinates
+    // Write to core. Accepts physical noc coordinates
     void write_core(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+
+    // Access physical noc coordinates. Does write without effects of write combining
+    void write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+
+    // Write to core without effects of write combining
+    template <typename DType>
+    void write_core_immediate(
+        chip_id_t device_id, const CoreCoord& core, const std::span<DType>& hex_vec, uint64_t addr) const {
+        write_core_immediate(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
+    }
+
+    // Write to core without effects of write combining
+    template <typename DType>
+    void write_core_immediate(
+        chip_id_t device_id, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) const {
+        write_core_immediate(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
+    }
+
+    // Write span to core
+    template <typename DType>
+    void write_core(chip_id_t device_id, const CoreCoord& core, const std::span<DType>& hex_vec, uint64_t addr) const {
+        write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
+    }
+
+    // Write vector to core
+    template <typename DType>
+    void write_core(
+        chip_id_t device_id, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) const {
+        write_core(hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(device_id, core), addr);
+    }
+
     void read_core(void* mem_ptr, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+
     void read_core(std::vector<uint32_t>& data, uint32_t sz_in_bytes, tt_cxy_pair core, uint64_t addr) const;
+
+    template <typename DType = uint32_t>
+    [[nodiscard]] std::vector<DType> read_core(
+        chip_id_t chip, const CoreCoord& core, uint64_t addr, uint32_t size) const {
+        std::vector<DType> read_hex_vec;
+        read_core(read_hex_vec, size, tt_cxy_pair(chip, core), addr);
+        return read_hex_vec;
+    }
 
     std::optional<std::tuple<uint32_t, uint32_t>> get_tlb_data(const tt_cxy_pair& target) const {
         tt::umd::CoreCoord target_coord = get_soc_desc(target.chip).get_coord_at(target, CoordSystem::TRANSLATED);
@@ -349,8 +393,8 @@ private:
 
     bool supports_dma_operations(chip_id_t chip_id, uint32_t sz_in_bytes) const;
 
-    ARCH arch_;
-    TargetDevice target_type_;
+    ARCH arch_{tt::ARCH::Invalid};
+    TargetDevice target_type_{0};
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
     std::unique_ptr<tt::umd::Cluster> driver_;

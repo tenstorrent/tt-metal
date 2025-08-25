@@ -189,6 +189,8 @@ def run_all_to_all_dispatch_test(
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     cluster_axis=1,
+    use_optional_output_tensors=False,
+    test_skew=False,
 ):
     torch.manual_seed(2005)
     mesh_device.enable_program_cache()
@@ -318,18 +320,25 @@ def run_all_to_all_dispatch_test(
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
-    # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
-
     tt_out_tensor_list = []
+    if test_skew:
+        delays = []
+        for i in range(mesh_shape[0]):
+            delay_at_i = []
+            for j in range(mesh_shape[1]):
+                delay_at_i.append(0)
+            delays.append(delay_at_i)
+        delays[0][0] = 400000
 
     def run_op(n_iters, store_all_results=True):
         tt_output_list = []
         tt_metadata_list = []
 
         for i in range(n_iters):
-            buffer_index = 0 if trace_mode else i
-            ttnn.all_to_all_dispatch(
+            buffer_index = i
+            if test_skew:
+                ttnn.apply_device_delay(mesh_device, delays)
+            output_tensor, metadata_tensor = ttnn.all_to_all_dispatch(
                 input_tensors[buffer_index],
                 expert_indices_tensors[buffer_index],
                 expert_mapping_tensors[buffer_index],
@@ -337,13 +346,14 @@ def run_all_to_all_dispatch_test(
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
-                global_semaphore=ccl_semaphore_handles[buffer_index],
                 subdevice_id=worker_sub_device_id,
-                output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]],
+                output_tensors=[output_tensors[buffer_index], metadata_tensors[buffer_index]]
+                if use_optional_output_tensors
+                else None,
             )
 
-            tt_out_tensor = output_tensors[buffer_index]
-            tt_metadata = metadata_tensors[buffer_index]
+            tt_out_tensor = output_tensors[buffer_index] if use_optional_output_tensors else output_tensor
+            tt_metadata = metadata_tensors[buffer_index] if use_optional_output_tensors else metadata_tensor
 
             if not trace_mode:
                 ttnn.synchronize_device(mesh_device)
@@ -358,20 +368,22 @@ def run_all_to_all_dispatch_test(
     if trace_mode:
         # compile run:
         logger.info("Compiling model")
-        tt_out_tensor_list = run_op(1, store_all_results=False)
+        tt_out_tensor_list, tt_metadata_list = run_op(1, store_all_results=True)
+        ttnn.synchronize_device(mesh_device)
 
         logger.info("Capturing Warmup")
 
         if warmup_iters > 0:
             logger.info(f"Capturing Warmup {warmup_iters} iterations")
             trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            run_op(warmup_iters, store_all_results=False)
+            tt_out_tensor_list, tt_metadata_list = run_op(warmup_iters, store_all_results=True)
             ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
             ttnn.synchronize_device(mesh_device)
+        logger.info("Warmup done")
 
         logger.info("Capturing Trace")
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        tt_out_tensor_list, tt_metadata_list = run_op(num_iters, store_all_results=False)
+        tt_out_tensor_list, tt_metadata_list = run_op(num_iters, store_all_results=True)
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
 
@@ -484,10 +496,12 @@ def run_all_to_all_dispatch_test(
                     break
             if not passed:
                 break
-
+    num_program_cache_entries = 1
+    if test_skew:
+        num_program_cache_entries = 2
     logger.info(f"Device has {mesh_device.num_program_cache_entries()} program cache entries")
     assert (
-        mesh_device.num_program_cache_entries() == 1
+        mesh_device.num_program_cache_entries() == num_program_cache_entries
     ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     if not metadata_passed:
@@ -743,6 +757,7 @@ def test_decode_perf(
         output_memory_config=output_memory_config,
         dtype=dtype,
         cluster_axis=cluster_axis,
+        use_optional_output_tensors=True,
     )
 
 
@@ -819,6 +834,7 @@ def test_prefill_perf(
         output_memory_config=output_memory_config,
         dtype=dtype,
         cluster_axis=cluster_axis,
+        use_optional_output_tensors=True,
     )
 
 
@@ -840,7 +856,7 @@ def test_prefill_perf(
 @pytest.mark.parametrize(
     "batches_per_device, seq_len, num_iters, warmup_iters",
     [
-        (16, 7, 2, 1),
+        (16, 7, 10, 5),
     ],
     ids=["b16s2"],
 )
@@ -914,20 +930,20 @@ def test_all_to_all_dispatch_ring_trace(
 @pytest.mark.parametrize("cluster_axis", [1], ids=["cluster_row"])
 @pytest.mark.parametrize("experts_per_device", [8])
 @pytest.mark.parametrize("select_experts_k", [8])
-@pytest.mark.parametrize("hidden_size", [7168])
+@pytest.mark.parametrize("hidden_size", [600])
 @pytest.mark.parametrize(
     "batches_per_device, seq_len, num_iters, warmup_iters",
     [
-        (16, 7, 2, 1),
+        (2, 2, 20, 5),
     ],
-    ids=["b16s2"],
+    ids=["b2s2"],
 )
-@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("topology", [ttnn.Topology.Ring])
+@pytest.mark.parametrize("num_links", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-@pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
-def test_all_to_all_dispatch_ring_trace(
+@pytest.mark.parametrize("input_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
+@pytest.mark.parametrize("output_memory_config", [ttnn.L1_MEMORY_CONFIG], ids=["l1"])
+def test_all_to_all_dispatch_skew(
     mesh_device,
     trace_mode,
     mesh_shape,
@@ -969,10 +985,11 @@ def test_all_to_all_dispatch_ring_trace(
         warmup_iters,
         trace_mode,
         num_links=num_links,
-        scheme="sequential",
-        topology=topology,
+        scheme="random",
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
         dtype=dtype,
         cluster_axis=cluster_axis,
+        topology=topology,
+        test_skew=True,
     )

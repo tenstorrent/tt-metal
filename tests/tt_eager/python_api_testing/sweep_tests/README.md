@@ -101,7 +101,7 @@ test-list:
 - _sanitize-args_: `True` if `args-gen` is doing arg sanitization, `False` otherwise. If not stated, the default is `True`. When ON, args sanitization won't allow some problematic combinations of args (Eg. `ROW_MAJOR` layout for `BFLOAT8_B` and `BFLOAT4_B`). But args sanitization might be an obstacle when we want to create some more flexible tests.
 - _args_: Defines how arguments to operation can be configured in terms of data-layout, data_type and memory config.
   - `data-layout`: Data layout each input argument can take. Can be TILE or ROW_MAJOR.
-  - `data-type`: Data type each input argument can take. Can be one of the follwoing: BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, UINT16 or INT32.
+  - `data-type`: Data type each input argument can take. Can be one of the following: BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, UINT32, UINT16 or INT32.
   - `buffer-type`: Buffer type each input argument can take. Can be DRAM, L1, or SYSTEM_MEMORY.
   - `out-buffer-type`: Buffer type output can take. Can be DRAM, L1, or SYSTEM_MEMORY.
 - _output-file_: Name of the output csv dumped inside the output folder. You can write results for additional tests to the same file if you provide the same output file path.

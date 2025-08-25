@@ -26,7 +26,7 @@ TEST(WorkerConfigBuffer, MarkCompletelyFull) {
     mgr.init_add_buffer(1024, 1024);
     mgr.init_add_buffer(2, 1024);
 
-    auto reservation = mgr.reserve({12, 12});
+    mgr.reserve({12, 12});
     mgr.alloc(1);
 
     mgr.mark_completely_full(5);

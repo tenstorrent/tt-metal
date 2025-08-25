@@ -113,16 +113,48 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       topology: topology-6u
-  blackhole-demos:
+  blackhole-single-card-demos:
     needs: [build-artifact, get-params]
     if: needs.get-params.outputs.is-release-candidate == 'true'
     secrets: inherit
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [ "P100", "P150" ]
     with:
-      runner-label: BH
+      runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  blackhole-multi-card-demos:
+    needs: [build-artifact, get-params]
+    if: needs.get-params.outputs.is-release-candidate == 'true'
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group:
+          - name: LLMBox Demo tests
+            runner-label: BH-LLMBox
+            extra-tag: pipeline-perf
+            num_devices: 4
+          - name: DeskBox Demo tests
+            runner-label: BH-DeskBox
+            extra-tag: pipeline-functional
+            num_devices: 2
+          # - name: RackBox Demo tests
+          #   runner-label: BH-RackBox
+          #   extra-tag: pipeline-functional
+          #   num_devices: 8
+    with:
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      extra-tag: ${{ matrix.test-group.extra-tag }}
+      num_devices: ${{ matrix.test-group.num_devices }}
   create-tag:
     needs: get-params
     uses: ./.github/workflows/release-verify-or-create-tag.yaml
@@ -234,9 +266,9 @@ jobs:
     secrets: inherit
     if: github.ref != 'refs/heads/main'
     with:
-      base-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       version: ${{ needs.create-tag.outputs.version }}
       is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   release-docs:
     needs: [
       build-artifact,

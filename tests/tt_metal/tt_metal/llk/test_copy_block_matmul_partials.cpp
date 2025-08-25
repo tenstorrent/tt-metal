@@ -95,7 +95,7 @@ void run_single_core_copy_block_matmul_partials(
                              num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float32}})
                              .set_page_size(src0_cb_index, single_tile_size);
     }
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t ouput_cb_index = test_config.ouput_cb_index;
     uint32_t num_output_tiles = test_config.writer_ublock;
@@ -108,7 +108,7 @@ void run_single_core_copy_block_matmul_partials(
                                num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float32}})
                                .set_page_size(ouput_cb_index, single_tile_size);
     }
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
     auto unary_reader_kernel = tt_metal::CreateKernel(
         program,
@@ -135,7 +135,7 @@ void run_single_core_copy_block_matmul_partials(
     if (test_config.fp32_dest_acc_en) {
         defines["DST_ACCUM_MODE"] = "1";
     }
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_block_matmul_partials.cpp",
         core,

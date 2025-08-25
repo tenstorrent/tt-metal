@@ -27,7 +27,7 @@ namespace tt::tt_metal {
 // #22835: These Fixtures will be removed once tests are fully migrated, and replaced by UnitMeshCQFixtures
 class CommandQueueFixture : public DispatchFixture {
 protected:
-    tt::tt_metal::IDevice* device_;
+    tt::tt_metal::IDevice* device_{};
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -287,18 +287,7 @@ protected:
 };
 
 using UnitMeshCQSingleCardBufferFixture = UnitMeshCQSingleCardFixture;
-
-// left in for subdevice testing
-class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture {
-protected:
-    void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->create_devices(90000000);
-    }
-};
+class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
 
 class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCardFixture {};
 
@@ -340,7 +329,7 @@ protected:
     }
 
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
-    size_t num_devices_;
+    size_t num_devices_{};
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };
@@ -382,7 +371,7 @@ protected:
 
     std::vector<tt::tt_metal::IDevice*> devices_;
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
-    size_t num_devices_;
+    size_t num_devices_{};
 };
 
 class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};

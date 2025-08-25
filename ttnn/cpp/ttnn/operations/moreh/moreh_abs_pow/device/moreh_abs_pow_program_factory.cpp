@@ -5,6 +5,7 @@
 #include "moreh_abs_pow_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::moreh::moreh_abs_pow {
 MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation::MorehAbsPowFactory::create(
@@ -98,8 +99,12 @@ MorehAbsPowOperation::MorehAbsPowFactory::cached_program_t MorehAbsPowOperation:
         "ttnn/cpp/ttnn/operations/moreh/moreh_abs_pow/device/kernels/"
         "writer_moreh_abs_pow.cpp";
 
-    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores);
-    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores);
+    std::vector<uint32_t> reader_ct_args = {};
+    TensorAccessorArgs(*input.buffer()).append_to(reader_ct_args);
+    const auto reader_kernels_id = CreateReadKernel(program, reader_kernel_file, all_cores, reader_ct_args);
+    std::vector<uint32_t> writer_ct_args = {};
+    TensorAccessorArgs(*output.buffer()).append_to(writer_ct_args);
+    const auto writer_kernels_id = CreateWriteKernel(program, writer_kernel_file, all_cores, writer_ct_args);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      ComputeKernel SetUp

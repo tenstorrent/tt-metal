@@ -16,14 +16,17 @@ parameters = {
             [1, 128, 150, 150, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 16, 25, 23, 2, 2, 2, 2, 0, 0, 1, 1, False],  # C=16
             [1, 480, 28, 28, 3, 3, 2, 2, 1, 1, 1, 1, True],
+            # Dilation test cases for height shard
+            [1, 32, 24, 24, 3, 3, 1, 1, 0, 0, 2, 2, False],  # Basic dilation=2
+            [1, 64, 32, 32, 3, 3, 1, 1, 1, 1, 2, 2, False],  # Dilation=2 with padding
             [1, 64, 400, 544, 3, 3, 2, 2, 1, 1, 1, 1, False],  # massive NHW
             [1, 832, 14, 14, 4, 4, 2, 2, 0, 0, 1, 1, True],  # > 800 channels, 16 kernel
             [1, 160, 30, 30, 15, 15, 1, 1, 7, 5, 1, 1, False],  # 15x15 kernel, uneven padding
             [1, 224, 20, 20, 8, 8, 6, 6, 2, 4, 1, 1, False],  # 8x8 kernel, uneven padding
             [1, 320, 48, 48, 36, 36, 1, 1, 0, 0, 1, 1, False],  # massive kernel, wide
-            [1, 320, 47, 47, 36, 36, 1, 1, 0, 0, 1, 1, False],  # non-tile multiple NHW
+            [1, 290, 47, 47, 36, 36, 1, 1, 0, 0, 1, 1, False],  # non-tile multiple NHW
             [1, 320, 48, 48, 36, 36, 1, 1, 0, 0, 1, 1, True],  # massive kernel, wide, ceil mode
-            [1, 320, 47, 47, 36, 36, 1, 1, 0, 0, 1, 1, True],  # non-tile multiple NHW, ceil mode
+            [1, 290, 47, 47, 36, 36, 1, 1, 0, 0, 1, 1, True],  # non-tile multiple NHW, ceil mode
             [1, 32, 6, 6, 3, 3, 1, 1, 1, 1, 1, 1, False],  # partial grid on WH to use noop cores
             [1, 32, 13, 8, 4, 3, 6, 5, 2, 1, 1, 1, True],  # ceil mode output shape adjustment edge case
             # requires reversed local reads on some cores, and forward reads on others
@@ -39,6 +42,8 @@ parameters = {
             [1, 32768, 6, 6, 2, 2, 1, 1, 0, 0, 1, 1, False],  # wide in place untilize
             [1, 16384, 8, 8, 2, 2, 1, 1, 0, 0, 1, 1, False],  # normal in place untilize
             [1, 6144, 20, 20, 11, 11, 1, 1, 5, 5, 1, 1, False],  # 11x11 kernel
+            # Dilation test cases for width shard
+            [1, 8192, 16, 16, 3, 3, 1, 1, 0, 0, 2, 2, False],  # Wide dilation=2
         ],
     },
     "block_shard_tests": {
@@ -47,6 +52,9 @@ parameters = {
         "input_specs": [
             [1, 4096, 16, 16, 2, 2, 1, 1, 0, 0, 1, 1, False],  # wide in place untilize
             [1, 2048, 16, 16, 2, 2, 1, 1, 0, 0, 1, 1, False],  # normal in place untilize
+            # Dilation test cases for block shard
+            [1, 1024, 20, 20, 3, 3, 1, 1, 0, 0, 2, 2, False],  # Block shard dilation=2
+            [1, 2048, 16, 16, 3, 3, 1, 1, 1, 1, 1, 2, False],  # Block shard asymmetric dilation (1,2)
             # requires reversed local reads on some cores, and forward reads on others, wide in place untilize, large kernel
             [1, 4096, 16, 16, 5, 5, 2, 2, 2, 2, 1, 1, True],
             # requires reversed local reads on some cores, and forward reads on others, normal in place untilize, large kernel
@@ -58,6 +66,8 @@ parameters = {
         "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_specs": [
             [1, 32, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
+            # Dilation test case for memory config
+            [1, 64, 64, 64, 3, 3, 1, 1, 0, 0, 2, 2, False],  # Memory config dilation=2
         ],
     },
 }

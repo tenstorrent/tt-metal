@@ -9,7 +9,7 @@ from typing import Optional
 
 import torch
 from loguru import logger
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 import ttnn
 
@@ -23,6 +23,15 @@ class HostEmbedding(torch.nn.Module):
         return self.emb(x)
 
 
+class HostScaledEmbedding(HostEmbedding):
+    def __init__(self, model_args):
+        super().__init__(model_args)
+        self.embed_scale = model_args.embed_scale
+
+    def forward(self, x):
+        return self.emb(x) * self.embed_scale
+
+
 # Default configuration for Paged Attention
 class PagedAttentionConfig:
     def __init__(self, block_size=32, max_num_blocks=1024):
@@ -33,7 +42,7 @@ class PagedAttentionConfig:
 class RopeScalingType(str, Enum):
     """Types of RoPE scaling."""
 
-    # LINEAR = "linear"
+    LINEAR = "linear"
     # DYNAMIC = "dynamic"
     YARN = "yarn"
     LLAMA3 = "llama3"
@@ -43,9 +52,15 @@ class RopeScalingType(str, Enum):
 class RopeScaling(BaseModel):
     """RoPE scaling configuration."""
 
-    rope_type: RopeScalingType = Field(exclude=True, description="RoPE scaling type")
+    rope_type: RopeScalingType = Field(
+        validation_alias=AliasChoices("rope_type", "type"), exclude=True, description="RoPE scaling type"
+    )
     factor: Optional[float]
-    original_max_position_embeddings: int
+    original_max_position_embeddings: Optional[int] = None
+
+
+class RopeScalingLinear(RopeScaling):
+    """RoPE scaling configuration for linear."""
 
 
 class RopeScalingLlama3(RopeScaling):
@@ -68,7 +83,9 @@ class RopeScalingYarn(RopeScaling):
 
 def rope_scaling_model_factory(rope_scaling_params: dict) -> RopeScaling:
     rope_scaling_type = rope_scaling_params.get("rope_type") or rope_scaling_params.get("type")
-    if rope_scaling_type == RopeScalingType.LLAMA3:
+    if rope_scaling_type == RopeScalingType.LINEAR:
+        return RopeScalingLinear(**rope_scaling_params)
+    elif rope_scaling_type == RopeScalingType.LLAMA3:
         return RopeScalingLlama3(**rope_scaling_params)
     elif rope_scaling_type == RopeScalingType.YARN:
         return RopeScalingYarn(**rope_scaling_params)
@@ -209,14 +226,42 @@ def preprocess_inputs_prefill(
 def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
     chat = []
-    if system_prompt_text:
-        chat.append({"role": "system", "content": system_prompt_text})
-    if prompt_text:
-        chat.append({"role": "user", "content": prompt_text})
-    return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
+    if isinstance(prompt_text, str):
+        if system_prompt_text:
+            chat.append({"role": "system", "content": system_prompt_text})
+        if prompt_text:
+            chat.append({"role": "user", "content": prompt_text})
+        return tokenizer.apply_chat_template(chat, add_generation_prompt=True, tokenize=True)
+    else:
+        return tokenizer.apply_chat_template(prompt_text, add_generation_prompt=True, tokenize=True)
 
 
-def apply_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
+def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
+    """
+    Transform cos/sin frequencies to a rotation matrix.
+    """
+    emb_size, emb_dim = cos_freqs.shape
+    dhead = emb_dim * 2
+    rot_emb_matrix = torch.zeros(emb_size, dhead, dhead)
+    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
+    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
+    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
+    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+
+    rot_emb_matrix = rot_emb_matrix.transpose(-1, -2)  # Necessary for correct rotation when applied as (x @ R)
+    return rot_emb_matrix
+
+
+def gather_cos_sin(position_ids, cos, sin):
+    position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
+    cos = cos.gather(0, position_id_expanded)
+    sin = sin.gather(0, position_id_expanded)
+    cos = torch.stack([cos, cos], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    sin = torch.stack([sin, sin], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    return cos, sin
+
+
+def apply_llama3_scaling(freqs: torch.Tensor, scale_factor: float, orig_context_len: int):
     # FIXME: Llama-3.x specific scaling - we need to support yarn for Qwen2.5 models
     # Values obtained from grid search
     low_freq_factor = 1
@@ -253,61 +298,9 @@ def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len):
     freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
     t = torch.arange(end)
     if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_llama3_scaling(freqs, scale_factor, orig_context_len)
     freqs = torch.outer(t, freqs).float()
     return torch.cos(freqs), torch.sin(freqs)
-
-
-def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
-    """
-    Transform cos/sin frequencies to a rotation matrix.
-    """
-    emb_size, emb_dim = cos_freqs.shape
-    dhead = emb_dim * 2
-    rot_emb_matrix = torch.zeros(emb_size, dhead, dhead)
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
-    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
-    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
-
-    rot_emb_matrix = rot_emb_matrix.transpose(-1, -2)  # Necessary for correct rotation when applied as (x @ R)
-    return rot_emb_matrix
-
-
-def gather_cos_sin(position_ids, cos, sin):
-    position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
-    cos = cos.gather(0, position_id_expanded)
-    sin = sin.gather(0, position_id_expanded)
-    cos = torch.stack([cos, cos], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
-    sin = torch.stack([sin, sin], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
-    return cos, sin
-
-
-def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, orig_context_len, start_pos=0):
-    cos, sin = precompute_freqs(
-        head_dim, seq_len * 2, theta=theta, scale_factor=scale_factor, orig_context_len=orig_context_len
-    )
-    cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
-    assert cos_gathered.size() == (1, 1, seq_len, head_dim)
-    assert sin_gathered.size() == (1, 1, seq_len, head_dim)
-
-    cos_gathereds = ttnn.from_torch(
-        cos_gathered,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-    sin_gathereds = ttnn.from_torch(
-        sin_gathered,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-    rot_mats = [cos_gathereds, sin_gathereds]
-    return rot_mats
 
 
 #  Add-Multiply method of rotary embeddings for prefill
@@ -332,7 +325,7 @@ def get_single_rot_mat(
 ):
     freqs_unscaled = 1.0 / (theta ** (torch.arange(0, dhead, 2)[: (dhead // 2)].float() / dhead))
     if scale_factor is not None:
-        freqs = apply_scaling(freqs_unscaled, scale_factor, orig_context_len)
+        freqs = apply_llama3_scaling(freqs_unscaled, scale_factor, orig_context_len)
     rot_matrix = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of rot_matrix
     sin_freqs, cos_freqs = torch.sin(freqs).to(rot_matrix.dtype), torch.cos(freqs).to(rot_matrix.dtype)
@@ -345,7 +338,7 @@ def get_single_rot_mat(
     # Support for start_pos different than 0
     freqs = start_pos * freqs_unscaled
     if scale_factor is not None:
-        freqs = apply_scaling(freqs, scale_factor, orig_context_len)
+        freqs = apply_llama3_scaling(freqs, scale_factor, orig_context_len)
     current_rot_mat = torch.zeros(dhead, dhead)
     # [INFO] freqs_unscaled and freqs are forced to float dtype above and it should be converted back to match dtype of current_rot_mat
     sin_freqs, cos_freqs = torch.sin(freqs).to(current_rot_mat.dtype), torch.cos(freqs).to(current_rot_mat.dtype)
@@ -384,7 +377,12 @@ def num_to_core_range_set(x):
     )
 
 
-def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
+def copy_host_to_device(
+    host_tensors,
+    device_tensors=None,
+    mesh_device=None,
+    shard_specs=None,
+):
     """
     Helper function which copies host tensors to device tensors.
     If no device_tensors are provided, it creates new device tensors and returns them.
@@ -393,7 +391,10 @@ def copy_host_to_device(host_tensors, device_tensors=None, mesh_device=None):
         assert mesh_device is not None, "mesh_device is required when device_tensors is None"
         ret = []
         for i in range(len(host_tensors)):
-            on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
+            if shard_specs and shard_specs[i] is not None:
+                on_device = host_tensors[i].to(mesh_device, shard_specs[i]) if host_tensors[i] else None
+            else:
+                on_device = ttnn.to_device(host_tensors[i], device=mesh_device) if host_tensors[i] else None
             ret.append(on_device)
         return ret
     else:
@@ -548,7 +549,7 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
     if dim < 0:
         dim = x.dim() + dim
     assert isinstance(x, torch.Tensor), "Input must be a torch.Tensor"
-    assert -x.dim() <= dim < x.dim(), f"Dimension {dim} out of range (expected between {-x.dim()} and {x.dim()-1})"
+    assert -x.dim() <= dim < x.dim(), f"Dimension {dim} out of range (expected between {-x.dim()} and {x.dim() - 1})"
     dim = x.dim() + dim if dim < 0 else dim
 
     current_size = x.size(dim)

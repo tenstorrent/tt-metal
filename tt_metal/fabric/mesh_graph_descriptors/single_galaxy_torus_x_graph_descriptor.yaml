@@ -21,7 +21,7 @@ Mesh: [
   board: Galaxy,
   device_topology: [8, 4],
   host_topology: [1, 1],
-  host_ranks: [[0]]}
+}
 ]
 
 Graph: [

@@ -52,7 +52,11 @@ public:
     // Emplaces the shard at the specified `coord`, calling `produce_buffer` to create the buffer only when needed.
     // No-op if the index is out of local bounds.
     // Throws if the index is out of global bounds.
+    using ProduceBufferFn = std::function<HostBuffer(const distributed::MeshCoordinate&)>;
     void emplace_shard(const distributed::MeshCoordinate& coord, const std::function<HostBuffer()>& produce_buffer);
+
+    // Returns true if the shard at the specified `coord` is local, false if remote.
+    bool is_local(const distributed::MeshCoordinate& coord) const;
 
     // Specifies the execution policy for the `transform` and `apply` functions.
     enum class ProcessShardExecutionPolicy {
@@ -68,6 +72,13 @@ public:
 
     using ApplyFn = std::function<void(const HostBuffer& buffer)>;
     void apply(const ApplyFn& fn, ProcessShardExecutionPolicy policy = ProcessShardExecutionPolicy::SEQUENTIAL) const;
+
+    // NOTE: `coords` are global, so this will skip non local shards.
+    // Calls emplace_shard for each coordinate in `coords` using the specified execution policy.
+    void emplace_shards(
+        const std::vector<distributed::MeshCoordinate>& coords,
+        const ProduceBufferFn& produce_buffer,
+        ProcessShardExecutionPolicy policy = ProcessShardExecutionPolicy::SEQUENTIAL);
 
     // Returns the global shape of the buffer.
     const distributed::MeshShape& shape() const;

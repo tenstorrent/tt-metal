@@ -93,6 +93,7 @@ target_sources(
             fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
@@ -146,8 +147,6 @@ target_link_libraries(
         detail
         distributed
         fabric
-        HAL::wormhole
-        HAL::blackhole
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
 )
@@ -233,7 +232,6 @@ if(TT_INSTALL)
             reflect
             enchantum
             TracyClient
-            small_vector
             tt-logger
         EXPORT Metalium
         FILE_SET

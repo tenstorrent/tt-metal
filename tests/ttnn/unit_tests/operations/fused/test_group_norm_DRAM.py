@@ -39,16 +39,12 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
             4,
             4,
         ),  # test all groups on core fit in less than one tile, so need to reduce col core count
-        # # # SDXL 1024x1024 resoultion
-        (1, 640, 128, 128, 32, 3, 4, 4),
-        (1, 960, 128, 128, 32, 6, 2, 2),
-        # VAE
-        # tensor is too large, but good example
-        (1, 256, 1024, 1024, 32, 128, 8, 4),
-        (1, 256, 515, 512, 32, 32, 4, 4),
-        (1, 512, 128, 128, 32, 4, 1, 4),
-        (1, 512, 256, 256, 32, 16, 4, 4),
-        (1, 512, 512, 512, 32, 32, 4, 4),
+        # Current in SDXL VAE 1024x1024
+        (1, 256, 1024, 1024, 32, 48, 8, 8),  # 62ms
+        (1, 256, 512, 512, 32, 12, 8, 8),  # 15.7ms
+        (1, 512, 256, 256, 32, 4, 8, 8),  # 6.1ms
+        (1, 512, 512, 512, 32, 12, 8, 8),  # 24ms
+        (1, 128, 1024, 1024, 32, 64, 4, 8),  # 100ms (6 of these in total)
         (1, 512, 64, 64, 32, 1, 8, 8),  # SD 1.4 VAE
         (1, 512, 128, 128, 32, 1, 8, 8),  # SD 1.4 VAE
         (1, 512, 256, 256, 32, 4, 8, 8),  # SD 1.4 VAE
@@ -132,3 +128,124 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize(
+    "N, C, H, W, num_groups, num_splits",
+    [
+        # (1, 256, 1024, 1024, 32, 32), # does not fit -> input is [16384, 8] per core (~260kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in)
+        (
+            1,
+            256,
+            512,
+            512,
+            32,
+            8,
+        ),  # Can fit in 8 slices, each slice does: (0,8ms for split, 0.3ms for interleavedToSharded + 0.68ms for GN) = 1.78ms, 8 slices x 1.78ms = 14.24ms + 4.6ms for concat = 18.84ms (original is 15.7ms)
+        (
+            1,
+            512,
+            128,
+            128,
+            32,
+            1,
+        ),  # Can fit in 1 slice, i2s = 0.09ms GN = 1.5ms, s2i = 0.135ms = 1.725ms against 1.57ms of dram GN. Is block shardable as well, in that case it GN takes 0.35ms
+        (
+            1,
+            512,
+            256,
+            256,
+            32,
+            4,
+        ),  # Can fit in 4 slice, split= 0.3ms i2s = 0.1ms GN = 0.6ms, s2i = 0.421ms = 5.6ms + 1ms for concat = 6.6ms (original is 6.1ms)
+        (
+            1,
+            512,
+            512,
+            512,
+            32,
+            16,
+        ),  # Can fit in 16 slice, split= 0.8ms i2s = 0.33ms GN = 0.38ms, s2i = 1.58ms = 49.44ms + 7.806ms for concat = 57.246ms (original is 24ms)
+        # (1, 128, 1024, 1024, 32, 32), # does not fit -> input is [16384, 4] per core (~130kB) gets tilized internally to [16384, 32] which is ~1MB, and 2 buffers are of that size (cb_x and cb_in). in addition to that, RM stick of size 4 is not L1 aligned
+    ],
+)
+def test_sdxl_base_group_norm_split(device, N, C, H, W, num_groups, num_splits):
+    torch.manual_seed(0)
+    if device.core_grid.y == 7:
+        pytest.skip()
+
+    grid_size = ttnn.CoreGrid(y=8, x=8)
+
+    # Generate torch tensor
+    torch_input_tensor = torch.rand([N, C, H, W], dtype=torch.bfloat16)
+
+    # Execute torch group_norm
+    torch_output_tensor = torch.nn.functional.group_norm(torch_input_tensor, num_groups)
+    torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+
+    # Generate ttnn tensor
+    tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
+    tt_input_tensor = ttnn.from_torch(
+        tt_input_tensor,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    # Generate input mask
+    num_groups_per_split = num_groups // num_splits  # 16
+    C_per_split = C // num_splits
+    input_mask_tensor = ttnn.create_group_norm_input_mask(C_per_split, num_groups_per_split, 1)
+    input_mask_tensor = ttnn.from_torch(
+        input_mask_tensor,
+        dtype=ttnn.DataType.BFLOAT8_B,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    input_negative_mask_tensor = ttnn.create_group_norm_input_negative_mask(C_per_split, num_groups_per_split, 1)
+    input_negative_mask_tensor = ttnn.from_torch(
+        input_negative_mask_tensor,
+        dtype=ttnn.DataType.BFLOAT8_B,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    tt_input_tensor = ttnn.to_device(tt_input_tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    # Generate shard config
+    grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
+    shard_shape = N * H * W // (grid_size.y * grid_size.x), C_per_split
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    sharded_mem_config_per_split = ttnn.MemoryConfig(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
+    )
+    per_group_results = []
+    for i in range(num_splits):
+        tt_input_tensor_per_group_split = tt_input_tensor[:, :, :, i * C_per_split : (i + 1) * C_per_split]
+        tt_input_tensor_per_group_split_sharded = ttnn.to_memory_config(
+            tt_input_tensor_per_group_split, sharded_mem_config_per_split
+        )
+        tt_output_tensor_per_group_split = ttnn.group_norm(
+            tt_input_tensor_per_group_split_sharded,
+            num_groups=num_groups_per_split,
+            input_mask=input_mask_tensor,
+            memory_config=sharded_mem_config_per_split,
+            core_grid=grid_size,
+            inplace=False,
+            negative_mask=input_negative_mask_tensor,
+        )
+        tt_output_tensor_per_group_split = ttnn.to_memory_config(
+            tt_output_tensor_per_group_split, ttnn.DRAM_MEMORY_CONFIG
+        )
+        per_group_results.append(tt_output_tensor_per_group_split)
+
+    tt_output_tensor = ttnn.concat(per_group_results, dim=-1)
+
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    tt_output_tensor = ttnn.to_torch(tt_output_tensor)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9997)

@@ -229,8 +229,14 @@ def get_ops(timeseries):
             if len(ts) == 5:
                 timerID, tsValue, attachedData, risc, core = ts
                 if opCores[core]:
-                    if (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START") or (
-                        risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START"
+                    if (
+                        (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START")
+                        or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START")
+                        or (
+                            risc == "CORE_AGG"
+                            and timerID["zone_name"] == "TRACE-FW"
+                            and timerID["type"] == "ZONE_START"
+                        )
                     ):
                         if len(opCores[core]) == 2:
                             corruption = False
@@ -248,8 +254,10 @@ def get_ops(timeseries):
                             False
                         ), f"Unexpected FW start, core {core}, risc {risc} is reporting a second start of FW for op {opID}. {assertMsg}"
 
-                    elif (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END") or (
-                        risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END"
+                    elif (
+                        (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END")
+                        or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END")
+                        or (risc == "CORE_AGG" and timerID["zone_name"] == "TRACE-FW" and timerID["type"] == "ZONE_END")
                     ):
                         assert (
                             len(opCores[core]) == 1
@@ -261,14 +269,22 @@ def get_ops(timeseries):
                                 opIsDone = False
                                 break
                 else:
-                    if (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START") or (
-                        risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START"
+                    if (
+                        (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START")
+                        or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START")
+                        or (
+                            risc == "CORE_AGG"
+                            and timerID["zone_name"] == "TRACE-FW"
+                            and timerID["type"] == "ZONE_START"
+                        )
                     ):
                         opCores[core] = (timerID,)
             if len(ts) == 4:
                 timerID, tsValue, attachedData, risc = ts
-                if (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END") or (
-                    risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END"
+                if (
+                    (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END")
+                    or (risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END")
+                    or (risc == "CORE_AGG" and timerID["zone_name"] == "TRACE-FW" and timerID["type"] == "ZONE_END")
                 ):
                     opIsDone = True
             ops[-1]["timeseries"].append(ts)
@@ -541,7 +557,9 @@ def op_core_first_last_analysis(riscData, analysis):
         else:
             core_ops[core] = [ts]
     for core, timeseries in core_ops.items():
-        durations.append(first_last_analysis(timeseries, analysis)[0])
+        ret = first_last_analysis(timeseries, analysis)
+        if len(ret) > 0:
+            durations.append(ret[0])
 
     return durations
 

@@ -6,9 +6,9 @@ from itertools import takewhile
 from typing import Any, Sequence
 
 import torch
-from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
@@ -494,6 +494,29 @@ def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Seque
     return tensor
 
 
+def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
+    dequantized_state_dict = {}
+
+    for name, tensor in state_dict.items():
+        if name.endswith("_scale_inv"):
+            continue
+
+        if tensor is not None:
+            # Look for corresponding scale tensor
+            scale_name = name + "_scale_inv"
+            if scale_name in state_dict:
+                scale_tensor = state_dict[scale_name]
+                # Dequantize using the scale
+                dequantized_tensor = dequantize(
+                    tensor, scale_tensor, hf_config.quantization_config["weight_block_size"]
+                )
+                dequantized_state_dict[name] = dequantized_tensor.to(dtype)
+            else:
+                dequantized_state_dict[name] = tensor.to(dtype)
+
+    return dequantized_state_dict
+
+
 def get_state_dicts(
     dicts: Sequence[dict[str, torch.Tensor] | None],
     key: Any,
@@ -557,6 +580,9 @@ def save_and_get_path(path, tensor):
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         logger.warning(f"Overwriting existing cache file: {path}")
-    ttnn.dump_tensor(path, tensor)
+    memory_config = tensor.memory_config()
+    ttnn.dump_tensor(path, tensor, enable_multihost_format=True)
     ttnn.deallocate(tensor)
-    return str(path)
+    return SavedWeight(
+        path=path, memory_config=memory_config
+    )  # TODO: bring regular tensor saving back once Issue #26763 is resolved

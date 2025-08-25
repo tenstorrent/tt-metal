@@ -64,7 +64,7 @@ def test_vit_embeddings(model_name, batch_size, image_size, image_channels):
         custom_preprocessor=torch_functional_vit.custom_preprocessor,
     )
 
-    # TODO: integrate within paramters
+    # TODO: integrate within parameters
     model_state_dict = model.state_dict()
     torch_cls_token = torch.nn.Parameter(model_state_dict["cls_token"])
     torch_position_embeddings = torch.nn.Parameter(model_state_dict["position_embeddings"])
@@ -249,7 +249,7 @@ def test_vit(model_name, batch_size, image_size, image_channels, model_location_
         custom_preprocessor=torch_functional_vit.custom_preprocessor,
     )
 
-    # TODO: integrate within paramters
+    # TODO: integrate within parameters
     model_state_dict = model.state_dict()
     torch_cls_token = torch.nn.Parameter(model_state_dict["vit.embeddings.cls_token"])
     torch_position_embeddings = torch.nn.Parameter(model_state_dict["vit.embeddings.position_embeddings"])

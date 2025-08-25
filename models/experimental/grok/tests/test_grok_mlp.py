@@ -22,8 +22,10 @@ from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 @pytest.mark.timeout(500)
 def test_grok_mlp_inference(t3k_mesh_device, reset_seeds):
     # Specify different dtypes for each feedForward weights

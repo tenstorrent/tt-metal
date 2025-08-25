@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, fields
+from pathlib import Path
 from typing import Any, Union
 
 import ttnn
@@ -32,6 +33,12 @@ class MeshDeviceStub:
 
     def __init__(self, mesh_shape: tuple[int, int] | ttnn.MeshShape):
         object.__setattr__(self, "mesh_shape", tuple(mesh_shape))
+
+
+@dataclass
+class SavedWeight:  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+    path: Path
+    memory_config: ttnn.MemoryConfig | None = None
 
 
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
@@ -246,7 +253,6 @@ class AllToAllDispatchConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    global_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
     subdevice_id: int | None = None
 
@@ -258,7 +264,6 @@ class AllToAllCombineConfig(OpConfigBase):
     axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    global_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
 
 
@@ -285,3 +290,12 @@ class LinearFallbackConfig(OpConfigBase):
 
     mesh_device: ttnn.Device
     dtype: ttnn.DataType
+
+
+@dataclass
+class TypecastConfig(OpConfigBase):
+    """Common parameters for a ttnn.typecast op"""
+
+    dtype: ttnn.DataType
+    memory_config: ttnn.MemoryConfig | None = None
+    sub_core_grids: ttnn.CoreRangeSet | None = None

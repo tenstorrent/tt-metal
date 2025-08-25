@@ -86,10 +86,7 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
         .buffer_type = tt_metal::BufferType::DRAM};
 
     auto src_dram_buffer = CreateBuffer(buff_config);
-    uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     auto dst_dram_buffer = CreateBuffer(buff_config);
-    uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-
 
     // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the
     // input CB CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to
@@ -99,7 +96,7 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_size);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_tiles = 1;
@@ -107,16 +104,16 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
         tt_metal::CircularBufferConfig(
             num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_size);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-    auto unary_reader_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp",
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-    auto unary_writer_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tt_metal/kernels/dataflow/writer_unary.cpp",
         core,
@@ -127,7 +124,7 @@ void construct_program(tt_metal::Program& program, tt_metal::IDevice* device, Co
         uint(num_tiles)  // per_core_tile_cnt
     };
 
-    auto eltwise_unary_kernel = tt_metal::CreateKernel(
+    tt_metal::CreateKernel(
         program,
         "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp",
         core,

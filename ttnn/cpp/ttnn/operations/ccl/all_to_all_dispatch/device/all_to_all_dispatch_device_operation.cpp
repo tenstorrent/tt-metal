@@ -69,11 +69,6 @@ void AllToAllDispatchDeviceOperation::validate_on_program_cache_miss(
             input_shape[i],
             indices_shape[i]);
     }
-
-    TT_FATAL(operation_attributes.axis.has_value(), "Axis must be specified at the moment");
-    TT_FATAL(
-        operation_attributes.cross_device_semaphore.has_value(),
-        "Cross device semaphore must be specified at the moment");
 }
 
 void AllToAllDispatchDeviceOperation::validate_on_program_cache_hit(
@@ -167,7 +162,6 @@ AllToAllDispatchDeviceOperation::invoke(
     tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set,
-    const std::optional<GlobalSemaphore>& global_semaphore,
     AllToAllTransferType impl) {
     return {
         operation_attributes_t{
@@ -176,7 +170,6 @@ AllToAllDispatchDeviceOperation::invoke(
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
-            .cross_device_semaphore = global_semaphore,
             .impl = impl},
         tensor_args_t{
             .input_tensor = input_tensor,

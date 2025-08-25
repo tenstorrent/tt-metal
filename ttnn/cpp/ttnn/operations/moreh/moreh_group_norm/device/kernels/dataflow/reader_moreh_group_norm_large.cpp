@@ -7,15 +7,8 @@
 void kernel_main() {
     int i{0};
     const auto input_addr = get_arg_val<uint32_t>(i++);
-    const bool input_is_dram = get_arg_val<uint32_t>(i++) == 1;
-
     const auto gamma_addr = get_arg_val<uint32_t>(i++);
-    const bool gamma_is_dram = get_arg_val<uint32_t>(i++) == 1;
-    const bool gamma_has_value = get_arg_val<uint32_t>(i++) == 1;
-
     const auto beta_addr = get_arg_val<uint32_t>(i++);
-    const bool beta_is_dram = get_arg_val<uint32_t>(i++) == 1;
-    const bool beta_has_value = get_arg_val<uint32_t>(i++) == 1;
 
     const auto scaler = get_arg_val<uint32_t>(i++);
     const auto eps = get_arg_val<uint32_t>(i++);
@@ -28,6 +21,12 @@ void kernel_main() {
     const auto origin_h = get_arg_val<uint32_t>(i++);
     const auto origin_w = get_arg_val<uint32_t>(i++);
     const auto block_size = get_arg_val<uint32_t>(i++);
+
+    constexpr bool gamma_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr bool beta_has_value = get_compile_time_arg_val(1) == 1;
+    constexpr auto input_args = TensorAccessorArgs<2>();
+    constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t onetile = 1;
 
@@ -68,33 +67,15 @@ void kernel_main() {
 
     // input
     const uint32_t input_tile_bytes = get_tile_size(cb_id_input);
-    const auto input_data_format = get_dataformat(cb_id_input);
-
-    const InterleavedAddrGenFast<true> dram_input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
-
-    const InterleavedAddrGenFast<false> l1_input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
+    const auto input_addrg = TensorAccessor(input_args, input_addr, input_tile_bytes);
 
     // gamma
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
-    const auto gamma_data_format = get_dataformat(cb_id_gamma);
-
-    const InterleavedAddrGenFast<true> dram_gamma_addrg = {
-        .bank_base_address = gamma_addr, .page_size = gamma_tile_bytes, .data_format = gamma_data_format};
-
-    const InterleavedAddrGenFast<false> l1_gamma_addrg = {
-        .bank_base_address = gamma_addr, .page_size = gamma_tile_bytes, .data_format = gamma_data_format};
+    const auto gamma_addrg = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
 
     // beta
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
-    const auto beta_data_format = get_dataformat(cb_id_beta);
-
-    const InterleavedAddrGenFast<true> dram_beta_addrg = {
-        .bank_base_address = beta_addr, .page_size = beta_tile_bytes, .data_format = beta_data_format};
-
-    const InterleavedAddrGenFast<false> l1_beta_addrg = {
-        .bank_base_address = beta_addr, .page_size = beta_tile_bytes, .data_format = beta_data_format};
+    const auto beta_addrg = TensorAccessor(beta_args, beta_addr, beta_tile_bytes);
 
     const auto input_l1_write_ptr = get_write_ptr(cb_id_input);
     uint32_t input_tile_idx;
@@ -104,11 +85,7 @@ void kernel_main() {
             cb_reserve_back(cb_id_input, block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
-                if (input_is_dram) {
-                    noc_async_read_tile(input_tile_idx, dram_input_addrg, input_l1_write_ptr + r * input_tile_bytes);
-                } else {
-                    noc_async_read_tile(input_tile_idx, l1_input_addrg, input_l1_write_ptr + r * input_tile_bytes);
-                }
+                noc_async_read_tile(input_tile_idx, input_addrg, input_l1_write_ptr + r * input_tile_bytes);
             }
             noc_async_read_barrier();
             cb_push_back(cb_id_input, block_size);
@@ -119,11 +96,7 @@ void kernel_main() {
             cb_reserve_back(cb_id_input, block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
-                if (input_is_dram) {
-                    noc_async_read_tile(input_tile_idx, dram_input_addrg, input_l1_write_ptr + r * input_tile_bytes);
-                } else {
-                    noc_async_read_tile(input_tile_idx, l1_input_addrg, input_l1_write_ptr + r * input_tile_bytes);
-                }
+                noc_async_read_tile(input_tile_idx, input_addrg, input_l1_write_ptr + r * input_tile_bytes);
             }
             noc_async_read_barrier();
             cb_push_back(cb_id_input, block_size);
@@ -134,11 +107,7 @@ void kernel_main() {
             cb_reserve_back(cb_id_input, block_size);
             for (uint32_t r = 0; r < block_size; r++) {
                 input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
-                if (input_is_dram) {
-                    noc_async_read_tile(input_tile_idx, dram_input_addrg, input_l1_write_ptr + r * input_tile_bytes);
-                } else {
-                    noc_async_read_tile(input_tile_idx, l1_input_addrg, input_l1_write_ptr + r * input_tile_bytes);
-                }
+                noc_async_read_tile(input_tile_idx, input_addrg, input_l1_write_ptr + r * input_tile_bytes);
             }
             noc_async_read_barrier();
             cb_push_back(cb_id_input, block_size);
@@ -155,12 +124,7 @@ void kernel_main() {
                 for (uint32_t r = 0; r < block_size; r++) {
                     input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
                     gamma_tile_idx = get_gamma_beta_tile_idx(input_tile_idx, HtWt, C, TILE_W);
-                    if (gamma_is_dram) {
-                        noc_async_read_tile(
-                            gamma_tile_idx, dram_gamma_addrg, gamma_l1_write_ptr + r * gamma_tile_bytes);
-                    } else {
-                        noc_async_read_tile(gamma_tile_idx, l1_gamma_addrg, gamma_l1_write_ptr + r * gamma_tile_bytes);
-                    }
+                    noc_async_read_tile(gamma_tile_idx, gamma_addrg, gamma_l1_write_ptr + r * gamma_tile_bytes);
                 }
                 noc_async_read_barrier();
 
@@ -185,11 +149,7 @@ void kernel_main() {
                 for (uint32_t r = 0; r < block_size; r++) {
                     input_tile_idx = tile_offset + outer_idx * num_inner_tiles + inner_idx + r;
                     beta_tile_idx = get_gamma_beta_tile_idx(input_tile_idx, HtWt, C, TILE_W);
-                    if (beta_is_dram) {
-                        noc_async_read_tile(beta_tile_idx, dram_beta_addrg, beta_l1_write_ptr + r * beta_tile_bytes);
-                    } else {
-                        noc_async_read_tile(beta_tile_idx, l1_beta_addrg, beta_l1_write_ptr + r * beta_tile_bytes);
-                    }
+                    noc_async_read_tile(beta_tile_idx, beta_addrg, beta_l1_write_ptr + r * beta_tile_bytes);
                 }
                 noc_async_read_barrier();
 

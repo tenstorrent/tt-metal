@@ -301,6 +301,7 @@ target_sources(
             inc/accessor/helpers.h
             inc/accessor/tensor_accessor.h
             inc/accessor/tensor_accessor_args.h
+            inc/accessor/shard_pages_address_iterator.h
             inc/atomic_rwptr.h
             inc/bit_utils.h
             inc/blackhole/c_tensix_core.h
@@ -373,6 +374,8 @@ target_sources(
             inc/wormhole/wormhole_b0_defines/tensix_types.h
             inc/dataflow_api_addrgen.h
             inc/dataflow_api_common.h
+            inc/socket_api.h
+            inc/socket.h
             # Toolchain
             toolchain/erisc-b0-app.ld
             toolchain/erisc-b0-app-sections.ld

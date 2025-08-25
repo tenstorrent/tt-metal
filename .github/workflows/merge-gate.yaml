@@ -163,7 +163,6 @@ jobs:
         platform: [
           "N300-viommu",
           "N300-llmbox",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -177,6 +176,7 @@ jobs:
     needs: [find-changes, build-tsan]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
@@ -186,7 +186,6 @@ jobs:
         platform: [
           "N300-viommu",
           "N300-llmbox",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -225,7 +224,6 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/basic.yaml
     with:
@@ -239,6 +237,7 @@ jobs:
     needs: [build-asan, find-changes]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
@@ -247,7 +246,6 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/basic.yaml
     with:

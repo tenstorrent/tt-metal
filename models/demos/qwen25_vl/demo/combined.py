@@ -30,6 +30,7 @@ from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
     [False, True],
     ids=["hf_vision", "tt_vision"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_qwen_vl_end_to_end(
     mesh_device,
     reset_seeds,

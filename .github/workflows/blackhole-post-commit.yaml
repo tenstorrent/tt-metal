@@ -131,6 +131,7 @@ jobs:
       build-wheel: true
       tracy: true
       version: "22.04"
+      build-umd-tests: true
   run-profiler-regression:
     needs: [build-artifact-profiler, generate-matrix]
     uses: ./.github/workflows/run-profiler-regression.yaml
@@ -166,7 +167,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
@@ -197,11 +198,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      timeout: 20
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -307,28 +307,38 @@ jobs:
 
   # LLMBox-only demo tests
   blackhole-llmbox-demo-tests:
-    needs: build-artifact
+    needs: [build-artifact, generate-matrix]
     if: ${{ inputs.enable-llmbox-tests }}
     secrets: inherit
-    uses: ./.github/workflows/blackhole-llmbox-demo-tests-impl.yaml
+    uses: ./.github/workflows/blackhole-multi-card-demo-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     with:
-      runner-label: ${{ inputs.runner-label || 'BH' }}
+      runner-label: ${{ matrix.test-group }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      extra-tag: pipeline-perf
+      num_devices: 4
 
-  # LLMBox-only fabric tests
-  blackhole-llmbox-fabric-unit-tests:
-    needs: build-artifact
+  # LLMBox-only unit tests
+  blackhole-llmbox-unit-tests:
+    needs: [build-artifact-profiler, generate-matrix]
     if: ${{ inputs.enable-llmbox-tests }}
     secrets: inherit
-    uses: ./.github/workflows/blackhole-llmbox-unit-tests-impl.yaml
+    uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
     with:
       arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'BH' }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      runner-label: ${{ matrix.test-group }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
 
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
@@ -346,6 +356,32 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
+  blackhole-20-cores-tests:
+    needs: [build-artifact, generate-matrix]
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-20-cores-tests.yaml
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
+    with:
+      arch: blackhole
+      runner-label: ${{ matrix.test-group }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+
+  # Multi-card post-commit tests
+  blackhole-multi-card-post-commit-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-multi-card-post-commit-tests-impl.yaml
+    with:
+      arch: blackhole
+      runner-label: BH-LLMBox
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow

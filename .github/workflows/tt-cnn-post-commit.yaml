@@ -1,4 +1,4 @@
-name: "[internal] tt-cnn uint tests impl"
+name: "[internal] tt-cnn unit tests impl"
 
 on:
   workflow_call:
@@ -12,7 +12,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 45
+        default: 10
       num-groups:
         required: false
         type: number
@@ -70,8 +70,8 @@ jobs:
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     runs-on: >-
       ${{
-        (github.event.pull_request.head.repo.fork == true || contains('P150b, N150', inputs.runner-label)) && format('tt-beta-ubuntu-2204-{0}-large-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service"]', inputs.runner-label))
+        (github.event.pull_request.head.repo.fork == true || contains('P150b, N150, N300', inputs.runner-label)) && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
+        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
       }}
     container:
       image: ${{ inputs.docker-image }}

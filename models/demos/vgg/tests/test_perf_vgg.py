@@ -125,7 +125,7 @@ def test_perf_device_bare_metal_vgg(batch_size, model_name):
         expected_perf = 435
         command = f"pytest tests/ttnn/integration_tests/vgg/test_ttnn_vgg11.py"
     else:
-        expected_perf = 345
+        expected_perf = 355
         command = f"pytest tests/ttnn/integration_tests/vgg/test_ttnn_vgg16.py"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

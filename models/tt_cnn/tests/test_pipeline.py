@@ -10,11 +10,17 @@ import torch
 
 import ttnn
 from models.tt_cnn.tt.executor import (
-    MultiCQTracedModelExecutor,
-    MultiCQTracedModelWithSeparateIOExecutor,
+    ModelExecutor,
+    MultiCQModelOverlappedInputExecutor,
+    MultiCQTracedModelOverlappedInputExecutor,
+    MultiCQTracedModelPipelinedIOExecutor,
     TracedModelExecutor,
 )
-from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
+from models.tt_cnn.tt.pipeline import (
+    PipelineConfig,
+    create_pipeline_from_config,
+    get_memory_config_for_persistent_dram_tensor,
+)
 from tests.ttnn.utils_for_testing import assert_equal
 
 
@@ -73,37 +79,56 @@ def create_test_model(input_shape, should_deallocate_input_tensor=True):
 @dataclass
 class ExecutorTestConfig:
     name: str
+    use_trace: bool
     num_command_queues: int
-    separate_io_queue: bool = False
+    all_transfers_on_separate_command_queue: bool = False
     requires_output_config: bool = False
+    requires_dram_output_config: bool = False
     requires_minimum_inputs: int = 1
     expected_executor_type: type = None
 
 
 EXECUTOR_CONFIGS = [
     ExecutorTestConfig(
-        name="TracedModelExecutor",
+        name="ModelExecutor",
+        use_trace=False,
         num_command_queues=1,
-        separate_io_queue=False,
-        requires_output_config=False,
+        all_transfers_on_separate_command_queue=False,
+        requires_minimum_inputs=1,
+        expected_executor_type=ModelExecutor,
+    ),
+    ExecutorTestConfig(
+        name="TracedModelExecutor",
+        use_trace=True,
+        num_command_queues=1,
+        all_transfers_on_separate_command_queue=False,
         requires_minimum_inputs=1,
         expected_executor_type=TracedModelExecutor,
     ),
     ExecutorTestConfig(
-        name="MultiCQTracedModelExecutor",
+        name="MultiCQModelOverlappedInputExecutor",
+        use_trace=False,
         num_command_queues=2,
-        separate_io_queue=False,
-        requires_output_config=False,
+        all_transfers_on_separate_command_queue=False,
         requires_minimum_inputs=1,
-        expected_executor_type=MultiCQTracedModelExecutor,
+        expected_executor_type=MultiCQModelOverlappedInputExecutor,
     ),
     ExecutorTestConfig(
-        name="MultiCQTracedModelWithSeparateIOExecutor",
+        name="MultiCQTracedModelOverlappedInputExecutor",
+        use_trace=True,
         num_command_queues=2,
-        separate_io_queue=True,
+        all_transfers_on_separate_command_queue=False,
+        requires_minimum_inputs=1,
+        expected_executor_type=MultiCQTracedModelOverlappedInputExecutor,
+    ),
+    ExecutorTestConfig(
+        name="MultiCQTracedModelPipelinedIOExecutor",
+        use_trace=True,
+        num_command_queues=2,
+        all_transfers_on_separate_command_queue=True,
         requires_output_config=True,
-        requires_minimum_inputs=2,  # Separate I/O requires at least 2 inputs to enable overlapping of input transfer with model execution
-        expected_executor_type=MultiCQTracedModelWithSeparateIOExecutor,
+        requires_minimum_inputs=2,  # Pipelined I/O requires at least 2 inputs to enable overlapping of input transfer with model execution
+        expected_executor_type=MultiCQTracedModelPipelinedIOExecutor,
     ),
 ]
 
@@ -144,14 +169,19 @@ def create_memory_configs(input_shape, dram_cores, l1_cores):
 
 
 def create_pipeline_for_executor_config(
-    executor_config: ExecutorTestConfig, model, device, input_shape, dram_cores, l1_cores
+    executor_config: ExecutorTestConfig,
+    model,
+    device,
+    input_shape,
+    dram_cores,
+    l1_cores,
 ):
     dram_memory_config, l1_memory_config = create_memory_configs(input_shape, dram_cores, l1_cores)
 
     config = PipelineConfig(
-        use_trace=True,
+        use_trace=executor_config.use_trace,
         num_command_queues=executor_config.num_command_queues,
-        separate_io_queue=executor_config.separate_io_queue,
+        all_transfers_on_separate_command_queue=executor_config.all_transfers_on_separate_command_queue,
     )
 
     pipeline_args = {
@@ -160,16 +190,8 @@ def create_pipeline_for_executor_config(
         "device": device,
         "dram_input_memory_config": dram_memory_config,
         "l1_input_memory_config": l1_memory_config,
+        "dram_output_memory_config": dram_memory_config,
     }
-
-    if executor_config.requires_output_config:
-        pipeline_args.update(
-            {
-                "dram_output_memory_config": dram_memory_config,
-                "output_shape": input_shape,
-                "output_dtype": ttnn.bfloat16,
-            }
-        )
 
     return create_pipeline_from_config(**pipeline_args)
 
@@ -328,3 +350,25 @@ def test_executor_with_preallocated_outputs(
             ttnn.to_torch(output),
             reference_output,
         )
+
+
+@pytest.mark.parametrize(
+    "shard_strategy", [ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.TensorMemoryLayout.HEIGHT_SHARDED]
+)
+def test_get_memory_config_for_persistent_dram_tensor(shard_strategy):
+    dram_grid_size = ttnn.CoreCoord(2, 1)
+    shape = (1, 1, 64, 64)
+    dram_memory_config = get_memory_config_for_persistent_dram_tensor(shape, shard_strategy, dram_grid_size)
+    assert dram_memory_config.buffer_type == ttnn.BufferType.DRAM
+    assert (
+        dram_memory_config.shard_spec.shape == [64, 32]
+        if shard_strategy == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        else [32, 64]
+    )
+
+
+def test_get_dram_sharded_memory_config_for_tensor_invalid_grid_size():
+    dram_grid_size = ttnn.CoreCoord(2, 2)
+    shape = (1, 1, 64, 64)
+    with pytest.raises(ValueError):
+        get_memory_config_for_persistent_dram_tensor(shape, ttnn.TensorMemoryLayout.WIDTH_SHARDED, dram_grid_size)

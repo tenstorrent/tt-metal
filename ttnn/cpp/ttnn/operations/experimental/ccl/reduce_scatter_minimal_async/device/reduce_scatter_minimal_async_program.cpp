@@ -94,6 +94,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<uint32_t> chunks_per_sync,
     const std::optional<uint32_t> num_workers_per_link,
@@ -116,6 +117,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async(
         topology,
         semaphore,
         barrier_semaphore,
+        using_persistent_buffers,
         sub_device_id,
         empty_fused_op_signaler,
         chunks_per_sync,
@@ -138,6 +140,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -160,6 +163,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             topology,
             semaphore,
             barrier_semaphore,
+            using_persistent_buffers,
             sub_device_id,
             fused_op_signaler,
             chunks_per_sync,
@@ -182,6 +186,7 @@ tt::tt_metal::operation::ProgramWithCallbacks reduce_scatter_minimal_async_helpe
             topology,
             semaphore,
             barrier_semaphore,
+            using_persistent_buffers,
             sub_device_id,
             fused_op_signaler,
             chunks_per_sync,
@@ -206,6 +211,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -213,8 +219,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset) {
     auto mesh_device = input_tensor.mesh_device();
-    bool is_first_chip = ring_index == 0;
-    bool is_last_chip = ring_index == ring_size - 1;
+    [[maybe_unused]] bool is_first_chip = ring_index == 0;
+    [[maybe_unused]] bool is_last_chip = ring_index == ring_size - 1;
 
     log_trace(
         tt::LogOp,
@@ -561,15 +567,13 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     (worker_id * batch_slice_num_pages / num_workers) %
                         (input_tensor_Wt / ring_size),  // pages_read_in_row
                     (worker_id * batch_slice_num_pages / num_workers) / (input_tensor_Wt / ring_size) *
-                        input_tensor_Wt,                                    // row_offset
-                    (worker_id * batch_slice_num_pages / num_workers),      // tiles_read
-                    (worker_id + 1) * batch_slice_num_pages / num_workers,  // tiles_to_read
-                    barrier_semaphore.has_value(),                          // use synchronize barrier semaphore
-                    barrier_semaphore.has_value()                           // synchronize barrier semaphore
+                        input_tensor_Wt,                                         // row_offset
+                    (worker_id * batch_slice_num_pages / num_workers),           // tiles_read
+                    (worker_id + 1) * batch_slice_num_pages / num_workers,       // tiles_to_read
+                    barrier_semaphore.has_value() && !using_persistent_buffers,  // use synchronize barrier semaphore
+                    barrier_semaphore.has_value()                                // synchronize barrier semaphore
                         ? barrier_semaphore.value().address()
-                        : 0,
-                    opposite_core_coord.x,
-                    opposite_core_coord.y};
+                        : 0};
                 append_fabric_mux_connection_rt_args(
                     true, core, program, termination_master_virtual_core, num_workers_per_direction, writer_rt_args);
                 if (intermediate_is_sharded) {
@@ -684,6 +688,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
     ccl::Topology topology,
     const std::vector<GlobalSemaphore>& semaphore,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::ReduceScatterFusedOpSignaler>& fused_op_signaler,
     std::optional<uint32_t> chunks_per_sync,
@@ -884,7 +889,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
 
     // Kernel Runtime Args
     uint32_t fwd_bwd_semaphore_address = tt::tt_metal::CreateSemaphore(program, sender_worker_core_range_set, 0);
-    bool use_barrier_sem = barrier_semaphore.has_value();
     const uint32_t l1_unreserved_base_address =
         sender_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
@@ -1102,8 +1106,6 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     {core},
                     tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
                 writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
-                bool signal_on_barrier_sem = use_barrier_sem && num_targets_in_direction;
-                bool wait_on_barrier_sem = use_barrier_sem && num_targets_in_direction;
                 std::vector<uint32_t> writer_rt_args = {
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address
                     output_tensor.buffer()->address(),        // output_tensor_address
@@ -1117,9 +1119,8 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     fwd_bwd_semaphore_address,
                     opposite_core_coord.x,
                     opposite_core_coord.y,
-                    signal_on_barrier_sem,         // signal_on_barrier_sem
-                    wait_on_barrier_sem,           // wait_on_barrier_sem
-                    barrier_semaphore.has_value()  // synchronize barrier semaphore
+                    barrier_semaphore.has_value() && !using_persistent_buffers,  // use_barrier_sem
+                    barrier_semaphore.has_value()                                // synchronize barrier semaphore
                         ? barrier_semaphore.value().address()
                         : 0};
                 append_fabric_mux_connection_rt_args(
@@ -1211,7 +1212,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                         worker_writer_sender_runtime_args[6] = semaphore.at(2).address();
 
                         if (barrier_semaphore.has_value()) {
-                            worker_writer_sender_runtime_args[14] = barrier_semaphore.value().address();
+                            worker_writer_sender_runtime_args[13] = barrier_semaphore.value().address();
                         }
 
                         core_idx++;

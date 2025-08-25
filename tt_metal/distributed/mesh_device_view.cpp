@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <mesh_device.hpp>
 #include <mesh_device_view.hpp>
 #include <cstddef>
@@ -58,13 +57,9 @@ MeshDeviceView::MeshDeviceView(
         mesh_id_);
 
     // Build coordinate map.
-    bool all_local = true;
     for (const auto& [coord, maybe_device] : devices_) {
-        all_local &= maybe_device.is_local();
         maybe_device.if_local([this, &coord](const auto& device) { device_coordinates_.emplace(device->id(), coord); });
     }
-
-    fully_local_ = all_local;
 }
 
 MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshCoordinateRange& range) const {
@@ -249,8 +244,6 @@ std::vector<IDevice*> MeshDeviceView::get_ring_devices() const {
 }
 
 MeshDeviceView::DeviceView MeshDeviceView::get_devices() const { return extract_locals(devices_.values()); }
-
-bool MeshDeviceView::fully_local() const { return fully_local_; }
 
 bool MeshDeviceView::is_local(const MeshCoordinate& coord) const {
     TT_FATAL(contains(coord), "Coordinate {} not found in mesh {}", coord, devices_.shape());

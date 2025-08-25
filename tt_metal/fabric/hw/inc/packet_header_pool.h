@@ -31,8 +31,7 @@ private:
     static const uint32_t risc_pool_start = proc_type * POOL_SIZE_PER_RISC;
     static const uint32_t risc_pool_end = risc_pool_start + POOL_SIZE_PER_RISC;
     static uint8_t route_id_;
-    // !!!! really tight size limitation !!!!
-    static const uint32_t HEADER_GROUP_SIZE_PER_RISC = POOL_SIZE_PER_RISC / 4;
+    static const uint32_t HEADER_GROUP_SIZE_PER_RISC = NUM_PACKET_HEADERS / MaxDMProcessorsPerCoreType;
 
 public:
     // {route_id: [header_ptr, num_headers]}
@@ -95,6 +94,14 @@ public:
             func(packet_headers, i);
             packet_headers++;
         }
+    }
+
+    FORCE_INLINE static uint8_t get_num_headers(uint8_t route_id) {
+        ASSERT(route_id < route_id_);
+        if (route_id >= route_id_) {
+            return 0;
+        }
+        return header_table[route_id].second;
     }
 };
 

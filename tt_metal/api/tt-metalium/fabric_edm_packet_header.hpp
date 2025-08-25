@@ -646,9 +646,6 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
 #elif (                                                              \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_MESH)) != 0) || \
     ((ROUTING_MODE & (ROUTING_MODE_2D | ROUTING_MODE_TORUS)) != 0))
-#if (ROUTING_MODE & ROUTING_MODE_PULL) != 0
-#define PACKET_HEADER_TYPE packet_header_t
-#else  // ROUTING_MODE_PUSH as default
 #if (ROUTING_MODE & ROUTING_MODE_LOW_LATENCY) != 0
 #define PACKET_HEADER_TYPE tt::tt_fabric::LowLatencyMeshPacketHeader
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
@@ -658,7 +655,6 @@ static_assert(false, "ROUTING_MODE_DYNAMIC is not supported yet");
 #define ROUTING_FIELDS_TYPE tt::tt_fabric::LowLatencyMeshRoutingFields
 #else
 #define PACKET_HEADER_TYPE packet_header_t
-#endif
 #endif
 #else
 static_assert(false, "non supported ROUTING_MODE: " TOSTRING(ROUTING_MODE));

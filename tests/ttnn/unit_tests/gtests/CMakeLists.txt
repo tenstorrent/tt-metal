@@ -80,9 +80,10 @@ target_link_libraries(
 
 # unit_tests_ttnn_ccl
 
-add_executable(unit_tests_ttnn_ccl)
+add_library(unit_tests_ttnn_ccl_lib OBJECT)
+add_library(TTNN::Test::CCL ALIAS unit_tests_ttnn_ccl_lib)
 target_sources(
-    unit_tests_ttnn_ccl
+    unit_tests_ttnn_ccl_lib
     PRIVATE
         ccl/test_ccl_commands.cpp
         ccl/test_ccl_helpers.cpp
@@ -93,42 +94,48 @@ target_sources(
         ccl/test_sharded_address_generators.cpp
         ccl/test_sharded_address_generators_new.cpp
 )
-target_include_directories(unit_tests_ttnn_ccl PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_include_directories(unit_tests_ttnn_ccl_lib PUBLIC ${PROJECT_SOURCE_DIR}/tests)
 target_link_libraries(
-    unit_tests_ttnn_ccl
-    PRIVATE
+    unit_tests_ttnn_ccl_lib
+    PUBLIC
         test_common_libs
         TTNN::CPP
 )
 
+add_executable(unit_tests_ttnn_ccl)
+target_link_libraries(unit_tests_ttnn_ccl PRIVATE TTNN::Test::CCL)
+
 # unit_tests_ttnn_ccl_ops
 
-add_executable(unit_tests_ttnn_ccl_ops)
+add_library(unit_tests_ttnn_ccl_ops_lib OBJECT)
+add_library(TTNN::Test::CCL::Ops ALIAS unit_tests_ttnn_ccl_ops_lib)
 target_sources(
-    unit_tests_ttnn_ccl_ops
+    unit_tests_ttnn_ccl_ops_lib
     PRIVATE
         ccl/test_persistent_fabric_ccl_ops.cpp
         ccl/test_send_recv_ops.cpp
 )
-setup_ttnn_test_target(unit_tests_ttnn_ccl_ops)
+target_include_directories(
+    unit_tests_ttnn_ccl_ops_lib
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}/tests
+        ${CMAKE_CURRENT_SOURCE_DIR}
+)
+target_link_libraries(
+    unit_tests_ttnn_ccl_ops_lib
+    PUBLIC
+        test_common_libs
+        TTNN::CPP
+)
 
-# unit_tests_ttnn_fabric_edm
-
-add_executable(unit_tests_ttnn_fabric_edm)
-target_sources(unit_tests_ttnn_fabric_edm PRIVATE ccl/test_fabric_edm.cpp)
-setup_ttnn_test_target(unit_tests_ttnn_fabric_edm)
+add_executable(unit_tests_ttnn_ccl_ops)
+target_link_libraries(unit_tests_ttnn_ccl_ops PRIVATE TTNN::Test::CCL::Ops)
 
 # unit_tests_ttnn_ccl_multi_tensor
 
 add_executable(unit_tests_ttnn_ccl_multi_tensor)
 target_sources(unit_tests_ttnn_ccl_multi_tensor PRIVATE ccl/test_multi_tensor_ccl.cpp)
 setup_ttnn_test_target(unit_tests_ttnn_ccl_multi_tensor)
-
-# unit_tests_ttnn_1d_fabric_latency
-
-add_executable(unit_tests_ttnn_1d_fabric_latency)
-target_sources(unit_tests_ttnn_1d_fabric_latency PRIVATE ccl/test_1d_fabric_loopback_latency.cpp)
-setup_ttnn_test_target(unit_tests_ttnn_1d_fabric_latency)
 
 # unit_tests_ttnn_accessor
 

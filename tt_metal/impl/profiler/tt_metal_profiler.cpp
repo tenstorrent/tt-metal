@@ -166,8 +166,8 @@ void syncDeviceHost(IDevice* device, CoreCoord logical_core, bool doHeader) {
     constexpr uint32_t briscIndex = 0;
     uint64_t addr = reinterpret_cast<uint64_t>(&profiler_msg->buffer[briscIndex][kernel_profiler::CUSTOM_MARKERS]);
 
-    std::vector<std::uint32_t> sync_times =
-        tt::llrt::read_hex_vec_from_core(device_id, core, addr, (sampleCount + 1) * 2 * sizeof(uint32_t));
+    std::vector<std::uint32_t> sync_times = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        device_id, core, addr, (sampleCount + 1) * 2 * sizeof(uint32_t));
 
     uint32_t preDeviceTime = 0;
     uint32_t preHostTime = 0;
@@ -501,12 +501,12 @@ void syncAllDevices(chip_id_t host_connected_device) {
             }
             for (auto& timePair : timePairs) {
                 double senderTime = timePair.first - senderBase;
-                double recieverTime = timePair.second - receiverBase;
+                double receiverTime = timePair.second - receiverBase;
 
-                receiverSum += recieverTime;
+                receiverSum += receiverTime;
                 senderSum += senderTime;
-                receiverSquareSum += (recieverTime * recieverTime);
-                senderReceiverProductSum += (senderTime * recieverTime);
+                receiverSquareSum += (receiverTime * receiverTime);
+                senderReceiverProductSum += (senderTime * receiverTime);
             }
 
             uint16_t accumulateSampleCount = timePairs.size();
@@ -594,7 +594,7 @@ void ProfilerSync(ProfilerSyncState state) {
                 }
             }
         }
-        // If at least one sender reciever pair has been found
+        // If at least one sender receiver pair has been found
         if (first_connected_device_id != -1) {
             syncAllDevices(first_connected_device_id);
         }
@@ -606,7 +606,7 @@ void ProfilerSync(ProfilerSyncState state) {
             auto deviceToSync = tt::DevicePool::instance().get_active_device(synced_with_host_device.first);
             syncDeviceHost(deviceToSync, SYNC_CORE, false);
         }
-        //  If at least one sender reciever pair has been found
+        //  If at least one sender receiver pair has been found
         if (first_connected_device_id != -1) {
             syncAllDevices(first_connected_device_id);
         }
@@ -727,11 +727,12 @@ void ReadDeviceProfilerResults(
 
                 profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(core_type, HalL1MemAddrType::PROFILER);
                 for (int i = 0; i < maxLoopCount; i++) {
-                    const std::vector<std::uint32_t> control_buffer = tt::llrt::read_hex_vec_from_core(
-                        device->id(),
-                        core,
-                        reinterpret_cast<uint64_t>(profiler_msg->control_vector),
-                        kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
+                    const std::vector<std::uint32_t> control_buffer =
+                        tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+                            device->id(),
+                            core,
+                            reinterpret_cast<uint64_t>(profiler_msg->control_vector),
+                            kernel_profiler::PROFILER_L1_CONTROL_BUFFER_SIZE);
                     if (control_buffer[kernel_profiler::PROFILER_DONE] == 1) {
                         is_core_done = true;
                         break;
@@ -754,9 +755,32 @@ void ReadDeviceProfilerResults(
             !tt::tt_metal::MetalContext::instance().dprint_server(),
             "Debug print server is running, cannot read device profiler data");
 
-        profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+            profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+        } else {
+            profiler.readResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        }
     }
 #endif
+}
+
+bool pushToTracyMidRun(const ProfilerReadState state) {
+    if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
+        return false;
+    }
+
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push() &&
+            !tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only(),
+        "Cannot push to Tracy GUI mid-run if only profiling trace runs");
+
+    TT_FATAL(
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push() &&
+            !tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_do_dispatch_cores(),
+        "Cannot push to Tracy GUI mid-run if profiling dispatch cores");
+
+    return tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push() &&
+           state == ProfilerReadState::NORMAL;
 }
 
 void ProcessDeviceProfilerResults(
@@ -776,8 +800,13 @@ void ProcessDeviceProfilerResults(
             return;
         }
 
-        profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
-        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_tracy_mid_run_push()) {
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+            profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
+        } else {
+            profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);
+        }
+
+        if (pushToTracyMidRun(state)) {
             profiler.pushTracyDeviceResults();
         }
     }
@@ -862,13 +891,25 @@ void FreshProfilerDeviceLog() {
 #endif
 }
 
+constexpr uint32_t DEVICE_ID_NUM_BITS = 10;
+constexpr uint32_t DEVICE_OP_ID_NUM_BITS = 31;
+
+// Given the base (host assigned id) for a program running on multiple devices, generate a unique per-device
+// id by coalescing the physical_device id with the program id.
+// For ops running on device, the MSB is 0. For host-fallback ops, the MSB is 1. This avoids aliasing.
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op) {
-    // Given the base (host assigned id) for a program running on multiple devices, generate a unique per-device
-    // id by coalescing the physical_device id with the program id.
-    // For ops running on device, the MSB is 0. For host-fallback ops, the MSB is 1. This avoids aliasing.
-    constexpr uint32_t DEVICE_ID_NUM_BITS = 10;
-    constexpr uint32_t DEVICE_OP_ID_NUM_BITS = 31;
     return (is_host_fallback_op << DEVICE_OP_ID_NUM_BITS) | (base_program_id << DEVICE_ID_NUM_BITS) | device_id;
+}
+
+// Decode per device program ID to get encoded values (base program id, device id, and a flag indicating whether
+// it's a host-fallback op).
+DeviceProgramId DecodePerDeviceProgramID(uint32_t encoded_device_program_id) {
+    DeviceProgramId device_program_id;
+    device_program_id.device_id = encoded_device_program_id & ((1 << DEVICE_ID_NUM_BITS) - 1);
+    device_program_id.base_program_id =
+        (encoded_device_program_id & ((uint32_t)(1 << DEVICE_OP_ID_NUM_BITS) - 1)) >> DEVICE_ID_NUM_BITS;
+    device_program_id.is_host_fallback_op = encoded_device_program_id >> DEVICE_OP_ID_NUM_BITS;
+    return device_program_id;
 }
 
 }  // namespace detail

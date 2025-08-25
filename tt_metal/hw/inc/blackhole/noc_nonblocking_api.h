@@ -161,13 +161,18 @@ inline __attribute__((always_inline)) uint32_t noc_get_interim_inline_value_addr
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
-    uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint64_t src_addr,
+    uint32_t dest_addr,
+    uint32_t len_bytes,
+    uint32_t read_req_vc = 1) {
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
     }
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         uint32_t noc_rd_cmd_field =
-            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+            NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(read_req_vc);
         NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_rd_cmd_field);
     }
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dest_addr);
@@ -561,16 +566,21 @@ inline __attribute__((always_inline)) void ncrisc_noc_full_sync() {
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
-    uint32_t noc, uint32_t cmd_buf, uint64_t src_addr, uint32_t dest_addr, uint32_t len_bytes) {
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint64_t src_addr,
+    uint32_t dest_addr,
+    uint32_t len_bytes,
+    uint32_t read_req_vc = 1) {
     while (len_bytes > NOC_MAX_BURST_SIZE) {
         while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE);
+        ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, NOC_MAX_BURST_SIZE, read_req_vc);
         src_addr += NOC_MAX_BURST_SIZE;
         dest_addr += NOC_MAX_BURST_SIZE;
         len_bytes -= NOC_MAX_BURST_SIZE;
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes);
+    ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool one_packet = false>
@@ -856,7 +866,19 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_with_transaction
     }
 }
 
-// set transaction id for a noc read
+// clang-format off
+/**
+ * Sets the transaction id for a noc transaction.
+ *
+ * Return value: None
+ *
+ * | Argument | Description                                        | Data type | Valid range | Required |
+ * |----------|----------------------------------------------------|-----------|-------------|----------|
+ * | noc      | Which NOC to use for the transaction               | uint32_t  | 0 or 1      | True     |
+ * | cmd_buf  | Which command buffer to use for the transaction    | uint32_t  | 0 - 3       | True     |
+ * | trid     | Transaction id for the transaction                 | uint32_t  | 0x0 - 0xF   | True     |
+ */
+// clang-format on
 inline __attribute__((always_inline)) void ncrisc_noc_set_transaction_id(
     uint32_t noc, uint32_t cmd_buf, uint32_t trid) {
     while (!noc_cmd_buf_ready(noc, cmd_buf));

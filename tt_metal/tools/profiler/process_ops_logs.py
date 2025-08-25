@@ -82,12 +82,15 @@ OPS_CSV_HEADER = [
     "COMPUTE KERNEL HASH",
     "DATA MOVEMENT KERNEL SOURCE",
     "DATA MOVEMENT KERNEL HASH",
-    "BRISC MAX KERNEL SIZE [B]",
-    "NCRISC MAX KERNEL SIZE [B]",
-    "TRISC 0 MAX KERNEL SIZE [B]",
-    "TRISC 1 MAX KERNEL SIZE [B]",
-    "TRISC 2 MAX KERNEL SIZE [B]",
-    "ERISC MAX KERNEL SIZE [B]",
+    "TENSIX DM 0 MAX KERNEL SIZE [B]",
+    "TENSIX DM 1 MAX KERNEL SIZE [B]",
+    "TENSIX COMPUTE 0 MAX KERNEL SIZE [B]",
+    "TENSIX COMPUTE 1 MAX KERNEL SIZE [B]",
+    "TENSIX COMPUTE 2 MAX KERNEL SIZE [B]",
+    "ACTIVE ETH DM 0 MAX KERNEL SIZE [B]",
+    "ACTIVE ETH DM 1 MAX KERNEL SIZE [B]",
+    "IDLE ETH DM 0 MAX KERNEL SIZE [B]",
+    "IDLE ETH DM 1 MAX KERNEL SIZE [B]",
     "PM IDEAL [ns]",
     "PM COMPUTE [ns]",
     "PM BANDWIDTH [ns]",
@@ -691,9 +694,10 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
             data = {}
             if ioField == "shape":
                 for field in ["W", "Z", "Y", "X"]:
-                    headers.append(field)
+                    padded_logical_field = field + "_PAD[LOGICAL]"
+                    headers.append(padded_logical_field)
                     assert field in ioData, "Wrong io tensor shape data format"
-                    data[field] = ioData[field]
+                    data[padded_logical_field] = ioData[field]
             elif ioField == "dtype":
                 headers = ["DATATYPE"]
                 data["DATATYPE"] = ioData
@@ -923,7 +927,7 @@ def analyzeNoCTraces(logFolder):
         logger.warning("Could not import tt-npe module. Ensure tt-npe is built, then source 'tt-npe/ENV_SETUP'")
         return None
     except Exception as e:
-        logger.error("Unexpected error occured when analyzing noc traces, aborting ... ")
+        logger.error("Unexpected error occurred when analyzing noc traces, aborting ... ")
         logger.error(" ↳ " + repr(e))
         return None
 
