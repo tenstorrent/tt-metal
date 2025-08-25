@@ -158,8 +158,8 @@ void MAIN {
             }
             cb_wait_front(cb_ex, onetile);  // should have 1 tile
             cb_reserve_back(cb_xmm, Wt);
-            // sub_bcast_cols_init_short(cb_x, cb_ex);
-            init_bcast<ELWSUB, BroadcastType::COL>(cb_x, cb_ex, cb_xmm);
+            sub_bcast_cols_init_short(cb_x, cb_ex);
+            // init_bcast<ELWSUB, BroadcastType::COL>(cb_x, cb_ex, cb_xmm);
             for (uint32_t wt = 0; wt < Wt; wt += blk) {
                 ACQ();
                 for (uint32_t wtr = 0; wtr < blk; wtr++) {
@@ -259,8 +259,8 @@ void MAIN {
             }
 
             ACQ();
-            // mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
-            init_bcast<ELWMUL, BroadcastType::COL>(cb_xmm, cb_ex2pe, cb_im_or_out);
+            mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
+            // init_bcast<ELWMUL, BroadcastType::COL>(cb_xmm, cb_ex2pe, cb_im_or_out);
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
                 mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);
