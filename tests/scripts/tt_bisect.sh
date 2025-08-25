@@ -71,7 +71,7 @@ while [[ "$found" == "false" ]]; do
 
   # Use and clean the CPM cache that CMake will use
   export CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-/work/.cpmcache}"
-  rm -rf "$CPM_SOURCE_CACHE" build build_Release build_Debug
+  rm -rf "$CPM_SOURCE_CACHE" build build_Release build_Debug "$PYTHON_ENV_DIR"
   mkdir -p "$CPM_SOURCE_CACHE"
 
   export CMAKE_ARGS="-DCPM_SOURCE_CACHE=$CPM_SOURCE_CACHE -DCPM_DOWNLOAD_ALL=ON -DCPM_USE_LOCAL_PACKAGES=OFF"
@@ -121,7 +121,11 @@ while [[ "$found" == "false" ]]; do
   source "$PYTHON_ENV_DIR/bin/activate" || venv_rc=$?
   python -m pip install -U pip || venv_rc=$?
   python -m pip install -r models/tt_transformers/requirements.txt || venv_rc=$?
+  python -m pip install -e . || venv_rc=$?
   echo "::endgroup::"
+
+  export PYTHONNOUSERSITE=1
+  export LD_LIBRARY_PATH="/work/build/lib"
 
   if [ $venv_rc -ne 0 ]; then
     echo "Python env failed; skipping this commit"
