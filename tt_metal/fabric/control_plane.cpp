@@ -153,7 +153,7 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
         if (is_ubb && cluster.is_external_cable(chip_id, eth_ports[0])) {
             continue;
         }
-        if (eth_ports.size() >= 0) {
+        if (eth_ports.size() > 0) {
             // Special case for TG not to include MMIO devices in adjacency map because they are control chips
             if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::TG && mmio_chip_ids.contains(connected_chip_id)) {
                 continue;
