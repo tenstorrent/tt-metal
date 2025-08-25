@@ -16,11 +16,10 @@ from loguru import logger
 
 
 class TtDecoder(nn.Module):
-    def __init__(self, device, state_dict, model_config, batch_size=1):
+    def __init__(self, device, state_dict, model_config):
         super().__init__()
 
         self.device = device
-        self.batch_size = batch_size
 
         self.norm_groups = 32
         self.norm_eps = 1e-5
