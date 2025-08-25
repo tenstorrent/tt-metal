@@ -5,6 +5,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::transformer::detail {
@@ -83,20 +84,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
         {(std::size_t)start_core_x, (std::size_t)start_core_y},
         {(std::size_t)start_core_x + num_cores_c - 1, (std::size_t)start_core_y + num_cores_r - 1});
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
-    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)in0_is_dram,
-
         // READER COMPILE TIME ARGS
         (std::uint32_t)block_size,             // block_size
         (std::uint32_t)num_blocks_per_tensor,  // out_num_blocks_per_tensor
     };
-    std::vector<uint32_t> writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)out_is_dram,
+    tt::tt_metal::TensorAccessorArgs(in0_buffer).append_to(reader_compile_time_args);
 
+    std::vector<uint32_t> writer_compile_time_args = {
         // WRITER COMPILE TIME ARGS
         (std::uint32_t)block_size_is_one,
         (std::uint32_t)block_size,                    // block_size
@@ -106,6 +101,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_split_query_key_value_a
         (std::uint32_t)out_h_tiles,                   // out_h_tiles
         (std::uint32_t)out_HtWt,                      // out_HtWt
     };
+    tt::tt_metal::TensorAccessorArgs(q_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(k_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(v_buffer).append_to(writer_compile_time_args);
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,

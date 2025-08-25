@@ -66,12 +66,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_fa
     ////////////////////////////////////////////////////////////////////////////
     tt_metal::Program program = tt_metal::CreateProgram();
 
-    bool out_is_dram = q_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args;
     tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)out_is_dram,
         (std::uint32_t)q_num_tiles_per_tensor,
         (std::uint32_t)kv_num_tiles_per_tensor,
         (std::uint32_t)q_out_h_tiles,
@@ -79,6 +76,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_fa
         (std::uint32_t)q_out_c,
         (std::uint32_t)q_out_HtWt,
     };
+    tt_metal::TensorAccessorArgs(*q_buffer).append_to(writer_compile_time_args);
+    tt_metal::TensorAccessorArgs(*k_buffer).append_to(writer_compile_time_args);
+    tt_metal::TensorAccessorArgs(*v_buffer).append_to(writer_compile_time_args);
 
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,

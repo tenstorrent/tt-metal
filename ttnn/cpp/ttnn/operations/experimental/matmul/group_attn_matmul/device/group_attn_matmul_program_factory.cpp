@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::experimental::matmul {
@@ -210,24 +211,20 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         cb_output = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
     }
 
-    const uint32_t src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
-    const uint32_t src1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> reader_compile_time_args = {
-        (uint32_t)src0_is_dram,
-        (uint32_t)src1_is_dram,
         (uint32_t)transpose_hw_bool,
         (uint32_t)row_major,
         out_subblock_w,
     };
+    tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
-    const uint32_t dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {
-        (uint32_t)src0_is_dram,
-        (uint32_t)dst_is_dram,
         (uint32_t)output_cb_index,
         out_subblock_w,
         intermediate_num_tiles,
     };
+    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_kernel_defines;
     std::map<std::string, std::string> writer_kernel_defines;

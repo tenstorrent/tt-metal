@@ -102,13 +102,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
             tt_metal::WriterDataMovementConfig(compile_time_args));
     } else {
         std::vector<uint32_t> reader_compile_time_args = {
-            // interleaved accessor args
-            (std::uint32_t)in0_is_dram,
             (std::uint32_t)in0_h_tiles,
             (std::uint32_t)in0_w_tiles,
             (std::uint32_t)in0_c,
             (std::uint32_t)in0_HtWt,
         };
+        tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)src0_cb_index};
         tt_metal::TensorAccessorArgs(*out_buffer).append_to(writer_compile_time_args);
         reader_kernel_id = tt_metal::CreateKernel(

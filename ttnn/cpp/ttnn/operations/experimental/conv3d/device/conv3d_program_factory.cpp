@@ -9,6 +9,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include <algorithm>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::conv3d::detail {
 
@@ -212,6 +213,7 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         config.stride[0],
         config.stride[1],
         config.stride[2]};
+    tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -309,6 +311,10 @@ tt::tt_metal::operation::ProgramWithCallbacks conv3d_factory(
         C_out_block_bytes,
         (uint32_t)use_bias,
         semaphore_id};
+    tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*weight_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(bias_tensor.has_value() ? bias_tensor.value().buffer() : nullptr)
+        .append_to(writer_compile_time_args);
 
     auto writer_kernels_id = CreateKernel(
         program,
