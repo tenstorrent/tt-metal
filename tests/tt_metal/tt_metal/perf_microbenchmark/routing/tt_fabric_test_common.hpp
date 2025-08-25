@@ -155,6 +155,10 @@ public:
     void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }
 
     void close_devices() {
+        if (!are_devices_open_) {
+            log_info(tt::LogTest, "Devices are already closed, skipping close_devices call");
+            return;
+        }
         mesh_device_->close();
         tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 
