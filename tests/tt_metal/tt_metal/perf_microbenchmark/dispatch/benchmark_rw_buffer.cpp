@@ -68,13 +68,30 @@ static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, Buf
 static constexpr std::array<TensorMemoryLayout, 3> SHARD_ORIENTATIONS = {
     TensorMemoryLayout::INTERLEAVED, TensorMemoryLayout::HEIGHT_SHARDED, TensorMemoryLayout::WIDTH_SHARDED};
 
+// Short-hand for page dimension = 32x32
+static constexpr std::uint32_t PAGE_SIDE = 32;
+
+/**
+ * Compute the element side after sharding across num_cores.
+ *
+ * The result needs to round up to a multiple of PAGE_SIDE.
+ */
+static constexpr auto compute_shard_side(auto element_side, auto num_cores) {
+    auto shard_side = element_side / num_cores;
+    shard_side += (element_side % num_cores > 0 ? 1 : 0);
+    // Rounding up to the nearest multiple of PAGE_HEIGHT
+    shard_side += (PAGE_SIDE - shard_side % PAGE_SIDE);
+    return shard_side;
+}
+
+// Quick test case
+static_assert(compute_shard_side(4096, 12) == 352);
+
 static std::shared_ptr<MeshBuffer> create_device_buffer(
     std::shared_ptr<MeshDevice> mesh_device, int64_t page_size, BufferType buffer_type, TensorMemoryLayout sharding) {
     // float32 of 4096x4096 is 64MB (transfer size)
     static constexpr std::uint32_t ELEMENT_SHAPE_SIDE = 4096;
     static_assert(ELEMENT_SHAPE_SIDE * ELEMENT_SHAPE_SIDE * sizeof(float) == TRANSFER_SIZE);
-
-    static constexpr std::uint32_t PAGE_SIDE = 32;
 
     BufferShardingArgs sharding_args;
 
@@ -83,11 +100,7 @@ static std::shared_ptr<MeshBuffer> create_device_buffer(
                                                        : mesh_device->dram_grid_size();
         CoreRangeSet core_range_set({CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1))});
         auto total_num_cores = core_range_set.num_cores();
-
-        // Rounding up to the nearest multiple of PAGE_HEIGHT
-        auto shard_side = ELEMENT_SHAPE_SIDE / total_num_cores;
-        shard_side += (ELEMENT_SHAPE_SIDE % total_num_cores > 0 ? 1 : 0);
-        shard_side += (PAGE_SIDE - shard_side % PAGE_SIDE);
+        auto shard_side = compute_shard_side(ELEMENT_SHAPE_SIDE, total_num_cores);
 
         std::array<uint32_t, 2> shard_shape;
         if (sharding == TensorMemoryLayout::HEIGHT_SHARDED) {
