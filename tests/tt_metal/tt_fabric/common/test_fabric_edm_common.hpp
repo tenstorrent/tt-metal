@@ -18,7 +18,6 @@
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal/common/executor.hpp"
-#include <tt-metalium/fabric_edm_packet_header.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder_helper.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tt_stl/small_vector.hpp"

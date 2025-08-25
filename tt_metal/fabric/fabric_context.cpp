@@ -9,8 +9,8 @@
 #include <tt-metalium/fabric_types.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include <enchantum/enchantum.hpp>
+#include "erisc_datamover_builder.hpp"
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
