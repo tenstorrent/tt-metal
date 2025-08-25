@@ -6,7 +6,8 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -18,7 +19,7 @@ namespace ckernel {
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void recip_tile_init() { MATH((llk_math_eltwise_unary_sfpu_reciprocal_init<APPROX>())); }
+ALWI void recip_tile_init() { MATH(SFPU_INIT_KERNEL_CALL(reciprocal, sfpu::recip_init, APPROX)); }
 // clang-format off
 /**
  * Performs element-wise computation of the reciprocal on each element of a tile
@@ -36,7 +37,7 @@ ALWI void recip_tile_init() { MATH((llk_math_eltwise_unary_sfpu_reciprocal_init<
  */
 // clang-format on
 ALWI void recip_tile(uint32_t idst, int vector_mode = (int)VectorMode::RC) {
-    MATH((llk_math_eltwise_unary_sfpu_reciprocal<APPROX, DST_ACCUM_MODE>(idst, vector_mode)));
+    MATH(SFPU_THREE_TEMPLATE_PARAM_KERNEL(reciprocal, APPROX, DST_ACCUM_MODE, 8, idst, vector_mode));
 }
 
 }  // namespace ckernel
