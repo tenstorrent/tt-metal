@@ -199,7 +199,7 @@ def dram_group_norm_virtual_columns(core_grid, num_channels, num_groups):
     return num_virtual_cols
 
 
-def group_norm_params_from_torch(
+def dram_group_norm_params_from_torch(
     torch_params,
     channels_per_device,
     groups_per_device,
