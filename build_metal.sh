@@ -305,8 +305,6 @@ fi
 
 if [ "$enable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=ON")
-else
-    cmake_args+=("-DENABLE_TRACY=OFF")
 fi
 
 if [ "$enable_coverage" = "ON" ]; then
