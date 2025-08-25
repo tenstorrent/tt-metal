@@ -351,7 +351,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToOneVirtualChannels) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToOneCustom) {
     GTEST_SKIP() << "Skipping test";
-    uint32_t test_id = 160;
+    uint32_t test_id = 151;
 
     // Parameters
     uint32_t num_of_transactions = 256;
