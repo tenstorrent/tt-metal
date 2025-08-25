@@ -149,9 +149,6 @@ void kernel_main() {
 
                     packet_id++;  // increment packet_id for chunk calculation
 
-                    uint64_t noc0_dest_noc_addr =
-                        get_noc_addr(first_id, intermediate_tensor_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
                     uint32_t current_chunk_id = packet_id / chunk_granularity;
                     if (current_chunk_id != prev_chunk_id) {
                         // Fused payload write with atomic inc
