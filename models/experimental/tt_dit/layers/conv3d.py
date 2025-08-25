@@ -137,6 +137,13 @@ class ContextParallelConv3d:
         torch_ref=None,
         **kwargs,
     ):
+        self.halos_chunk_map = {
+            768: 16,
+            512: 64,
+            256: 96,
+            128: 192,
+        }
+
         assert causal
         assert context_parallel
         self.mesh_device = mesh_device
@@ -248,6 +255,7 @@ class ContextParallelConv3d:
             # Pad on first device
             front_slice = x_NTHWC[:, 0:1, :, :, :]
             device_tensors_front_pad = ttnn.concat([front_slice] * 2, dim=1)
+            ttnn.deallocate(front_slice)
             device_tensors_front_pad = ttnn.multiply(device_tensors_front_pad, self.mask)
             halo_tensor = x_NTHWC[:, -context_size:, :, :, :]
             halos = ttnn.all_gather(  # TODO change to fabric all gather
@@ -255,25 +263,39 @@ class ContextParallelConv3d:
                 dim=1,
                 topology=ttnn.Topology.Linear,
             )
+            ttnn.deallocate(halo_tensor)
             halos_orig_shape = halos.shape
             halos_permute = ttnn.permute(halos, (0, 2, 3, 4, 1))
+            ttnn.deallocate(halos)
+            halos_chunks = self.halos_chunk_map[halos_orig_shape[4]]
             halos_reshape = ttnn.reshape(halos_permute, (-1, halos_orig_shape[1]))
+            ttnn.deallocate(halos_permute)
             halos_reshape_back = ttnn.permute(halos_reshape, (1, 0))
-
-            intermediates_halos_reshape_back = ttnn.chunk(halos_reshape_back, halos_orig_shape[1], 1)
+            ttnn.deallocate(halos_reshape)
+            intermediates_halos_reshape_back = ttnn.chunk(halos_reshape_back, halos_chunks, 1)
+            ttnn.deallocate(halos_reshape_back)
             split_tiles = [
                 ttnn.to_layout(intermediate, layout=ttnn.TILE_LAYOUT)
                 for intermediate in intermediates_halos_reshape_back
             ]
-            halos_reshape_back = ttnn.concat(split_tiles, 1)
+            for i in range(len(intermediates_halos_reshape_back)):
+                ttnn.deallocate(intermediates_halos_reshape_back[i])
+            num_concats = halos_chunks // 32
+            for i in range(num_concats):
+                if i == 0:
+                    halos_reshape_back = ttnn.concat(split_tiles[32 * i : 32 * (i + 1)], 1)
+                else:
+                    halos_reshape_back = ttnn.concat([halos_reshape_back] + split_tiles[32 * i : 32 * (i + 1)], 1)
+                for i in range(32 * i, 32 * (i + 1)):
+                    ttnn.deallocate(split_tiles[i])
+            halos_reshape_back = ttnn.matmul(self.proj, halos_reshape_back)
+            halos_reshape_back = ttnn.reshape(halos_reshape_back, device_tensors_front_pad.shape)
+            halos_reshape_back = ttnn.add(device_tensors_front_pad, halos_reshape_back)
+            halos_reshape_back = ttnn.to_layout(halos_reshape_back, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-            shifted_halos = ttnn.matmul(self.proj, halos_reshape_back)
-            shifted_halos = ttnn.reshape(shifted_halos, device_tensors_front_pad.shape)
-            total_halos = ttnn.add(device_tensors_front_pad, shifted_halos)
-
-            total_halos = ttnn.to_layout(total_halos, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-            x_pad_NTHWC = ttnn.concat([total_halos, x_NTHWC], dim=1)
+            x_pad_NTHWC = ttnn.concat([halos_reshape_back, x_NTHWC], dim=1)
+            ttnn.deallocate(halos_reshape_back)
+            ttnn.deallocate(x_NTHWC)
 
         out_NTHWC = ttnn.experimental.conv3d(
             input_tensor=x_pad_NTHWC,
