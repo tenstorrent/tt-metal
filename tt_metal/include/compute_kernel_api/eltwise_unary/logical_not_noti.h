@@ -6,7 +6,8 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_logical_not_noti.h"
+#include "ckernel_sfpu_logical_not_noti.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -27,22 +28,22 @@ namespace ckernel {
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void logical_not_unary_tile(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op<APPROX, sfpi::vFloat, float>(idst)));
+    MATH(SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS(logical_not_unary, APPROX, sfpi::vFloat, float, idst));
 }
 
 ALWI void logical_not_unary_tile_int32(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op<APPROX, sfpi::vInt, int16_t>(idst)));
+    MATH(SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS(logical_not_unary, APPROX, sfpi::vInt, int16_t, idst));
 }
 
 ALWI void logical_not_unary_tile_uint32(uint32_t idst) {
-    MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_op<APPROX, sfpi::vUInt, uint16_t>(idst)));
+    MATH(SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS(logical_not_unary, APPROX, sfpi::vUInt, uint16_t, idst));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void logical_not_unary_tile_init() { MATH((llk_math_eltwise_unary_sfpu_logical_not_unary_init<APPROX>())); }
+ALWI void logical_not_unary_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(logical_not_unary, APPROX)); }
 
 }  // namespace ckernel
