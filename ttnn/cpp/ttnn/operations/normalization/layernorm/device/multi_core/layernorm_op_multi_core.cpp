@@ -301,8 +301,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
+
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> compute_defines;
+
     if (fuse_pre_add) {
         reader_defines["FUSE_PRE_ADD"] = "1";
         if (!use_welford) {
