@@ -26,9 +26,8 @@ namespace ttnn {
 using ccl::EriscDatamoverBuilder;
 
 enum class AllGatherAsyncVersion {
-    GENERIC = 0,
-    LLAMA_MINIMAL_SHARDED = 1,
-    MINIMAL_DEFAULT = 2,
+    LLAMA_MINIMAL_SHARDED = 0,
+    MINIMAL_DEFAULT = 1,
 };
 
 struct AllGatherAsync {
@@ -125,25 +124,6 @@ struct AllGatherAsync {
 };
 
 // All Gather Variants
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
-    size_t num_links,
-    size_t num_workers_per_link,
-    IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
-tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
-    const Tensor& input_tensor,
-    IDevice* target_device,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
-    Tensor& output_tensor,
-    uint32_t dim,
-    uint32_t num_links,
-    uint32_t ring_size,
-    uint32_t ring_index,
-    ccl::Topology topology,
-    GlobalSemaphore semaphore,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id);
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
     const Tensor& input_tensor,
     IDevice* target_device,

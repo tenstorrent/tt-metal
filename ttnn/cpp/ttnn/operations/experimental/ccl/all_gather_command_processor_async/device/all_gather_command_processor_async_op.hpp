@@ -31,7 +31,7 @@ struct AllGatherCommandProcessorAsync {
     const uint32_t dim;
     const GlobalSemaphore semaphore;
     const uint32_t num_links;
-    const MemoryConfig output_mem_config;
+    const MemoryConfig output_memory_config;
     const ccl::Topology topology;
     std::optional<uint32_t> cluster_axis;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
@@ -42,7 +42,7 @@ struct AllGatherCommandProcessorAsync {
         uint32_t dim,
         GlobalSemaphore semaphore,
         uint32_t num_links,
-        MemoryConfig output_mem_config,
+        MemoryConfig output_memory_config,
         ccl::Topology topology,
         std::optional<uint32_t> cluster_axis,
         std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) :
@@ -51,7 +51,7 @@ struct AllGatherCommandProcessorAsync {
         dim(dim),
         semaphore(semaphore),
         num_links(num_links),
-        output_mem_config(output_mem_config),
+        output_memory_config(output_memory_config),
         topology(topology),
         cluster_axis(cluster_axis),
         sub_device_id(sub_device_id) {}
@@ -65,7 +65,7 @@ struct AllGatherCommandProcessorAsync {
         attrs.emplace_back("dim", dim);
         attrs.emplace_back("semaphore", semaphore);
         attrs.emplace_back("num_links", num_links);
-        attrs.emplace_back("output_mem_config", output_mem_config);
+        attrs.emplace_back("output_memory_config", output_memory_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("cluster_axis", cluster_axis);
 
@@ -89,12 +89,6 @@ struct AllGatherCommandProcessorAsync {
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> all_gather_command_processor_choose_worker_cores(
-    size_t num_links,
-    size_t num_workers_per_link,
-    IDevice* device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    CoreCoord core_grid_offset = CoreCoord(0, 0));
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_command_processor_async_multi_core_with_workers(
     const Tensor& input_tensor,
     IDevice* target_device,
@@ -122,7 +116,7 @@ Tensor all_gather_command_processor_async(
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<uint32_t> cluster_axis = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 
 std::vector<Tensor> all_gather_command_processor_async(
     const std::vector<Tensor>& input_tensors,
@@ -133,7 +127,7 @@ std::vector<Tensor> all_gather_command_processor_async(
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<uint32_t> cluster_axis = std::nullopt,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 }  // namespace ccl
 }  // namespace experimental
 }  // namespace operations

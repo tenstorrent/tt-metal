@@ -21,7 +21,7 @@ struct ExecuteAllGatherCommandProcessorAsync {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         std::optional<uint32_t> cluster_axis = std::nullopt,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt);
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id = std::nullopt);
 };
 
 }  // namespace operations::experimental::ccl

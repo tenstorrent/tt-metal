@@ -19,7 +19,16 @@ ttnn::Tensor ExecuteAllGatherCommandProcessorAsync::invoke(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
-    return ttnn::operations::experimental::all_gather_command_processor_async(/* TODO */);
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
+    return ttnn::operations::experimental::ccl::all_gather_command_processor_async(
+        input_tensor,
+        dim,
+        multi_device_global_semaphore,
+        persistent_output_buffer,
+        num_links,
+        memory_config,
+        topology,
+        cluster_axis,
+        sub_device_id);
 }
 }  // namespace ttnn::operations::experimental::ccl

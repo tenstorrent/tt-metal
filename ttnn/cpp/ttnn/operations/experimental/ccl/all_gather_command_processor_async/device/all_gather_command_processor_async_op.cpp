@@ -12,7 +12,7 @@
 
 namespace ttnn {
 
-void AllGatherAsync::validate_with_output_tensors(
+void AllGatherCommandProcessorAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
@@ -59,8 +59,8 @@ void AllGatherAsync::validate_with_output_tensors(
             "Error, Output tensor page config should be same as input tensor page config but has {}",
             output_tensor.value().tensor_spec().page_config());
         TT_FATAL(
-            output_tensor.value().memory_config() == this->output_mem_config,
-            "Error, Output tensor memory config should be same as output_mem_config but has {}",
+            output_tensor.value().memory_config() == this->output_memory_config,
+            "Error, Output tensor memory config should be same as output_memory_config but has {}",
             output_tensor.value().memory_config());
 
         TT_FATAL(
@@ -106,20 +106,21 @@ void AllGatherAsync::validate_with_output_tensors(
         tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()), "Only 1D fabric config is supported");
 }
 
-std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> AllGatherCommandProcessorAsync::compute_output_specs(
+    const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.logical_shape();
     shape[this->dim] *= this->ring_size;
     return {TensorSpec(
-        shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_mem_config))};
+        shape, TensorLayout(input_tensor.dtype(), input_tensor.tensor_spec().page_config(), output_memory_config))};
 }
 
-std::vector<Tensor> AllGatherAsync::create_output_tensors(
+std::vector<Tensor> AllGatherCommandProcessorAsync::create_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     return tt::tt_metal::operation::default_create_output_tensors(*this, input_tensors, optional_output_tensors);
 }
 
-tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherAsync::create_mesh_workload(
+tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherCommandProcessorAsync::create_mesh_workload(
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
@@ -129,11 +130,10 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherAsync::create_mesh_w
         });
 }
 
-tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
+tt::tt_metal::operation::ProgramWithCallbacks AllGatherCommandProcessorAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].mesh_device();
-    AllGatherAsyncVersion version = select_version(input_tensors[0]);
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     if (this->cluster_axis.has_value()) {
@@ -181,18 +181,19 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
         this->sub_device_id);
 }
 
-tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+tt::tt_metal::operation::Hash AllGatherCommandProcessorAsync::compute_program_hash(
+    const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
     auto input_shape = input_tensors[0].padded_shape();
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
 
-    return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
+    return tt::tt_metal::operation::hash_operation<AllGatherCommandProcessorAsync>(
         this->ring_size,
         this->dim,
         this->num_links,
-        this->output_mem_config,
+        this->output_memory_config,
         this->topology,
         this->cluster_axis,
         this->sub_device_id.has_value(),
@@ -203,7 +204,7 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
         input_shape,
         input_memory_layout,
         input_dtype,
-        input_memory_config, );
+        input_memory_config);
 }
 
 namespace operations {
@@ -220,11 +221,11 @@ Tensor all_gather_command_processor_async_impl(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
     const std::vector<IDevice*>& devices) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
-        "all_gather_async op is only supported for Fast Dispatch");
+        "all_gather_command_processor_async op is only supported for Fast Dispatch");
 
     uint32_t num_devices;
     if (cluster_axis.has_value()) {
@@ -270,14 +271,14 @@ Tensor all_gather_command_processor_async(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     return all_gather_command_processor_async_impl(
         input_tensor,
         dim,
         multi_device_global_semaphore,
         persistent_output_buffer,
         num_links,
-        mem_config,
+        memory_config,
         topology,
         cluster_axis,
         sub_device_id,
@@ -293,17 +294,17 @@ std::vector<Tensor> all_gather_command_processor_async(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
     std::optional<uint32_t> cluster_axis,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
     for (size_t i = 0; i < input_tensors.size(); i++) {
         output_tensors.push_back(all_gather_command_processor_async_impl(
             input_tensors[i],
             dim,
-            multi_device_global_semaphore,
+            multi_device_global_semaphore[i],
             persistent_output_buffer,
             num_links,
-            mem_config,
+            memory_config,
             topology,
             cluster_axis,
             sub_device_id,

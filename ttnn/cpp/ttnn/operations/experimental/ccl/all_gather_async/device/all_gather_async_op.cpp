@@ -43,6 +43,8 @@ void AllGatherAsync::validate_with_output_tensors(
         "Unsupported input tensor memory layout {}.",
         input_tensor.memory_config().memory_layout());
 
+    AllGatherAsyncVersion version = select_version(input_tensors[0]);
+
     if (output_tensors.size() > 0 and output_tensors[0].has_value()) {
         TT_FATAL(
             output_tensors.size() <= 1,
@@ -103,7 +105,7 @@ void AllGatherAsync::validate_with_output_tensors(
             }
         }
 
-        if (layout == tt::tt_metal::Layout::TILE && semaphore.size() == 2) {
+        if (version == AllGatherAsyncVersion::MINIMAL_DEFAULT) {
             // Checks specific to the MINIMAL_DEFAULT case
 
             // Don't support output DRAM block sharding
@@ -123,19 +125,13 @@ void AllGatherAsync::validate_with_output_tensors(
     }
 
     // Checks specific to the MINIMAL_DEFAULT case
-    if (layout == tt::tt_metal::Layout::TILE && semaphore.size() == 2) {
+    if (version == AllGatherAsyncVersion::MINIMAL_DEFAULT) {
         // Don't support input DRAM block sharding
         if (input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
             TT_FATAL(
                 input_tensor.memory_config().buffer_type() == BufferType::L1,
                 "We don't support input DRAM block sharding");
         }
-    }
-    AllGatherAsyncVersion version = select_version(input_tensors[0]);
-    if (version == AllGatherAsyncVersion::GENERIC) {
-        TT_FATAL(
-            tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig()),
-            "Only 1D fabric config is supported for generic all gather");
     }
 }
 
@@ -163,8 +159,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
         return AllGatherAsyncVersion::MINIMAL_DEFAULT;
     }
 
-    log_trace(tt::LogOp, "Using generic implementation");
-    return AllGatherAsyncVersion::GENERIC;
+    TT_FATAL(false, "Invalid config");
 }
 
 tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherAsync::create_mesh_workload(
@@ -236,6 +231,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 this->use_optimal_ccl_for_llama);
 
         case AllGatherAsyncVersion::MINIMAL_DEFAULT:
+        default:
             log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_minimal_default is called");
             return all_gather_async_minimal_default(
                 input_tensors[0],
@@ -255,54 +251,16 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
                 this->chunks_per_sync,
                 this->num_workers_per_link,
                 this->num_buffers_per_channel);
-
-        case AllGatherAsyncVersion::GENERIC:
-        default:
-            log_trace(tt::LogOp, "Running generic all_gather_async_multi_core_with_workers");
-            return all_gather_async_multi_core_with_workers(
-                input_tensors[0],
-                target_device,
-                forward_device,
-                backward_device,
-                output_tensors[0],
-                this->dim,
-                this->num_links,
-                target_ring_size,
-                device_index,
-                this->topology,
-                this->semaphore.at(0),
-                this->sub_device_id);
     }
 }
 
 tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
     log_trace(tt::LogOp, "compute_program_hash is called");
-    AllGatherAsyncVersion version = select_version(input_tensors[0]);
-    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
     auto input_shape = input_tensors[0].padded_shape();
     auto input_memory_layout = input_tensors[0].layout();
     auto input_dtype = input_tensors[0].dtype();
     auto input_memory_config = input_tensors[0].memory_config();
     uint32_t semaphore_address = this->semaphore.at(0).address();
-    if (version == AllGatherAsyncVersion::GENERIC) {
-        return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
-            this->dim,
-            this->num_links,
-            this->ring_size,
-            this->output_mem_config,
-            this->topology,
-            this->cluster_axis,
-            this->sub_device_id.has_value(),
-            this->sub_device_id.has_value()
-                ? input_tensors[0].device()->worker_cores(
-                      tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
-                : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
-            input_shape,
-            input_memory_layout,
-            input_dtype,
-            input_memory_config,
-            semaphore_address);
-    }
     return tt::tt_metal::operation::hash_operation<AllGatherAsync>(
         this->dim,
         this->num_links,
