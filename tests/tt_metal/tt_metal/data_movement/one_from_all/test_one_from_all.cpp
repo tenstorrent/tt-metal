@@ -358,10 +358,12 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllDirectedIdeal) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllVirtualChannels) {
     GTEST_SKIP() << "Skipping test";
+
     // Test ID (Arbitrary)
-    uint32_t test_id = 153;
+    uint32_t test_id = 156;
     auto mesh_device = get_mesh_device();
     auto device = mesh_device->get_device(0);
+
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
@@ -373,9 +375,11 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllVirtualChannels) {
 
 TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneFromAllCustom) {
     GTEST_SKIP() << "Skipping test";
-    uint32_t test_id = 160;
+
+    uint32_t test_id = 157;
     auto mesh_device = get_mesh_device();
     auto device = mesh_device->get_device(0);
+
     CoreCoord master_core_coord = {0, 0};
     CoreCoord subordinate_start_coord = {0, 0};
     CoreCoord subordinate_grid_size = {
