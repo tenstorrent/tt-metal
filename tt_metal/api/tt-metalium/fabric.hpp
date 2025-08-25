@@ -149,6 +149,9 @@ public:
     // Returns the compile time args to be passed for the mux kernel
     std::vector<uint32_t> get_fabric_mux_compile_time_args() const;
 
+    // Returns the base compile time args without stream IDs (for custom stream ID override)
+    std::vector<uint32_t> get_fabric_mux_compile_time_main_args() const;
+
     // Returns the run-time arguments for the mux kernel depending on the connection setup with fabric router
     std::vector<uint32_t> get_fabric_mux_run_time_args(
         const FabricNodeId& src_fabric_node_id,
@@ -157,6 +160,7 @@ public:
         tt::tt_metal::Program& mux_program,
         const CoreCoord& mux_logical_core) const;
 
+    uint8_t get_num_channels(FabricMuxChannelType channel_type) const;
     uint8_t get_num_buffers(FabricMuxChannelType channel_type) const;
     size_t get_buffer_size_bytes(FabricMuxChannelType channel_type) const;
     size_t get_status_address() const;
@@ -176,7 +180,6 @@ public:
     std::vector<std::pair<size_t, size_t>> get_memory_regions_to_clear() const;
 
 private:
-    uint8_t get_num_channels(FabricMuxChannelType channel_type) const;
     void validate_channel_id(FabricMuxChannelType channel_type, uint8_t channel_id) const;
     uint8_t get_channel_global_offset(FabricMuxChannelType channel_type, uint8_t channel_id) const;
 
