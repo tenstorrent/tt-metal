@@ -1648,14 +1648,11 @@ static uint32_t process_relay_inline_all(uint32_t data_ptr, uint32_t fence, bool
 }
 
 // Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
-// Since the size of the data is less that the size of the cmddat_q, we let the caller return pages to the upstream all at once.
+// Since the size of the data is less that the size of the cmddat_q, we let the caller return pages to the upstream all
+// at once.
 template <typename RelayInlineState>
 inline void relay_raw_data_to_downstream(
-    uint32_t& fence,
-    uint32_t& data_ptr,
-    uint32_t length,
-    uint32_t& local_downstream_data_ptr,
-    uint8_t extra_pages) {
+    uint32_t& fence, uint32_t& data_ptr, uint32_t length, uint32_t& local_downstream_data_ptr, uint8_t extra_pages) {
     ASSERT(length < (cmddat_q_end - cmddat_q_base));
     // Stream data to downstream as it arrives. Acquire upstream pages incrementally.
     uint32_t remaining = length;
