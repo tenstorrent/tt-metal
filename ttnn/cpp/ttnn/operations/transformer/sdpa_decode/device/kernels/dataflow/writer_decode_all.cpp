@@ -137,9 +137,10 @@ void kernel_main() {
     // {
     // generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
     // }
+
+    // HERE:
     cb_reserve_back(cb_identity_scale_in, 1);
     cb_push_back(cb_identity_scale_in, 1);
-
     cb_reserve_back(cb_zero_in, 1);
     cb_push_back(cb_zero_in, 1);
 
@@ -148,6 +149,7 @@ void kernel_main() {
     // }
 
     if (is_worker) {
+        DeviceZoneScopedN("Worker compute");
         ASSERT(num_heads_per_core == 1);  // if there are workers, then head must be split across workers so there
                                           // should not be more than one head per core
         worker_compute<out_chunk_tiles, cb_out_worker, cb_out_m, cb_out_l, cb_intermed_out, PNHt>(
@@ -180,6 +182,8 @@ void kernel_main() {
     // generate and send mask to compute if causal
 
     if constexpr (is_causal) {
+        DeviceZoneScopedN("Generate mask");
+
         // These helper functions respect tile size of CBs (ie. no need for special handling of tiny tiles)
 
         generate_mask<cb_mask_in, PNHt>(k_num_chunks, Sk_chunk_t_dynamic, cur_pos);
@@ -201,6 +205,8 @@ void kernel_main() {
         if constexpr (enable_split_reader) {
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk++) {
                 {
+                    DeviceZoneScopedN("Read K second half");
+
                     read_k_chunks<num_kv_heads, block_size_t, DHt, true, true>(
                         k_tile_bytes, Sk_chunk_t_dynamic, cb_k_in1, k_chunk, cur_head, page_table_ptr, k_reader, 1);
                 }

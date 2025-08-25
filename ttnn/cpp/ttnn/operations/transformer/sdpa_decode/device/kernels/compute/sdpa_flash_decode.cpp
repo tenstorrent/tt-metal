@@ -134,6 +134,7 @@ void MAIN {
         if (cur_pos_arg != UINT32_MAX) {
             cur_pos = cur_pos_arg;
         } else {
+            DeviceZoneScopedN("Reading cur pos");
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
             cb_wait_front(cb_index_id, 1);
             volatile uint32_t* index_addr_ptr;
@@ -166,22 +167,21 @@ void MAIN {
     }
 
     // We tilize input Q if it is in ROW MAJOR layout
-    {
-        if constexpr (tilize_q) {
-            compute_kernel_hw_startup(cb_q_rm, cb_q_in);
-            tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
-            cb_wait_front(cb_q_rm, q_chunk_tiles);
-            cb_reserve_back(cb_q_in, q_chunk_tiles);
-            tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
-            tilize_uninit(cb_q_rm, cb_q_in);
-            cb_push_back(cb_q_in, q_chunk_tiles);
-            cb_pop_front(cb_q_rm, q_chunk_tiles);
-            mm_init_short(cb_q_in, cb_k_in_0);
-        } else {
-            mm_init(cb_q_in, cb_k_in_0, cb_qk_im);
-        }
-        cb_wait_front(cb_q_in, q_chunk_tiles);
+    if constexpr (tilize_q) {
+        DeviceZoneScopedN("Tilize Q");
+        compute_kernel_hw_startup(cb_q_rm, cb_q_in);
+        tilize_init(cb_q_rm, q_chunk_tiles, cb_q_in);
+        cb_wait_front(cb_q_rm, q_chunk_tiles);
+        cb_reserve_back(cb_q_in, q_chunk_tiles);
+        tilize_block(cb_q_rm, q_chunk_tiles, cb_q_in);
+        tilize_uninit(cb_q_rm, cb_q_in);
+        cb_push_back(cb_q_in, q_chunk_tiles);
+        cb_pop_front(cb_q_rm, q_chunk_tiles);
+        mm_init_short(cb_q_in, cb_k_in_0);
+    } else {
+        mm_init(cb_q_in, cb_k_in_0, cb_qk_im);
     }
+    cb_wait_front(cb_q_in, q_chunk_tiles);
     // Define dynamic matmul configs
 #ifdef DYNAMIC_CHUNK_SIZE
     const uint32_t qk_subblock_h_dynamic = 1;
@@ -288,6 +288,7 @@ void MAIN {
 
                 /* QK = Q_CHUNK @ K_CHUNK */
                 {
+                    DeviceZoneScopedN("QK matmul");
                     cb_matmul_blocks(
                         cb_q_in,
                         cb_k_in_0,
@@ -371,6 +372,7 @@ void MAIN {
                 pack_reconfig_data_format(cb_out_im);
 
                 {
+                    DeviceZoneScopedN("Out V matmul");
                     cb_matmul_blocks(
                         cb_qk_im,
                         cb_v_in,
@@ -391,6 +393,7 @@ void MAIN {
                         cb_zero_in,
                         false);
                 }
+
                 // Reconfig register DF
                 reconfig_data_format_srca(cb_out_im);
                 cb_pop_front(cb_qk_im, qk_chunk_tiles_dynamic);

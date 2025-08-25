@@ -415,12 +415,15 @@ void read_k_chunks(
 
         // Iterate through DHt
         for (uint32_t col = col_start; col < col_start + num_k_cols_split; ++col) {
-            noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
+            noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col, 0, reader_id);
             physical_k_tile_id += 1;                       // Go to next tile in row
             k_write_ptr_col += num_k_rows * k_tile_bytes;  // Go to next column in CB
         }
     }
-    noc_async_read_barrier();
+    noc_async_read_barrier(reader_id);
+
+    // noc_async_write_barrier();
+
     cb_push_back(cb_k_in, k_chunk_tiles);
 }
 
