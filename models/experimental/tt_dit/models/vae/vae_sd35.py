@@ -26,7 +26,7 @@ class ResnetBlock:
         out_channels=None,
         num_groups=None,
         eps=None,
-        norm_out_blocks=None,
+        norm_out_blocks=-1,
         mesh_device=None,
         mesh_axis=None,
         norm_core_grid=None,
@@ -100,7 +100,7 @@ class ResnetBlock:
     def from_torch(
         cls,
         torch_ref,
-        norm_out_blocks=None,
+        norm_out_blocks=-1,
         mesh_device=None,
         mesh_axis=None,
         norm_core_grid=None,

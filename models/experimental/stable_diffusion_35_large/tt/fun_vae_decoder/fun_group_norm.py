@@ -23,11 +23,11 @@ num_output_blocks = {
     (1, 1024, 1024, 128): 64,
     (1, 1024, 1024, 256): 64,
     (1, 128, 128, 512 // 4): 1,
-    (1, 256, 256, 512 // 4): 4,
-    (1, 512, 512, 256 // 4): 16,
-    (1, 512, 512, 512 // 4): 16,
-    (1, 1024, 1024, 128 // 4): 64,
-    (1, 1024, 1024, 256 // 4): 64,
+    (1, 256, 256, 512 // 4): 2,
+    (1, 512, 512, 256 // 4): 4,
+    (1, 512, 512, 512 // 4): 8,
+    (1, 1024, 1024, 128 // 4): 8,
+    (1, 1024, 1024, 256 // 4): 16,
 }
 
 
@@ -74,13 +74,11 @@ class TtGroupNormParameters:
         ), f"Incompatible channels ({num_channels}%32)or groups({num_channels}%{num_groups}):"
 
         opt_core_grid = parallel_config.device.core_grid
-        grid_e = min(opt_core_grid.x, opt_core_grid.y)
-        while num_channels % (32 * grid_e) != 0:
-            grid_e -= 1
 
-        opt_core_grid = (
-            ttnn.CoreGrid(y=grid_e, x=opt_core_grid.x) if core_grid is None else core_grid
-        )  # Non uniform core grid causing issues with PCC
+        TILE_WIDTH = 32
+        num_virtual_cols = min(opt_core_grid.x, num_groups)
+        while (num_channels / num_virtual_cols) % TILE_WIDTH != 0:
+            num_virtual_cols -= 1
 
         torch_weight, mesh_mapper_weight = group_norm_weight_bias_rm_sharded(
             torch_groupnorm.state_dict()["weight"],
@@ -88,7 +86,7 @@ class TtGroupNormParameters:
             allow_sharded_compute,
             device_count,
             num_channels,
-            opt_core_grid,
+            num_virtual_cols,
             parallel_config.device,
         )
         torch_bias, mesh_mapper_bias = group_norm_weight_bias_rm_sharded(
@@ -97,11 +95,11 @@ class TtGroupNormParameters:
             allow_sharded_compute,
             device_count,
             num_channels,
-            opt_core_grid,
+            num_virtual_cols,
             parallel_config.device,
         )
 
-        torch_mask = ttnn.create_group_norm_input_mask(num_channels, num_groups, opt_core_grid.y)
+        torch_mask = ttnn.create_group_norm_input_mask(num_channels, num_groups, num_virtual_cols)
 
         memory_config = ttnn.DRAM_MEMORY_CONFIG
         return cls(
@@ -140,16 +138,16 @@ class TtGroupNormParameters:
 
 
 def group_norm_weight_bias_rm_sharded(
-    tensor, mesh_sharded_input, allow_sharded_compute, device_count, num_channels, opt_core_grid, device
+    tensor, mesh_sharded_input, allow_sharded_compute, device_count, num_channels, num_virtual_cols, device
 ):
     if mesh_sharded_input and allow_sharded_compute:
         torch_sharded_lst = [
-            ttnn.create_group_norm_weight_bias_rm(t, num_channels, opt_core_grid.y) for t in tensor.chunk(device_count)
+            ttnn.create_group_norm_weight_bias_rm(t, num_channels, num_virtual_cols) for t in tensor.chunk(device_count)
         ]
         tensor_to_shard = torch.cat(torch_sharded_lst, dim=0)
         mesh_mapper = ttnn.ShardTensor2dMesh(device, tuple(device.shape), dims=[None, 0])
     else:
-        tensor_to_shard = ttnn.create_group_norm_weight_bias_rm(tensor, num_channels, opt_core_grid.y)
+        tensor_to_shard = ttnn.create_group_norm_weight_bias_rm(tensor, num_channels, num_virtual_cols)
         mesh_mapper = None
 
     return tensor_to_shard, mesh_mapper
