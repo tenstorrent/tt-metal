@@ -8,6 +8,14 @@ from ..utils.tensor import bf16_tensor
 
 
 class CCLManager:
+    """
+    Manages parallelization of DiT model.
+
+        - stores mesh device, num links, topology
+        - caches ping pong buffers and semaphores
+        - sets up one SubDevice spanning all compute cores
+    """
+
     def __init__(
         self,
         mesh_device,
@@ -78,6 +86,7 @@ class CCLManager:
             buffers = []
             output_buffer_shape = list(shape)
             output_buffer_shape[dim] //= self.mesh_device.shape[mesh_axis]
+
             intermediate_buffer_shape = list(shape)
             intermediate_buffer_shape = [2] + intermediate_buffer_shape
             for _ in range(2):
