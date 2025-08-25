@@ -155,26 +155,24 @@ void kernel_main() {
                     uint32_t current_chunk_id = packet_id / chunk_granularity;
                     if (current_chunk_id != prev_chunk_id) {
                         // Fused payload write with atomic inc
-                        cur_pkt_header->to_noc_fused_unicast_write_atomic_inc(
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                                noc0_dest_noc_addr, output_semaphore_noc_addr_in_pkt, 1, 32, false},
-                            payload_size_bytes);
-                        cur_connection.wait_for_empty_write_slot();
-                        cur_connection.send_payload_without_header_non_blocking_from_address(
-                            l1_read_addr, payload_size_bytes);
-                        cur_connection.send_payload_flush_non_blocking_from_address(
-                            (uint32_t)cur_pkt_header, sizeof(PACKET_HEADER_TYPE));
+                        perform_atomic_fabric_write(
+                            cur_pkt_header,
+                            first_id,
+                            intermediate_tensor_addrgen,
+                            cur_connection,
+                            l1_read_addr,
+                            payload_size_bytes,
+                            output_semaphore_noc_addr_in_pkt,
+                            1,
+                            32,
+                            false);
 
                         prev_chunk_id = current_chunk_id;
                     } else {
                         // Unicast payload write
-                        cur_pkt_header->to_noc_unicast_write(
-                            tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
-                        cur_connection.wait_for_empty_write_slot();
-                        cur_connection.send_payload_without_header_non_blocking_from_address(
-                            l1_read_addr, payload_size_bytes);
-                        cur_connection.send_payload_flush_non_blocking_from_address(
-                            (uint32_t)cur_pkt_header, sizeof(PACKET_HEADER_TYPE));
+                        tt::tt_fabric::linear::to_noc_unicast_write(
+                            payload_size_bytes, cur_pkt_header, first_id, intermediate_tensor_addrgen);
+                        perform_payload_send(cur_connection, l1_read_addr, payload_size_bytes, cur_pkt_header);
                     }
 
                     noc_async_writes_flushed();
