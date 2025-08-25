@@ -4,6 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -22,6 +23,10 @@ void kernel_main() {
 
     // For grid sample: output is row major, each stick is written directly
     // We wait for ntiles_c pages to accumulate one full output stick
+
+    DPRINT << "Writer: Writing " << (uint32_t)(end_stick_id - start_stick_id) << " sticks starting from stick id "
+           << (uint32_t)start_stick_id << "\n";
+
     for (uint32_t stick_id = start_stick_id; stick_id < end_stick_id; stick_id++) {
         {
             // Wait for ntiles_c pages in output CB (one full stick)
