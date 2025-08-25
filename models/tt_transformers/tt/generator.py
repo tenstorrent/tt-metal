@@ -58,7 +58,13 @@ class Generator:
 
     # Note: This function is called by vLLM
     def prefill_forward_text(
-        self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None, empty_slots=None
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        **kwargs,
     ):
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
@@ -102,6 +108,7 @@ class Generator:
                 last_token_idx=last_token_idx,
                 kv_cache=model_kv_cache,
                 model_id=model_id,
+                **kwargs,
             )
             out_list.append(logits)
 
@@ -117,7 +124,9 @@ class Generator:
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
 
-    def prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1):
+    def prefill_forward_single_user_text(
+        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, **kwargs
+    ):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         if use_chunked_prefill:
@@ -167,6 +176,7 @@ class Generator:
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
+                    **kwargs,
                 )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
@@ -194,6 +204,7 @@ class Generator:
             ) = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
+                **kwargs,
             )
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
@@ -1276,24 +1287,7 @@ def create_submeshes(mesh_device, data_parallel):
     num_devices = num_rows * num_cols
     assert num_devices % data_parallel == 0, f"Unsupported device split: {num_devices} devices, {data_parallel} groups"
 
-    if (
-        num_rows == 8
-        and num_cols == 4
-        and num_rows % data_parallel == 0
-        and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
-    ):
-        submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows // data_parallel, num_cols))
-        for submesh in submeshes:
-            submesh.reshape(ttnn.MeshShape(1, num_devices // data_parallel))
-        return submeshes
-
-    # Submeshes with 8 devices on 8x4 mesh are expected to be in ring topology on 6U galaxy
-    if (
-        num_rows == 8
-        and num_cols == 4
-        and num_cols % data_parallel == 0
-        and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
-    ):
+    if num_rows == 8 and num_cols == 4 and num_cols % data_parallel == 0:
         submeshes = mesh_device.create_submeshes(ttnn.MeshShape(num_rows, num_cols // data_parallel))
         for submesh in submeshes:
             submesh.reshape(ttnn.MeshShape(1, num_devices // data_parallel))

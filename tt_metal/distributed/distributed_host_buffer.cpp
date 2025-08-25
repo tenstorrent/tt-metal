@@ -11,6 +11,7 @@
 
 #include <vector>
 #include <functional>
+#include <unordered_map>
 #include <taskflow/taskflow.hpp>
 #include <taskflow/algorithm/for_each.hpp>
 #include "common/executor.hpp"
@@ -112,16 +113,32 @@ DistributedHostBuffer DistributedHostBuffer::transform(
     const auto& shards = shards_.values();
     std::vector<distributed::MaybeRemote<Shard>> transformed_shards(
         shards.size(), distributed::MaybeRemote<Shard>::remote());
+
+    // Group replicated shard indices together
+    std::unordered_map<const std::byte*, std::vector<size_t>> shard_group_indices;
+    for (size_t shard_index : indices_to_process) {
+        const auto bytes = shards[shard_index]->buffer.view_bytes();
+        shard_group_indices[bytes.data()].push_back(shard_index);
+    }
+
+    // Transform one HostBuffer per shard group
     if (policy == ProcessShardExecutionPolicy::SEQUENTIAL || indices_to_process.size() < 2) {
-        std::for_each(indices_to_process.begin(), indices_to_process.end(), [&](size_t i) {
-            transformed_shards[i] =
-                distributed::MaybeRemote<Shard>::local(Shard{.buffer = fn(shards[i]->buffer), .is_populated = true});
-        });
+        for (const auto& [key, group] : shard_group_indices) {
+            HostBuffer out = fn(shards[group.front()]->buffer);
+            for (size_t i : group) {
+                transformed_shards[i] =
+                    distributed::MaybeRemote<Shard>::local(Shard{.buffer = out, .is_populated = true});
+            }
+        }
     } else {
         tf::Taskflow taskflow;
-        taskflow.for_each(indices_to_process.begin(), indices_to_process.end(), [&](size_t i) {
-            transformed_shards[i] =
-                distributed::MaybeRemote<Shard>::local(Shard{.buffer = fn(shards[i]->buffer), .is_populated = true});
+        taskflow.for_each(shard_group_indices.begin(), shard_group_indices.end(), [&](const auto& pair) {
+            const auto& group = pair.second;
+            HostBuffer out = fn(shards[group.front()]->buffer);
+            for (size_t i : group) {
+                transformed_shards[i] =
+                    distributed::MaybeRemote<Shard>::local(Shard{.buffer = out, .is_populated = true});
+            }
         });
         detail::GetExecutor().run(taskflow).wait();
     }
@@ -141,6 +158,33 @@ void DistributedHostBuffer::apply(const ApplyFn& fn, ProcessShardExecutionPolicy
         tf::Taskflow taskflow;
         taskflow.for_each(
             indices_to_process.begin(), indices_to_process.end(), [&](size_t i) { fn(local_shards[i]->buffer); });
+        detail::GetExecutor().run(taskflow).wait();
+    }
+}
+
+void DistributedHostBuffer::emplace_shards(
+    const std::vector<distributed::MeshCoordinate>& coords,
+    const ProduceBufferFn& produce_buffer,
+    ProcessShardExecutionPolicy policy) {
+    std::for_each(coords.begin(), coords.end(), [&](const auto& coord) { shard_coords_.insert(coord); });
+
+    if (policy == ProcessShardExecutionPolicy::SEQUENTIAL || coords.size() < 2) {
+        for (const auto& coord : coords) {
+            auto& shard = shards_.at(coord);
+            if (shard.is_local()) {
+                shard->buffer = produce_buffer(coord);
+                shard->is_populated = true;
+            }
+        }
+    } else {
+        tf::Taskflow taskflow;
+        taskflow.for_each(coords.begin(), coords.end(), [&](const auto& coord) {
+            auto& shard = shards_.at(coord);
+            if (shard.is_local()) {
+                shard->buffer = produce_buffer(coord);
+                shard->is_populated = true;
+            }
+        });
         detail::GetExecutor().run(taskflow).wait();
     }
 }

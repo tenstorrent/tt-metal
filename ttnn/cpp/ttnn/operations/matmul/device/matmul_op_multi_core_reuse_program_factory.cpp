@@ -6,6 +6,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
@@ -110,12 +111,12 @@ tt_metal::operation::ProgramWithCallbacks create_program(
             .set_page_size(interm0_cb_index, out_single_tile_size);
     auto cb_output = tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(reader_compile_time_args);
 
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)out_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {};
+    tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(writer_compile_time_args);
 
     // Create reader and writer kernels per core
     auto mm_reader_kernel_id = tt_metal::CreateKernel(
@@ -272,9 +273,9 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     uint32_t per_core_M = 16;
     uint32_t per_core_N = 16;
 
-    TT_FATAL(Mt % per_core_M == 0, "Error");
-    TT_FATAL(Nt % per_core_N == 0, "Error");
-    TT_FATAL(Kt % in0_block_w == 0, "Error");
+    TT_FATAL(Mt % per_core_M == 0, "Mt ({}) must be divisible by per_core_M ({})", Mt, per_core_M);
+    TT_FATAL(Nt % per_core_N == 0, "Nt ({}) must be divisible by per_core_N ({})", Nt, per_core_N);
+    TT_FATAL(Kt % in0_block_w == 0, "Kt ({}) must be divisible by in0_block_w ({})", Kt, in0_block_w);
 
     // This should allocate a DRAM buffer on the device
     tt_metal::IDevice* device = a.device();
@@ -283,7 +284,11 @@ tt::tt_metal::operation::ProgramWithCallbacks matmul_multi_core_reuse(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     uint32_t num_blocks_total = (Mt / per_core_M) * (Nt / per_core_N);
-    TT_FATAL(num_blocks_total <= num_cores_x * num_cores_y, "Error");
+    TT_FATAL(
+        num_blocks_total <= num_cores_x * num_cores_y,
+        "Total number of blocks ({}) must not exceed available cores ({})",
+        num_blocks_total,
+        num_cores_x * num_cores_y);
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
