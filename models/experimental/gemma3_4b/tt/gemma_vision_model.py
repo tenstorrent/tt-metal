@@ -81,6 +81,10 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         )
 
     def forward(self, images):
+        if isinstance(images, list):
+            assert len(images) == 1, "Only single image input is supported."
+            images = images[0]
+
         assert isinstance(
             images, torch.Tensor
         ), "VisionEncoder input must be a torch tensor because of unfold in self.conv1"
