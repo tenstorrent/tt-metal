@@ -9,6 +9,7 @@
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/cluster.hpp>
 #include "llrt/rtoptions.hpp"
+#include "llrt/tt_target_device.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -55,8 +56,6 @@ static constexpr std::uint32_t SW_VERSION = 0x00020000;
 using tt_target_dram = std::tuple<int, int, int>;
 
 namespace tt {
-
-// TargetDevice now lives in rtoptions.hpp
 
 enum class EthRouterMode : uint32_t {
     IDLE = 0,

@@ -240,15 +240,6 @@ MetalContext& MetalContext::instance() {
 }
 
 MetalContext::MetalContext() {
-    this->construct_cluster();
-    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
-
-    // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
-    // how MetalContext lifetime will work through the API.
-    std::atexit([]() { MetalContext::instance().~MetalContext(); });
-}
-
-void MetalContext::construct_cluster() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
@@ -259,6 +250,11 @@ void MetalContext::construct_cluster() {
         Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
+    distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
+
+    // We do need to call Cluster teardown at the end of the program, use atexit temporarily until we have clarity on
+    // how MetalContext lifetime will work through the API.
+    std::atexit([]() { MetalContext::instance().~MetalContext(); });
 }
 
 distributed::multihost::DistributedContext& MetalContext::global_distributed_context() {
@@ -392,22 +388,6 @@ tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     return *control_plane_;
 }
 
-void MetalContext::reset_control_plane() {
-    control_plane_.reset();
-    this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
-}
-
-void MetalContext::reset_rtoptions() {
-    rtoptions_.~RunTimeOptions();
-    new (&rtoptions_) llrt::RunTimeOptions();
-}
-
-void MetalContext::reset() {
-    this->reset_rtoptions();
-    this->reset_control_plane();
-    this->construct_cluster();
-}
-
 void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
@@ -425,7 +405,10 @@ void MetalContext::set_default_fabric_topology() {
         !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
     // Reset the control plane, since it was initialized with custom parameters.
-    this->reset_control_plane();
+    control_plane_.reset();
+    // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
+    // mapping.
+    this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
 
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();

@@ -19,21 +19,12 @@
 
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
+#include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.h>
 
 enum class CoreType;
 
 namespace tt {
-
-/**
- * @brief Specifies the target devices on which the graph can be run.
- */
-enum class TargetDevice : std::uint8_t {
-    Silicon = 0,
-    Simulator = 1,
-    Mock = 2,
-    Invalid = 0xFF,
-};
 
 namespace llrt {
 
@@ -176,7 +167,6 @@ class RunTimeOptions {
 
     bool skip_deleting_built_cache = false;
 
-    bool simulator_enabled = false;
     std::filesystem::path simulator_path = "";
 
     bool erisc_iram_enabled = false;
@@ -217,8 +207,7 @@ class RunTimeOptions {
     bool enable_fabric_telemetry = false;
 
     // Mock cluster initialization using a provided cluster descriptor
-    bool mock_enabled = false;
-    std::string mock_cluster_desc_path;
+    std::string mock_cluster_desc_path = "";
 
     // Consolidated target device selection
     TargetDevice runtime_target_device_ = TargetDevice::Silicon;
@@ -454,7 +443,7 @@ public:
 
     inline bool get_skip_deleting_built_cache() const { return skip_deleting_built_cache; }
 
-    inline bool get_simulator_enabled() const { return simulator_enabled; }
+    inline bool get_simulator_enabled() const { return runtime_target_device_ == TargetDevice::Simulator; }
     inline const std::filesystem::path& get_simulator_path() const { return simulator_path; }
 
     inline bool get_erisc_iram_enabled() const {
@@ -505,7 +494,7 @@ public:
     inline void set_enable_fabric_telemetry(bool enable) { enable_fabric_telemetry = enable; }
 
     // Mock cluster accessors
-    inline bool get_mock_enabled() const { return mock_enabled; }
+    inline bool get_mock_enabled() const { return runtime_target_device_ == TargetDevice::Mock; }
     inline const std::string& get_mock_cluster_desc_path() const { return mock_cluster_desc_path; }
 
     // Target device accessor

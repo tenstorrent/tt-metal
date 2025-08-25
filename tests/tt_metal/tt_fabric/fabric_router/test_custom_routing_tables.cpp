@@ -30,34 +30,14 @@ std::unique_ptr<tt::tt_fabric::ControlPlane> make_control_plane(const std::files
 
 namespace tt::tt_fabric::fabric_router_tests {
 
-class CustomMockControlPlaneFixture : public ControlPlaneFixture {
-protected:
-    void SetUp() override {
-        setenv(
-            "TT_METAL_MOCK_CLUSTER_DESC_PATH",
-            "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/2x2_n300_cluster_desc.yaml",
-            1);
-        // Reinitialize to absorb the mock cluster descriptor path
-        tt::tt_metal::MetalContext::instance().reset();
-        ControlPlaneFixture::SetUp();
-    }
-
-    void TearDown() override {
-        ControlPlaneFixture::TearDown();
-        unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
-        // Reinitialize to reset the cluster and hal after mocking the test
-        tt::tt_metal::MetalContext::instance().reset();
-    }
-};
-
-TEST_F(CustomMockControlPlaneFixture, TestCustomControlPlaneInit) {
+TEST_F(ControlPlaneFixture, TestCustomControlPlaneInit) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/custom_2x2_mesh_graph_descriptor.yaml";
     [[maybe_unused]] auto control_plane = make_control_plane(mesh_graph_desc_path);
 }
 
-TEST_F(CustomMockControlPlaneFixture, TestCustomMeshAPIs) {
+TEST_F(ControlPlaneFixture, TestCustomMeshAPIs) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     auto user_meshes = control_plane.get_user_physical_mesh_ids();
     EXPECT_EQ(user_meshes.size(), 1);

@@ -2364,10 +2364,6 @@ void ControlPlane::populate_fabric_connection_info(
     }
 }
 
-ControlPlane::~ControlPlane() {
-    // Clear the logical chip id to physical chip id mapping
-    this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
-
-}
+ControlPlane::~ControlPlane() = default;
 
 }  // namespace tt::tt_fabric

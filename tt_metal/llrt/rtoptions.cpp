@@ -219,7 +219,6 @@ RunTimeOptions::RunTimeOptions() {
     }
 
     if (std::getenv("TT_METAL_SIMULATOR")) {
-        this->simulator_enabled = true;
         this->simulator_path = std::getenv("TT_METAL_SIMULATOR");
         this->runtime_target_device_ = tt::TargetDevice::Simulator;
     }
@@ -227,15 +226,9 @@ RunTimeOptions::RunTimeOptions() {
     // Enable mock cluster if TT_METAL_MOCK is set to a descriptor path
     // This is used for initializing UMD without any hardware using a mock cluster descriptor
     if (const char* mock_path = std::getenv("TT_METAL_MOCK_CLUSTER_DESC_PATH")) {
-        this->mock_enabled = true;
         this->mock_cluster_desc_path = std::string(mock_path);
         this->runtime_target_device_ = tt::TargetDevice::Mock;
     }
-
-    // Enforce mutual exclusivity between Mock and Simulator
-    TT_FATAL(
-        !(this->runtime_target_device_ == tt::TargetDevice::Simulator && this->mock_enabled),
-        "Cannot enable both simulator and mock targets. Use only one of TT_METAL_SIMULATOR or TT_METAL_MOCK_CLUSTER_DESC_PATH.");
 
     if (auto str = getenv("TT_METAL_ENABLE_ERISC_IRAM")) {
         bool disabled = strcmp(str, "0") == 0;

@@ -62,8 +62,6 @@ public:
     std::unique_ptr<DPrintServer>& dprint_server() { return dprint_server_; }
     std::unique_ptr<WatcherServer>& watcher_server() { return watcher_server_; }
 
-    void reset();
-
     void initialize(
         const DispatchCoreConfig& dispatch_core_config,
         uint8_t num_hw_cqs,
@@ -100,10 +98,6 @@ private:
     friend class tt::stl::Indestructible<MetalContext>;
     MetalContext();
     ~MetalContext();
-
-    void construct_cluster();
-    void reset_control_plane();
-    void reset_rtoptions();
 
     void clear_l1_state(chip_id_t device_id);
     void clear_dram_state(chip_id_t device_id);
