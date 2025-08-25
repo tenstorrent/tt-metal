@@ -1,0 +1,15 @@
+num_hosts: 5
+connections: { ep_a: { host: 0, tray: 1, port: 1 }, ep_b: { host: 0, tray: 4, port: 1 }}
+connections: { ep_a: { host: 0, tray: 2, port: 2 }, ep_b: { host: 0, tray: 3, port: 2 }}
+connections: { ep_a: { host: 1, tray: 1, port: 1 }, ep_b: { host: 1, tray: 4, port: 1 }}
+connections: { ep_a: { host: 1, tray: 2, port: 2 }, ep_b: { host: 1, tray: 3, port: 2 }}
+connections: { ep_a: { host: 2, tray: 1, port: 1 }, ep_b: { host: 2, tray: 4, port: 1 }}
+connections: { ep_a: { host: 2, tray: 2, port: 2 }, ep_b: { host: 2, tray: 3, port: 2 }}
+connections: { ep_a: { host: 4, tray: 1, port: 1 }, ep_b: { host: 4, tray: 4, port: 1 }}
+connections: { ep_a: { host: 4, tray: 2, port: 2 }, ep_b: { host: 4, tray: 3, port: 2 }}
+connections: { ep_a: { host: 3, tray: 1, port: 1 }, ep_b: { host: 3, tray: 4, port: 1 }}
+connections: { ep_a: { host: 3, tray: 2, port: 2 }, ep_b: { host: 3, tray: 3, port: 2 }}
+connections: { ep_a: { host: 0, tray: 1, port: 2 }, ep_b: { host: 3, tray: 4, port: 2 }}
+connections: { ep_a: { host: 1, tray: 1, port: 2 }, ep_b: { host: 3, tray: 3, port: 1 }}
+connections: { ep_a: { host: 2, tray: 1, port: 2 }, ep_b: { host: 3, tray: 2, port: 1 }}
+connections: { ep_a: { host: 4, tray: 1, port: 2 }, ep_b: { host: 3, tray: 1, port: 2 }}
