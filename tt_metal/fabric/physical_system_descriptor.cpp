@@ -94,7 +94,68 @@ PhysicalSystemDescriptor::PhysicalSystemDescriptor(bool run_discovery) {
     }
 }
 
+void PhysicalSystemDescriptor::resolve_hostname_uniqueness() {
+    using namespace tt::tt_metal::distributed::multihost;
+    constexpr uint32_t controller_rank = 0;
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    auto my_rank = *(distributed_context.rank());
+
+    if (my_rank == controller_rank) {
+        std::vector<std::string> hostnames = {};
+        hostnames.push_back(get_host_name());
+        for (std::size_t rank = 0; rank < *(distributed_context.size()); rank++) {
+            if (rank != controller_rank) {
+                std::size_t peer_hostname_size = 0;
+                distributed_context.recv(
+                    tt::stl::Span<std::byte>(
+                        reinterpret_cast<std::byte*>(&peer_hostname_size), sizeof(peer_hostname_size)),
+                    Rank{rank},
+                    Tag{0});
+                std::vector<uint8_t> serialized_peer_hostname(peer_hostname_size);
+                distributed_context.recv(
+                    tt::stl::as_writable_bytes(
+                        tt::stl::Span<uint8_t>(serialized_peer_hostname.data(), serialized_peer_hostname.size())),
+                    Rank{rank},
+                    Tag{0});
+
+                hostnames.push_back(std::string(serialized_peer_hostname.begin(), serialized_peer_hostname.end()));
+            }
+        }
+        all_hostnames_unique_ = std::set<std::string>(hostnames.begin(), hostnames.end()).size() == hostnames.size();
+
+        for (std::size_t rank = 0; rank < *(distributed_context.size()); rank++) {
+            if (rank != controller_rank) {
+                distributed_context.send(
+                    tt::stl::Span<std::byte>(
+                        reinterpret_cast<std::byte*>(&all_hostnames_unique_), sizeof(all_hostnames_unique_)),
+                    Rank{rank},
+                    Tag{0});
+            }
+        }
+    } else {
+        auto host_name = get_host_name();
+        auto serialized_hostname = std::vector<uint8_t>(host_name.begin(), host_name.end());
+        std::size_t serialized_hostname_size = serialized_hostname.size();
+        distributed_context.send(
+            tt::stl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(&serialized_hostname_size), sizeof(serialized_hostname_size)),
+            Rank{controller_rank},
+            Tag{0});
+        distributed_context.send(
+            tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_hostname.data(), serialized_hostname.size())),
+            Rank{controller_rank},
+            Tag{0});
+
+        distributed_context.recv(
+            tt::stl::Span<std::byte>(
+                reinterpret_cast<std::byte*>(&all_hostnames_unique_), sizeof(all_hostnames_unique_)),
+            Rank{controller_rank},
+            Tag{0});
+    }
+}
+
 void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery) {
+    this->resolve_hostname_uniqueness();
     this->run_local_discovery();
     if (run_global_discovery) {
         this->run_global_discovery();
@@ -111,7 +172,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     auto cluster_desc = cluster.get_cluster_desc();
 
     auto my_rank = *(distributed_context.rank());
-    auto hostname = get_host_name() + "_" + std::to_string(my_rank);
+    auto hostname = this->my_host_name();
     host_to_mobo_name_[hostname] = get_mobo_name();
     host_to_rank_[hostname] = my_rank;
 
@@ -502,6 +563,9 @@ std::vector<std::string> PhysicalSystemDescriptor::get_all_hostnames() const {
 }
 
 std::string PhysicalSystemDescriptor::my_host_name() const {
+    if (all_hostnames_unique_) {
+        return get_host_name();
+    }
     auto my_rank = *(tt::tt_metal::MetalContext::instance().global_distributed_context().rank());
     return get_host_name() + "_" + std::to_string(my_rank);
 }

@@ -136,12 +136,14 @@ private:
     void exchange_metadata(bool issue_gather);
     void generate_cross_host_connections();
     void remove_unresolved_nodes();
+    void resolve_hostname_uniqueness();
 
     PhysicalConnectivityGraph system_graph_;
     std::unordered_map<asic_id_t, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
     std::unordered_map<std::string, uint32_t> host_to_rank_;
     ExitNodeConnectionTable exit_node_connection_table_;
+    bool all_hostnames_unique_ = true;
 };
 
 }  // namespace tt::tt_metal
