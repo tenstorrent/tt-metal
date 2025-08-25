@@ -18,6 +18,7 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
 
 namespace NAMESPACE {
@@ -56,12 +57,10 @@ void MAIN {
     //           After summing up, we pass the intermediate results to cb_ex_partial
     //           The reader kernels then aggregate all of the local scalars into two tiles // TBD
     //       Global Reduce:
-    //           These two tiles (cb_ex_external) contain the partial values of μ[x] and σ^2[x] from all the other cores
     //           Only the core designated as the sender reduces this tile to produce the global μ[x] and σ^2[x]
     //           It's reader core the sends this data out to all other cores as cb_ex_global
-    //           The reader core also sends the partial reduce from itself to all other cores as cb_ex    // TBD
     //     Denominator Calculation:
-    //       First we add cb_ex2_global with cb_eps
+    //       First we add variance with cb_eps
     //       Then we take the sqrt
     //       Lastly we take the reciprocal and we have the denominator of our calculation
     //     Final Val Calc:
@@ -111,6 +110,7 @@ void MAIN {
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_compile_time_arg_val(22);
     constexpr uint32_t group_row_offset = get_compile_time_arg_val(23);
     constexpr uint32_t num_out_blocks = get_compile_time_arg_val(24);
+    constexpr uint32_t group_size = get_compile_time_arg_val(25);
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
@@ -123,7 +123,6 @@ void MAIN {
     // input cbs
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_in = tt::CBIndex::c_29;
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
     constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
     constexpr uint32_t cb_eps = tt::CBIndex::c_3;
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
@@ -136,10 +135,7 @@ void MAIN {
     constexpr uint32_t cb_x = tt::CBIndex::c_24;
     constexpr uint32_t cb_xmm = tt::CBIndex::c_25;
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;
-    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;
-    constexpr uint32_t cb_ex2_global = tt::CBIndex::c_14;
     constexpr uint32_t cb_ex2pe = tt::CBIndex::c_27;
 
     // interm cbs reuse
@@ -235,6 +231,16 @@ void MAIN {
         cb_ex_external_tiles_required++;
     }
 
+    // Copy 2 zeros to cb_ex_partial
+    cb_reserve_back(cb_ex_partial, 2);
+    tile_regs_acquire();
+    zeroacc();
+    tile_regs_commit();
+    tile_regs_wait();
+    pack_tile_block(0, cb_ex_partial, 2);
+    tile_regs_release();
+    cb_push_back(cb_ex_partial, 2);
+
     // Start Batch Loop
     for (uint32_t b = 0; b < batch; ++b) {
         index_g_offset = 0;
@@ -248,9 +254,9 @@ void MAIN {
 
         // Start Group Loop
         for (uint32_t g = 0; g < group; ++g) {
-            // Start Average Calc
-            // Start Local Reduce
-            uint32_t start_N = 0;
+            // Start Welford's Calculation
+            uint32_t curr_xy_coord = 0;
+            uint32_t curr_xy_limit = 0;
 
             cb_wait_front(cb_input_mask, block_w);
 
@@ -260,57 +266,6 @@ void MAIN {
             //         // transpose the tile -> put it in dst0
             //         // Call welford's algorithm
             //         // welford(0, 1, 2, h * c + w * 32, (h + 1) * c, 0)
-            //             // Start copy
-            //             welford_init();
-            //             cb_reserve_back(cb_ex_partial, 2);
-            //             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded;
-            //             out_block_index++) {
-            //                 uint32_t out_block_h_actual, out_block_hw_actual;
-            //                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-            //                     out_block_h_actual = out_block_h_last;
-            //                     out_block_hw_actual = out_block_hw_last;
-            //                 } else {
-            //                     out_block_h_actual = out_block_h_normal;
-            //                     out_block_hw_actual = out_block_hw_normal;
-            //                 }
-            //                 cb_wait_front(cb_in0, out_block_hw_normal);
-
-            //                 index_h_offset = 0;
-            //                 reconfig_data_format_srcb(cb_in0, cb_input_mask);
-            //                 // mask input
-            //                 mul_tiles_init(cb_in0, cb_input_mask);
-            //                 for (uint32_t i = 0; i < out_block_h_actual; ++i) {
-            //                     index_subblock_w_offset = 0;
-            //                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-            //                         tile_regs_acquire();
-            //                         for (uint32_t w = 0; w < subblock_w; ++w) {
-            //                             uint32_t index = w + index_subblock_w_offset + index_h_offset;
-            //                             uint32_t index_mask = w + index_subblock_w_offset;
-            // #ifdef TILIZE_IN
-            //                             mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
-            // #else
-            //                             mul_tiles(cb_in0, cb_input_mask, index, index_mask, w);
-            // #endif
-            //                             // Transpose the tile -> put it in dst0
-            //                             welford(0, 1, 2, 32 * index, num_cols_per_group, 0);
-            //                         }
-            //                         tile_regs_commit();
-            //                         index_subblock_w_offset += subblock_w;
-            //                     }
-            //                     index_h_offset += block_w;
-            //                 }
-            // #ifdef TILIZE_IN
-            //                 cb_pop_front(cb_in, out_block_hw_actual);
-            // #else
-            //                 cb_pop_front(cb_in0, out_block_hw_normal);
-            // #endif
-            //             }
-            //             pack_tile(1, cb_ex_partial);
-            //             pack_tile(2, cb_ex_partial);
-            //             cb_push_back(cb_ex_partial, 2);
-            //             // End copy
-
-            welford_init();
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                 uint32_t out_block_h_actual, out_block_hw_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
@@ -357,66 +312,68 @@ void MAIN {
 #endif
                 cb_push_back(cb_x, out_block_hw_normal);
 
-                // Partial/E[x] and Var[x]
-                welford_init();
-                cb_reserve_back(cb_ex_partial, 2);
-                tile_regs_acquire();
+                // Transpose (from cb_x) and Welford
                 cb_wait_front(cb_x, out_block_hw_normal);
 
-                for (uint32_t h = 0; h < out_block_h_actual; ++h) {
-                    for (uint32_t w = 0; w < block_w; ++w) {
-                        // welford(0, 1, 2, 32 * index, num_cols_per_group, 0);
+                index_h_offset = 0;
+                reconfig_data_format_srcb(cb_input_mask, cb_x);
+                transpose_wh_init(cb_x, cb_x);
+                copy_tile_init(cb_ex_partial);
+                welford_init();
+
+                for (uint32_t i = 0; i < out_block_h_actual; ++i) {
+                    curr_xy_limit += group_size;
+                    index_subblock_w_offset = 0;
+                    for (uint32_t j = 0; j < num_subblocks_w; ++j) {
+                        cb_wait_front(cb_ex_partial, 2);
+                        cb_reserve_back(cb_ex_partial, 2);
+                        tile_regs_acquire();
+
+                        // Copy the current values to DST regs 1 and 2
+                        copy_tile_to_dst_init_short(cb_ex_partial, 0);
+                        copy_tile(cb_ex_partial, 0, 1);
+                        copy_tile(cb_ex_partial, 1, 2);
+
+                        // Run Welford's algorithm
+                        for (uint32_t w = 0; w < subblock_w; ++w) {
+                            uint32_t index = w + index_subblock_w_offset + index_h_offset;
+                            uint32_t index_mask = w + index_subblock_w_offset;
+                            transpose_wh_init_short(cb_x);
+                            transpose_wh_tile(cb_x, index, 0);
+                            welford(0, 1, 2, curr_xy_coord, curr_xy_limit, 0);
+                            // curr_xy_coord += 32; // Test hangs when this is run
+                        }
+                        tile_regs_commit();
+                        cb_pop_front(cb_ex_partial, 2);
+
+                        tile_regs_wait();
+                        pack_tile_block(1, cb_ex_partial, 2);
+                        tile_regs_release();
+                        cb_push_back(cb_ex_partial, 2);
+                        index_subblock_w_offset += subblock_w;
                     }
+                    index_h_offset += block_w;
                 }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(1, cb_ex_partial);
-                pack_tile(2, cb_ex_partial);
-                tile_regs_release();
-                cb_pop_front(cb_x, out_block_hw_normal);
-                cb_push_back(cb_ex_partial, 2);
+#ifdef TILIZE_IN
+                cb_pop_front(cb_in, out_block_hw_actual);
+#else
+                cb_pop_front(cb_in0, out_block_hw_normal);
+#endif
+                cb_push_back(cb_x, out_block_hw_normal);
             }
 
             // End Local Reduce
-            // Start Global Reduce
-            if constexpr (is_mcast_sender) {
-                reduce_init(cb_ex_external, cb_scaler_global, cb_ex_global);
-                cb_reserve_back(cb_ex_global, 1);
-                cb_reserve_back(cb_ex2_global, 1);
-                if (num_cores_per_mcast_group > 1) {
-                    cb_reserve_back(cb_ex, 2);
-                }
-                tile_regs_acquire();
-                cb_wait_front(cb_scaler_global, 1);
-                cb_wait_front(cb_ex_external, cb_ex_external_tiles_required);
-                for (uint32_t external_i = 0; external_i < cb_ex_external_tiles_required; external_i++) {
-                    reduce_tile(cb_ex_external, cb_scaler_global, external_i, scaler0, dst0);
-                }
-                cb_pop_front(cb_ex_external, cb_ex_external_tiles_required);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile(dst0, cb_ex_global);
-                tile_regs_release();
-                reduce_uninit();
-                cb_push_back(cb_ex_global, 1);
-                cb_push_back(cb_ex2_global, 1);
-                if (num_cores_per_mcast_group > 1) {
-                    cb_push_back(cb_ex, 2);
-                }
-            }
-            // End Global Reduce
-            // End Average Calc
+            // End Welford's Calculation
 
             // Start Variance Calc
             //  global reduce results
             cb_wait_front(cb_eps, 1);
-            cb_wait_front(cb_ex_global, 1);
-            cb_wait_front(cb_ex2_global, 1);
+            cb_wait_front(cb_ex_global, 2);
             cb_reserve_back(cb_ex2pe, 1);
             // (Var + eps)
             tile_regs_acquire();
-            add_tiles_init(cb_ex2_global, cb_eps);
-            add_tiles(cb_ex2_global, cb_eps, 0, 0, dst0);
+            add_tiles_init(cb_ex_global, cb_eps);
+            add_tiles(cb_ex_global, cb_eps, 1, 0, dst0);
             tile_regs_wait();
             // sqrt(Var + eps)
             sqrt_tile_init();
@@ -430,7 +387,6 @@ void MAIN {
             pack_tile(dst0, cb_ex2pe);
             tile_regs_release();
             cb_push_back(cb_ex2pe, 1);
-            cb_pop_front(cb_ex2_global, 1);
             // End Variance Calc
 
             bool start_copy_or_add = copy_or_add;
@@ -709,7 +665,7 @@ void MAIN {
                     index_g_offset += block_w_minus_two;
                 }
             }
-            cb_pop_front(cb_ex_global, 1);
+            cb_pop_front(cb_ex_global, 2);
             cb_pop_front(cb_ex2pe, 1);
             cb_pop_front(cb_input_mask, block_w);
         }
