@@ -34,6 +34,7 @@ from ...models.transformers.transformer_sd35 import SD35Transformer2DModel
 from ...parallel.manager import CCLManager
 from ...parallel.config import DiTParallelConfig, create_vae_parallel_manager, EncoderParallelManager
 from ...utils.padding import PaddingConfig
+from ...utils.cache import get_cache_path, load_cache_dict
 
 TILE_SIZE = 32
 
@@ -106,6 +107,7 @@ class StableDiffusion3Pipeline:
         height: int,
         width: int,
         model_location_generator,
+        use_cache=False,
     ) -> None:
         self._mesh_device = mesh_device
 
@@ -225,7 +227,20 @@ class StableDiffusion3Pipeline:
                 init=False,
                 padding_config=padding_config,
             )
-            tt_transformer.load_state_dict(torch_transformer.state_dict())
+
+            if use_cache:
+                cache_path = get_cache_path(
+                    model_name="stable-diffusion-3.5-large",
+                    subfolder="transformer",
+                    parallel_config=self.dit_parallel_config,
+                    dtype="bf16",
+                )
+                logger.info(f"Loading transformer weights from cache: {cache_path}")
+                cache_dict = load_cache_dict(cache_path)
+                tt_transformer.from_cached_state_dict(cache_dict)
+            else:
+                logger.info("Loading transformer weights from PyTorch state dict")
+                tt_transformer.load_state_dict(torch_transformer.state_dict())
 
             self.transformers.append(tt_transformer)
             ttnn.synchronize_device(submesh_device)
