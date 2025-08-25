@@ -35,6 +35,22 @@ class FeedForward:
         self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation=activation_fn, init=init)
         self.ff2 = Linear(inner_dim, dim_out, bias=bias, mesh_device=mesh_device, init=init)
 
+    def to_cached_state_dict(self, path_prefix):
+        ff1_cache = self.ff1.to_cached_state_dict(path_prefix + "ff1.")
+        ff2_cache = self.ff2.to_cached_state_dict(path_prefix + "ff2.")
+        cache_dict = {}
+        # Add ff1. prefix to all keys from ff1_cache
+        for key, value in ff1_cache.items():
+            cache_dict[f"ff1.{key}"] = value
+        # Add ff2. prefix to all keys from ff2_cache
+        for key, value in ff2_cache.items():
+            cache_dict[f"ff2.{key}"] = value
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.ff1.from_cached_state_dict(substate(cache_dict, "ff1"))
+        self.ff2.from_cached_state_dict(substate(cache_dict, "ff2"))
+
     def load_state_dict(self, state_dict):
         self.ff1.load_state_dict(substate(state_dict, "ff1"))
         self.ff2.load_state_dict(substate(state_dict, "ff2"))
@@ -99,6 +115,22 @@ class ParallelFeedForward:
             ccl_manager=ccl_manager,
             init=init,
         )
+
+    def to_cached_state_dict(self, path_prefix):
+        ff1_cache = self.ff1.to_cached_state_dict(path_prefix + "ff1.")
+        ff2_cache = self.ff2.to_cached_state_dict(path_prefix + "ff2.")
+        cache_dict = {}
+        # Add ff1. prefix to all keys from ff1_cache
+        for key, value in ff1_cache.items():
+            cache_dict[f"ff1.{key}"] = value
+        # Add ff2. prefix to all keys from ff2_cache
+        for key, value in ff2_cache.items():
+            cache_dict[f"ff2.{key}"] = value
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.ff1.from_cached_state_dict(substate(cache_dict, "ff1"))
+        self.ff2.from_cached_state_dict(substate(cache_dict, "ff2"))
 
     def load_state_dict(self, state_dict):
         self.ff1.load_state_dict(substate(state_dict, "ff1"))

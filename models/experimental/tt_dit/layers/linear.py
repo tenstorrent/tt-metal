@@ -39,16 +39,35 @@ class Linear:
             packer_l1_acc=True,
         )
 
+    def to_cached_state_dict(self, path_prefix):
+        weight_path = path_prefix + "weight"
+        bias_path = path_prefix + "bias"
+        ttnn.dump_tensor(weight_path, self.weight)
+        if self.bias is not None:
+            ttnn.dump_tensor(bias_path, self.bias)
+        cache_dict = {"weight": weight_path}
+        if self.bias is not None:
+            cache_dict["bias"] = bias_path
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
+        if "bias" in cache_dict:
+            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
+        else:
+            self.bias = None
+
     def load_state_dict(self, state_dict):
         """
         Loads the state dict into the layer.
         """
         weight = state_dict["weight"].transpose(0, 1)
         bias = state_dict.get("bias", None)
+        if bias is not None:
+            bias = bias.reshape(1, -1)
 
         self.weight = bf16_tensor(weight, device=self.mesh_device)
         if bias is not None:
-            bias = bias.reshape(1, -1)
             self.bias = bf16_tensor(bias, device=self.mesh_device)
         else:
             self.bias = None
@@ -131,6 +150,24 @@ class ColParallelLinear:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+
+    def to_cached_state_dict(self, path_prefix):
+        weight_path = path_prefix + "weight"
+        bias_path = path_prefix + "bias"
+        ttnn.dump_tensor(weight_path, self.weight)
+        if self.bias is not None:
+            ttnn.dump_tensor(bias_path, self.bias)
+        cache_dict = {"weight": weight_path}
+        if self.bias is not None:
+            cache_dict["bias"] = bias_path
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
+        if "bias" in cache_dict:
+            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
+        else:
+            self.bias = None
 
     def load_state_dict(self, state_dict):
         """
@@ -264,6 +301,24 @@ class RowParallelLinear:
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
+
+    def to_cached_state_dict(self, path_prefix):
+        weight_path = path_prefix + "weight"
+        bias_path = path_prefix + "bias"
+        ttnn.dump_tensor(weight_path, self.weight)
+        if self.bias is not None:
+            ttnn.dump_tensor(bias_path, self.bias)
+        cache_dict = {"weight": weight_path}
+        if self.bias is not None:
+            cache_dict["bias"] = bias_path
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
+        if "bias" in cache_dict:
+            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
+        else:
+            self.bias = None
 
     def load_state_dict(self, state_dict):
         """
