@@ -13,6 +13,39 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
+uint32_t get_pf_type(bool output_is_sharded, const Tensor& tensor) {
+    auto device = tensor.device();
+    uint32_t max_l1_size =
+        device->l1_size_per_core() / 2 - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
+    uint32_t single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+    // Determine the max number of tiles that can be in any CB at a given time (1 input CB + 1 output CB = 2 total CBs)
+    uint32_t max_tiles_per_cb = max_l1_size / (2 * single_tile_size);
+
+    // TODO : currently multi_core parallelization on column only works for single tile height tensors.
+    // Need to debug this to work on wide tensors that are higher than a single tile
+    const auto& tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+    uint32_t tensor_width = tensor.padded_shape()[-1];
+    uint32_t tensor_height = tensor.physical_volume() / tensor_width;
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
+    uint32_t num_tiles_per_row = tensor_width / tile_width;
+    uint32_t num_tiles_per_col = tensor_height / tile_height;
+
+    // If the input is interleaved and an entire row of tiles can't fit in a CB at once
+    if (!tensor.is_sharded() && num_tiles_per_row > max_tiles_per_cb) {
+        // If the output is also interleaved and the tensor is only a single tile high, we can
+        // parellize the work column wise. Otherwise we have to resort to the single core implementation,
+        // as the current default multi core implementation processes an entire row of tiles at once.
+        if (!output_is_sharded && num_tiles_per_col == 1) {
+            return 0;
+        } else {
+            return 1;
+        }
+    }
+    return 2;
+}
+
 void Untilize::validate(const std::vector<Tensor>& input_tensors) const {
     using namespace tt::constants;
     const auto& input_tensor_a = input_tensors.at(0);
