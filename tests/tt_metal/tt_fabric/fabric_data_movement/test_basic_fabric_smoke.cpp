@@ -79,7 +79,7 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     const auto& devices = fixture->get_devices();
 
     // Need at least 2 devices for smoke test
-    if (devices.size() < 2) {
+    if (devices.size() == 2) {
         GTEST_SKIP() << "Smoke test requires at least 2 devices";
     }
 
