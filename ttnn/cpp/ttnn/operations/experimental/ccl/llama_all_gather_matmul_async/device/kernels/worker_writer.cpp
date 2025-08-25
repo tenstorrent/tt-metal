@@ -6,7 +6,6 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <cstdint>
 #include <utility>
@@ -31,7 +30,6 @@ FORCE_INLINE void advance_local_read_address_for_fabric_write(
     // payload_size_bytes);
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        RECORD_FABRIC_HEADER(pkt_hdr_forward);
         fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
@@ -40,7 +38,6 @@ FORCE_INLINE void advance_local_read_address_for_fabric_write(
 
     if (num_targets_backward_direction > 0 && fabric_connection.has_backward_connection()) {
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        RECORD_FABRIC_HEADER(pkt_hdr_backward);
         fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
