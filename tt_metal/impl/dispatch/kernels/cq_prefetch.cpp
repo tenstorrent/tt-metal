@@ -1697,7 +1697,7 @@ inline void relay_raw_data_to_downstream(
 
         // Release pages consumed by this chunk; include extra_pages on final chunk
         uint32_t pages_to_release = npages;
-        if (is_final_chunk && extra_pages != 0) {
+        if (is_final_chunk) {
             pages_to_release += extra_pages;
         }
         if (pages_to_release != 0) {
