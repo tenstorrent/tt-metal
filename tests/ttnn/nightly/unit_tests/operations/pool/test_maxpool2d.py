@@ -46,8 +46,8 @@ def run_max_pool(
     ceil_mode=False,
     in_place=False,
     nightly_skips=True,
-    output_data_format=None,
-    output_layout=None,
+    output_data_format=ttnn.bfloat16,
+    output_layout=ttnn.ROW_MAJOR_LAYOUT,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -163,12 +163,6 @@ def run_max_pool(
 
     # run ttnn maxpool2d
 
-    # Use default values if None is provided
-    if output_data_format is None:
-        output_data_format = ttnn.bfloat16
-    if output_layout is None:
-        output_layout = ttnn.ROW_MAJOR_LAYOUT
-
     ttnn_output = ttnn.max_pool2d(
         input_tensor=ttnn_input,
         batch_size=in_n,
@@ -222,14 +216,16 @@ def run_max_pool(
     # test for equivalance
     pcc_thresh = 1.0
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-    if dtype == ttnn.bfloat8_b:
+    if dtype == ttnn.bfloat8_b or output_data_format == ttnn.bfloat8_b:
         pcc_thresh = 0.997
         atol = 0.35
     assert_with_pcc(ttnn_output, torch_output, pcc_thresh)
+    if output_data_format != ttnn.bfloat16:
+        ttnn_output = ttnn_output.to(torch.bfloat16)
     allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
     isequal = torch.equal(ttnn_output, torch_output)
     assert allclose
-    if dtype == ttnn.bfloat16:
+    if dtype == ttnn.bfloat16 and output_data_format == ttnn.bfloat16:
         assert isequal
 
 
@@ -331,8 +327,9 @@ def test_run_max_pool_height_shard(
     "input_shape",  ## NCHW
     (
         (  # resnet shapes
-            [1, 256, 16, 16],
-            [1, 320, 64, 64],
+            [1, 256, 64, 64],
+            [1, 320, 16, 16],
+            [1, 32 * 11, 64, 64],
             [4, 32, 12, 12],
         )
     ),
@@ -370,14 +367,28 @@ def test_run_max_pool_height_shard(
     ],
 )
 @pytest.mark.parametrize(
+    "out_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
         True,
     ],
 )
+@pytest.mark.parametrize(
+    "out_layout",
+    [
+        # ttnn.ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ttnn.TILE_LAYOUT,
+    ],
+)
 def test_run_max_pool_height_shard_tile(
-    input_shape, kernel_size, padding, stride, dilation, device, tensor_map, dtype, ceil_mode
+    input_shape, kernel_size, padding, stride, dilation, device, tensor_map, dtype, out_dtype, ceil_mode, out_layout
 ):
     run_max_pool(
         input_shape,
@@ -390,7 +401,8 @@ def test_run_max_pool_height_shard_tile(
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
-        output_layout=ttnn.TILE_LAYOUT,
+        output_data_format=out_dtype,
+        output_layout=out_layout,
     )
 
 
