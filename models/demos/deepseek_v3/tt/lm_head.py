@@ -240,7 +240,7 @@ class LMHead(AbstractModule):
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mesh_scatter": {
-                "semaphores": (ccl.get_semaphore(0), ccl.get_semaphore(1)),
+                "semaphores": (ccl.get_gather_sem(0), ccl.get_gather_sem(1)),
             },
         }
 

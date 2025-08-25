@@ -10,6 +10,8 @@ METALIUM_GUIDE.md @davorchap
 .github/workflows/ttnn-run-sweeps.yaml @stevendae
 .github/workflows/tg-deepseek-tests.yaml @yieldthought @avoraTT @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
 .github/workflows/tg-deepseek-tests-impl.yaml @yieldthought @avoraTT @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
+.github/workflows/vllm-nightly-tests.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra
+.github/workflows/vllm-nightly-tests-impl.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra
 
 /infra/ @tenstorrent/metalium-developers-infra
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra
@@ -261,6 +263,7 @@ models/experimental/openpdn_mnist @tenstorrent/cse-developer-ttnn
 models/demos/vanilla_unet @dvartaniansTT @tenstorrent/cse-developer-ttnn
 models/demos/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn
 models/experimental/grok @yieldthought @uaydonat
+models/experimental/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT
 models/demos/wormhole/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
 models/demos/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat
 models/experimental/*yolo*/ @tenstorrent/cse-developer-ttnn @uaydonat
@@ -288,6 +291,7 @@ models/demos/yolov12x @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/efficientnetb0 @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/yolov5x @ssinghalTT @tenstorrent/cse-developer-ttnn
 models/experimental/vovnet @ssinghalTT @tenstorrent/cse-developer-ttnn
+models/**/requirements*.txt @tenstorrent/metalium-developers-infra
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
