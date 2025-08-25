@@ -6,7 +6,13 @@ import math
 UNARY_OPERATIONS = {
     # Exponential functions
     "exp": (torch.exp, ttnn.exp, math.exp, "exp"),
-    "exp_approx": (
+    "exp-fast-approx": (
+        torch.exp,
+        lambda x, output_tensor: ttnn.exp(x, fast_and_approximate_mode=True, output_tensor=output_tensor),
+        None,
+        "exp",
+    ),
+    "exp-fast-approx-v2": (
         torch.exp,
         lambda x, output_tensor: ttnn.exp(x, fast_and_approximate_mode=True, output_tensor=output_tensor),
         None,

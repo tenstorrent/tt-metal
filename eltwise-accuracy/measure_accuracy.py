@@ -588,12 +588,13 @@ def main(args):
 
     # Unused: atan2, logaddexp, logaddexp2
     all_operations = [
-        # "exp",
+        "exp",
         # "exp21f",
-        "exp_21f_round_nearest",
+        "exp-fast-approx-v2",
+        # "exp_21f_round_nearest",
         # "exp_hybrid",
         # "exp_cond",
-        # "exp_approx",
+        # "exp-fast-approx",
         # "exp_approx0",
         # "exp_approx_21f",
         # "exp_accurate_python",
@@ -658,12 +659,13 @@ def main(args):
 
     highres_operations = [
         # "exp_hybrid",
-        # "exp",
-        "exp_21f_round_nearest",
+        "exp",
+        # "exp_21f_round_nearest",
+        "exp-fast-approx-v2",
         # "exp21f",
         # "exp_cond",
         # "exp_approx_21f",
-        # "exp_approx",
+        # "exp-fast-approx",
         # "exp_approx0",
         # "exp_accurate_python",
         # "exp_python_alt1",
