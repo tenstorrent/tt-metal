@@ -64,6 +64,10 @@ FORCE_INLINE uint32_t get_stream_reg_write_addr(uint8_t stream_id) {
     return STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
 }
 
+FORCE_INLINE int32_t pack_value_for_inc_on_write_stream_reg_write(int32_t val) {
+    return val << REMOTE_DEST_BUF_WORDS_FREE_INC;
+}
+
 template <uint32_t stream_id, uint32_t txq_id>
 FORCE_INLINE void remote_update_ptr_val(int32_t val) {
     constexpr uint32_t addr = STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
