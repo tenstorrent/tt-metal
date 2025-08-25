@@ -77,7 +77,7 @@ void kernel_main() {
         } else {
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
             const InterleavedAddrGen<true> addrg = {.bank_base_address = pos_addr, .page_size = index_stick_size_B};
-
+            DeviceZoneScopedN("Reading cur pos");
             cb_reserve_back(cb_index_id, 1);
             uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
             // index_tensor has one page to read
@@ -150,6 +150,7 @@ void kernel_main() {
     // First, read Q entirely, it could be interleaved or sharded
     uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
     {
+        DeviceZoneScopedN("Reading Q");
         if constexpr (is_q_sharded) {
             uint64_t q_read_addr;
             uint32_t q_write_ptr;
@@ -201,6 +202,7 @@ void kernel_main() {
             cb_push_back(cb_q_in, q_chunk_tiles);
         }
     }
+
     // Read the rest
     const InterleavedAddrGenFast<is_dram> k_reader = {
         .bank_base_address = k_addr, .page_size = k_tile_bytes, .data_format = k_data_format};
@@ -230,6 +232,7 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
     if constexpr (is_paged_attention) {
+        DeviceZoneScopedN("Reading page table");
         constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
         const InterleavedAddrGen<true> page_table_gen = {
             .bank_base_address = page_table_addr, .page_size = page_table_page_size};
@@ -254,15 +257,20 @@ void kernel_main() {
                 uint64_t k_base_read_ptr;
 
                 {
-                    read_k_chunks<num_kv_heads, block_size_t, DHt, enable_split_reader, true>(
-                        k_tile_bytes, Sk_chunk_t_dynamic, cb_k_in, k_chunk, cur_head, page_table_ptr, k_reader, 0);
+                    DeviceZoneScopedN("Reading K first half");
+                    cb_reserve_back(cb_k_in, Sk_chunk_t_dynamic * DHt / 2);
+                    cb_push_back(cb_k_in, Sk_chunk_t_dynamic * DHt / 2);
+                    // read_k_chunks<num_kv_heads, block_size_t, DHt, enable_split_reader, true>(
+                    //     k_tile_bytes, Sk_chunk_t_dynamic, cb_k_in, k_chunk, cur_head, page_table_ptr, k_reader, 0);
                 }
                 if constexpr (use_attention_mask) {
+                    DeviceZoneScopedN("Read mask chunk");
                     mask_start_tile_id = read_mask_chunk<cb_mask_in, mask_tile_bytes, barrier_threshold, PNHt>(
                         PSt, Sk_chunk_t_dynamic, mask_chunk_tiles, mask_start_tile_id, mask_reader);
                 }
 
                 {
+                    DeviceZoneScopedN("Read V");
                     if constexpr (reuse_k) {
                         // Read V chunk (tranpose of K), from K's L1 buffer
                         cb_reserve_back(cb_v_in, v_chunk_tiles);
