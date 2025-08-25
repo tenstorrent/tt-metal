@@ -5,7 +5,7 @@
 import torch
 import ttnn
 import pytest
-from models.experimental.oft.reference.resnet import BasicBlock, ResNetFeatures
+from models.experimental.oft.reference.resnet import resnet18
 from models.experimental.oft.tt.tt_resnet import TTBasicBlock, TTResNetFeatures
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
@@ -17,25 +17,30 @@ from models.experimental.oft.tt.model_preprocessing import create_OFT_model_para
     "input_shape, layers",
     [
         ((1, 3, 384, 1280), [2, 2, 2, 2]),  # ResNet-18
-        # ((2, 3, 128, 128), [2, 2, 2, 2]),  # batch size 2
+        # ((2, 3, 128, 128), [2, 2, 2, 2]),  # batch size2
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 10 * 1024}], indirect=True)
 def test_resnetfeatures_forward(device, input_shape, layers):
     torch.manual_seed(0)
-    model = ResNetFeatures(BasicBlock, layers)
+    model = resnet18(pretrained=False)
+    # model = ResNetFeatures(BasicBlock, layers)
     torch_tensor = torch.randn(*input_shape)
     # feats8, feats16, feats32 = model.forward(torch_tensor)
-    feats8, feats16, feats32 = model.forward(torch_tensor)
 
     params = create_OFT_model_parameters_resnet(model, torch_tensor, device)
-
+    feats8, feats16, feats32 = model.forward(torch_tensor)
+    with open("resnet_params.log", "w") as f:
+        f.write(str(params))
     print("-----------------------------------------")
     # print(f"{params=}")
     print(
         f"Input shape: {torch_tensor.shape}, feats8 shape: {feats8.shape}, feats16 shape: {feats16.shape}, feats32 shape: {feats32.shape}"
     )
     print("-----------------------------------------")
+    n, c, h, w = feats8.shape
+    feats8 = feats8.permute(0, 2, 3, 1)
+    feats8 = feats8.reshape(1, 1, n * h * w, c)
     n, c, h, w = feats16.shape
     feats16 = feats16.permute(0, 2, 3, 1)
     feats16 = feats16.reshape(1, 1, n * h * w, c)
@@ -56,11 +61,28 @@ def test_resnetfeatures_forward(device, input_shape, layers):
     )
     # ttnn_feats8, ttnn_feats16, ttnn_feats32 = tt_module.forward(device, ttnn_input)
     # ttnn_feats8, ttnn_feats16 = tt_module.forward(device, ttnn_input)
-    ttnn_feat16 = tt_module.forward(device, ttnn_input)
-    # ttnn_feat8 = ttnn.to_torch(ttnn_feat8)
-    ttnn_feat16 = ttnn.to_torch(ttnn_feat16)
-    print(f"TTNN feats16 shape: {ttnn_feat16.shape}")
+    ttnn_feats8, ttnn_feats16, ttnn_feats32 = tt_module.forward(device, ttnn_input)
+    print("-----------------------------------------")
+    print(
+        f"TTNN feats8 shape: {ttnn_feats8.shape} dtype: {ttnn_feats8.dtype}, layout: {ttnn_feats8.layout}, memory_config: {ttnn_feats8.memory_config()}"
+    )
+    print(
+        f"TTNN feats16 shape: {ttnn_feats16.shape} dtype: {ttnn_feats16.dtype},layout: {ttnn_feats16.layout}, memory_config: {ttnn_feats16.memory_config()}"
+    )
+    print(
+        f"TTNN feats32 shape: {ttnn_feats32.shape} dtype: {ttnn_feats32.dtype},layout: {ttnn_feats32.layout}, memory_config: {ttnn_feats32.memory_config()}"
+    )
+    print("------------------------------------------")
+
+    ttnn_feats8 = ttnn.to_torch(ttnn_feats8)
+    ttnn_feats16 = ttnn.to_torch(ttnn_feats16)
+    print(f"TTNN feats16 shape: {ttnn_feats16.shape}")
+    ttnn_feats32 = ttnn.to_torch(ttnn_feats32)
     # message, pcc = assert_with_pcc(ttnn_feat8, feats8, 0.99)
     # print(f"Passing: {message}, PCC: {pcc}")
-    message, pcc = assert_with_pcc(ttnn_feat16, feats32, 0.99)
+    message, pcc = assert_with_pcc(ttnn_feats8, feats8, 0.99)
+    print(f"Passing: {message}, PCC: {pcc}")
+    message, pcc = assert_with_pcc(ttnn_feats16, feats16, 0.99)
+    print(f"Passing: {message}, PCC: {pcc}")
+    message, pcc = assert_with_pcc(ttnn_feats32, feats32, 0.99)
     print(f"Passing: {message}, PCC: {pcc}")
