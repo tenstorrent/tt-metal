@@ -477,17 +477,21 @@ void overwrite_compute_kernel_name_and_defines(
     }
 }
 
-bool is_llk_bcast(const SubtileBroadcastType subtile_broadcast_type, const DataType a_dtype, const DataType b_dtype) {
+bool is_llk_bcast(
+    const SubtileBroadcastType subtile_broadcast_type,
+    const DataType a_dtype,
+    const DataType b_dtype,
+    const DataType c_dtype) {
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B) {
-        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) {
+        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16) {
             return true;
         }
     }
 
     if (subtile_broadcast_type == SubtileBroadcastType::ROW_A_COL_B ||
         subtile_broadcast_type == SubtileBroadcastType::ROW_B_COL_A) {
-        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16) {
+        if (a_dtype == DataType::BFLOAT16 && b_dtype == DataType::BFLOAT16 && c_dtype == DataType::BFLOAT16) {
             return true;
         }
     }
@@ -730,7 +734,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
     const uint32_t num_tiles_per_cycle = 1;  // we produce 1 output tile per read-compute-write cycle
-    if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype)) {
+    if (CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, c_dtype)) {
         CMAKE_UNIQUE_NAMESPACE::overwrite_compute_kernel_name_and_defines(
             compute_kernel, operation_attributes.subtile_broadcast_type, compute_kernel_defines);
         reader_defines["BCAST_LLK"] = "1";
