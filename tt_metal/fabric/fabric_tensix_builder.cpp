@@ -344,7 +344,6 @@ std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_termination_addre
 // FabricTensixDatamoverBuilder implementation
 
 FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
-    tt::tt_metal::IDevice* device,
     const CoreCoord& my_core_logical,
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
     tt::tt_fabric::FabricNodeId remote_fabric_node_id,
@@ -355,7 +354,6 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     uint32_t noc_y,
     std::shared_ptr<tt::tt_fabric::FabricMuxConfig> fabric_mux_config,
     eth_chan_directions direction) :
-    device_(device),
     my_core_logical_(my_core_logical),
     local_fabric_node_id_(local_fabric_node_id),
     remote_fabric_node_id_(remote_fabric_node_id),
@@ -367,7 +365,6 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     fabric_mux_config_(fabric_mux_config),
     direction_(direction) {
     channel_connection_liveness_check_disable_array_.fill(false);
-    TT_FATAL(device_ != nullptr, "Device cannot be null");
     TT_FATAL(fabric_mux_config_ != nullptr, "FabricMuxConfig cannot be null");
 }
 
@@ -399,7 +396,6 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     auto fabric_mux_config = tensix_config.get_mux_config(risc_id);
 
     return FabricTensixDatamoverBuilder(
-        device,
         my_core_logical,
         local_fabric_node_id,
         remote_fabric_node_id,
@@ -425,7 +421,7 @@ void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::IDevice* dev
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
         my_core_logical_,
         tt::tt_metal::DataMovementConfig{
-            .processor = processor, .noc = noc, .compile_args = get_compile_time_args(), .defines = {}});
+            .processor = processor, .noc = noc, .compile_args = get_compile_time_args(device), .defines = {}});
 
     // Set runtime arguments
     tt::tt_metal::SetRuntimeArgs(program, mux_kernel, my_core_logical_, get_runtime_args(program));
@@ -453,7 +449,7 @@ tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_conne
     };
 }
 
-std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args() const {
+std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt_metal::IDevice* device) const {
     // Get base compile time args without stream IDs from the underlying mux config
     auto ct_args = fabric_mux_config_->get_fabric_mux_compile_time_main_args();
 
@@ -465,7 +461,7 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args() cons
     const auto worker_channel = is_2d_fabric ? direction_ : 0;
     const auto& tensix_config = fabric_context.get_tensix_config();
     const auto worker_stream_id =
-        tensix_config.get_channel_credits_stream_id(device_->id(), ethernet_channel_id_, worker_channel);
+        tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, worker_channel);
 
     std::vector<uint32_t> fabric_stream_ids_ack_to_upstream;
     std::vector<uint32_t> fabric_stream_ids_check_by_local;

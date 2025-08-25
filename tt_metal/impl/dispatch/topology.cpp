@@ -1060,8 +1060,9 @@ void build_tt_fabric_program(
 
     const bool wrap_around_mesh = fabric_context.is_wrap_around_mesh(fabric_node_id.mesh_id);
 
-    bool fabric_tensix_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
-                                 tt::tt_fabric::FabricTensixConfig::DISABLED;
+    // check whether using tensix extension for connection between worker and fabric routers.
+    bool fabric_tensix_extension_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                                           tt::tt_fabric::FabricTensixConfig::DISABLED;
 
     for (const auto& [direction, remote_fabric_node_id] : chip_neighbors) {
         const auto& [fabric_edm_type, fabric_edm_axis] = get_fabric_edm_type(
@@ -1095,7 +1096,7 @@ void build_tt_fabric_program(
             edm_builders.insert({eth_chan, edm_builder});
 
             auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
-            if (fabric_tensix_enabled) {
+            if (fabric_tensix_extension_enabled) {
                 // Only create tensix builder if this channel is not used by dispatch
                 if (!(device_has_dispatch_tunnel && link_idx == dispatch_link_idx)) {
                     auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
@@ -1116,6 +1117,26 @@ void build_tt_fabric_program(
     const auto topology = fabric_context.get_fabric_topology();
     const bool is_galaxy =
         tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() == tt::tt_metal::ClusterType::GALAXY;
+
+    auto build_downstream_connections = [&](tt::tt_fabric::chan_id_t eth_chan_dir1,
+                                            tt::tt_fabric::chan_id_t eth_chan_dir2) {
+        auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
+        auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
+
+        if (fabric_tensix_extension_enabled) {
+            if (tensix_builders.find(eth_chan_dir1) != tensix_builders.end() &&
+                tensix_builders.find(eth_chan_dir2) != tensix_builders.end()) {
+                auto& tensix_builder1 = tensix_builders.at(eth_chan_dir1);
+                auto& tensix_builder2 = tensix_builders.at(eth_chan_dir2);
+
+                edm_builder1.connect_to_downstream_edm(tensix_builder2);
+                edm_builder2.connect_to_downstream_edm(tensix_builder1);
+            }
+        } else {
+            edm_builder1.connect_to_downstream_edm(edm_builder2);
+            edm_builder2.connect_to_downstream_edm(edm_builder1);
+        }
+    };
 
     auto connect_downstream_builders = [&](RoutingDirection dir1, RoutingDirection dir2) {
         bool can_connect =
@@ -1142,19 +1163,7 @@ void build_tt_fabric_program(
                 auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
                 auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
 
-                if (fabric_tensix_enabled) {
-                    if (tensix_builders.find(eth_chan_dir1) != tensix_builders.end() &&
-                        tensix_builders.find(eth_chan_dir2) != tensix_builders.end()) {
-                        auto& tensix_builder1 = tensix_builders.at(eth_chan_dir1);
-                        auto& tensix_builder2 = tensix_builders.at(eth_chan_dir2);
-
-                        edm_builder1.connect_to_downstream_edm(tensix_builder2);
-                        edm_builder2.connect_to_downstream_edm(tensix_builder1);
-                    }
-                } else {
-                    edm_builder1.connect_to_downstream_edm(edm_builder2);
-                    edm_builder2.connect_to_downstream_edm(edm_builder1);
-                }
+                build_downstream_connections(eth_chan_dir1, eth_chan_dir2);
 
                 // select VC based on the current link
                 auto edm_noc_vc = edm_builder1.config.DEFAULT_NOC_VC + (link % edm_builder1.config.NUM_EDM_NOC_VCS);

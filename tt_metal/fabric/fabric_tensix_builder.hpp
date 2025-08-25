@@ -106,7 +106,6 @@ class FabricTensixDatamoverBuilder {
 public:
     // Constructor for fabric tensix datamover builder
     FabricTensixDatamoverBuilder(
-        tt::tt_metal::IDevice* device,
         const CoreCoord& my_core_logical,
         tt::tt_fabric::FabricNodeId local_fabric_node_id,
         tt::tt_fabric::FabricNodeId remote_fabric_node_id,
@@ -144,9 +143,6 @@ public:
     eth_chan_directions get_direction() const { return direction_; }
 
 private:
-    // Device reference
-    tt::tt_metal::IDevice* device_;
-
     // Core and fabric configuration
     CoreCoord my_core_logical_;
     tt::tt_fabric::FabricNodeId local_fabric_node_id_;
@@ -170,7 +166,7 @@ private:
         channel_connection_liveness_check_disable_array_{};
 
     // Helper methods for kernel compilation
-    std::vector<uint32_t> get_compile_time_args() const;
+    std::vector<uint32_t> get_compile_time_args(tt::tt_metal::IDevice* device) const;
     std::vector<uint32_t> get_runtime_args(tt::tt_metal::Program& program) const;
 };
 
