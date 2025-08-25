@@ -57,6 +57,7 @@ def test_sd35_joint_attention(
     mesh_shape: tuple[int, int],
     sp_axis: int,
     tp_axis: int,
+    num_links: int,
     B: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
@@ -87,7 +88,7 @@ def test_sd35_joint_attention(
     # Create CCL manager
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
-        num_links=1,
+        num_links=num_links,
         topology=ttnn.Topology.Linear,
     )
 
