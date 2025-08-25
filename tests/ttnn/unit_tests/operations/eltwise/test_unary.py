@@ -242,6 +242,68 @@ def test_log(device, h, w):
     run_unary_test(device, h, w, ttnn.log)
 
 
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([4, 7, 21, 133])),
+        (torch.Size([5, 3, 145, 72])),
+        (torch.Size([4, 9, 52, 182])),
+        (torch.Size([6, 6, 98, 125])),
+    ),
+)
+@pytest.mark.parametrize(
+    "log_function, torch_dtype, ttnn_dtype, low_range, high_range",
+    [
+        # for negative input values torch output is nan
+        # for ttnn bfloat8_b due to shared exponent inf/nan values will result in incorrect results due to flushing
+        # Hence ignoring the negative input for bfloat8_b
+        (ttnn.log, torch.bfloat16, ttnn.bfloat8_b, 1, 100),
+        (ttnn.log2, torch.bfloat16, ttnn.bfloat8_b, 1, 100),
+        (ttnn.log10, torch.bfloat16, ttnn.bfloat8_b, 1, 100),
+        # for ttnn bfloat16 nan is packed as inf (doesn't match with torch behavior).
+        # hence ignoring the negative input for bfloat16 as well
+        (ttnn.log, torch.bfloat16, ttnn.bfloat16, 1, 100),
+        (ttnn.log2, torch.bfloat16, ttnn.bfloat16, 1, 100),
+        (ttnn.log10, torch.bfloat16, ttnn.bfloat16, 1, 100),
+        # TODO: add float32 once https://github.com/tenstorrent/tt-metal/pull/26675 is merged
+    ],
+)
+@pytest.mark.parametrize(
+    "data_seed",
+    [4171614],
+)
+# Related to issue 8634 for log based functions with different dtypes
+def test_unary_log_operations_ttnn(
+    input_shapes, log_function, torch_dtype, ttnn_dtype, low_range, high_range, data_seed, device
+):
+    """Test logarithm functions (log, log2, log10)"""
+    torch.manual_seed(data_seed)
+    in_data = torch.Tensor(size=input_shapes).uniform_(low_range, high_range).to(torch_dtype)
+
+    # Only use pad_value=1.0 for bfloat8_b to avoid log(0) issues with shared exponent flushing
+    tensor_kwargs = {
+        "dtype": ttnn_dtype,
+        "layout": ttnn.TILE_LAYOUT,
+        "device": device,
+        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+    }
+    if ttnn_dtype == ttnn.bfloat8_b:
+        tensor_kwargs["pad_value"] = 1.0
+
+    input_tensor = ttnn.from_torch(in_data, **tensor_kwargs)
+    output_tensor = log_function(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    golden_function = ttnn.get_golden_function(log_function)
+    # for bfloat8_b precision
+    input_torch_converted = ttnn.to_torch(input_tensor)
+    golden_tensor = golden_function(input_torch_converted, device=device)
+    tt_result = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(tt_result, golden_tensor, pcc=0.99)
+    assert torch.allclose(tt_result, golden_tensor, rtol=4e-2, atol=4e-2)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_sin(device, h, w):
@@ -1379,5 +1441,24 @@ def test_unary_signbit_float_edge_case_ttnn(torch_dtype, ttnn_dtype, device):
     output_tensor = ttnn.signbit(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.signbit)
     golden_tensor = golden_function(in_data)
+
+    assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([1, 1, 320, 384])),
+        (torch.Size([1, 3, 320, 384])),
+    ),
+)
+@pytest.mark.parametrize("threshold", [1.0, 10.0, 100.0, -5, -8.0, -100.0])
+@pytest.mark.parametrize("value", [10.0, 100.0, -7.0, -85.5])
+def test_unary_threshold_ttnn(input_shapes, threshold, value, device):
+    in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
+    output_tensor = ttnn.threshold(input_tensor1, threshold, value)
+    golden_function = ttnn.get_golden_function(ttnn.threshold)
+    golden_tensor = golden_function(in_data1, threshold, value)
 
     assert torch.equal(golden_tensor, ttnn.to_torch(output_tensor))

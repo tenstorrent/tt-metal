@@ -510,7 +510,7 @@ ttnn::Tensor pad_to_tile_vol(
         auto padded_height = tt::round_up(padded_shape[-2], tt::constants::TILE_HEIGHT);
         auto padded_width = tt::round_up(padded_shape[-1], tt::constants::TILE_WIDTH);
         uint32_t num_non_hw_dims = rank - 2u;
-        auto padding_vec = ttnn::SmallVector<std::pair<uint32_t, uint32_t>>(num_non_hw_dims, {0, 0});
+        auto padding_vec = ttnn::SmallVector<std::array<uint32_t, 2>>(num_non_hw_dims, {0, 0});
         padding_vec.reserve(rank);
         padding_vec.emplace_back(0, padded_height - padded_shape[-2]);
         padding_vec.emplace_back(0, padded_width - padded_shape[-1]);
@@ -604,7 +604,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
 
     auto height = logical_shape[-2];
     auto width = logical_shape[-1];
-    std::array<uint32_t, 2> computed_shard_shape;
+    std::array<uint32_t, 2> computed_shard_shape{};
 
     if (shard_shape.has_value()) {
         computed_shard_shape = shard_shape.value();

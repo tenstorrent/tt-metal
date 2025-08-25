@@ -15,7 +15,7 @@ run_t3000_ttmetal_tests() {
   echo "LOG_METAL: Running run_t3000_ttmetal_tests"
   ./build/test/tt_metal/distributed/distributed_unit_tests
 
-  echo "LOG_METAL: Testing TT_METAL_VISIBLE_DEVICES functionality"
+  echo "LOG_METAL: Testing TT_VISIBLE_DEVICES functionality"
   ./tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh ; fail+=$?
 
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsDirectSendAllConnectedChips" ; fail+=$?
@@ -476,7 +476,7 @@ run_t3000_qwen25_vl_unit_tests() {
   start_time=$(date +%s)
 
   # install qwen25_vl requirements
-  pip install -r models/demos/qwen25_vl/reference/requirements.txt
+  pip install -r models/demos/qwen25_vl/requirements.txt
 
   # export PYTEST_ADDOPTS for concise pytest output
   export PYTEST_ADDOPTS="--tb=short"

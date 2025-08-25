@@ -1077,7 +1077,7 @@ void ControlPlane::write_routing_tables_to_eth_cores(MeshId mesh_id, chip_id_t c
             // eth_chans are the active ethernet channels on this chip
             const auto& eth_chan_intra_mesh_routing_table = chip_intra_mesh_routing_tables[eth_chan];
             const auto& eth_chan_inter_mesh_routing_table = chip_inter_mesh_routing_tables[eth_chan];
-            tt::tt_fabric::fabric_router_l1_config_t fabric_router_config;
+            tt::tt_fabric::fabric_router_l1_config_t fabric_router_config{};
             std::fill_n(
                 fabric_router_config.intra_mesh_table.dest_entry,
                 tt::tt_fabric::MAX_MESH_SIZE,
@@ -2315,7 +2315,7 @@ void ControlPlane::populate_fabric_connection_info(
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2d_fabric = topology == Topology::Mesh;
+    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
     const auto sender_channel = is_2d_fabric ? router_direction : 0;
 
     // Always populate fabric router config for normal workers

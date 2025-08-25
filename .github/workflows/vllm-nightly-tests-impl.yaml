@@ -37,6 +37,17 @@ jobs:
             co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
           },
           {
+            name: "[T3K] Qwen2.5-VL-72B-Instruct",
+            model: "Qwen/Qwen2.5-VL-72B-Instruct",
+            server-timeout: 30,
+            benchmark-timeout: 15,
+            runner-label: config-t3000,
+            mesh-device: T3K,
+            tt-llama-text-ver: tt_transformers,
+            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 28467200}",
+            co-owner-1-id: U07RY6B5FLJ, # Gongyu Wang
+          },
+          {
             name: "[DB] Llama-3.1-8B-Instruct",
             model: "meta-llama/Llama-3.1-8B-Instruct",
             server-timeout: 5,
@@ -56,19 +67,19 @@ jobs:
             mesh-device: P150x4,
             tt-llama-text-ver: tt_transformers,
             override-tt-config: "{\"data_parallel\": 4}",
-            owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
-          },
-          {
-            name: "[RB] Llama-3.1-8B-Instruct",
-            model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 35,
-            benchmark-timeout: 10,
-            runner-label: bh-rackbox,
-            mesh-device: P150x8,
-            tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 8}",
             owner_id: U08GELBB1AP, # Ambrose Ling
           },
+          # { Removing this until #26734 is resolved
+          #   name: "[RB] Llama-3.1-8B-Instruct",
+          #   model: "meta-llama/Llama-3.1-8B-Instruct",
+          #   server-timeout: 35,
+          #   benchmark-timeout: 10,
+          #   runner-label: bh-rackbox,
+          #   mesh-device: P150x8,
+          #   tt-llama-text-ver: tt_transformers,
+          #   override-tt-config: "{\"data_parallel\": 8}",
+          #   owner_id: U08GELBB1AP, # Ambrose Ling
+          # },
           {
             name: "[TG] Llama-3.3-70B-Instruct",
             model: "meta-llama/Llama-3.3-70B-Instruct",

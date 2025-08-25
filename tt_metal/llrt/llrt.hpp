@@ -65,24 +65,6 @@ const ll_api::memory& get_risc_binary(
     ll_api::memory::Loading loading = ll_api::memory::Loading::DISCRETE,
     std::function<void(ll_api::memory&)> update_callback = nullptr);
 
-// TODO: try using "stop" method from device instead, it's the proper way of asserting reset
-
-// CoreCoord core --> NOC coordinates ("functional workers" from the SOC descriptor)
-// NOC coord is also synonymous to routing / physical coord
-// dram_channel id (0..7) for GS is also mapped to NOC coords in the SOC descriptor
-template <typename DType>
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord& core, const std::vector<DType>& hex_vec, uint64_t addr) {
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
-}
-template <typename DType>
-void write_hex_vec_to_core(chip_id_t chip, const CoreCoord& core, tt::stl::Span<const DType> hex_vec, uint64_t addr) {
-    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
-        hex_vec.data(), hex_vec.size() * sizeof(DType), tt_cxy_pair(chip, core), addr);
-}
-
-std::vector<std::uint32_t> read_hex_vec_from_core(chip_id_t chip, const CoreCoord& core, uint64_t addr, uint32_t size);
-
 CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord& ethernet_core);
 
 tt_metal::HalProgrammableCoreType get_core_type(chip_id_t chip_id, const CoreCoord& virtual_core);

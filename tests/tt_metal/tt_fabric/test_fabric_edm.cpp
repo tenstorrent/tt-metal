@@ -26,9 +26,9 @@ void signal_handler(int signum) { daemon_running = false; }
 struct TestParams {
     std::variant<WriteThroughputStabilityTestWithPersistentFabricParams, FullMeshTestParams> params;
     std::string message_noc_type;
-    size_t num_messages;
-    size_t packet_payload_size_bytes;
-    bool fabric_unicast;
+    size_t num_messages{};
+    size_t packet_payload_size_bytes{};
+    bool fabric_unicast{};
 };
 
 // noc_send_type, flush

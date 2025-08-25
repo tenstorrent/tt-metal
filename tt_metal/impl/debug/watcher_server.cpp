@@ -82,7 +82,7 @@ private:
     inline static std::chrono::time_point start_time = std::chrono::system_clock::now();
     std::mutex watch_mutex_;  // Guards server internal state + logfile + device watcher mailbox
 
-    std::thread* server_thread_;
+    std::thread* server_thread_{};
 
     FILE* logfile_ = nullptr;
     FILE* kernel_file_ = nullptr;
@@ -140,7 +140,16 @@ void WatcherServer::Impl::attach_devices() {
 
 void WatcherServer::Impl::detach_devices() {
     // If server isn't running, and wasn't killed due to an error, nothing to do here.
+    auto close_file = [](FILE*& file) {
+        if (file != nullptr) {
+            std::fclose(file);
+            file = nullptr;
+        }
+    };
     if (!server_thread_ and !server_killed_due_to_error_) {
+        close_file(logfile_);
+        close_file(kernel_file_);
+        close_file(kernel_elf_file_);
         return;
     }
 
@@ -179,10 +188,9 @@ void WatcherServer::Impl::detach_devices() {
 
         // Watcher server closed, can use dma library again.
         MetalContext::instance().rtoptions().set_disable_dma_ops(false);
-
-        // Close files
-        std::fclose(logfile_);
-        logfile_ = nullptr;
+        close_file(logfile_);
+        close_file(kernel_file_);
+        close_file(kernel_elf_file_);
     }
 }
 
@@ -492,7 +500,7 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
             } else {
                 data->debug_insert_delays = debug_delays_val_zero;
             }
-            tt::llrt::write_hex_vec_to_core(
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device_id,
                 worker_core,
                 tt::stl::Span<const uint32_t>(watcher_init_val.data(), watcher_init_val.size()),
@@ -510,7 +518,7 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
         } else {
             data->debug_insert_delays = debug_delays_val_zero;
         }
-        tt::llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device_id,
             virtual_core,
             watcher_init_val,
