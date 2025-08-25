@@ -117,6 +117,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         const uint32_t output_shard_width = output_tensor.memory_config().shard_spec()->shape[1];
         const uint32_t input_width_bytes = input_shard_width * nbytes;
         const uint32_t output_width_bytes = output_shard_width * nbytes;
+        // for small stick sizes alignment can cause the shards to be larger than the number of sticks, thus
+        // we must account for alignment when computing the size delta between input and output shards
         uint32_t aligned_delta_size =
             align_buffer(this->max_out_nsticks_per_core_ * output_width_bytes) / output_width_bytes -
             align_buffer(this->in_nsticks_per_core_ * input_width_bytes) / input_width_bytes;
