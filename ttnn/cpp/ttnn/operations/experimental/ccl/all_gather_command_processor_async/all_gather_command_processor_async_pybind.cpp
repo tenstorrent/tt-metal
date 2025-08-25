@@ -30,8 +30,8 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
-               const ttnn::Tensor& persistent_output_buffer,
                const GlobalSemaphore& multi_device_global_semaphore,
+               const std::optional<ttnn::Tensor>& persistent_output_buffer,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
@@ -40,8 +40,8 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                 return self(
                     input_tensor,
                     dim,
-                    persistent_output_buffer,
                     multi_device_global_semaphore,
+                    persistent_output_buffer,
                     num_links,
                     memory_config,
                     topology,
@@ -74,11 +74,12 @@ void py_bind_all_gather_command_processor_async(pybind11::module& module) {
             input_tensor (ttnn.Tensor): multi-device tensor.
             dim (int): Dimension to perform operation.
             multi_device_global_semaphore (ttnn.Tensor): multi-device semaphore required to perform the operation.
-            persistent_output_buffer (ttnn.Tensor): multi-device output tensor.
+
 
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming_Mesh_of_Devices/Programming_Mesh_of_Devices_with_TT-NN.md
 
         Keyword Args:
+            persistent_output_buffer (ttnn.Tensor, optional): multi-device output tensor.
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
@@ -99,14 +100,7 @@ void py_bind_all_gather_command_processor_async(pybind11::module& module) {
                             memory_config=mem_config,
                             mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-            >>> output_tensor = ttnn.from_torch(
-                            torch.zeros(ag_output_shape),
-                            dtype=input_dtype,
-                            device=mesh_device,
-                            layout=layout,
-                            memory_config=mem_config,
-                            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device))
-            >>> output = ttnn.all_gather(ttnn_tensor, dim=0, multi_device_semaphore, output_tensor)
+            >>> output = ttnn.all_gather(ttnn_tensor, dim=0, multi_device_semaphore)
         )doc");
 }
 

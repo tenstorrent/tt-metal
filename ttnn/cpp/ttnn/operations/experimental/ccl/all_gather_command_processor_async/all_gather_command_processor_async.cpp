@@ -13,8 +13,8 @@ namespace ttnn::operations::experimental::ccl {
 ttnn::Tensor ExecuteAllGatherCommandProcessorAsync::invoke(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
-    const ttnn::Tensor& persistent_output_buffer,
     const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer,
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
