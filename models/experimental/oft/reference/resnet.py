@@ -2,6 +2,8 @@ import pytest
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.model_zoo as model_zoo
+
 
 model_urls = {
     "resnet18": "https://download.pytorch.org/models/resnet18-5c106cde.pth",
@@ -106,6 +108,27 @@ class ResNetFeatures(nn.Module):
         feats32 = self.layer4(feats16)
 
         return feats8, feats16, feats32
+
+
+def resnet18(pretrained=False, **kwargs):
+    model = ResNetFeatures(BasicBlock, [2, 2, 2, 2], **kwargs)
+    if pretrained:
+        _load_pretrained(model, model_zoo.load_url(model_urls["resnet18"]))
+    return model
+
+
+def resnet34(pretrained=False, **kwargs):
+    model = ResNetFeatures(BasicBlock, [3, 4, 6, 3], **kwargs)
+    if pretrained:
+        _load_pretrained(model, model_zoo.load_url(model_urls["resnet34"]))
+    return model
+
+
+def _load_pretrained(model, pretrained):
+    model_dict = model.state_dict()
+    pretrained = {k: v for k, v in pretrained.items() if k in model_dict}
+    model_dict.update(pretrained)
+    model.load_state_dict(model_dict)
 
 
 @pytest.mark.parametrize(
