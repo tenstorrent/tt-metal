@@ -33,6 +33,7 @@ enum class KernelName {
     ReaderRowBColABcastNg,
     ReaderScalarBcastNg,
     ComputeRowBcastNg,
+    ComputeRowColBcastNg,
 };
 
 struct BinaryNgKernelConfig {
