@@ -10,13 +10,13 @@
 
 namespace lite_fabric {
 
-int CompileLiteFabric(
+int CompileFabricLite(
     tt::Cluster& cluster,
     const std::filesystem::path& root_dir,
     const std::filesystem::path& out_dir,
     const std::vector<std::string>& defines = {});
 
-int LinkLiteFabric(
+int LinkFabricLite(
     const std::filesystem::path& root_dir, const std::filesystem::path& out_dir, const std::filesystem::path& elf_out);
 
 }  // namespace lite_fabric
