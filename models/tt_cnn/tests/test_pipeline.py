@@ -21,7 +21,7 @@ from models.tt_cnn.tt.pipeline import (
     create_pipeline_from_config,
     get_memory_config_for_persistent_dram_tensor,
 )
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 
 @dataclass
@@ -72,6 +72,36 @@ def create_test_model(input_shape, should_deallocate_input_tensor=True):
     def run_reference(torch_input_tensor):
         assert input_shape == torch_input_tensor.shape, "Unexpected input shape"
         return torch.nn.functional.relu(torch_input_tensor)
+
+    return run, run_reference
+
+
+def create_multi_output_test_model(input_shape):
+    """Creates a test model that returns multiple outputs."""
+
+    def run(l1_input_tensor):
+        assert l1_input_tensor.storage_type() == ttnn.StorageType.DEVICE, "Model expects input tensor to be on device"
+        assert (
+            l1_input_tensor.memory_config().buffer_type == ttnn.BufferType.L1
+        ), "Model expects input tensor to be in L1"
+        assert input_shape == l1_input_tensor.shape, "Unexpected input shape"
+
+        # Create two outputs: relu and sigmoid of input
+        x = ttnn.tilize(l1_input_tensor)
+        output1 = ttnn.relu(x)
+        output1 = ttnn.to_layout(output1, ttnn.ROW_MAJOR_LAYOUT)
+
+        output2 = ttnn.sigmoid(x)
+        output2 = ttnn.to_layout(output2, ttnn.ROW_MAJOR_LAYOUT)
+
+        ttnn.deallocate(l1_input_tensor)
+        return [output1, output2]
+
+    def run_reference(torch_input_tensor):
+        assert input_shape == torch_input_tensor.shape, "Unexpected input shape"
+        output1 = torch.nn.functional.relu(torch_input_tensor)
+        output2 = torch.sigmoid(torch_input_tensor)
+        return [output1, output2]
 
     return run, run_reference
 
@@ -246,6 +276,78 @@ def test_executor_single_runs(
 @pytest.mark.parametrize("executor_config", EXECUTOR_CONFIGS, ids=lambda cfg: cfg.name)
 @pytest.mark.parametrize("shape_config", SHAPE_CONFIGS, ids=lambda cfg: f"shape_{cfg.input_shape}")
 @pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 16384, "trace_region_size": 32768, "num_command_queues": 2}],
+    indirect=True,
+)
+def test_executor_multi_output(device, executor_config: ExecutorTestConfig, shape_config: TestShapeConfig):
+    """Test multi-output functionality across all executor types"""
+    input_shape = shape_config.input_shape
+    dram_cores = shape_config.dram_cores
+    l1_cores = shape_config.l1_cores
+
+    model, reference_model = create_multi_output_test_model(input_shape)
+
+    pipe = create_pipeline_for_executor_config(executor_config, model, device, input_shape, dram_cores, l1_cores)
+    executor = pipe.executor
+
+    assert isinstance(
+        executor, executor_config.expected_executor_type
+    ), f"Expected {executor_config.expected_executor_type.__name__}, got {type(executor).__name__}"
+
+    num_inputs = 16  # Reduced for performance
+    host_inputs = []
+    reference_outputs = []
+    direct_model_outputs = []  # Store outputs from direct model execution
+
+    for _ in range(num_inputs):
+        input_tensor, reference_input = create_input_tensors(input_shape, device=None, memory_config=None)
+        host_inputs.append(input_tensor)
+        reference_outputs.append(reference_model(reference_input))
+
+        # Run model directly for comparison
+        l1_input = ttnn.to_device(input_tensor, device=device, memory_config=executor.l1_input_memory_config)
+        direct_outputs = model(l1_input)
+        direct_model_outputs.append(direct_outputs)
+        # Clean up the L1 input tensor
+        if l1_input.is_allocated():
+            ttnn.deallocate(l1_input, force=True)
+
+    pipe.compile(host_inputs[0])
+    outputs = pipe.enqueue(host_inputs).pop_all()
+    pipe.cleanup()
+
+    # Each input produces 2 outputs, so total outputs should be 2 * num_inputs
+    expected_total_outputs = 2 * num_inputs
+    assert len(outputs) == expected_total_outputs, f"Expected {expected_total_outputs} outputs, got {len(outputs)}"
+
+    # Verify all outputs are on host
+    for i, output in enumerate(outputs):
+        assert (
+            output.storage_type() == ttnn.StorageType.HOST
+        ), f"Output {i} should be on host for {executor_config.name}"
+
+    # Verify outputs match reference implementation and direct model execution
+    for i in range(num_inputs):
+        # Get the two outputs for this input
+        output1 = outputs[2 * i]
+        output2 = outputs[2 * i + 1]
+        reference_output1, reference_output2 = reference_outputs[i]
+        direct_output1, direct_output2 = direct_model_outputs[i]
+
+        # Compare with reference implementation
+        assert_with_pcc(ttnn.to_torch(output1), reference_output1, 0.99)
+        assert_with_pcc(ttnn.to_torch(output2), reference_output2, 0.99)
+
+        # Compare executor output with direct model execution
+        # This verifies the executor doesn't introduce any bugs or numerical differences
+        assert_with_pcc(ttnn.to_torch(output1), ttnn.to_torch(direct_output1), 0.999999)
+        assert_with_pcc(ttnn.to_torch(output2), ttnn.to_torch(direct_output2), 0.999999)
+
+
+@pytest.mark.parametrize("executor_config", EXECUTOR_CONFIGS, ids=lambda cfg: cfg.name)
+@pytest.mark.parametrize("shape_config", SHAPE_CONFIGS, ids=lambda cfg: f"shape_{cfg.input_shape}")
+@pytest.mark.parametrize(
     "create_model", [create_test_model, create_identity_test_model], ids=["relu_model", "identity_model"]
 )
 @pytest.mark.parametrize(
@@ -350,6 +452,89 @@ def test_executor_with_preallocated_outputs(
             ttnn.to_torch(output),
             reference_output,
         )
+
+
+@pytest.mark.parametrize("executor_config", EXECUTOR_CONFIGS, ids=lambda cfg: cfg.name)
+@pytest.mark.parametrize("shape_config", SHAPE_CONFIGS, ids=lambda cfg: f"shape_{cfg.input_shape}")
+@pytest.mark.parametrize(
+    "device_params",
+    [{"l1_small_size": 16384, "trace_region_size": 32768, "num_command_queues": 2}],
+    indirect=True,
+)
+def test_executor_multi_output_with_preallocation(
+    device, executor_config: ExecutorTestConfig, shape_config: TestShapeConfig
+):
+    """Test multi-output functionality with preallocated tensors"""
+    input_shape = shape_config.input_shape
+    dram_cores = shape_config.dram_cores
+    l1_cores = shape_config.l1_cores
+
+    model, reference_model = create_multi_output_test_model(input_shape)
+
+    pipe = create_pipeline_for_executor_config(executor_config, model, device, input_shape, dram_cores, l1_cores)
+
+    sample_input, _ = create_input_tensors(input_shape, device=None, memory_config=None)
+    pipe.compile(sample_input)
+
+    num_inputs = 8  # Reduced for performance
+    # Each input produces 2 outputs, so we need 2 * num_inputs preallocated tensors
+    num_outputs = 2 * num_inputs
+    pipe.preallocate_output_tensors_on_host(
+        num_outputs, output_shape=input_shape, output_dtype=ttnn.bfloat16, output_layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+
+    assert (
+        pipe.preallocated_output_tensors == True
+    ), f"Pipeline should be in preallocated mode for {executor_config.name}"
+    assert (
+        len(pipe.output_tensors) == num_outputs
+    ), f"Expected {num_outputs} preallocated tensors for {executor_config.name}"
+
+    host_inputs = []
+    reference_outputs = []
+    direct_model_outputs = []  # Store outputs from direct model execution
+
+    for _ in range(num_inputs):
+        input_tensor, reference_input = create_input_tensors(input_shape, device=None, memory_config=None)
+        host_inputs.append(input_tensor)
+        reference_outputs.append(reference_model(reference_input))
+
+        # Run model directly for comparison
+        l1_input = ttnn.to_device(input_tensor, device=device, memory_config=pipe.executor.l1_input_memory_config)
+        direct_outputs = model(l1_input)
+        direct_model_outputs.append(direct_outputs)
+        # Clean up the L1 input tensor
+        if l1_input.is_allocated():
+            ttnn.deallocate(l1_input, force=True)
+
+    outputs = pipe.enqueue(host_inputs).pop_all()
+    pipe.cleanup()
+
+    assert outputs is pipe.output_tensors, f"Should return preallocated tensors for {executor_config.name}"
+    assert len(outputs) == num_outputs, f"Expected {num_outputs} outputs for {executor_config.name}"
+
+    # Verify all outputs are on host
+    for i, output in enumerate(outputs):
+        assert (
+            output.storage_type() == ttnn.StorageType.HOST
+        ), f"Preallocated output {i} should be on host for {executor_config.name}"
+
+    # Verify outputs match reference implementation and direct model execution
+    for i in range(num_inputs):
+        # Get the two outputs for this input
+        output1 = outputs[2 * i]
+        output2 = outputs[2 * i + 1]
+        reference_output1, reference_output2 = reference_outputs[i]
+        direct_output1, direct_output2 = direct_model_outputs[i]
+
+        # Compare with reference implementation
+        assert_with_pcc(ttnn.to_torch(output1), reference_output1, 0.99)
+        assert_with_pcc(ttnn.to_torch(output2), reference_output2, 0.99)
+
+        # Compare executor output with direct model execution
+        # This verifies the executor doesn't introduce any bugs or numerical differences
+        assert_with_pcc(ttnn.to_torch(output1), ttnn.to_torch(direct_output1), 0.999999)
+        assert_with_pcc(ttnn.to_torch(output2), ttnn.to_torch(direct_output2), 0.999999)
 
 
 @pytest.mark.parametrize(
