@@ -2242,7 +2242,10 @@ void kernel_main() {
                     downstream_edm_vc0_worker_location_info_address,
                     channel_buffer_size,
                     local_sender_channel_connection_buffer_index_id[edm_index],
-                    0,
+                    0,  // Unused for Router->Router connections. Router->Router always uses stream registers for
+                        // credits. Used by Worker->Router connections. This is an address in the worker's L1. The
+                        // Router that a Worker adapter is connected to writes its read counter to this address. The
+                        // worker uses this to calculate free slots in the router's sender channel.
                     reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc0_noc_interface_buffer_index_local_addr,  // keep common, since its a scratch noc read
                                                                            // dest.
@@ -2297,7 +2300,10 @@ void kernel_main() {
                     downstream_edm_vc1_worker_location_info_address,
                     channel_buffer_size,
                     local_sender_channel_connection_buffer_index_id[NUM_USED_RECEIVER_CHANNELS - 1],
-                    0,
+                    0,  // Unused for Router->Router connections. Router->Router always uses stream registers for
+                        // credits. Used by Worker->Router connections. This is an address in the worker's L1. The
+                        // Router that a Worker adapter is connected to writes its read counter to this address. The
+                        // worker uses this to calculate free slots in the router's sender channel.
                     reinterpret_cast<volatile uint32_t* const>(teardown_sem_address),
                     downstream_vc1_noc_interface_buffer_index_local_addr,
 
