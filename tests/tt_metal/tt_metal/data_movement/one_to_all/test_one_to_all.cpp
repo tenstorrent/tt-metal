@@ -722,7 +722,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastVirtualChannel
     GTEST_SKIP() << "Skipping test";
 
     // Parameters
-    uint32_t test_case_id = 152;
+    uint32_t test_case_id = 154;
 
     auto mesh_device = get_mesh_device();
     auto device = mesh_device->get_device(0);
@@ -754,7 +754,7 @@ TEST_F(GenericMeshDeviceFixture, TensixDataMovementOneToAllUnicastCustom) {
     GTEST_SKIP() << "Skipping test";
 
     // Parameters
-    uint32_t test_case_id = 160;
+    uint32_t test_case_id = 155;
 
     auto mesh_device = get_mesh_device();
     auto device = mesh_device->get_device(0);
