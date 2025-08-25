@@ -381,13 +381,29 @@ class TtSppf:
 
 
 class TtDetectCv2:
-    def __init__(self, device, parameters, path, input_params):
+    def __init__(self, device, parameters, path, input_params, block_shard=False, block_shard_all_convs=False):
         self.device = device
         self.parameters = parameters
         self.path = path
         self.input_params = input_params
-        self.conv0 = TtConv(device, parameters, f"{path}.0", input_params=input_params[0], bfloat8=True)
-        self.conv1 = TtConv(device, parameters, f"{path}.1", input_params=input_params[1], bfloat8=True)
+        self.conv0 = TtConv(
+            device,
+            parameters,
+            f"{path}.0",
+            input_params=input_params[0],
+            bfloat8=True,
+            block_shard=block_shard,
+            deallocate_activation=False,
+        )
+        self.conv1 = TtConv(
+            device,
+            parameters,
+            f"{path}.1",
+            input_params=input_params[1],
+            bfloat8=True,
+            block_shard=block_shard_all_convs,
+            deallocate_activation=True,
+        )
         self.conv2 = TtConv(
             device,
             parameters,
@@ -397,6 +413,8 @@ class TtDetectCv2:
             is_fused=False,
             change_shard=True,
             is_detect_cv2=True,
+            block_shard=block_shard_all_convs,
+            deallocate_activation=True,
         )
 
     def __call__(self, x):
@@ -444,8 +462,21 @@ class TtDetect:
         for i in range(nl):
             cv2_params = input_params["cv2_params"][i]["input_params"]
             cv3_params = input_params["cv3_params"][i]["input_params"]
-            self.detect_cv2_modules.append(TtDetectCv2(device, parameters, f"{path}.cv2.{i}", input_params=cv2_params))
-            self.detect_cv3_modules.append(TtDetectCv2(device, parameters, f"{path}.cv3.{i}", input_params=cv3_params))
+            self.detect_cv2_modules.append(
+                TtDetectCv2(
+                    device, parameters, f"{path}.cv2.{i}", input_params=cv2_params, block_shard=True if i > 0 else False
+                )
+            )
+            self.detect_cv3_modules.append(
+                TtDetectCv2(
+                    device,
+                    parameters,
+                    f"{path}.cv3.{i}",
+                    input_params=cv3_params,
+                    block_shard=True if i > 0 else False,
+                    block_shard_all_convs=True if i > 1 else False,
+                )
+            )
 
         self.dfl_module = TtDFL(
             device, parameters, f"{path}.dfl", input_params=input_params["dfl_params"]["input_params"]
