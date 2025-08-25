@@ -36,6 +36,8 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(22) == 1;
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(24);
+    // TensorAccessorArgs for output buffer
+    constexpr auto out_args = TensorAccessorArgs<25>();
 
     uint32_t arg_idx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -143,10 +145,8 @@ void kernel_main() {
     // *** Reducer Compute Below ***
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t tile_bytes_intermed = get_tile_size(cb_intermed_out);
-    constexpr DataFormat data_format = get_dataformat(cb_out);
 
-    const InterleavedAddrGenFast<is_dram> out_writer = {
-        .bank_base_address = out_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto out_writer = TensorAccessor(out_args, out_addr, tile_bytes);
 
     uint64_t intermed_l1_read_addr = get_noc_addr(get_read_ptr(cb_intermed_out));
 
