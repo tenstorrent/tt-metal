@@ -256,17 +256,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, sender_worker_core_range_set, cb_sender_config);
 
-    // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CB::c_in1;
-    static constexpr auto num_packet_headers_storable = 8;
-    auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
-        tt::tt_metal::CircularBufferConfig(
-            num_packet_headers_storable * packet_header_size_bytes * 2,
-            {{reserved_packet_header_CB_index, tt::DataFormat::RawUInt32}})
-            .set_page_size(reserved_packet_header_CB_index, packet_header_size_bytes);
-    CreateCircularBuffer(program, sender_worker_core_range_set, cb_reserved_packet_header_config);
-
     bool input_is_sharded = input_tensor.is_sharded();
     bool output_is_sharded = output_tensor.is_sharded();
 
@@ -459,8 +448,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 // Writer
                 std::vector<uint32_t> sender_writer_compile_args = {
                     ring_index,                                        // my_chip_id
-                    reserved_packet_header_CB_index,                   // reserved_packet_header_cb_id
-                    num_packet_headers_storable,                       // num_packet_headers_storable
                     static_cast<uint32_t>(output_tensor_buffer_type),  // output_buffer_type
                     sender_cb_index,                                   // cb_forward_id
                     num_tiles_to_write_per_packet,                     // num_tiles_to_write_per_packet
