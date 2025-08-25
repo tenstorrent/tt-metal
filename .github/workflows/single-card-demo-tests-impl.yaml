@@ -221,7 +221,6 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e ARCH_NAME=${{ inputs.arch }}
-            ${{ !matrix.test-group.civ2-compatible && '-e HF_HOME=/mnt/MLPerf/huggingface' || '' }}
             ${{ matrix.test-group.civ2-compatible && '-e TT_GH_CI_INFRA=1' || '' }}
             -v /mnt/MLPerf:/mnt/MLPerf:ro
             --cap-add=ALL
