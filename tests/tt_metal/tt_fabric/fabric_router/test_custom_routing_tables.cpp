@@ -48,5 +48,3 @@ TEST_F(ControlPlaneFixture, TestCustom2x2MeshAPIs) {
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
-
-
