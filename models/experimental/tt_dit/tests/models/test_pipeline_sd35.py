@@ -45,6 +45,7 @@ from ...parallel.config import DiTParallelConfig, ParallelFactor
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
     indirect=True,
 )
+@pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
 @pytest.mark.parametrize("traced", [True, False], ids=["yes_traced", "no_traced"])
 def test_sd35_pipeline(
     *,
@@ -62,6 +63,7 @@ def test_sd35_pipeline(
     no_prompt,
     model_location_generator,
     traced,
+    use_cache,
 ) -> None:
     """Test the new SD3.5 pipeline implementation."""
     cfg_factor, cfg_axis = cfg
@@ -106,6 +108,7 @@ def test_sd35_pipeline(
         height=image_h,
         width=image_w,
         model_location_generator=model_location_generator,
+        use_cache=use_cache,
     )
 
     # Set timing collector
