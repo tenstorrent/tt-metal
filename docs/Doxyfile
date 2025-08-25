@@ -954,7 +954,7 @@ INPUT                  = tt_metal/hw/inc/compile_time_args.h \
                          tt_metal/include/compute_kernel_api/reg_api.h \
                          tt_metal/include/compute_kernel_api/tile_move_copy.h \
                          tt_metal/include/compute_kernel_api/tilize.h \
-                         tt_metal/include/compute_kernel_api/transpose_wh.h \
+                         tt_metal/include/compute_kernel_api/transpose.h \
                          tt_metal/include/compute_kernel_api/untilize.h \
                          tt_metal/include/compute_kernel_api.h \
                          tt_metal/impl/kernels/kernel_args.hpp \

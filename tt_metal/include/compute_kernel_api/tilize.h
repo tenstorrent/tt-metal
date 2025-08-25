@@ -118,7 +118,7 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
 
 // clang-format off
 /**
- * Performs the tilize operation on a block.
+ * Performs the tilize operation on a block of tiles.
  *
  * Return value: None
  *

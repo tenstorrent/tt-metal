@@ -23,14 +23,14 @@ void process_and_sort_tiles(
         cb_wait_front(index_cb_index, 2);
 
         reconfig_data_format_srca(input_cb_index);
-        transpose_wh_init_short(input_cb_index);
-        transpose_wh_tile(input_cb_index, 0, 0);
-        transpose_wh_tile(input_cb_index, 1, 1);
+        transpose_init(input_cb_index);
+        transpose_tile(input_cb_index, 0, 0);
+        transpose_tile(input_cb_index, 1, 1);
 
         reconfig_data_format_srca(index_cb_index);
-        transpose_wh_init_short(index_cb_index);
-        transpose_wh_tile(index_cb_index, 0, 2);
-        transpose_wh_tile(index_cb_index, 1, 3);
+        transpose_init(index_cb_index);
+        transpose_tile(index_cb_index, 0, 2);
+        transpose_tile(index_cb_index, 1, 3);
 
         // llk_topk_sort -> inplace
         ckernel::topk_local_sort(0, (int)ascending, end_phase);
@@ -266,14 +266,14 @@ void process_iteration(
 
 void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, uint32_t Kt, uint32_t Wt) {
     reconfig_data_format_srca(transposed_cb_index);
-    transpose_wh_init_short(transposed_cb_index);
+    transpose_init(transposed_cb_index);
     pack_reconfig_data_format(transposed_cb_index);
 
     cb_wait_front(transposed_cb_index, Kt);
     for (uint32_t i = 0; i < Kt; ++i) {
         acquire_dst();
         cb_reserve_back(dest_cb_index, 1);
-        transpose_wh_tile(transposed_cb_index, i, 0);
+        transpose_tile(transposed_cb_index, i, 0);
         pack_tile(0, dest_cb_index);
         cb_push_back(dest_cb_index, 1);
         release_dst();

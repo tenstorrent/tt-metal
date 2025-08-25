@@ -16,8 +16,12 @@ namespace ckernel {
 
 ALWI void unary_op_init_common(uint32_t icb, uint32_t ocb) {
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE, StochRndType::None, true>(icb)));
-    UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
-        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+    UNPACK((llk_unpack_A_init<
+            BroadcastType::NONE,
+            false,
+            EltwiseBinaryReuseDestType::NONE,
+            UnpackToDestEn,
+            true /*disable_src_zero_flag*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
 
     PACK((llk_pack_hw_configure_disaggregated<DST_ACCUM_MODE, false>(ocb)));
     PACK((llk_pack_init<false>(ocb)));

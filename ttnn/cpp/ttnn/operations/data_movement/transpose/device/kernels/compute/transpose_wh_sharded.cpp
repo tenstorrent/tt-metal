@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-#include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -17,7 +17,8 @@ void MAIN {
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
 
-    transpose_wh_init(cb_id_in, cb_id_out);
+    compute_kernel_hw_startup(cb_id_in, cb_id_out);
+    transpose_init(cb_id_in);
 
     // transpose a row-major block:
     // - uses reader_unary_transpose_wh
@@ -33,7 +34,7 @@ void MAIN {
         for (uint32_t w = 0; w < Wt; ++w) {
             for (uint32_t h = 0; h < Ht; ++h) {
                 tile_regs_acquire();
-                transpose_wh_tile(cb_id_in, tile_idx, 0);
+                transpose_tile(cb_id_in, tile_idx, 0);
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(0, cb_id_out);
