@@ -437,7 +437,8 @@ void dump_eth_link_stats(
         return;  // link stats not populated for BH yet!
     }
 
-    std::filesystem::path output_dir = std::filesystem::path(tt::tt_metal::get_profiler_logs_dir());
+    std::filesystem::path output_dir =
+        std::filesystem::path(::tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_logs_dir());
     std::filesystem::path log_path = output_dir / "eth_link_stats.csv";
     std::ofstream log_file;
     if (write_header) {
