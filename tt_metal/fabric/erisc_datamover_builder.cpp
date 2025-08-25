@@ -112,6 +112,11 @@ static void configure_risc_settings(
     }
 }
 
+static uint32_t get_worker_connected_sender_channel(const eth_chan_directions direction, Topology topology) {
+    const bool is_2D_routing = FabricContext::is_2D_topology(topology);
+    return is_2D_routing ? direction : 0;
+}
+
 static void update_sender_channel_servicing(
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config,
     std::vector<FabricRiscConfig>& risc_configs,
@@ -123,8 +128,7 @@ static void update_sender_channel_servicing(
     }
 
     // Determine which channel corresponds to the current direction
-    const bool is_2D_routing = FabricContext::is_2D_topology(topology);
-    uint32_t target_channel = is_2D_routing ? direction : 0;
+    uint32_t target_channel = get_worker_connected_sender_channel(direction, topology);
 
     auto arch = tt::tt_metal::MetalContext::instance().hal().get_arch();
     if (arch == tt::ARCH::WORMHOLE_B0) {
@@ -437,8 +441,7 @@ void FabricEriscDatamoverConfig::configure_buffer_slots_helper(
 
     switch (options.fabric_tensix_config) {
         case tt::tt_fabric::FabricTensixConfig::MUX: {
-            bool is_2D_routing = FabricContext::is_2D_topology(topology);
-            uint32_t target_channel = is_2D_routing ? direction : 0;
+            uint32_t target_channel = get_worker_connected_sender_channel(direction, topology);
             size_t default_num_sender_buffer_slots;
             size_t default_num_receiver_buffer_slots;
             // get the default buffer slots
@@ -1153,9 +1156,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     auto local_physical_chip_id = control_plane.get_physical_chip_id_from_fabric_node_id(this->local_fabric_node_id);
     auto& soc_desc = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(local_physical_chip_id);
 
-    const bool is_2D_routing =
-        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().is_2D_routing_enabled();
-    auto sender_channel_to_check = is_2D_routing ? direction : 0;
+    const auto topology =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context().get_fabric_topology();
+    auto sender_channel_to_check = get_worker_connected_sender_channel(direction, topology);
     size_t sender_channel_num_buffers = this->sender_channels_num_buffers[sender_channel_to_check];
     size_t receiver_channel_num_buffers =
         this->dateline_connection ? this->receiver_channels_num_buffers[1] : this->receiver_channels_num_buffers[0];
