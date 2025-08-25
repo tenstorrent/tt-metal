@@ -249,9 +249,6 @@ MetalContext::MetalContext() {
 }
 
 void MetalContext::construct_cluster() {
-    rtoptions_.~RunTimeOptions();
-    new (&rtoptions_) llrt::RunTimeOptions();
-
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
@@ -395,6 +392,22 @@ tt::tt_fabric::ControlPlane& MetalContext::get_control_plane() {
     return *control_plane_;
 }
 
+void MetalContext::reset_control_plane() {
+    control_plane_.reset();
+    this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
+}
+
+void MetalContext::reset_rtoptions() {
+    rtoptions_.~RunTimeOptions();
+    new (&rtoptions_) llrt::RunTimeOptions();
+}
+
+void MetalContext::reset() {
+    this->reset_rtoptions();
+    this->reset_control_plane();
+    this->construct_cluster();
+}
+
 void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, chip_id_t>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
@@ -412,10 +425,8 @@ void MetalContext::set_default_fabric_topology() {
         !DevicePool::is_initialized() || DevicePool::instance().get_all_active_devices().size() == 0,
         "Modifying control plane requires no devices to be active");
     // Reset the control plane, since it was initialized with custom parameters.
-    control_plane_.reset();
-    // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
-    // mapping.
-    this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
+    this->reset_control_plane();
+
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     } else {

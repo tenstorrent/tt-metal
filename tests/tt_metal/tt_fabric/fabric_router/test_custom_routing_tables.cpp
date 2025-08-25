@@ -38,7 +38,7 @@ protected:
             "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/2x2_n300_cluster_desc.yaml",
             1);
         // Reinitialize to absorb the mock cluster descriptor path
-        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+        tt::tt_metal::MetalContext::instance().reset();
         ControlPlaneFixture::SetUp();
     }
 
@@ -46,7 +46,7 @@ protected:
         ControlPlaneFixture::TearDown();
         unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
         // Reinitialize to reset the cluster and hal after mocking the test
-        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+        tt::tt_metal::MetalContext::instance().reset();
     }
 };
 

@@ -78,7 +78,7 @@ protected:
               "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/tg_cluster_desc.yaml",
               1);
         // Need to reinitialize to absorb the mock cluster descriptor path
-        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+        tt::tt_metal::MetalContext::instance().reset();
         ControlPlaneFixture::SetUp();
     }
 
@@ -86,7 +86,7 @@ protected:
         ControlPlaneFixture::TearDown();
         unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
         // Need to reinitialize to reset the cluster and hal after mocking the test
-        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+        tt::tt_metal::MetalContext::instance().reset();
     }
 };
 
@@ -139,14 +139,14 @@ protected:
               "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/t3k_cluster_desc.yaml",
               1);
         // Need to reinitialize to absorb the mock cluster descriptor path
-        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+        tt::tt_metal::MetalContext::instance().reset();
         ControlPlaneFixture::SetUp();
     }
     void TearDown() override {
         ControlPlaneFixture::TearDown();
         unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
         // Need to reinitialize to reset the cluster and hal after mocking the test
-        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+        tt::tt_metal::MetalContext::instance().reset();
     }
 };
 
@@ -263,14 +263,14 @@ protected:
               "tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/6u_cluster_desc.yaml",
               1);
         // Need to reinitialize to absorb the mock cluster descriptor path
-        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+        tt::tt_metal::MetalContext::instance().reset();
         ControlPlaneFixture::SetUp();
     }
     void TearDown() override {
         ControlPlaneFixture::TearDown();
         unsetenv("TT_METAL_MOCK_CLUSTER_DESC_PATH");
         // Need to reinitialize to reset the cluster and hal after mocking the test
-        tt::tt_metal::MetalContext::instance().reinitialize_cluster();
+        tt::tt_metal::MetalContext::instance().reset();
     }
 };
 
