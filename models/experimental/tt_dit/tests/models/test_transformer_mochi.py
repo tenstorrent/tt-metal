@@ -482,13 +482,6 @@ def test_mochi_transformer_model_caching(
         dtype="bf16",
     )
 
-    torch.manual_seed(0)
-    # Create input tensors
-    spatial_input = torch.randn((B, in_channels, T, H, W), dtype=torch_dtype)
-    prompt_input = torch.randn((B, prompt_seq, text_embed_dim), dtype=torch_dtype)
-    timestep_input = torch.randint(0, 1000, (B,), dtype=torch_dtype)
-    attention_mask = torch.ones((B, prompt_seq), dtype=torch_dtype)
-
     # Create TT model
     tt_model = MochiTransformer3DModel(
         patch_size=patch_size,
