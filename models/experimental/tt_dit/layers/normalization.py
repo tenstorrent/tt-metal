@@ -242,8 +242,8 @@ class GroupNorm:
             return_mask=True,
         )
 
-    def __call__(self, x, num_out_blocks=None):
-        self.num_out_blocks = num_out_blocks or self.get_num_out_blocks(tuple(x.shape))
+    def __call__(self, x, num_out_blocks=-1):
+        self.num_out_blocks = num_out_blocks
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
         x = ttnn.group_norm(

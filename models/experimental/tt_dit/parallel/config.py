@@ -32,6 +32,7 @@ class VAEParallelManager:
         device: ttnn.MeshDevice,
         gather_semaphores: list[ttnn._ttnn.global_semaphore.global_sempahore],
         num_links: int,
+        vae_shapes,
     ):
         self.device = device
         self.gather_semaphores = gather_semaphores
@@ -39,21 +40,6 @@ class VAEParallelManager:
         self.ping_pong_idx = 0
 
         self.buffer_count = 1  # Double buffer causing OOM
-        vae_shapes = [
-            # [1, 128, 128, 512],
-            # [1, 256, 256, 512],
-            # [1, 512, 512, 512],
-            # [1, 512, 512, 256],
-            # [1, 1024, 1024, 256],
-            # [1, 1024, 1024, 128],
-            # more optimal reahaped versions
-            [1, 1, 128 * 128, 512],
-            [1, 1, 256 * 256, 512],
-            [1, 1, 512 * 512, 512],
-            [1, 1, 512 * 512, 256],
-            [1, 1, 1024 * 1024, 256],
-            [1, 1, 1024 * 1024, 128],
-        ]
 
         # We only need to create buffers for what is used. Make this more creating and saving buffers as needed.
         self.vae_persistent_buffers = {}
@@ -65,7 +51,15 @@ class VAEParallelManager:
                 for _ in range(self.buffer_count)
             ]  # double buffer , depending on buffer_count
 
-    def vae_all_gather(self, x: ttnn.Tensor, cluster_axis: int = 1, dim: int = 3) -> ttnn.Tensor:
+    def vae_all_gather(
+        self,
+        x: ttnn.Tensor,
+        cluster_axis: int = 1,
+        dim: int = 3,
+        num_workers_per_link: int = 4,
+        chunks_per_sync: int = 80,
+        num_buffers_per_channel: int = 4,
+    ) -> ttnn.Tensor:
         semaphores = self.gather_semaphores[self.ping_pong_idx * 2 : (self.ping_pong_idx + 1) * 2]
 
         # reshape to b,1,h*w,c. This was tested to be faster. Need to verify overhead. TODO: Cleanup
@@ -89,9 +83,9 @@ class VAEParallelManager:
             topology=ttnn.Topology.Linear,
             cluster_axis=cluster_axis,
             num_links=self.num_links,
-            num_workers_per_link=4,
-            chunks_per_sync=80,
-            num_buffers_per_channel=4,
+            num_workers_per_link=num_workers_per_link,
+            chunks_per_sync=chunks_per_sync,
+            num_buffers_per_channel=num_buffers_per_channel,
         )
 
         # reshape back to original expected shape
@@ -105,6 +99,7 @@ class VAEParallelManager:
 def create_vae_parallel_manager(
     vae_device: ttnn.MeshDevice,
     ccl_manager: CCLManager,
+    vae_shapes,
 ) -> VAEParallelManager:
     return VAEParallelManager(
         device=vae_device,
@@ -112,6 +107,7 @@ def create_vae_parallel_manager(
             ttnn.create_global_semaphore(vae_device, ccl_manager.ccl_cores, 0) for _ in range(2 * 2)
         ],  # Ping pong
         num_links=ccl_manager.num_links,
+        vae_shapes=vae_shapes,
     )
 
 

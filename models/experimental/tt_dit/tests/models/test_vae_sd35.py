@@ -13,6 +13,22 @@ from ...parallel.config import create_vae_parallel_manager
 from time import time
 from loguru import logger
 
+vae_shapes = [
+    # [1, 128, 128, 512],
+    # [1, 256, 256, 512],
+    # [1, 512, 512, 512],
+    # [1, 512, 512, 256],
+    # [1, 1024, 1024, 256],
+    # [1, 1024, 1024, 128],
+    # more optimal reahaped versions
+    [1, 1, 128 * 128, 512],
+    [1, 1, 256 * 256, 512],
+    [1, 1, 512 * 512, 512],
+    [1, 1, 512 * 512, 256],
+    [1, 1, 1024 * 1024, 256],
+    [1, 1, 1024 * 1024, 128],
+]
+
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/autoencoders/vae.py
 class VaeDecoder(torch.nn.Module):
@@ -338,7 +354,7 @@ def test_sd35_vae_resnet_block(
 
     # breakpoint()  # Commented out for normal test execution
     vae_parallel_manager = create_vae_parallel_manager(
-        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+        mesh_device, CCLManager(mesh_device, topology=xttnn.Topology.Linear), vae_shapes=vae_shapes
     )
 
     tt_model = vae_sd35.ResnetBlock.from_torch(
@@ -396,7 +412,7 @@ def test_sd35_vae_up_decoder_block(
     torch_model.eval()
 
     vae_parallel_manager = create_vae_parallel_manager(
-        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear), vae_shapes=vae_shapes
     )
 
     tt_model = vae_sd35.UpDecoderBlock2D.from_torch(
@@ -449,7 +465,7 @@ def test_sd35_vae_attention(
     torch_model.eval()
 
     vae_parallel_manager = create_vae_parallel_manager(
-        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear), vae_shapes=vae_shapes
     )
 
     tt_model = vae_sd35.Attention.from_torch(
@@ -500,7 +516,7 @@ def test_sd35_vae_unet_mid_block2d(
     torch_model.eval()
 
     vae_parallel_manager = create_vae_parallel_manager(
-        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear), vae_shapes=vae_shapes
     )
 
     tt_model = vae_sd35.UnetMidBlock2D.from_torch(
@@ -566,7 +582,7 @@ def test_sd35_vae_vae_decoder(
     torch_model.eval()
 
     vae_parallel_manager = create_vae_parallel_manager(
-        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear), vae_shapes=vae_shapes
     )
 
     tt_model = vae_sd35.VAEDecoder.from_torch(
