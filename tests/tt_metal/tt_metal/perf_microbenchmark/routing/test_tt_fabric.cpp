@@ -131,7 +131,13 @@ int main(int argc, char** argv) {
 
         const auto& topology = test_config.fabric_setup.topology;
         const auto& routing_type = test_config.fabric_setup.routing_type.value();
-        log_info(tt::LogTest, "Opening devices with topology: {} and routing type: {}", topology, routing_type);
+        const auto& fabric_tensix_config = test_config.fabric_setup.fabric_tensix_config.value();
+        log_info(
+            tt::LogTest,
+            "Opening devices with topology: {}, routing type: {}, and fabric_tensix_config: {}",
+            topology,
+            routing_type,
+            fabric_tensix_config);
         test_context.open_devices(test_config.fabric_setup);
         device_opened = true;
 

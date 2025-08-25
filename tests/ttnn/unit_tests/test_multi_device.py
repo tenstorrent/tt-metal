@@ -381,6 +381,7 @@ def test_multi_device_as_tensor_api(mesh_device, layout, memory_config, dtype):
             device=mesh_device,
             memory_config=memory_config,
             cache_file_name=f"{temp_file.name}.weight",
+            enable_multihost_format=True,
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
@@ -391,6 +392,7 @@ def test_multi_device_as_tensor_api(mesh_device, layout, memory_config, dtype):
             device=mesh_device,
             memory_config=memory_config,
             cache_file_name=f"{temp_file.name}.weight",
+            enable_multihost_format=True,
             mesh_mapper=ReplicateTensorToMesh(mesh_device),
         )
 
@@ -425,6 +427,7 @@ def test_multi_device_as_tensor_api_sharded_tensor(mesh_device, layout, memory_c
             device=mesh_device,
             memory_config=memory_config,
             cache_file_name=f"{temp_file.name}.weight",
+            enable_multihost_format=True,
             mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
         )
         load_tensor = ttnn.as_tensor(
@@ -434,6 +437,7 @@ def test_multi_device_as_tensor_api_sharded_tensor(mesh_device, layout, memory_c
             device=mesh_device,
             memory_config=memory_config,
             cache_file_name=f"{temp_file.name}.weight",
+            enable_multihost_format=True,
             mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
         )
         torch_loaded_tensor = ttnn.to_torch(load_tensor, mesh_composer=ConcatMeshToTensor(mesh_device, dim=0))
@@ -644,6 +648,7 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         memory_config=memory_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         cache_file_name=tmp_path / "cache_file",
+        enable_multihost_format=True,
     )
     assert tensor.dtype == ttnn.float32
     assert tensor.layout == ttnn.TILE_LAYOUT
@@ -657,6 +662,7 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         memory_config=memory_config,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         cache_file_name=tmp_path / "cache_file",
+        enable_multihost_format=True,
     )
     assert tensor.dtype == ttnn.float32
     assert tensor.layout == ttnn.TILE_LAYOUT
