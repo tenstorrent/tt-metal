@@ -38,10 +38,10 @@ struct AccumulationProgramFactory {
         "ttnn/cpp/ttnn/operations/reduction/accumulation/device/kernels/dataflow/"
         "accumulation_writer.cpp"};
     struct shared_variables_t {
-        KernelHandle accumulation_reader_kernel_id;
-        KernelHandle accumulation_compute_kernel_id;
+        KernelHandle accumulation_reader_kernel_id{};
+        KernelHandle accumulation_compute_kernel_id{};
         std::optional<KernelHandle> accumulation_compute_kernel_id_2;
-        KernelHandle accumulation_writer_kernel_id;
+        KernelHandle accumulation_writer_kernel_id{};
         std::vector<CoreCoord> cores;
     };
 

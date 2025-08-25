@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import pytest
+import torch
 from loguru import logger
 from transformers import AutoConfig
 
@@ -92,3 +93,13 @@ def ccl(mesh_device):
     This is used to test distributed operations in DeepSeek modules.
     """
     return CCL1D(mesh_device)
+
+
+@pytest.fixture(scope="function")
+def set_deterministic_env():
+    """
+    Fixture to set seeds and enable deterministic algorithms for DeepSeek tests.
+    This ensures reproducible results across test runs.
+    """
+    torch.manual_seed(5)
+    torch.use_deterministic_algorithms(True)

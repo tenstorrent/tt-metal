@@ -1652,7 +1652,7 @@ public:
                 device_command_sequence.add_dispatch_wait(CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER, 0, 0, 0);
             }
         }
-        go_msg_t run_program_go_signal;
+        go_msg_t run_program_go_signal{};
         run_program_go_signal.signal = RUN_MSG_GO;
         // Dispatch X/Y resolved when the program is enqueued
         run_program_go_signal.master_x = 0;
@@ -1685,7 +1685,7 @@ void assemble_device_commands(
     IDevice* device,
     SubDeviceId sub_device_id,
     bool use_prefetcher_cache) {
-    CommandConstants constants;
+    CommandConstants constants{};
     auto dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
     constants.dispatch_core_type = dispatch_core_config.get_core_type();
     constants.noc_index = k_dispatch_downstream_noc;
@@ -2017,7 +2017,7 @@ void update_program_dispatch_commands(
         }
     }
     // Update go signal to reflect potentially modified dispatch core and new wait count
-    go_msg_t run_program_go_signal;
+    go_msg_t run_program_go_signal{};
     run_program_go_signal.signal = RUN_MSG_GO;
     run_program_go_signal.master_x = (uint8_t)dispatch_core.x;
     run_program_go_signal.master_y = (uint8_t)dispatch_core.y;
@@ -2195,7 +2195,7 @@ void update_traced_program_dispatch_commands(
         }
     }
     // Update go signal to reflect potentially modified dispatch core and new wait count
-    go_msg_t run_program_go_signal;
+    go_msg_t run_program_go_signal{};
     run_program_go_signal.signal = RUN_MSG_GO;
     run_program_go_signal.master_x = (uint8_t)dispatch_core.x;
     run_program_go_signal.master_y = (uint8_t)dispatch_core.y;
@@ -2443,7 +2443,7 @@ void reset_worker_dispatch_state_on_device(
             command_sequence.add_notify_dispatch_s_go_signal_cmd(false, index_bitmask);
             dispatcher_for_go_signal = DispatcherSelect::DISPATCH_SUBORDINATE;
         }
-        go_msg_t reset_launch_message_read_ptr_go_signal;
+        go_msg_t reset_launch_message_read_ptr_go_signal{};
         reset_launch_message_read_ptr_go_signal.signal = RUN_MSG_RESET_READ_PTR;
         reset_launch_message_read_ptr_go_signal.master_x = (uint8_t)dispatch_core.x;
         reset_launch_message_read_ptr_go_signal.master_y = (uint8_t)dispatch_core.y;

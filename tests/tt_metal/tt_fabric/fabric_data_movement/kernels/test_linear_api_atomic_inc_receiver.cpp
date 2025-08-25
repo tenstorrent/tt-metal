@@ -16,11 +16,12 @@ constexpr uint32_t notification_mailbox_address = get_compile_time_arg_val(2);
 uint32_t target_address = get_compile_time_arg_val(3);
 constexpr NocSendType noc_send_type = static_cast<NocSendType>(get_compile_time_arg_val(4));
 constexpr uint32_t num_send_dir = get_compile_time_arg_val(5);
-constexpr bool is_chip_multicast = get_compile_time_arg_val(6) == 1;
+constexpr bool with_state = get_compile_time_arg_val(6) == 1;
+constexpr bool is_chip_multicast = get_compile_time_arg_val(7) == 1;
 
 void kernel_main() {
     uint32_t rt_arg_idx = 0;
-    uint32_t packet_payload_size_bytes = get_arg_val<uint32_t>(rt_arg_idx++);
+    uint16_t packet_payload_size_bytes = static_cast<uint16_t>(get_arg_val<uint32_t>(rt_arg_idx++));
     uint32_t num_packets = get_arg_val<uint32_t>(rt_arg_idx++);
     uint32_t time_seed = get_arg_val<uint32_t>(rt_arg_idx++);
 

@@ -13,7 +13,7 @@ std::size_t SlidingWindowConfig::get_hash() const { return std::hash<std::string
 
 std::array<uint32_t, 4> get_pair_n4_padding(
     const std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>>& padding) {
-    std::array<uint32_t, 4> ret_padding;
+    std::array<uint32_t, 4> ret_padding{};
     std::visit(
         [&](auto&& value) {
             using T = std::decay_t<decltype(value)>;
@@ -398,7 +398,7 @@ struct GatherTransfer {
 };
 
 struct GatherRoute {
-    GatherHeader header;
+    GatherHeader header{};
     std::vector<GatherTransfer> transfers;
 };
 
@@ -502,7 +502,7 @@ static GatherConfig reduce_flattened_transfers(const std::vector<DestinationTran
             current_route.header.noc_y = t.noc_y;
         }
 
-        GatherTransfer transfer;
+        GatherTransfer transfer{};
         transfer.src_id = t.src_id;
         transfer.dst_id = t.dst_id;
         transfer.size = t.size;

@@ -18,6 +18,7 @@
 #include <optional>
 #include <set>
 #include <vector>
+#include <tt-metalium/kernel.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/xy_pair.h>
@@ -215,6 +216,91 @@ void append_fabric_connection_rt_args(
     }
 }
 
+// append runtime parameter for RoutingPlaneConnectionManager
+void append_routing_plane_connection_manager_rt_args(
+    const FabricNodeId& src_fabric_node_id,
+    const std::vector<FabricNodeId>& next_hop_nodes,
+    tt::tt_metal::Program& worker_program,
+    tt::tt_metal::KernelHandle& kernel_id,
+    const CoreCoord& worker_core,
+    std::vector<uint32_t>& worker_args,
+    CoreType core_type,
+    const std::vector<uint32_t>& connection_link_indices) {
+    // 1) append tag (like direction) and fabric connection info for each route
+    TT_FATAL(
+        connection_link_indices.empty() || connection_link_indices.size() == next_hop_nodes.size(),
+        "connection_link_indices must be empty or the same size as next_hop_nodes");
+
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
+
+    // TODO: Remove this restriction once multiple ethernet cores per direction are supported
+    // https://github.com/tenstorrent/tt-metal/issues/27221
+    // Check for duplicate directions in next_hop_nodes to prevent using multiple ethernet cores in same
+    // direction
+    std::unordered_set<eth_chan_directions> used_directions;
+    for (const auto& next_hop_node : next_hop_nodes) {
+        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, next_hop_node);
+        if (dir_opt.has_value()) {
+            TT_FATAL(
+                used_directions.find(dir_opt.value()) == used_directions.end(),
+                "Multiple ethernet cores in the same direction ({}) are not currently supported. "
+                "This restriction will be removed in a future update when proper multi-core routing is implemented.",
+                dir_opt.value());
+            used_directions.insert(dir_opt.value());
+        }
+    }
+
+    for (size_t i = 0; i < next_hop_nodes.size(); ++i) {
+        const auto& next_hop_node = next_hop_nodes[i];
+        auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, next_hop_node);
+        TT_FATAL(
+            dir_opt.has_value(),
+            "Could not determine forwarding direction from src {} to first hop {}",
+            src_fabric_node_id,
+            next_hop_node);
+        // Use direction as tag for ConnectionSlot
+        worker_args.push_back(static_cast<uint32_t>(dir_opt.value()));
+
+        uint32_t link_idx = 0;
+        if (!connection_link_indices.empty()) {
+            link_idx = connection_link_indices[i];
+        } else {
+            const auto links = get_forwarding_link_indices(src_fabric_node_id, next_hop_node);
+            TT_FATAL(
+                links.size() > 0, "No forwarding links available from {} to {}", src_fabric_node_id, next_hop_node);
+            link_idx = links[0];
+        }
+
+        append_fabric_connection_rt_args(
+            src_fabric_node_id, next_hop_node, link_idx, worker_program, worker_core, worker_args, core_type);
+    }
+
+    // 2) Append additional info for 2D Mesh
+    if (fabric_context.is_2D_routing_enabled()) {
+        auto kernel = tt::tt_metal::detail::GetKernel(worker_program, kernel_id);
+        kernel->add_defines({{"FABRIC_2D", "1"}});
+        if (fabric_context.is_dynamic_routing_enabled()) {
+            kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});
+        }
+
+        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
+        uint32_t ew_dim = mesh_shape[1];
+        uint32_t my_dev_id = src_fabric_node_id.chip_id;
+
+        worker_args.push_back(ew_dim);
+        worker_args.push_back(my_dev_id);
+
+        // For each target, append dst_dev_id and dst_mesh_id (per-header)
+        for (const auto& next_hop_node : next_hop_nodes) {
+            // dst_dev_id
+            worker_args.push_back(static_cast<uint16_t>(next_hop_node.chip_id));
+            // dst_mesh_id
+            worker_args.push_back(static_cast<uint16_t>(*next_hop_node.mesh_id));
+        }
+    }
+}
+
 std::vector<uint32_t> get_forwarding_link_indices(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -237,8 +323,12 @@ tt::tt_fabric::Topology get_fabric_topology() {
 FabricConfig GetFabricConfig() { return tt::tt_metal::MetalContext::instance().get_fabric_config(); }
 
 void SetFabricConfig(
-    FabricConfig fabric_config, FabricReliabilityMode reliability_mode, std::optional<uint8_t> num_routing_planes) {
-    tt::tt_metal::MetalContext::instance().set_fabric_config(fabric_config, reliability_mode, num_routing_planes);
+    FabricConfig fabric_config,
+    FabricReliabilityMode reliability_mode,
+    std::optional<uint8_t> num_routing_planes,
+    FabricTensixConfig fabric_tensix_config) {
+    tt::tt_metal::MetalContext::instance().set_fabric_config(
+        fabric_config, reliability_mode, num_routing_planes, fabric_tensix_config);
 }
 
 std::optional<eth_chan_directions> get_eth_forwarding_direction(

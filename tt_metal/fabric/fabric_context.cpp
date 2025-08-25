@@ -13,6 +13,7 @@
 #include <enchantum/enchantum.hpp>
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "impl/context/metal_context.hpp"
 
 namespace tt::tt_fabric {
@@ -154,13 +155,8 @@ FabricContext::FabricContext(tt::tt_fabric::FabricConfig fabric_config) {
         tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDevice,
         tt::tt_fabric::FabricEriscDatamoverAxis::Long);
 
-    // dateline upstream adjacent upstream edm router
-    this->dateline_upstream_adjcent_upstream_router_config_[short_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Short);
-    this->dateline_upstream_adjcent_upstream_router_config_[long_axis] = get_edm_config_options(
-        tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream,
-        tt::tt_fabric::FabricEriscDatamoverAxis::Long);
+    // Tensix config will be initialized later after routing tables are configured
+    tensix_config_ = nullptr;
 
     this->num_devices = tt::tt_metal::GetNumAvailableDevices();
     auto num_pcie_devices = tt::tt_metal::GetNumPCIeDevices();
@@ -242,12 +238,6 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
                 "Error, fabric dateline upstream adjacent device router config is uninitialized");
             return *this->dateline_upstream_adjcent_router_config_[axis_index].get();
             break;
-        case tt::tt_fabric::FabricEriscDatamoverType::DatelineUpstreamAdjacentDeviceUpstream:
-            TT_FATAL(
-                this->dateline_upstream_adjcent_upstream_router_config_[axis_index] != nullptr,
-                "Error, fabric dateline upstream adjacent device upstream router config is uninitialized");
-            return *this->dateline_upstream_adjcent_upstream_router_config_[axis_index].get();
-            break;
         default: TT_FATAL(false, "Error, invalid fabric edm type");
     }
 };
@@ -304,6 +294,22 @@ std::optional<std::pair<uint32_t, tt::tt_fabric::EDMStatus>> FabricContext::get_
 std::pair<uint32_t, uint32_t> FabricContext::get_fabric_router_termination_address_and_signal() const {
     return std::make_pair(
         this->router_config_->termination_signal_address, tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+}
+
+tt::tt_fabric::FabricTensixDatamoverConfig& FabricContext::get_tensix_config() const {
+    TT_FATAL(tensix_config_ != nullptr, "Error, fabric tensix config is uninitialized");
+    return *tensix_config_.get();
+}
+
+void FabricContext::initialize_tensix_config() {
+    TT_FATAL(tensix_config_ == nullptr, "Trying to re-initialize fabric tensix config");
+
+    auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+    if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        // Now it's safe to call get_active_fabric_eth_channels() because
+        // configure_routing_tables_for_fabric_ethernet_channels() has already run
+        tensix_config_ = std::make_unique<tt::tt_fabric::FabricTensixDatamoverConfig>();
+    }
 }
 
 }  // namespace tt::tt_fabric

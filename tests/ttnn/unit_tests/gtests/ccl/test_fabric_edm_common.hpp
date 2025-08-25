@@ -73,8 +73,8 @@ using tt::tt_metal::distributed::SystemMesh;
 
 class BaseFabricFixture {
 protected:
-    tt::ARCH arch_;
-    std::size_t num_devices_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
+    std::size_t num_devices_{};
     bool device_open = false;
 
     // Common constants for both fixtures
@@ -181,8 +181,8 @@ public:
 
 class Fabric1DDeviceInitFixture {
 public:
-    tt::ARCH arch_;
-    std::size_t num_devices_;
+    tt::ARCH arch_{tt::ARCH::Invalid};
+    std::size_t num_devices_{};
     bool device_open = false;
 
     // Common constants for both fixtures
@@ -345,7 +345,6 @@ Correctness run_output_check(CONTAINER_T const& inputs, CONTAINER_T output_buffe
     return pass ? Correctness::Correct : Correctness::Incorrect;
 };
 
-
 static SubdeviceInfo create_worker_subdevices(const std::vector<IDevice*>& devices) {
     SubdeviceInfo subdevice_info;
     std::unordered_map<chip_id_t, SubDeviceManagerId> sub_device_manager_ids;
@@ -466,8 +465,6 @@ struct mcast_send {
 };
 
 using mode_variant_t = std::variant<mcast_send, unicast_send>;
-
-
 
 void generate_multi_input_test_worker_reader_kernel(
     Program& program,
@@ -826,7 +823,6 @@ bool RunLocalTestWithMultiInputReaders(
     return pass;
 }
 
-
 inline bool TestMultiInputReaderKernel(
     size_t fabric_num_devices,
     Tensor& input_tensor0,
@@ -964,7 +960,8 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
     const MemoryConfig& out0_memory_config,
     const MemoryConfig& out1_memory_config,
     TwoInputReaderKernelWriteMode test_writeback_mode) {
-    TT_FATAL(test_writeback_mode == TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK, "Only LOCAL_WRITEBACK is supported");
+    TT_FATAL(
+        test_writeback_mode == TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK, "Only LOCAL_WRITEBACK is supported");
     auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor0 =
         ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to_layout(layout);
@@ -1120,7 +1117,8 @@ bool RunPipelinedWorkersTest(
     auto full_mesh_device = test_fixture.mesh_device_;
 
     IDevice* device = full_mesh_device->get_device(MeshCoordinate(0, 0));
-    std::shared_ptr<distributed::MeshDevice> mesh_device = full_mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    std::shared_ptr<distributed::MeshDevice> mesh_device =
+        full_mesh_device->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
 
     // General setup is as follows:
     // Worker 1 reads input tensor as a sequence of slices - it forwards to an output tensor and after each slice, it

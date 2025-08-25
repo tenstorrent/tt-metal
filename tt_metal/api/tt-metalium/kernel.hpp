@@ -82,6 +82,10 @@ public:
 
     const CoreRangeSet &core_range_set() const { return core_range_set_; }
 
+    const std::set<CoreCoord>& cores_with_runtime_args() const { return core_with_runtime_args_; }
+
+    const std::map<std::string, std::string>& defines() const { return defines_; }
+
     const std::set<CoreCoord> &logical_cores() const;
 
     std::vector<CoreRange> logical_coreranges() const;
@@ -89,8 +93,6 @@ public:
     bool is_on_logical_core(const CoreCoord &logical_core) const;
 
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
-
-    const std::set<CoreCoord> &cores_with_runtime_args() const { return core_with_runtime_args_; }
 
     std::vector<uint32_t> & runtime_args(const CoreCoord &logical_core);
     RuntimeArgsData & runtime_args_data(const CoreCoord &logical_core);
@@ -101,10 +103,6 @@ public:
     RuntimeArgsData & common_runtime_args_data();
     void set_common_runtime_args_count(uint32_t count);
     uint32_t get_common_runtime_args_count() const { return this->common_runtime_args_count_; }
-
-    const std::map<std::string, std::string>& defines() const { return defines_; }
-
-    virtual RISCV processor() const = 0;
     uint32_t dispatch_class() { return this->dispatch_class_; }
 
     virtual bool configure(IDevice* device, const CoreCoord &logical_core, uint32_t base_address, const uint32_t offsets[]) const = 0;
@@ -140,17 +138,17 @@ protected:
     HalProgrammableCoreType programmable_core_type_;
     HalProcessorClassType processor_class_;
 
-    int watcher_kernel_id_;
+    int watcher_kernel_id_{};
     KernelSource kernel_src_;
     std::string kernel_full_name_;  // Name + hash
     CoreRangeSet core_range_set_;
-    uint8_t dispatch_class_;
+    uint8_t dispatch_class_{};
     std::vector<uint32_t> compile_time_args_;
     std::vector< std::vector< std::vector<uint32_t>> > core_to_runtime_args_;
     std::vector< std::vector< RuntimeArgsData> > core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_;
     std::vector<uint32_t> common_runtime_args_;
-    RuntimeArgsData common_runtime_args_data_;
+    RuntimeArgsData common_runtime_args_data_{};
     std::set<CoreCoord> core_with_runtime_args_;
     std::size_t max_runtime_args_per_core_;             // For validation
     CoreCoord core_with_max_runtime_args_;              // For validation

@@ -14,6 +14,10 @@
 #define SFPU_INIT_KERNEL_CALL(OP, INIT_CB, APPROXIMATE) \
     llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>)
 
+// For ops that need a custom init callback with fast_approx template parameter
+#define SFPU_INIT_KERNEL_CALL_FAST_APPROX(OP, INIT_CB, APPROXIMATE, FAST_APPROX) \
+    llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE, FAST_APPROX>)
+
 // For ops that need a custom init callback but takes one extra init-parameter
 #define SFPU_ONE_PARAM_KERNEL_INIT(OP, INIT_CB, APPROXIMATE, PARAM0) \
     llk_math_eltwise_unary_sfpu_init<SfpuType::OP, APPROXIMATE>(INIT_CB<APPROXIMATE>, PARAM0);

@@ -11,9 +11,9 @@
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 struct IndexInfo {
-    bool is_defined;
-    uint32_t address;
-    uint32_t unit_size;
+    bool is_defined{};
+    uint32_t address{};
+    uint32_t unit_size{};
     tt::tt_metal::TensorAccessorArgs args;
 };
 }  // namespace CMAKE_UNIQUE_NAMESPACE
