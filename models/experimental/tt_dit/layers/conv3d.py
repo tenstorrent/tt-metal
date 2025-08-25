@@ -280,13 +280,16 @@ class ContextParallelConv3d:
             ]
             for i in range(len(intermediates_halos_reshape_back)):
                 ttnn.deallocate(intermediates_halos_reshape_back[i])
-            num_concats = halos_chunks // 32
+            CHUNK_SIZE = 16
+            num_concats = halos_chunks // CHUNK_SIZE
             for i in range(num_concats):
                 if i == 0:
-                    halos_reshape_back = ttnn.concat(split_tiles[32 * i : 32 * (i + 1)], 1)
+                    halos_reshape_back = ttnn.concat(split_tiles[CHUNK_SIZE * i : CHUNK_SIZE * (i + 1)], 1)
                 else:
-                    halos_reshape_back = ttnn.concat([halos_reshape_back] + split_tiles[32 * i : 32 * (i + 1)], 1)
-                for i in range(32 * i, 32 * (i + 1)):
+                    halos_reshape_back = ttnn.concat(
+                        [halos_reshape_back] + split_tiles[CHUNK_SIZE * i : CHUNK_SIZE * (i + 1)], 1
+                    )
+                for i in range(CHUNK_SIZE * i, CHUNK_SIZE * (i + 1)):
                     ttnn.deallocate(split_tiles[i])
             halos_reshape_back = ttnn.matmul(self.proj, halos_reshape_back)
             halos_reshape_back = ttnn.reshape(halos_reshape_back, device_tensors_front_pad.shape)
