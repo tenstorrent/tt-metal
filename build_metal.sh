@@ -275,11 +275,26 @@ echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 
+# Runtime paths
+BUILD_PATH="$(pwd)/$build_dir"
+export LD_LIBRARY_PATH="$LD_LIBRARY_PATH:$BUILD_PATH/tt_metal:$BUILD_PATH/ttnn:$BUILD_PATH/lib:$BUILD_PATH/tt_metal/third_party/umd/device:$BUILD_PATH/tt-train/3rd_party/wandb-cpp"
+
+# RPATH flags
+cmake_args+=("-DCMAKE_INSTALL_RPATH=$BUILD_PATH/tt-train/3rd_party/wandb-cpp")
+cmake_args+=("-DCMAKE_BUILD_RPATH=$BUILD_PATH/tt-train/3rd_party/wandb-cpp")
+cmake_args+=("-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON")
+cmake_args+=("-DCMAKE_INSTALL_RPATH_USE_LINK_PATH=ON")
+
+echo "INFO: LD_LIBRARY_PATH set to:"
+echo "$LD_LIBRARY_PATH"
+
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
 cmake_args+=("-G" "Ninja")
 cmake_args+=("-DCMAKE_BUILD_TYPE=$build_type")
 cmake_args+=("-DCMAKE_INSTALL_PREFIX=$cmake_install_prefix")
+# Workaround for Ninja RPATH install errors on Debian
+cmake_args+=("-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON")
 
 if [ "$cxx_compiler_path" != "" ]; then
     echo "INFO: C++ compiler: $cxx_compiler_path"
