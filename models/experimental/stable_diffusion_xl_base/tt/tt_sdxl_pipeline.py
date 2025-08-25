@@ -29,11 +29,11 @@ from models.utility_functions import profiler
 
 @dataclass
 class TtSDXLPipelineConfig:
-    capture_trace: bool
-    vae_on_device: bool
-    encoders_on_device: bool
     num_inference_steps: int
     guidance_scale: float
+    capture_trace: bool = True
+    vae_on_device: bool = True
+    encoders_on_device: bool = True
 
 
 class TtSDXLPipeline(nn.Module):
@@ -613,11 +613,11 @@ class TtSDXLPipeline(nn.Module):
 
     def __release_trace(self):
         # Helper method for trace release.
-        if self.pipeline_config.capture_trace and hasattr(self, "tid"):
+        if self.pipeline_config.capture_trace and hasattr(self, "tid") and self.tid is not None:
             ttnn.release_trace(self.ttnn_device, self.tid)
             delattr(self, "tid")
 
-        if self.pipeline_config.vae_on_device and hasattr(self, "tid_vae"):
+        if self.pipeline_config.vae_on_device and hasattr(self, "tid_vae") and self.tid_vae is not None:
             ttnn.release_trace(self.ttnn_device, self.tid_vae)
             delattr(self, "tid_vae")
 

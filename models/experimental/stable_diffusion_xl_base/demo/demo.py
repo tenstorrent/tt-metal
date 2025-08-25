@@ -41,10 +41,6 @@ def run_demo_inference(
     needed_padding = (batch_size - len(prompts) % batch_size) % batch_size
     prompts = prompts + [""] * needed_padding
 
-    # 0. Set up default height and width for unet
-    height = 1024
-    width = 1024
-
     # 1. Load components
     profiler.start("diffusion_pipeline_from_pretrained")
     pipeline = DiffusionPipeline.from_pretrained(
@@ -71,14 +67,8 @@ def run_demo_inference(
         ),
     )
 
-    cpu_device = "cpu"
-
     if encoders_on_device:
-        tt_sdxl.compile_text_encoding(
-            prompts,
-            batch_size,
-            cpu_device,
-        )
+        tt_sdxl.compile_text_encoding()
     (
         prompt_embeds_torch,
         negative_prompt_embeds_torch,
