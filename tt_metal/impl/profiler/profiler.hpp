@@ -24,8 +24,12 @@
 #include "hostdevcommon/profiler_common.h"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_types.hpp"
+#include "profiler_paths.hpp"
 #include "tt-metalium/program.hpp"
 #include "tracy/TracyTTDevice.hpp"
+
+#define HOST_SIDE_LOG "profile_log_host.csv"
+#define DEVICE_SIDE_LOG "profile_log_device.csv"
 
 namespace tt {
 enum class ARCH;

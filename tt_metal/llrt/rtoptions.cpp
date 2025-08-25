@@ -249,6 +249,15 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
         this->log_kernels_compilation_commands = true;
     }
+
+    {
+        auto* env = std::getenv("TT_METAL_PROFILER_DIR");
+        if (env) {
+            profiler_logs_dir_ = std::string(env) + "/";
+        } else {
+            profiler_logs_dir_ = get_root_dir() + "/generated/profiler/.logs/";
+        }
+    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {
