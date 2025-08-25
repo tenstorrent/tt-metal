@@ -7,6 +7,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/untilize.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 using std::uint32_t;
 
@@ -31,7 +32,11 @@ void MAIN {
 
     constexpr uint32_t num_rows_in_one_tile = 32;
 
-    mm_init(cb_in0, cb_in1, cb_intermed0, transpose_hw);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(cb_in0, cb_in1, cb_intermed0);
+
+    // Initialize matmul operation (matmul-specific configurations only)
+    matmul_init(cb_in0, cb_in1, transpose_hw);
 
     for (uint32_t nb = 0; nb < batch; ++nb) {
         for (uint32_t mt_C = 0; mt_C < Mt; ++mt_C) {    // output tile of C
@@ -45,7 +50,7 @@ void MAIN {
                         }
                         cb_wait_front(cb_in1, onetile);
 
-                        matmul_tiles(cb_in0, cb_in1, kt, 0, 0, transpose_hw);
+                        matmul_tile(cb_in0, cb_in1, kt, 0, 0, transpose_hw);
 
                         cb_pop_front(cb_in1, onetile);
                     }
@@ -69,7 +74,7 @@ void MAIN {
                     untilize_uninit(cb_intermed0);
 
                     reconfig_data_format_srca(cb_intermed0, cb_in1);
-                    mm_init_short(cb_in0, cb_in1, transpose_hw);
+                    matmul_init(cb_in0, cb_in1, transpose_hw);
                 }
                 cb_pop_front(cb_in0, Kt);
 
@@ -87,7 +92,7 @@ void MAIN {
                 tilize_uninit_with_dt(cb_intermed2, cb_in1, out_cb_id);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
-                mm_init_short_with_dt(cb_in0, cb_in1, cb_intermed2, transpose_hw);
+                matmul_init_reconfig_data_format_srca(cb_in0, cb_in1, cb_intermed2, transpose_hw);
             }
         }
     }

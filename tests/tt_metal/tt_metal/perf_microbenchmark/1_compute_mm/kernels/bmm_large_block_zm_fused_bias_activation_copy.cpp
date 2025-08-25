@@ -14,6 +14,7 @@
 #endif
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 namespace NAMESPACE {
 
@@ -35,7 +36,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
     // Reconfigure srcA back
-    mm_block_init_short_with_dt(
+    matmul_block_init_reconfig_data_format_srca(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
@@ -123,7 +124,11 @@ void MAIN {
 
     constexpr bool spill = num_blocks > 1;
 
-    mm_block_init(in0_cb_id, in1_cb_id, mm_partials_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(in0_cb_id, in1_cb_id, mm_partials_cb_id);
+
+    // Initialize matmul block operation
+    matmul_block_init(in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
     for (uint32_t b = 0; b < batch; b++) {
         bool enable_reload = false;
         uint32_t out_num_tiles_to_wait = out_subblock_num_tiles;
@@ -369,7 +374,9 @@ void MAIN {
         }
         if constexpr (batch > 1) {
             // reconfigure init for matmul
-            mm_block_init_short(in0_cb_id, in1_cb_id, 0, out_subblock_w, out_subblock_h, in0_block_w);
+
+            // Initialize matmul block operation
+            matmul_block_init(in0_cb_id, in1_cb_id, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef FUSE_BIAS
             // reconfigure unpacker df for src A and src B
             reconfig_data_format(mm_partials_cb_id, in1_cb_id, bias_cb_id, in0_cb_id);

@@ -7,6 +7,7 @@
 #include "compute_kernel_api/tilize_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 inline void tilize_activation(
     uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks, uint32_t out_cb) {
@@ -132,7 +133,11 @@ void MAIN {
     uint32_t untilize_mode_final_matmul_partials_cb = tt::CBIndex::c_26;
     uint32_t untilize_mode_reblock_cb = tt::CBIndex::c_27;
     uint32_t out0_cb = tt::CBIndex::c_16;
-    mm_init(in0_cb, tt::CBIndex::c_1, out0_cb);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(in0_cb, tt::CBIndex::c_1, out0_cb);
+
+    // Initialize matmul operation
+    matmul_init(in0_cb, tt::CBIndex::c_1);
     for (uint32_t block_in0_h = 0; block_in0_h < num_blocks_in0_h; block_in0_h++) {
         for (uint32_t block_in1_w = 0; block_in1_w < num_blocks_in1_w; block_in1_w++) {
             enable_reload = false;
@@ -142,7 +147,8 @@ void MAIN {
                 if (tilize_in) {
                     tilize_activation(
                         in0_cb, in0_subblock_h, in0_block_w, in0_num_subblocks, tilize_mode_tilized_in0_cb);
-                    mm_init_short(tilize_mode_tilized_in0_cb, tt::CBIndex::c_1);
+                    // Initialize matmul operation
+                    matmul_init(tilize_mode_tilized_in0_cb, tt::CBIndex::c_1);
                     cb_wait_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
 
                 } else {
@@ -164,7 +170,7 @@ void MAIN {
                                 copy_tile(matmul_partials_cb, i, i);
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
-                            mm_init_short(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
+                            matmul_init(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
                         }
 
                         // Compute output sub-block from in0_subblock x in1_subblock
@@ -177,7 +183,7 @@ void MAIN {
                                     int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                     int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
                                     if (tilize_in) {
-                                        matmul_tiles(
+                                        matmul_tile(
                                             tilize_mode_tilized_in0_cb,
                                             tt::CBIndex::c_1,
                                             in0_index,
@@ -185,7 +191,7 @@ void MAIN {
                                             dst_index,
                                             false /* transpose */);
                                     } else {
-                                        matmul_tiles(
+                                        matmul_tile(
                                             in0_cb,
                                             tt::CBIndex::c_1,
                                             in0_index,
@@ -224,7 +230,8 @@ void MAIN {
                                 untilize_mode_final_matmul_partials_cb,
                                 untilize_mode_reblock_cb,
                                 out0_cb);
-                            mm_init_short(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
+                            // Initialize matmul operation
+                            matmul_init(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
                         }
                     }
 
@@ -237,6 +244,7 @@ void MAIN {
 
                 if (tilize_in) {
                     cb_pop_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
+
                 } else {
                     cb_pop_front(in0_cb, in0_block_num_tiles);
                 }

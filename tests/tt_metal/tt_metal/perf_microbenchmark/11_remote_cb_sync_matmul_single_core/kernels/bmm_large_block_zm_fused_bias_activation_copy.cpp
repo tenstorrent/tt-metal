@@ -5,6 +5,7 @@
 #include <cstdint>
 
 #include "compute_kernel_api/matmul.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 namespace NAMESPACE {
 
@@ -27,7 +28,11 @@ void MAIN {
     constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
 
     for (uint32_t l = 0; l < num_layers; ++l) {
-        mm_block_init(in0_cb_id, in1_cb_id, out_cb_id, false, out_block_w, out_block_h, in0_block_w);
+        // Hardware startup - common MMIO configurations
+        compute_kernel_hw_startup(in0_cb_id, in1_cb_id, out_cb_id);
+
+        // Initialize matmul block operation
+        matmul_block_init(in0_cb_id, in1_cb_id, false, out_block_w, out_block_h, in0_block_w);
 
         tile_regs_acquire();
 

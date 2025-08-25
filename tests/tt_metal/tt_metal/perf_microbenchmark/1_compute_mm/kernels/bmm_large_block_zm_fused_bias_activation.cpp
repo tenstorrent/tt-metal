@@ -12,6 +12,7 @@
 #endif
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
+#include "compute_kernel_api/compute_kernel_hw_startup.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -39,7 +40,11 @@ void MAIN {
     init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(mm_bias_intermediate_cb_id, bias_cb_id, out_cb_id);
 #endif
 
-    mm_init(in0_cb_id, in1_cb_id, out_cb_id);
+    // Hardware startup - common MMIO configurations
+    compute_kernel_hw_startup(in0_cb_id, in1_cb_id, out_cb_id);
+
+    // Initialize matmul operation
+    matmul_init(in0_cb_id, in1_cb_id);
 
     for (uint32_t b = 0; b < batch; b++) {
         bool spill = num_blocks > 1;
@@ -66,7 +71,7 @@ void MAIN {
                         }
                         cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
                         // Reconfigure srcA back
-                        mm_init_short_with_dt(in0_cb_id, in1_cb_id, mm_partials_cb_id);
+                        matmul_init_reconfig_data_format_srca(in0_cb_id, in1_cb_id, mm_partials_cb_id);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock
@@ -78,7 +83,7 @@ void MAIN {
                             for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                 int in0_index = in0_index_subblock_offset + in0_index_h_offset + inner_dim;
                                 int in1_index = in1_index_subblock_offset + in1_index_inner_dim_offset + w;
-                                matmul_tiles(
+                                matmul_tile(
                                     in0_cb_id, in1_cb_id, in0_index, in1_index, dst_index, false /* transpose */);
                                 in1_index_inner_dim_offset += in1_per_core_w;
                             }
@@ -114,9 +119,8 @@ void MAIN {
                             }
                         }
                         cb_pop_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
-                        // reconfigure init for matmul
-                        mm_init_short(in0_cb_id, in1_cb_id);
-                        // reconfigure unpacker df for src B
+
+                        matmul_init(in0_cb_id, in1_cb_id);
                         reconfig_data_format(in1_cb_id, in0_cb_id);
 #endif
 
