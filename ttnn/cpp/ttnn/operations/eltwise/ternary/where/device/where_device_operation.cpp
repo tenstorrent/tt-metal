@@ -314,7 +314,7 @@ WhereDeviceOperation::invoke(
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTT,
         .broadcast_type = broadcast_type,
-        .memory_config = memory_config.value_or(predicate.memory_config()),
+        .memory_config = memory_config.value_or(value_true.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_true.dtype()),
         .compute_kernel_config = std::nullopt,
@@ -340,7 +340,7 @@ WhereDeviceOperation::invoke(
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TTS,
         .broadcast_type = WhereBroadcastType::NONE,  // should use get_broadcast_type when support is added
-        .memory_config = memory_config.value_or(predicate.memory_config()),
+        .memory_config = memory_config.value_or(value_true.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_true.dtype()),
         .compute_kernel_config = std::nullopt,
@@ -367,7 +367,7 @@ WhereDeviceOperation::invoke(
     operation_attributes_t attributes{
         .where_variant = WhereVariant::TST,
         .broadcast_type = WhereBroadcastType::NONE,  // should use get_broadcast_type when support is added
-        .memory_config = memory_config.value_or(predicate.memory_config()),
+        .memory_config = memory_config.value_or(value_false.memory_config()),
         .input_dtype = predicate.dtype(),
         .dtype = output_dtype.value_or(value_false.dtype()),
         .compute_kernel_config = std::nullopt,
