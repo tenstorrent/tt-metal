@@ -73,6 +73,8 @@ jobs:
         TT_METAL_HOME: /work
         TRACY_NO_INVARIANT_CHECK: 1
         TRACY_NO_ISA_EXTENSIONS: 1
+        PYTHONFAULTHANDLER: 1       # prints Python stack trace on segfault
+        PYTHONMALLOC: debug         # adds checks, helps catch memory issues
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
