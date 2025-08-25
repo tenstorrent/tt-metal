@@ -216,7 +216,7 @@ Result conv2d_DRAM(
     // If num_slices is not set, automatically determine a value for num_slices that would be functional.
     if (dram_slice_config.num_slices == 0) {
         auto L1_stats = device->allocator()->get_statistics(tt::tt_metal::BufferType::L1);
-        uint32_t current_num_slices = 2;
+        uint32_t current_num_slices = 1;
         log_debug(tt::LogOp, "Conv2D DRAM Auto slice with {} free memory", L1_stats.total_free_bytes);
         while (current_num_slices < output_sliced_dim) {
             dram_slice_config.num_slices = current_num_slices;
@@ -257,7 +257,8 @@ Result conv2d_DRAM(
             "Either increase the number of slices or reduce the output dimension being sliced.");
         log_debug(tt::LogOp, "Conv2D DRAM Slicing: Automatically determined number of slices: {}", current_num_slices);
     }
-    TT_FATAL(dram_slice_config.num_slices > 1, " Number of slices should be greater than 1 for Conv2D DRAM Slicing");
+    TT_FATAL(dram_slice_config.num_slices > 0, " Number of slices should be greater than 0 for Conv2D DRAM Slicing");
+
     TT_FATAL(
         dram_slice_config.num_slices < output_sliced_dim,
         " Number of slices {} should be less than the dimension {} being sliced in Conv2D DRAM Slicing",
@@ -471,6 +472,12 @@ Result conv2d_DRAM(
                 sliced_input_tensor_memory_config);
         }
         auto conv_config_l1 = conv_config;
+
+        // Setting both to true causes an error in pytest
+        // "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features[output_layout=Layout.TILE-math_fidelity=MathFidelity.HiFi4-filter=3-padding=(1,
+        // 2, 2,
+        // 3)-packer_l1_acc=True-fp32_accum=True-input_dtype=DataType.BFLOAT16-output_dtype=DataType.BFLOAT8_B-weights_dtype=DataType.BFLOAT16-output_channels=353-input_channels=384-input_height=8-input_width=8-shard_layout=TensorMemoryLayout.WIDTH_SHARDED-config=None-batch_size=2-stride=2-device_params={'l1_small_size':
+        // 16384}]"
         conv_config_l1.deallocate_activation = true;
         conv_config_l1.reallocate_halo_output = true;
 

@@ -929,7 +929,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             padding);
 
         l1_usage.tensor_allocation_size += approx_input_size_per_core * input_datum_size;
-        log_debug(
+        log_trace(
             tt::LogOp,
             "L1 usage for {}: {}, {}, Halo Output : {}",
             conv_config.shard_layout,
@@ -962,8 +962,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         winning_config = width;
     }
 
-    log_debug(LogOp, "Core counts H: {} B: {}, W: {}", height.core_count, block.core_count, width.core_count);
-    log_debug(
+    log_trace(
         LogOp, "Selected shard layout: {}, size: {}", winning_config.conv_config.shard_layout, winning_config.size);
 
     return winning_config.conv_config;
@@ -1086,7 +1085,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                                           uint32_t input_slice_width,
                                           uint32_t output_slice_height,
                                           uint32_t output_slice_width) {
-        log_debug(
+        log_trace(
             LogOp,
             "Conv2D DRAM Auto Slice Max Input Size : {}x{}, Max Output Size : {}x{}",
             input_slice_height,
@@ -1179,7 +1178,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                                              params.dilation,
                                              params.padding_n4) *
                                          input_datum_size;
-        log_debug(
+        log_trace(
             tt::LogOp,
             "Conv DRAM Auto slicing: num_slices = {}, input_size = {}, approx_max_halo_bytes = {}, conv size = {}",
             dram_slice_config.num_slices,
@@ -1350,7 +1349,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             output_size = cb.cb_size_per_core();
         }
     }
-    log_debug(tt::LogOp, "Conv L1 Size Estimation, Total CB size: {}, Output Size: {}", total_CB_size, output_size);
+    log_trace(tt::LogOp, "Conv L1 Size Estimation, Total CB size: {}, Output Size: {}", total_CB_size, output_size);
 
     return conv2d::conv_op_l1_usage{.tensor_allocation_size = output_size, .CB_allocation_size = total_CB_size};
 }
