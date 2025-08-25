@@ -1112,6 +1112,21 @@ KernelHandle CreateKernel(
     const std::string& file_name,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const std::variant<DataMovementConfig, ComputeConfig, EthernetConfig>& config) {
+
+    // Validate the defines in the config
+    std::visit(
+        [](const auto& cfg) {
+            for (const auto& [key, value] : cfg.defines) {
+                // Ensure the value is of type std::string
+                if (value.empty() || value.find('\0') != std::string::npos) {
+                    throw std::invalid_argument(
+                        "Invalid define value for key '" + key +
+                        "'. Values must be non-empty strings without null characters.");
+                }
+            }
+        },
+        config);
+    
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
     KernelSource kernel_src(file_name, KernelSource::FILE_PATH);
