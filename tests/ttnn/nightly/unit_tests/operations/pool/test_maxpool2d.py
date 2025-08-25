@@ -120,14 +120,14 @@ def run_max_pool(
 
     torch.manual_seed(0)
     torch_input = randomize_torch_tensor(tensor_map, input_shape)
-    torch_input = torch.zeros(input_shape, dtype=torch.bfloat16)
-    count = 0
-    for n in range(input_shape[0]):
-        for c in range(input_shape[1]):
-            for h in range(input_shape[2]):
-                for w in range(input_shape[3]):
-                    torch_input[n, c, h, w] = h * in_w + w
-                    count += 1
+    # torch_input = torch.zeros(input_shape, dtype=torch.bfloat16)
+    # count = 0
+    # for n in range(input_shape[0]):
+    #     for c in range(input_shape[1]):
+    #         for h in range(input_shape[2]):
+    #             for w in range(input_shape[3]):
+    #                 torch_input[n, c, h, w] = h * in_w + w
+    #                 count += 1
 
     # print(torch_input)
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
@@ -222,9 +222,7 @@ def run_max_pool(
     # test for equivalance
     pcc_thresh = 1.0
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-    # Use output data format for tolerance determination
-    test_dtype = output_data_format if output_data_format is not None else dtype
-    if test_dtype == ttnn.bfloat8_b:
+    if dtype == ttnn.bfloat8_b:
         pcc_thresh = 0.997
         atol = 0.35
     assert_with_pcc(ttnn_output, torch_output, pcc_thresh)
@@ -665,8 +663,8 @@ def test_run_max_pool_squeeze_net_model(
 
 # Simplified test for new API parameters: output_data_format and output_layout
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("output_data_format", [ttnn.bfloat8_b])
-@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("output_data_format", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_max_pool2d_output_formats_and_layouts(device, tensor_map, output_data_format, output_layout):
     """
     Simplified test that iterates through different output_data_format and output_layout combinations.
@@ -676,10 +674,10 @@ def test_max_pool2d_output_formats_and_layouts(device, tensor_map, output_data_f
     # if output_data_format == ttnn.bfloat8_b and output_layout == ttnn.ROW_MAJOR_LAYOUT:
     #     pytest.skip("BFLOAT8_B output data format is not supported with ROW_MAJOR layout")
 
-    input_shape = [1, 32, 16, 16]
-    kernel_size = (3, 3)
-    padding = (1, 1)
-    stride = (1, 1)
+    input_shape = [1, 64, 64, 64]
+    kernel_size = (2, 2)
+    padding = (0, 0)
+    stride = (2, 2)
     dilation = (1, 1)
 
     print(f"Testing output_data_format={output_data_format}, output_layout={output_layout}")
