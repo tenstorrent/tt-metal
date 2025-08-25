@@ -81,13 +81,6 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          export TT_METAL_WATCHER_NOINLINE=1
-          export TT_METAL_WATCHER_DISABLE_ASSERT=1
-          export TT_METAL_WATCHER_DISABLE_PAUSE=1
-          export TT_METAL_WATCHER_DISABLE_RING_BUFFER=1
-          export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
-          export TT_METAL_WATCHER_DISABLE_WAYPOINT=1
-          export TT_METAL_WATCHER_DISABLE_STACK_USAGE=1
           ${{ matrix.test-group.cmd }}
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
