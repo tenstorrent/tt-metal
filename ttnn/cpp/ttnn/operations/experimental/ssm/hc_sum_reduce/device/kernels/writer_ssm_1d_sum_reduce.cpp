@@ -20,14 +20,11 @@ void kernel_main() {
     constexpr uint32_t intermed_cb_id1 = get_compile_time_arg_val(0);
     constexpr uint32_t intermed_cb_id2 = get_compile_time_arg_val(1);
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(2);
-    constexpr bool output_is_dram = get_compile_time_arg_val(3) == 1;
 
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(output_cb_id);
-    const DataFormat data_format = get_dataformat(output_cb_id);
-
-    const InterleavedAddrGenFast<output_is_dram> s = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto dst_args = TensorAccessorArgs<3>();
+    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
     const uint32_t end_id = start_id + num_output_blocks_w_per_core;
 

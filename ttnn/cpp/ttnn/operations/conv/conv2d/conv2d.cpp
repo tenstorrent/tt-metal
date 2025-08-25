@@ -208,6 +208,7 @@ Result conv2d_DRAM(
                         .compute_grid = compute_grid_size,
                         .weights_shape = weight_tensor.padded_shape(),
                         .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
+                        .input_datatype = input_tensor.dtype(),
                         .output_datatype = output_dtype,
                         .enable_bias = bias_tensor.has_value(),
                         .mm_conv = mm_conv,
