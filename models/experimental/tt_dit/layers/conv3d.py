@@ -134,6 +134,7 @@ class ContextParallelConv3d:
         input_shape=None,
         context_parallel: bool = True,
         groups: int = 1,
+        parallel_manager=None,
         torch_ref=None,
         **kwargs,
     ):
@@ -152,6 +153,7 @@ class ContextParallelConv3d:
         self.out_channels = out_channels or torch_ref.out_channels
         self.causal = causal
         self.context_parallel = context_parallel
+        self.parallel_manager = parallel_manager
 
         # Conv3d parameters
         self.kernel_size = kernel_size or torch_ref.kernel_size
@@ -201,9 +203,10 @@ class ContextParallelConv3d:
         self.mask, self.proj = prepare_conv3d_mask_proj(self.mesh_device, self.kernel_size[0] - 1, N, C, T, H, W)
 
     @classmethod
-    def from_torch(cls, torch_ref, mesh_device):
+    def from_torch(cls, torch_ref, mesh_device, parallel_manager):
         layer = cls(
             mesh_device=mesh_device,
+            parallel_manager=parallel_manager,
             torch_ref=torch_ref,
         )
         return layer
@@ -258,12 +261,20 @@ class ContextParallelConv3d:
             ttnn.deallocate(front_slice)
             device_tensors_front_pad = ttnn.multiply(device_tensors_front_pad, self.mask)
             halo_tensor = x_NTHWC[:, -context_size:, :, :, :]
-            halos = ttnn.all_gather(  # TODO change to fabric all gather
+            halo_tensor = ttnn.squeeze(halo_tensor, 0)
+            halos = ttnn.experimental.all_gather_async(
                 halo_tensor,
-                dim=1,
+                dim=0,
+                mesh_device=self.mesh_device,
+                cluster_axis=1,
                 topology=ttnn.Topology.Linear,
+                multi_device_global_semaphore=self.parallel_manager.gather_semaphores[
+                    self.parallel_manager.ping_pong_idx * 2 : (self.parallel_manager.ping_pong_idx + 1) * 2
+                ],
             )
+            self.parallel_manager.ping_pong_idx = 1 - self.parallel_manager.ping_pong_idx
             ttnn.deallocate(halo_tensor)
+            halos = ttnn.unsqueeze(halos, 0)
             halos_orig_shape = halos.shape
             halos_permute = ttnn.permute(halos, (0, 2, 3, 4, 1))
             ttnn.deallocate(halos)

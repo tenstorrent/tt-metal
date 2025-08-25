@@ -163,6 +163,7 @@ class ResBlock:
         mesh_device=None,
         mesh_axis=None,
         input_shape=None,
+        parallel_manager=None,
         torch_ref=None,
     ):
         self.num_out_blocks_map = {
@@ -172,11 +173,11 @@ class ResBlock:
             480 * 848: 135,
         }
 
-        grid_size_y = 4 if torch_ref.channels == 128 else mesh_device.core_grid.y
-        grid_size_x = (
-            min(32 // mesh_device.get_num_devices(), mesh_device.core_grid.x)
+        grid_size_x = 4 if torch_ref.channels == 128 else mesh_device.core_grid.x
+        grid_size_y = (
+            min(32 // mesh_device.get_num_devices(), mesh_device.core_grid.y)
             if torch_ref.channels == 768
-            else mesh_device.core_grid.x
+            else mesh_device.core_grid.y
         )
         self.grid_size = ttnn.CoreGrid(y=grid_size_y, x=grid_size_x)
 
@@ -202,6 +203,7 @@ class ResBlock:
             bias=bias,
             causal=causal,
             input_shape=input_shape,
+            parallel_manager=parallel_manager,
             torch_ref=torch_ref.stack[2] if torch_ref is not None else None,
         )
         self.conv2 = ContextParallelConv3d(
@@ -212,6 +214,7 @@ class ResBlock:
             bias=bias,
             causal=causal,
             input_shape=input_shape,
+            parallel_manager=parallel_manager,
             torch_ref=torch_ref.stack[5] if torch_ref is not None else None,
         )
 
