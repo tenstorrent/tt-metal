@@ -1656,7 +1656,6 @@ inline void relay_raw_data_to_downstream(
     uint32_t& local_downstream_data_ptr,
     uint8_t extra_pages) {
     // Stream data to downstream as it arrives. Acquire upstream pages incrementally.
-    uint32_t total_pages_written = 0;
     uint32_t remaining = length;
 
     while (remaining > 0) {
@@ -1693,7 +1692,21 @@ inline void relay_raw_data_to_downstream(
         } else {
             npages = write_pages_to_dispatcher<0, false>(local_downstream_data_ptr, data_ptr, can_read_now);
         }
-        total_pages_written += npages;
+
+        // Ensure previous async writes are committed before proceeding
+        noc_async_writes_flushed();
+
+        // Release pages consumed by this chunk; include extra_pages on final chunk
+        uint32_t pages_to_release = npages;
+        if (is_final_chunk && extra_pages != 0) {
+            pages_to_release += extra_pages;
+        }
+        if (pages_to_release != 0) {
+            cb_release_pages<
+                my_noc_index,
+                RelayInlineState::downstream_noc_encoding,
+                RelayInlineState::downstream_cb_sem>(pages_to_release);
+        }
 
         // Advance pointers and remaining
         data_ptr += can_read_now;
@@ -1705,11 +1718,8 @@ inline void relay_raw_data_to_downstream(
         }
     }
 
-    // Align downstream write pointer and release pages (including any extra header page credits)
+    // Align downstream write pointer
     local_downstream_data_ptr = round_up_pow2(local_downstream_data_ptr, RelayInlineState::downstream_page_size);
-    cb_release_pages<my_noc_index, RelayInlineState::downstream_noc_encoding, RelayInlineState::downstream_cb_sem>(
-        total_pages_written + extra_pages);
-    noc_async_writes_flushed();
 
     // Round upstream pointer to next cmddat page boundary for next command
     data_ptr = round_up_pow2(data_ptr, cmddat_q_page_size);
