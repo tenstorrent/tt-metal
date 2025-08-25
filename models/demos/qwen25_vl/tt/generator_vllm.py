@@ -92,11 +92,12 @@ def input_processor_for_qwen25_vl(ctx: InputContext, inputs: Union[DecoderOnlyIn
         # [INFO] with current version of vLLM, in server mode, inputs["prompt"] gives KeyError; only inputs['prompt_token_ids'] is available
         assert "prompt_token_ids" in inputs, "prompt_token_ids must be available in server mode"
         prompt_text = input_processor.decode(inputs["prompt_token_ids"], skip_special_tokens=False)
-    images = inputs["multi_modal_data"]["image"]
+
+    multi_modal_data = inputs.get("multi_modal_data", None)
 
     processed_inputs = input_processor(
         text=prompt_text,  # [INFO] Qwen2VLProcessor handles the case where text is a string or a list of strings
-        images=images,
+        images=multi_modal_data["image"] if multi_modal_data is not None else None,
         videos=None,  # [INFO] videos are not supported yet
         return_tensors="pt",
     )
@@ -194,7 +195,6 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         # reconstruct the inputs that Qwen2.5-VL expects
         inputs = CustomNamespace()
         inputs.input_ids = tokens.to(images[0].attention_mask.dtype)
-        inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
         inputs.attention_mask = torch.concat(
             [
                 torch.nn.functional.pad(im.attention_mask, (0, padded_seq_len - im.attention_mask.shape[-1]), value=0)
@@ -202,10 +202,15 @@ class Qwen2_5_VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
             ],
             dim=0,
         )
-        inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
-
-        # Vision prefill
-        image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+        if "pixel_values" in images[0]:
+            # we currently do not support mixed inputs of text-only users and text-image users; hence checking images[0] is enough
+            inputs.pixel_values = torch.concat([im.pixel_values for im in images], dim=0)
+            inputs.image_grid_thw = torch.concat([im.image_grid_thw for im in images], dim=0)
+            # Vision prefill
+            image_embeds = self.visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+        else:
+            # text-only users
+            image_embeds = torch.tensor([], dtype=torch.bfloat16)
 
         # Prepare text + vision inputs for decoder model
         text_embeds = self.reference_model.model.language_model.embed_tokens(inputs.input_ids)
