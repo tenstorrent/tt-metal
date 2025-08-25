@@ -327,14 +327,13 @@ FORCE_INLINE void scatter_fabric_write_unidir(
     volatile PACKET_HEADER_TYPE* pkt_hdr,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_direction_connection,
     size_t l1_read_addr,
-    uint16_t payload_size_bytes_first_core,
-    uint32_t payload_size_bytes_second_core,
+    uint16_t payload_size,
     uint32_t offset0 = 0,
     uint32_t offset1 = 0) {
     const size_t payload_l1_address = l1_read_addr;
     tt::tt_fabric::linear::to_noc_unicast_scatter_write(
-        payload_size_bytes_first_core, pkt_hdr, first_id, second_id, addrgen, offset0, offset1);
+        payload_size, pkt_hdr, first_id, second_id, addrgen, offset0, offset1);
 
-    perform_payload_send(fabric_direction_connection, l1_read_addr, payload_size_bytes_first_core * 2, pkt_hdr);
+    perform_payload_send(fabric_direction_connection, l1_read_addr, payload_size * 2, pkt_hdr);
     noc_async_writes_flushed();
 }
