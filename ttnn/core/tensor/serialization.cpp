@@ -183,34 +183,32 @@ DistributedStorage load_multi_device_host_storage(
     safe_fread(&num_buffers, sizeof(num_buffers), 1, input_file);
     safe_fread(&strategy, sizeof(strategy), 1, input_file);
 
-    std::vector<HostBuffer> buffers;
     // Tensor spec was serialized, but now TTNN enforces uniform tensor specs.
     // Load the spec without using it, to correctly read the file.
     auto ignore_spec = [](const TensorSpec&) {};
+
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
         uint64_t size = 0;
         safe_fread(&size, sizeof(size), 1, input_file);
         std::vector<T> data(size);
         safe_fread(data.data(), sizeof(T) * size, 1, input_file);
         HostBuffer buffer = HostBuffer(std::move(data));
-        buffers.push_back(std::move(buffer));
         ignore_spec(load_tensor_spec(input_file));
 
-        for (std::size_t i = 1; i < mesh_device.num_devices(); ++i) {
-            buffers.push_back(buffers[0]);
-        }
-    } else {
-        for (std::size_t i = 0; i < num_buffers; ++i) {
-            uint64_t size = 0;
-            safe_fread(&size, sizeof(size), 1, input_file);
-            std::vector<T> data(size);
-            safe_fread(data.data(), sizeof(T) * size, 1, input_file);
-            auto buffer = HostBuffer(std::move(data));
-            buffers.push_back(std::move(buffer));
-        }
-        for (std::size_t i = 0; i < num_buffers; ++i) {
-            ignore_spec(load_tensor_spec(input_file));
-        }
+        return {HostStorage(std::move(buffer)), strategy};
+    }
+
+    std::vector<HostBuffer> buffers;
+    for (std::size_t i = 0; i < num_buffers; ++i) {
+        uint64_t size = 0;
+        safe_fread(&size, sizeof(size), 1, input_file);
+        std::vector<T> data(size);
+        safe_fread(data.data(), sizeof(T) * size, 1, input_file);
+        auto buffer = HostBuffer(std::move(data));
+        buffers.push_back(std::move(buffer));
+    }
+    for (std::size_t i = 0; i < num_buffers; ++i) {
+        ignore_spec(load_tensor_spec(input_file));
     }
 
     // Create a distributed host buffer with the same shape as the mesh device.
@@ -314,9 +312,9 @@ Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
     auto storage = load_storage(input_file, spec.data_type(), spec.layout(), storage_type, device);
     // TODO (#25340): Switch to new serialization format and remove this code path
     Tensor tensor(std::move(storage.storage), spec, storage.strategy, TensorTopology{});
-    if (device != nullptr) {
-        tensor = tensor.to_device(device, spec.memory_config());
-    }
+    // if (device != nullptr) {
+    //     tensor = tensor.to_device(device, spec.memory_config());
+    // }
     return tensor;
 }
 
