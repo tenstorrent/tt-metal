@@ -253,8 +253,6 @@ class AllToAllDispatchConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    global_semaphore: object | None = None
-    init_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
     subdevice_id: int | None = None
 
@@ -266,8 +264,6 @@ class AllToAllCombineConfig(OpConfigBase):
     axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    global_semaphore: object | None = None
-    init_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
 
 
