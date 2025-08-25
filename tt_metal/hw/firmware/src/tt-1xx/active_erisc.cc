@@ -22,7 +22,7 @@
 #include "ethernet/dataflow_api.h"
 #include "ethernet/tunneling.h"
 #include "dev_mem_map.h"
-#include "tests/tt_metal/tt_metal/tunneling/lite_fabric.hpp"
+#include "tt_metal/lite_fabric/hw/inc/kernel_api.hpp"
 
 #include "debug/watcher_common.h"
 #include "debug/waypoint.h"

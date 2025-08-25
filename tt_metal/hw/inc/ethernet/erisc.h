@@ -7,7 +7,7 @@
 #include "noc_nonblocking_api.h"
 
 #if !defined(COOPERATIVE_ERISC)
-#include "tests/tt_metal/tt_metal/tunneling/lite_fabric.hpp"
+#include "tt_metal/lite_fabric/hw/inc/kernel_api.hpp"
 #endif
 
 inline void (*rtos_context_switch_ptr)();

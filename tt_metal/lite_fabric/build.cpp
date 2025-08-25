@@ -3,7 +3,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "build.hpp"
+#include "tt_metal/lite_fabric/build.hpp"
 
 #include <filesystem>
 #include <sstream>
@@ -30,7 +30,7 @@ std::string GetToolchainPath(const std::string& root_dir) {
 
 std::string GetCommonOptions() {
     std::vector<std::string> options{
-        "Os",
+        "O3",
         "mcpu=tt-bh",
         "fno-rvtt-sfpu-replay",
         "std=c++17",
@@ -63,39 +63,34 @@ std::string GetCommonOptions() {
 
 namespace lite_fabric {
 
-int CompileLiteFabric(
+int CompileFabricLite(
     tt::Cluster& cluster,
     const std::filesystem::path& root_dir,
     const std::filesystem::path& out_dir,
     const std::vector<std::string>& extra_defines) {
-    const auto root_dir_str = root_dir.string();
-    const auto out_dir_str = out_dir.string();
+    const std::filesystem::path lite_fabric_src = root_dir / "tt_metal/lite_fabric/hw/src/lite_fabric.cpp";
 
-    const std::string lite_fabric_src =
-        fmt::format("{}/tests/tt_metal/tt_metal/tunneling/lite_fabric.cpp", root_dir_str);
-
-    std::vector<std::string> includes = {
-        ".",
-        "..",
-        root_dir_str,
-        root_dir_str + "/ttnn",
-        root_dir_str + "/ttnn/cpp",
-        root_dir_str + "/tt_metal",
-        root_dir_str + "/tt_metal/include",
-        root_dir_str + "/tt_metal/hw/inc",
-        root_dir_str + "/tt_metal/hw/inc/ethernet",
-        root_dir_str + "/tt_metal/hostdevcommon/api",
-        root_dir_str + "/tt_metal/hw/inc/debug",
-        root_dir_str + "/tt_metal/hw/inc/blackhole",
-        root_dir_str + "/tt_metal/hw/inc/blackhole/blackhole_defines",
-        root_dir_str + "/tt_metal/hw/inc/blackhole/noc",
-        root_dir_str + "/tt_metal/hw/ckernels/blackhole/metal/common",
-        root_dir_str + "/tt_metal/hw/ckernels/blackhole/metal/llk_io",
-        root_dir_str + "/tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc",
-        root_dir_str + "/tt_metal/api/",
-        root_dir_str + "/tt_metal/api/tt-metalium/",
-        root_dir_str + "/tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib",
-        root_dir_str + "/tests/tt_metal/tt_metal/tunneling"};  // For memory configuration headers
+    std::vector<std::filesystem::path> includes = {
+        root_dir,
+        root_dir.parent_path(),
+        root_dir / "ttnn",
+        root_dir / "ttnn/cpp",
+        root_dir / "tt_metal",
+        root_dir / "tt_metal/include",
+        root_dir / "tt_metal/hw/inc",
+        root_dir / "tt_metal/hw/inc/ethernet",
+        root_dir / "tt_metal/hostdevcommon/api",
+        root_dir / "tt_metal/hw/inc/debug",
+        root_dir / "tt_metal/hw/inc/blackhole",
+        root_dir / "tt_metal/hw/inc/blackhole/blackhole_defines",
+        root_dir / "tt_metal/hw/inc/blackhole/noc",
+        root_dir / "tt_metal/hw/ckernels/blackhole/metal/common",
+        root_dir / "tt_metal/hw/ckernels/blackhole/metal/llk_io",
+        root_dir / "tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc",
+        root_dir / "tt_metal/api/",
+        root_dir / "tt_metal/api/tt-metalium/",
+        root_dir / "tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib",
+        root_dir / "tt_metal/lite_fabric/hw/inc"};  // For memory configuration headers
 
     // TODO remove hardcoded defines
     std::vector<std::string> defines{
@@ -127,11 +122,11 @@ int CompileLiteFabric(
     defines.insert(defines.end(), extra_defines.begin(), extra_defines.end());
 
     std::ostringstream oss;
-    oss << GetToolchainPath(root_dir_str) << "riscv32-tt-elf-g++ ";
+    oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-g++ ";
     oss << GetCommonOptions() << " ";
 
-    for (size_t i = 0; i < includes.size(); ++i) {
-        oss << "-I" << includes[i] << " ";
+    for (const auto& include : includes) {
+        oss << "-I" << include.string() << " ";
     }
 
     for (size_t i = 0; i < defines.size(); ++i) {
@@ -143,30 +138,30 @@ int CompileLiteFabric(
     // Disable gp relaxations. We store various data in L1. We need functions to work when called directly from
     // the L1 address. The caller may have already setup their own gp, thus the gp relative instructions we have
     // are invalid
-    oss << "-mno-relax -c -o " << out_dir_str << "/lite_fabric.o";
+    oss << "-mno-relax -c -o " << out_dir / "lite_fabric.o";
 
     std::string compile_cmd = oss.str();
-    log_info(tt::LogMetal, "Compile LiteFabric command:\n{}", compile_cmd);
+    log_info(tt::LogMetal, "compile:\n{}", compile_cmd);
 
     // Ensure the output dir exists
     std::filesystem::create_directories(out_dir);
-    log_info(tt::LogMetal, "Compile LiteFabric output directory: {}", out_dir);
+    log_info(tt::LogMetal, "output directory: {}", out_dir);
 
     return system(compile_cmd.c_str());
 }
 
-int LinkLiteFabric(
+int LinkFabricLite(
     const std::filesystem::path& root_dir, const std::filesystem::path& out_dir, const std::filesystem::path& elf_out) {
     // First, preprocess the linker script to resolve #include directives
-    const std::string tunneling_dir = fmt::format("{}/tests/tt_metal/tt_metal/tunneling", root_dir.string());
-    const std::string input_ld = fmt::format("{}/lite_fabric.ld", tunneling_dir);
-    const std::string output_ld = fmt::format("{}/lite_fabric_preprocessed.ld", out_dir.string());
+    const std::filesystem::path tunneling_dir = root_dir / "tt_metal/lite_fabric/hw/inc";
+    const std::filesystem::path input_ld = root_dir / "tt_metal/lite_fabric/toolchain/lite_fabric.ld";
+    const std::filesystem::path output_ld = out_dir / "lite_fabric_preprocessed.ld";
 
     std::ostringstream preprocess_oss;
     preprocess_oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-g++ ";
-    preprocess_oss << fmt::format("-I{} ", tunneling_dir);  // Include path for the memory defs header
-    preprocess_oss << "-E -P -x c ";                        // Preprocess only, no line markers, treat as C
-    preprocess_oss << fmt::format("-o {} ", output_ld);
+    preprocess_oss << fmt::format("-I{} ", tunneling_dir.string());  // Include path for the memory defs header
+    preprocess_oss << "-E -P -x c ";                                 // Preprocess only, no line markers, treat as C
+    preprocess_oss << fmt::format("-o {} ", output_ld.string());
     preprocess_oss << input_ld;
 
     std::string preprocess_cmd = preprocess_oss.str();
@@ -183,15 +178,15 @@ int LinkLiteFabric(
     link_oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-g++ ";
     link_oss << GetCommonOptions() << " ";
     link_oss << "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
-    link_oss << fmt::format("-T{} ", output_ld);  // Use preprocessed linker script
+    link_oss << fmt::format("-T{} ", output_ld.string());  // Use preprocessed linker script
     link_oss << fmt::format("-Wl,-Map={}/lite_fabric.map ", out_dir.string());
     link_oss << fmt::format("-save-temps {}/lite_fabric.o ", out_dir.string());
-    link_oss << fmt::format("{}/runtime/hw/lib/blackhole/tmu-crt0.o ", root_dir.string());
-    link_oss << fmt::format("{}/runtime/hw/lib/blackhole/substitutes.o ", root_dir.string());
+    link_oss << fmt::format("{}/runtime/hw/lib/blackhole/tmu-crt0.o ", root_dir.string());     // FIXME: hardcoded path
+    link_oss << fmt::format("{}/runtime/hw/lib/blackhole/substitutes.o ", root_dir.string());  // FIXME: hardcoded path
     link_oss << fmt::format("-o {}", elf_out.string());
 
     std::string link_cmd = link_oss.str();
-    log_info(tt::LogMetal, "Link LiteFabric command:\n{}", link_cmd);
+    log_info(tt::LogMetal, "link:\n{}", link_cmd);
 
     int link_result = system(link_cmd.c_str());
     if (link_result != 0) {
@@ -199,15 +194,15 @@ int LinkLiteFabric(
     }
 
     // Create flat binary from ELF for direct device loading
-    std::string bin_path = elf_out.string();
-    bin_path.replace(bin_path.find(".elf"), 4, ".bin");
+    std::filesystem::path bin_path = elf_out;
+    bin_path.replace_extension(".bin");
 
     std::ostringstream objcopy_oss;
     objcopy_oss << GetToolchainPath(root_dir.string()) << "riscv32-tt-elf-objcopy -O binary ";
-    objcopy_oss << elf_out.string() << " " << bin_path;
+    objcopy_oss << elf_out << " " << bin_path;
 
     std::string objcopy_cmd = objcopy_oss.str();
-    log_info(tt::LogMetal, "Create flat binary command:\n{}", objcopy_cmd);
+    log_info(tt::LogMetal, "copy binary:\n{}", objcopy_cmd);
 
     int objcopy_result = system(objcopy_cmd.c_str());
     if (objcopy_result != 0) {
@@ -215,7 +210,7 @@ int LinkLiteFabric(
         return objcopy_result;
     }
 
-    log_info(tt::LogMetal, "Flat binary created: {}", bin_path);
+    log_info(tt::LogMetal, "binary: {}", bin_path);
     return 0;
 }
 

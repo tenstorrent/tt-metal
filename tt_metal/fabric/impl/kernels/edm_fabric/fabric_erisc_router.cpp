@@ -2827,13 +2827,10 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
-        DPRINT << "enable_ethernet_handshake" << ENDL();
         if constexpr (is_handshake_sender) {
-            DPRINT << "handhake sender" << ENDL();
             erisc::datamover::handshake::sender_side_handshake(
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
-            DPRINT << "handhake receiver" << ENDL();
             erisc::datamover::handshake::receiver_side_handshake(
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }

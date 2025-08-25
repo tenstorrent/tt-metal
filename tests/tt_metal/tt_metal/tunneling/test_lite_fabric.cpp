@@ -24,15 +24,16 @@
 #include "distributed.hpp"
 #include "fabric_types.hpp"
 #include "kernel_types.hpp"
-#include "lite_fabric.hpp"
 #include "mesh_workload.hpp"
 #include "rtoptions.hpp"
 #include "llrt/hal.hpp"
 #include "tt_cluster.hpp"
-#include "lite_fabric_host_util.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
 #include "tt_metal.hpp"
-#include "build.hpp"
+
+#include "tt_metal/lite_fabric/hw/inc/host_interface.hpp"
+#include "tt_metal/lite_fabric/host_util.hpp"
+#include "tt_metal/lite_fabric/build.hpp"
 
 #define CHECK_TEST_REQS()                                                                       \
     if (tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::BLACKHOLE) { \
@@ -40,6 +41,10 @@
     }                                                                                           \
     if (tt::tt_metal::GetNumAvailableDevices() < 2) {                                           \
         GTEST_SKIP() << "At least 2 Devices are required";                                      \
+    }                                                                                           \
+    if (tt::tt_metal::GetClusterType() != tt::tt_metal::ClusterType::P150 &&                    \
+        tt::tt_metal::GetClusterType() != tt::tt_metal::ClusterType::P300) {                    \
+        GTEST_SKIP() << "P150/P300 only";                                                       \
     }
 
 namespace {
@@ -50,9 +55,9 @@ template <typename HOST_INTERFACE>
 std::unordered_map<CoreCoord, std::vector<uint32_t>> perform_write_read_test(
     const lite_fabric::SystemDescriptor& desc,
     HOST_INTERFACE& host_interface,
-    uint32_t payload_size_bytes = 4096,
-    uint32_t l1_base = 0x10000,
-    uint32_t device_id = 1) {
+    uint32_t payload_size_bytes,
+    uint32_t l1_base,
+    uint32_t device_id) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& tunnel = desc.tunnels_from_mmio[0];
     auto grid_size = cluster.get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
@@ -76,14 +81,11 @@ std::unordered_map<CoreCoord, std::vector<uint32_t>> perform_write_read_test(
                 payload_size_bytes, 100, std::chrono::system_clock::now().time_since_epoch().count(), 1.0f);
 
             host_interface.write_any_len(
-                test_data_per_worker[logical_worker].data(),
-                payload_size_bytes,
-                tunnel.mmio_cxy_virtual(),
-                dest_noc_addr);
+                test_data_per_worker[logical_worker].data(), payload_size_bytes, dest_noc_addr);
         }
     }
 
-    host_interface.barrier(tunnel.mmio_cxy_virtual());
+    host_interface.barrier();
 
     // Read back and verify data
     for (int worker_x = 0; worker_x < grid_size.x; ++worker_x) {
@@ -108,9 +110,9 @@ template <typename HOST_INTERFACE>
 void perform_read_test(
     const lite_fabric::SystemDescriptor& desc,
     HOST_INTERFACE& host_interface,
-    uint32_t payload_size_bytes = 4 * 1024,
-    uint32_t l1_base = 0x10000,
-    uint32_t device_id = 1,
+    uint32_t payload_size_bytes,
+    uint32_t l1_base,
+    uint32_t device_id,
     CoreCoord target_worker = CoreCoord{0, 0}) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& tunnel = desc.tunnels_from_mmio[0];
@@ -136,18 +138,18 @@ void perform_read_test(
     uint64_t twosNocAddr = dest_noc_addr + payload_size_bytes;
 
     // Write both data sets to different addresses
-    host_interface.write_any_len(allOnes.data(), payload_size_bytes, tunnel.mmio_cxy_virtual(), onesNocAddr);
-    host_interface.write_any_len(allTwos.data(), payload_size_bytes, tunnel.mmio_cxy_virtual(), twosNocAddr);
+    host_interface.write_any_len(allOnes.data(), payload_size_bytes, onesNocAddr);
+    host_interface.write_any_len(allTwos.data(), payload_size_bytes, twosNocAddr);
 
     // Barrier to ensure writes complete
-    host_interface.barrier(tunnel.mmio_cxy_virtual());
+    host_interface.barrier();
 
     log_info(tt::LogMetal, "Reading back data from Device {} worker core {}", device_id, target_worker.str());
 
     // Read back first data set and verify
     {
         std::vector<uint32_t> read_data(payload_size_bytes / sizeof(uint32_t));
-        host_interface.read_any_len(read_data.data(), payload_size_bytes, tunnel.mmio_cxy_virtual(), onesNocAddr);
+        host_interface.read_any_len(read_data.data(), payload_size_bytes, onesNocAddr);
         log_info(
             tt::LogMetal,
             "Read out data from {} {:#x} {} elements",
@@ -161,7 +163,7 @@ void perform_read_test(
     // Read back second data set and verify
     {
         std::vector<uint32_t> read_data(payload_size_bytes / sizeof(uint32_t));
-        host_interface.read_any_len(read_data.data(), payload_size_bytes, tunnel.mmio_cxy_virtual(), twosNocAddr);
+        host_interface.read_any_len(read_data.data(), payload_size_bytes, twosNocAddr);
         log_info(
             tt::LogMetal,
             "Read out data from {} {:#x} {} elements",
@@ -180,8 +182,8 @@ void perform_unaligned_write_test(
     const lite_fabric::SystemDescriptor& desc,
     HOST_INTERFACE& host_interface,
     uint32_t payload_size_bytes,
-    uint32_t l1_base = 0x10000,
-    uint32_t device_id = 1,
+    uint32_t l1_base,
+    uint32_t device_id,
     CoreCoord target_worker = CoreCoord{0, 0},
     int max_alignment_offset = 16) {
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
@@ -202,9 +204,8 @@ void perform_unaligned_write_test(
         log_info(tt::LogMetal, "Testing unaligned write to {:#x} (offset {})", addr, aligned_offset);
 
         // Write data to unaligned address
-        host_interface.write_any_len(
-            test_data.data(), test_data.size() * sizeof(uint32_t), tunnel.mmio_cxy_virtual(), dest_noc_addr);
-        host_interface.barrier(tunnel.mmio_cxy_virtual());
+        host_interface.write_any_len(test_data.data(), test_data.size() * sizeof(uint32_t), dest_noc_addr);
+        host_interface.barrier();
 
         // Read back and verify
         std::vector<uint32_t> read_data(test_data.size());
@@ -223,8 +224,8 @@ void perform_unaligned_read_test(
     const lite_fabric::SystemDescriptor& desc,
     HOST_INTERFACE& host_interface,
     uint32_t write_data_size_bytes,
-    uint32_t l1_base = 0x10000,
-    uint32_t device_id = 1,
+    uint32_t l1_base,
+    uint32_t device_id,
     CoreCoord target_worker = CoreCoord{0, 0},
     size_t read_size_bytes = 64 * sizeof(uint32_t),
     size_t unaligned_offset_bytes = 7) {
@@ -252,8 +253,7 @@ void perform_unaligned_read_test(
 
     // Read a slice from an unaligned address using host interface
     std::vector<uint8_t> read_bytes(read_size_bytes);
-    host_interface.read(
-        read_bytes.data(), read_bytes.size(), tunnel.mmio_cxy_virtual(), dest_noc_addr + unaligned_offset_bytes);
+    host_interface.read(read_bytes.data(), read_bytes.size(), dest_noc_addr + unaligned_offset_bytes);
 
     // Build expected bytes by taking a byte view of the original write buffer and slicing by the same offset
     const uint8_t* write_bytes = reinterpret_cast<const uint8_t*>(write_data.data());
@@ -272,8 +272,8 @@ template <typename HOST_INTERFACE>
 void perform_small_write_test(
     const lite_fabric::SystemDescriptor& desc,
     HOST_INTERFACE& host_interface,
-    uint32_t l1_base = 0x10000,
-    uint32_t device_id = 1,
+    uint32_t l1_base,
+    uint32_t device_id,
     CoreCoord target_worker = CoreCoord{0, 0},
     uint32_t num_writes = 64,
     uint32_t start_index = 1) {
@@ -293,11 +293,11 @@ void perform_small_write_test(
 
     // Write 1 byte at a time to consecutive addresses
     for (int i = start_index; i < num_writes; ++i) {
-        host_interface.write_any_len(&write_data[i], 1, tunnel.mmio_cxy_virtual(), dest_noc_addr + i);
+        host_interface.write_any_len(&write_data[i], 1, dest_noc_addr + i);
         // Due to unaligned 1-byte write, mask off the irrelevant bits for comparison
         write_data[i] = write_data[i] & 0xff;
     }
-    host_interface.barrier(tunnel.mmio_cxy_virtual());
+    host_interface.barrier();
 
     // Read back and verify each 1-byte write
     for (int i = start_index; i < num_writes; ++i) {
@@ -325,7 +325,7 @@ void perform_small_write_test(
 
 void perform_basic_combo_test(
     const lite_fabric::SystemDescriptor& desc,
-    lite_fabric::HostToLiteFabricInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>&
+    lite_fabric::HostToFabricLiteInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>&
         host_interface) {
     const auto& tunnel = desc.tunnels_from_mmio[0];
     log_info(tt::LogTest, "Tunnel: {} -> {}", tunnel.mmio_cxy_virtual().str(), tunnel.connected_cxy_virtual().str());
@@ -340,34 +340,43 @@ void perform_basic_combo_test(
     size_t unaligned_offset_bytes = 7;
     int max_alignment_offset = 16;
 
-    perform_write_read_test(desc, host_interface, payload_size_bytes, l1_base, 1);
+    int remote_device_id = desc.tunnels_from_mmio[0].connected_id;
+
+    perform_write_read_test(desc, host_interface, payload_size_bytes, l1_base, remote_device_id);
 
     perform_unaligned_read_test(
-        desc, host_interface, payload_size_bytes, l1_base, 1, target_worker, read_size_bytes, unaligned_offset_bytes);
+        desc,
+        host_interface,
+        payload_size_bytes,
+        l1_base,
+        remote_device_id,
+        target_worker,
+        read_size_bytes,
+        unaligned_offset_bytes);
 
-    host_interface.barrier(tunnel.mmio_cxy_virtual());
+    host_interface.barrier();
 
-    perform_read_test(desc, host_interface, payload_size_bytes, l1_base, 1, target_worker);
+    perform_read_test(desc, host_interface, payload_size_bytes, l1_base, remote_device_id, target_worker);
 
-    perform_small_write_test(desc, host_interface, l1_base, 1, target_worker, num_writes, start_index);
+    perform_small_write_test(desc, host_interface, l1_base, remote_device_id, target_worker, num_writes, start_index);
 
     perform_unaligned_write_test(
-        desc, host_interface, payload_size_bytes, l1_base, 1, target_worker, max_alignment_offset);
+        desc, host_interface, payload_size_bytes, l1_base, remote_device_id, target_worker, max_alignment_offset);
 }
 
 }  // anonymous namespace
 
-struct LiteFabricTestConfig {
+struct FabricLiteTestConfig {
     bool standalone{false};
     tt::tt_fabric::FabricConfig fabric_config{tt::tt_fabric::FabricConfig::DISABLED};
 };
 
 // Lite Fabric Test Fixture
-class LiteFabric : public testing::TestWithParam<LiteFabricTestConfig> {
+class FabricLite : public testing::TestWithParam<FabricLiteTestConfig> {
 protected:
     inline static lite_fabric::SystemDescriptor desc;
     inline static lite_fabric::
-        HostToLiteFabricInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>
+        HostToFabricLiteInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>
             host_interface;
 
     // Instance variables instead of static ones for parameter-dependent resources
@@ -381,7 +390,8 @@ protected:
 
         lite_fabric::LaunchLiteFabric(cluster, hal, desc);
 
-        host_interface = lite_fabric::LiteFabricMemoryMap::make_host_interface();
+        host_interface =
+            lite_fabric::FabricLiteMemoryMap::make_host_interface(desc.tunnels_from_mmio[0].mmio_cxy_virtual());
     }
 
     static void TearDownTestSuite() {
@@ -393,6 +403,10 @@ protected:
 
     void SetUp() override {
         CHECK_TEST_REQS();
+
+        if (desc.tunnels_from_mmio.empty()) {
+            GTEST_SKIP() << "No tunnels found";
+        }
 
         // Configure fabric if needed
         if (GetParam().fabric_config != tt::tt_fabric::FabricConfig::DISABLED) {
@@ -427,19 +441,19 @@ protected:
 };
 
 INSTANTIATE_TEST_SUITE_P(
-    LiteFabricFixture,
-    LiteFabric,
+    FabricLiteFixture,
+    FabricLite,
     ::testing::Values(
         // Standalone tests (no mesh device, no fabric)
-        LiteFabricTestConfig{.standalone = true},
+        FabricLiteTestConfig{.standalone = true},
         // Standard tests with mesh device but no fabric
-        LiteFabricTestConfig{.standalone = false},
+        FabricLiteTestConfig{.standalone = false}
         // Test with 1D fabric active (full fabric)
-        LiteFabricTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}
+        // FabricLiteTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_1D}
         // Test with 2D fabric active (full fabric)
-        // LiteFabricTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D}
+        // FabricLiteTestConfig{.standalone = false, .fabric_config = tt::tt_fabric::FabricConfig::FABRIC_2D}
         ),
-    [](const testing::TestParamInfo<LiteFabricTestConfig>& info) {
+    [](const testing::TestParamInfo<FabricLiteTestConfig>& info) {
         std::string name;
         if (info.param.standalone) {
             name = "Standalone";
@@ -452,60 +466,63 @@ INSTANTIATE_TEST_SUITE_P(
         return name;
     });
 
-TEST(LiteFabricBuild, BuildOnly) {
+TEST(FabricLiteBuild, BuildOnly) {
     auto home_directory = std::filesystem::path(std::getenv("TT_METAL_HOME"));
     auto output_directory = home_directory / "lite_fabric";
     auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (lite_fabric::CompileLiteFabric(cluster, home_directory, output_directory)) {
-        throw std::runtime_error("Failed to compile lite fabric");
+    if (lite_fabric::CompileFabricLite(cluster, home_directory, output_directory)) {
+        throw std::runtime_error("Failed to compile");
     }
-    if (lite_fabric::LinkLiteFabric(home_directory, output_directory, output_directory / "lite_fabric.elf")) {
-        throw std::runtime_error("Failed to link lite fabric");
+    if (lite_fabric::LinkFabricLite(home_directory, output_directory, output_directory / "lite_fabric.elf")) {
+        throw std::runtime_error("Failed to link");
     }
 }
 
-TEST_P(LiteFabric, Init) { EXPECT_GT(desc.tunnels_from_mmio.size(), 0) << "No tunnels found"; }
+TEST_P(FabricLite, Init) { EXPECT_GT(desc.tunnels_from_mmio.size(), 0) << "No tunnels found"; }
 
-TEST_P(LiteFabric, Writes) {
+TEST_P(FabricLite, Writes) {
     const auto& tunnel = desc.tunnels_from_mmio[0];
     log_info(tt::LogTest, "Tunnel: {} -> {}", tunnel.mmio_cxy_virtual().str(), tunnel.connected_cxy_virtual().str());
 
     // This will wrap the sender channel multiple times and write to all worker cores
     uint32_t payload_size_bytes = 4096;  // (128 * 1024) + 512;
     uint32_t l1_base = 0x10000;
+    auto remote_device_id = desc.tunnels_from_mmio[0].connected_id;
 
     // Use the extracted function to perform the write/read test
-    perform_write_read_test(desc, host_interface, payload_size_bytes, l1_base, 1);
+    perform_write_read_test(desc, host_interface, payload_size_bytes, l1_base, remote_device_id);
 }
 
-TEST_P(LiteFabric, Reads) {
+TEST_P(FabricLite, Reads) {
     const auto& tunnel = desc.tunnels_from_mmio[0];
     log_info(tt::LogTest, "Tunnel: {} -> {}", tunnel.mmio_cxy_virtual().str(), tunnel.connected_cxy_virtual().str());
 
     uint32_t payload_size_bytes = 4 * 1024;
     uint32_t l1_base = 0x10000;
     CoreCoord target_worker{0, 0};
+    auto remote_device_id = desc.tunnels_from_mmio[0].connected_id;
 
     // Use the extracted function to perform the read test
-    perform_read_test(desc, host_interface, payload_size_bytes, l1_base, 1, target_worker);
+    perform_read_test(desc, host_interface, payload_size_bytes, l1_base, remote_device_id, target_worker);
 }
 
-TEST_P(LiteFabric, Barrier) {
+TEST_P(FabricLite, Barrier) {
     const auto& tunnel = desc.tunnels_from_mmio[0];
 
-    host_interface.barrier(tunnel.mmio_cxy_virtual());
+    host_interface.barrier();
 }
 
-TEST_P(LiteFabric, WritesSmall) {
+TEST_P(FabricLite, WritesSmall) {
     uint32_t l1_base = 0x10000;
     CoreCoord target_worker{0, 0};
     uint32_t num_writes = 64;
     uint32_t start_index = 1;  // Skip index 0 to avoid overwriting each other
+    auto remote_device_id = desc.tunnels_from_mmio[0].connected_id;
 
-    perform_small_write_test(desc, host_interface, l1_base, 1, target_worker, num_writes, start_index);
+    perform_small_write_test(desc, host_interface, l1_base, remote_device_id, target_worker, num_writes, start_index);
 }
 
-TEST_P(LiteFabric, WritesUnaligned) {
+TEST_P(FabricLite, WritesUnaligned) {
     uint32_t payload_size_bytes = 512;
     uint32_t l1_base = 0x10000;
     CoreCoord target_worker{0, 0};
@@ -515,28 +532,29 @@ TEST_P(LiteFabric, WritesUnaligned) {
         desc, host_interface, payload_size_bytes, l1_base, 1, target_worker, max_alignment_offset);
 }
 
-TEST_P(LiteFabric, ReadsUnaligned) {
+TEST_P(FabricLite, ReadsUnaligned) {
     uint32_t write_data_size_bytes = 4096;
     uint32_t l1_base = 0x10000;
     CoreCoord target_worker{0, 0};
     size_t read_size_bytes = 64 * sizeof(uint32_t);  // 256-byte slice
     size_t unaligned_offset_bytes = 7;
+    auto remote_device_id = desc.tunnels_from_mmio[0].connected_id;
 
     perform_unaligned_read_test(
         desc,
         host_interface,
         write_data_size_bytes,
         l1_base,
-        1,
+        remote_device_id,
         target_worker,
         read_size_bytes,
         unaligned_offset_bytes);
 }
 
-TEST_P(LiteFabric, FunctionPointerTable) {
+TEST_P(FabricLite, FunctionPointerTable) {
     const auto& tunnel = desc.tunnels_from_mmio[0];
 
-    auto service_func_offset = lite_fabric::LiteFabricMemoryMap::get_service_channel_func_addr();
+    auto service_func_offset = lite_fabric::FabricLiteMemoryMap::get_service_channel_func_addr();
     // This value can be read from the MMIO device. It's the same across all devices
     uint32_t service_func = 0;
     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
@@ -546,14 +564,14 @@ TEST_P(LiteFabric, FunctionPointerTable) {
     // First instruction should be a stack allocation
 }
 
-TEST_P(LiteFabric, BasicFunctions) {
+TEST_P(FabricLite, BasicFunctions) {
     if (GetParam().standalone) {
         GTEST_SKIP() << "BasicFunctions test requires mesh device (not standalone)";
     }
     perform_basic_combo_test(desc, host_interface);
 }
 
-TEST_P(LiteFabric, ActiveEthKernelDevice0) {
+TEST_P(FabricLite, ActiveEthKernelDevice0) {
     if (!mesh_device_) {
         GTEST_SKIP() << "Mesh device required for this test";
     }

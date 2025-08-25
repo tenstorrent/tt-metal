@@ -50,9 +50,7 @@ enum class HalL1MemAddrType : uint8_t {
     ETH_FW_MAILBOX,
     TENSIX_ROUTING_TABLE,
     TENSIX_FABRIC_CONNECTIONS,
-    FABRIC_LITE_CONFIG,
-    FABRIC_LITE_BARRIER,
-    LOCAL_L1_INIT_SCRATCH,
+    LITE_FABRIC_CONFIG,
     COUNT  // Keep this last so it always indicates number of enum options
 };
 
