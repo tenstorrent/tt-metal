@@ -24,6 +24,29 @@ class RMSNorm:
             if bias:
                 self.bias = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
 
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        # Cache weight
+        if self.weight is not None:
+            weight_path = path_prefix + "weight"
+            ttnn.dump_tensor(weight_path, self.weight)
+            cache_dict["weight"] = weight_path
+
+        # Cache bias if it exists
+        if self.bias is not None:
+            bias_path = path_prefix + "bias"
+            ttnn.dump_tensor(bias_path, self.bias)
+            cache_dict["bias"] = bias_path
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        if "weight" in cache_dict:
+            self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
+        if "bias" in cache_dict:
+            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
+
     def load_state_dict(self, state_dict):
         if self.norm_elementwise_affine:
             self.weight = bf16_tensor(state_dict["weight"].unsqueeze(0), device=self.mesh_device)
@@ -80,6 +103,29 @@ class LayerNorm:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        if self.weight is not None:
+            # Cache weight
+            weight_path = path_prefix + "weight"
+            ttnn.dump_tensor(weight_path, self.weight)
+            cache_dict["weight"] = weight_path
+
+        if self.bias is not None:
+            # Cache bias
+            bias_path = path_prefix + "bias"
+            ttnn.dump_tensor(bias_path, self.bias)
+            cache_dict["bias"] = bias_path
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        if "weight" in cache_dict:
+            self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
+        if "bias" in cache_dict:
+            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
 
     def load_state_dict(self, state_dict):
         if self.norm_elementwise_affine:
@@ -160,6 +206,29 @@ class DistributedLayerNorm:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        # Cache weight
+        if self.weight is not None:
+            weight_path = path_prefix + "weight"
+            ttnn.dump_tensor(weight_path, self.weight)
+            cache_dict["weight"] = weight_path
+
+        # Cache bias
+        if self.bias is not None:
+            bias_path = path_prefix + "bias"
+            ttnn.dump_tensor(bias_path, self.bias)
+            cache_dict["bias"] = bias_path
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        if "weight" in cache_dict:
+            self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
+        if "bias" in cache_dict:
+            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
 
     def load_state_dict(self, state_dict):
         if self.norm_elementwise_affine:
