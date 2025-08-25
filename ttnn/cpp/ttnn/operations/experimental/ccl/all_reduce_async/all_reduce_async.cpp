@@ -5,7 +5,7 @@
 #include "all_reduce_async.hpp"
 
 #include "ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
-#include "ttnn/operations/experimental/ccl/all_gather_async_command_processor/device/all_gather_async_command_processor_op.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_command_processor_async/device/all_gather_command_processor_async_op.hpp"
 #include "device/all_reduce_async_op.hpp"
 #include "ttnn/global_semaphore.hpp"
 
@@ -95,7 +95,7 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     return ttnn::operations::experimental::ccl::all_gather_command_processor_async(
         scattered_tensors,
         dim,
-        gather_multi_device_global_semaphore,
+        gather_multi_device_global_semaphore.global_semaphores.at(0),
         /* persistent_output_buffers */ std::nullopt,
         num_preferred_links.value_or(1),
         out_memory_config,
@@ -179,7 +179,7 @@ std::vector<ttnn::Tensor> ExecuteAllReduceAsync::invoke(
     return ttnn::operations::experimental::ccl::all_gather_command_processor_async(
         scattered_tensors,
         dim,
-        gather_multi_device_global_semaphore,
+        gather_multi_device_global_semaphore.global_semaphores.at(0),
         /* persistent_output_buffers */ std::nullopt,
         num_preferred_links.value_or(1),
         out_memory_config,

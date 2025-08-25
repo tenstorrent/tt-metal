@@ -302,7 +302,8 @@ std::vector<Tensor> all_gather_command_processor_async(
             input_tensors[i],
             dim,
             multi_device_global_semaphore,
-            persistent_output_buffer[i],
+            persistent_output_buffers.has_value() ? std::make_optional(persistent_output_buffers.value().at(i))
+                                                  : std::nullopt,
             num_links,
             memory_config,
             topology,
