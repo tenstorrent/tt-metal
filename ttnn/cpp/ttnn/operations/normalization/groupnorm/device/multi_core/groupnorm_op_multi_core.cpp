@@ -2827,10 +2827,9 @@ operation::ProgramWithCallbacks groupnorm_multi_core_welford(
     uint32_t x_CB_size_group_2 = 0;
     uint32_t xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm_CB_size_group_2 = 0;
-    uint32_t ex_partial_CB_size = 2 * single_tile_size;   // partial Ex
-    uint32_t ex2_partial_CB_size = 2 * single_tile_size;  // partial Ex2
-    uint32_t ex_global_CB_size = 2 * ex_partial_CB_size;  // the final result Ex
-    uint32_t ex2_global_CB_size = ex2_partial_CB_size;  // the final result Ex2
+    uint32_t ex_partial_CB_size =
+        2 * 2 * single_tile_size;                     // partial Ex // Double buffered for previous and next values
+    uint32_t ex_global_CB_size = ex_partial_CB_size;  // the final result Ex
     uint32_t xmm2_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm2_CB_size_group_2 = 0;
     uint32_t xmm3_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
@@ -2863,53 +2862,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core_welford(
         out_CB_size_group_1 = in0_block_tiles_group_1 * out_single_tile_size;
         out_CB_size_group_2 = in0_block_tiles_group_2 * out_single_tile_size;
     }
-
-    // Do CB size check with group_2 since it's larger
-    // if (equal_batches_per_core) {
-    //     TT_FATAL(
-    //         cbs_fit_in_DRAM(
-    //             in0_CB_size_group_1,
-    //             in_CB_size_group_1,
-    //             in2_CB_size,
-    //             in3_CB_size,
-    //             in5_CB_size,
-    //             in6_CB_size,
-    //             in_mask_CB_size,
-    //             repack_CB_size,
-    //             x_CB_size_group_1,
-    //             xmm_CB_size_group_1,
-    //             ex_partial_CB_size,
-    //             ex_global_CB_size,
-    //             ex2_global_CB_size,
-    //             xmm2_CB_size_group_1,
-    //             xmm3_CB_size_group_1,
-    //             ex2pe_CB_size,
-    //             out_CB_size_group_1,
-    //             a.device()->l1_size_per_core()),
-    //         "Circular buffers require too much space to fit into L1");
-    // } else {
-    //     TT_FATAL(
-    //         cbs_fit_in_DRAM(
-    //             in0_CB_size_group_2,
-    //             in_CB_size_group_2,
-    //             in2_CB_size,
-    //             in3_CB_size,
-    //             in5_CB_size,
-    //             in6_CB_size,
-    //             in_mask_CB_size,
-    //             repack_CB_size,
-    //             x_CB_size_group_2,
-    //             xmm_CB_size_group_2,
-    //             ex_partial_CB_size,
-    //             ex_global_CB_size,
-    //             ex2_global_CB_size,
-    //             xmm2_CB_size_group_2,
-    //             xmm3_CB_size_group_2,
-    //             ex2pe_CB_size,
-    //             out_CB_size_group_2,
-    //             a.device()->l1_size_per_core()),
-    //         "Circular buffers require too much space to fit into L1");
-    // }
 
     log_debug(tt::LogOp, "per_core_Nt: {}", per_core_Nt);
     log_debug(tt::LogOp, "per_core_Mt_group_1: {}", per_core_Mt_group_1);
@@ -3346,7 +3298,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_welford(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
-    };
+        (std::uint32_t)group_size};
     std::vector<uint32_t> mcast_sender_compute_compile_time_args_group_2 = {
         (std::uint32_t)1,
         (std::uint32_t)gamma.has_value(),
@@ -3377,7 +3329,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_welford(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
-    };
+        (std::uint32_t)group_size};
 
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_1 = {
         (std::uint32_t)0,
@@ -3409,7 +3361,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_welford(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
-    };
+        (std::uint32_t)group_size};
     std::vector<uint32_t> mcast_receiver_compute_compile_time_args_group_2 = {
         (std::uint32_t)0,
         (std::uint32_t)gamma.has_value(),
@@ -3440,7 +3392,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_welford(
         (std::uint32_t)num_datum_row_per_group < TILE_WIDTH,
         (std::uint32_t)num_datum_row_per_group - (block_wt - 1) * TILE_WIDTH,
         (std::uint32_t)num_out_blocks,
-    };
+        (std::uint32_t)group_size};
     // compute kernel
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -3635,20 +3587,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_welford(
             .set_page_size(ex_cb_external_index, single_tile_size);
     auto cb_ex_external = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_external_config);
     // ex_global
-    uint32_t ex_cb_index = tt::CBIndex::c_9;
     uint32_t ex_global_cb_index = tt::CBIndex::c_15;
-    std::map<uint8_t, tt::DataFormat> ex_global_cb_data_format_spec{
-        {ex_global_cb_index, cb_data_format}, {ex_cb_index, cb_data_format}};
+    std::map<uint8_t, tt::DataFormat> ex_global_cb_data_format_spec{{ex_global_cb_index, cb_data_format}};
     auto ex_global_cb_config = tt::tt_metal::CircularBufferConfig(ex_global_CB_size, ex_global_cb_data_format_spec)
-                                   .set_page_size(ex_global_cb_index, single_tile_size)
-                                   .set_page_size(ex_cb_index, single_tile_size);
+                                   .set_page_size(ex_global_cb_index, single_tile_size);
     auto cb_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_global_cb_config);
-    // ex2_global
-    uint32_t ex2_global_cb_index = tt::CBIndex::c_14;
-    std::map<uint8_t, tt::DataFormat> ex2_global_cb_data_format_spec{{ex2_global_cb_index, cb_data_format}};
-    auto ex2_global_cb_config = tt::tt_metal::CircularBufferConfig(ex2_global_CB_size, ex2_global_cb_data_format_spec)
-                                    .set_page_size(ex2_global_cb_index, single_tile_size);
-    auto cb2_ex_global = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex2_global_cb_config);
+
     // ex2pe
     uint32_t cb_ex2pe_index;
     cb_ex2pe_index = tt::CBIndex::c_27;
