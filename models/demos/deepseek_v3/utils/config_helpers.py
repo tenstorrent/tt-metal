@@ -586,8 +586,8 @@ TENSOR_CACHE_EXTENSION = ".tensorbin"
 def save_and_get_path(path, tensor):
     """Save a tensor to a file and return the path."""
     # Ensure the path has an appropriate extension
-    if not path.name.endswith(TENSOR_CACHE_EXTENSION):
-        path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
+    # if not path.name.endswith(TENSOR_CACHE_EXTENSION):
+    #     path = path.with_name(f"{path.name}{TENSOR_CACHE_EXTENSION}")
 
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
