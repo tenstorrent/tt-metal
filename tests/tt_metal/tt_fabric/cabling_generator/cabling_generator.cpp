@@ -65,14 +65,16 @@ int main(int argc, char* argv[]) {
         std::cerr << "Failed to open file: " << dep_fn << std::endl;
         return 1;
     }
-    // Read the entire d_input file into a string
-    std::string d_input_str((std::istreambuf_iterator<char>(d_input)), std::istreambuf_iterator<char>());
     // Create the Deployment protobuf object
     deployment::DeploymentDescriptor deployment;
+    // Read the entire d_input file into a string
+    std::string d_input_str((std::istreambuf_iterator<char>(d_input)), std::istreambuf_iterator<char>());
 
     // Parse the textproto into the protobuf object
     if (!google::protobuf::TextFormat::ParseFromString(d_input_str, &deployment)) {
         std::cerr << "Failed to parse deployment textproto." << std::endl;
+        std::cerr << "May have misordered input parameters, please check ordering and try again." << std::endl;
+        std::cerr << "Usage: " << argv[0] << " <deployment.textproto> <cabling.textproto>" << std::endl;
         return 1;
     }
 
@@ -133,8 +135,8 @@ int main(int argc, char* argv[]) {
         output_file << host_info_b.hall() << "," << host_info_b.aisle() << "," << std::setw(2) << host_info_b.rack()
                     << "," << host_info_b.shelf_u() << "," << connection.ep_b().tray() << ","
                     << connection.ep_b().port() << "," << label.str() << ",";
-        output_file << cable_length_str.at(cable_l) << ","                       // Cable Length
-                    << ((cable_l == OPTICAL_CABLE) ? "Optical" : "QSFP_DD ACE")  // Cable Type
+        output_file << cable_length_str.at(cable_l) << ","                   // Cable Length
+                    << ((cable_l == OPTICAL_CABLE) ? "Optical" : "QSFP_DD")  // Cable Type
                     << "," << std::endl;
     }
 
