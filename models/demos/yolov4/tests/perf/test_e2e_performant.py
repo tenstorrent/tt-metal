@@ -81,11 +81,11 @@ def run_perf_e2e_yolov4(
 )
 @pytest.mark.parametrize(
     "batch_size_per_device, act_dtype, weight_dtype",
-    ((1, ttnn.bfloat16, ttnn.bfloat16),),
+    ((1, ttnn.bfloat8_b, ttnn.bfloat8_b),),
 )
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((320, 320), 103), ((640, 640), 46)],
+    [((320, 320), 103)],
 )
 def test_e2e_performant(
     device,

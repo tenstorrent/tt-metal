@@ -207,6 +207,7 @@ class TtNeck:
         ttnn.deallocate(pool_1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        output_tensor = ttnn.add(output_tensor, 0.0, dtype=ttnn.bfloat16)
         output_tensor = ttnn.concat([pool_all, output_tensor], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         output_tensor = self.conv4(output_tensor)[0]
@@ -299,6 +300,7 @@ class TtNeck:
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
 
+        output_tensor_upsample_1 = ttnn.add(output_tensor_upsample_1, 0.0, dtype=ttnn.bfloat8_b)
         output_tensor = ttnn.concat(
             [output_tensor, output_tensor_upsample_1], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
         )
@@ -415,6 +417,7 @@ class TtNeck:
         output_tensor = ttnn.leaky_relu(output_tensor, negative_slope=0.1)
 
         output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+        output_tensor_upsample_2 = ttnn.add(output_tensor_upsample_2, 0.0, dtype=ttnn.bfloat8_b)
         output_tensor = ttnn.concat(
             [output_tensor, output_tensor_upsample_2], dim=3, memory_config=ttnn.L1_MEMORY_CONFIG
         )

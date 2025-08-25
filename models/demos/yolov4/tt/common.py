@@ -19,7 +19,7 @@ class Conv:
             packer_l1_acc=False,
             math_approx_mode=False,
         )
-        self.conv_output_dtype = conv_param.dtype
+        self.conv_output_dtype = ttnn.bfloat8_b
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=ttnn.bfloat8_b,
             activation=activation,
