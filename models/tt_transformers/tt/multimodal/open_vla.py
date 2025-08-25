@@ -104,7 +104,7 @@ class LLama2OpenVLAArgs(ModelArgs):
             "rope_scaling": None,
             "rope_theta": 10000.0,
             "tie_word_embeddings": False,
-            "torch_dtype": "bfloat16",
+            "torch_dtype": "BFLOAT8_b",
             "transformers_version": "4.38.0",
             "use_cache": True,
             "vocab_size": 32064,
@@ -121,12 +121,11 @@ class LLama2OpenVLAArgs(ModelArgs):
 
 
 class OpenVLALanguageModel:
-    def __init__(self):
-        mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    def __init__(self, device):
         generator_args_config = {
             "num_devices": 1,
             "data_parallel": 1,
-            "mesh_device": mesh_device,
+            "mesh_device": device,
             "instruct": True,
             "global_batch_size": 1,
             "optimizations": None,
@@ -431,7 +430,9 @@ class PrismaticForConditionalGeneration(PrismaticPreTrainedModel):
 
         # Instantiate LLM Backbone
         # TODO: Insert TT LLM HERE
-        self.language_model = OpenVLALanguageModel()
+        mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+
+        self.language_model = OpenVLALanguageModel(mesh_device)
         breakpoint()
         self.language_model = AutoModelForCausalLM.from_config(
             config.text_config, attn_implementation=config._attn_implementation
@@ -767,8 +768,17 @@ kwargs = {
 }
 config_dict, kwargs = OpenVLAConfig.get_config_dict(**kwargs)
 vla_config, kwargs = OpenVLAConfig.from_dict(config_dict, **kwargs)
-vla = TTOpenVLAForActionPrediction(vla_config).to("cpu", dtype=torch.bfloat16)
-# Predict Action (7-DoF; un-normalize for BridgeData V2)
-inputs = processor(prompt, image).to("cpu", dtype=torch.bfloat16)
-action = vla.predict_action(**inputs, unnorm_key="bridge_orig", do_sample=False)
-print(action)
+# vla = TTOpenVLAForActionPrediction(vla_config).to("cpu", dtype=torch.bfloat16)
+# # Predict Action (7-DoF; un-normalize for BridgeData V2)
+# inputs = processor(prompt, image).to("cpu", dtype=torch.bfloat16)
+# action = vla.predict_action(**inputs, unnorm_key="bridge_orig", do_sample=False)
+# print(action)
+
+
+
+
+
+def test_language_model(device):
+    language_model = OpenVLALanguageModel(device)
+    breakpoint()
+    print("DONE")
