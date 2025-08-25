@@ -57,13 +57,12 @@ void kernel_main() {
     constexpr uint32_t src_chip_id = get_compile_time_arg_val(9);
     constexpr uint32_t data_size_bytes = get_compile_time_arg_val(10);  // hidden dim * datum size
     constexpr uint32_t alignment = get_compile_time_arg_val(11);
-    constexpr uint32_t output_is_dram = get_compile_time_arg_val(12);
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(13);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(14);  // ew_dim
-    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(15);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(16);
-    constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(17));
-    constexpr uint32_t locally_reduced = get_compile_time_arg_val(18);
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(12);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(13);  // ew_dim
+    constexpr uint32_t fabric_max_packet_size_bytes = get_compile_time_arg_val(14);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(15);
+    constexpr tt::tt_fabric::Topology topology = tt::tt_fabric::Topology(get_compile_time_arg_val(16));
+    constexpr uint32_t locally_reduced = get_compile_time_arg_val(17);
 
 #ifdef REPLICATE_GROUP_AXIS
     constexpr ReplicateGroup replicate_axis = ReplicateGroup(REPLICATE_GROUP_AXIS);
@@ -108,8 +107,8 @@ void kernel_main() {
     std::array<WorkerToFabricEdmSender, Num_Directions> fabric_connections;
     open_direction_connections_async(directions, fabric_connections, rt_arg_count);
 
-    InterleavedAddrGen<output_is_dram> output_addrgen{
-        .bank_base_address = output_base_addr, .page_size = data_size_bytes};
+    constexpr auto output_tensor_args = TensorAccessorArgs<18>();
+    TensorAccessor output_addrgen(output_tensor_args, output_base_addr, data_size_bytes);
 
     volatile PACKET_HEADER_TYPE * packet_headers[2];
     for(uint8_t i =0;i<2;++i){

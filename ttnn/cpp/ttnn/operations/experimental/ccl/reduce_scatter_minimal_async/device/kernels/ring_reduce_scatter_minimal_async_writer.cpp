@@ -117,11 +117,8 @@ void kernel_main() {
 #else
     constexpr uint32_t ct_offset = 0;
 
-    constexpr bool intermediate_is_dram = intermediate_type == tt::tt_metal::BufferType::DRAM;
-    auto intermediate_addrgen = InterleavedAddrGenFast<intermediate_is_dram>{
-        .bank_base_address = intermediate_address,
-        .page_size = intermediate_page_size,
-        .data_format = get_dataformat(cb_compute_output_id)};
+    constexpr auto intermediate_args = TensorAccessorArgs<ct_idx>();
+    auto intermediate_addrgen = TensorAccessor(intermediate_args, intermediate_address, intermediate_page_size);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -143,11 +140,8 @@ void kernel_main() {
 
     arg_idx += output_rt_increment;
 #else
-    constexpr bool output_is_dram = output_type == tt::tt_metal::BufferType::DRAM;
-    auto output_addrgen = InterleavedAddrGenFast<output_is_dram>{
-        .bank_base_address = output_address,
-        .page_size = intermediate_page_size,
-        .data_format = get_dataformat(cb_compute_output_id)};
+    constexpr auto output_args = TensorAccessorArgs<ct_idx + ct_offset>();
+    auto output_addrgen = TensorAccessor(output_args, output_address, intermediate_page_size);
 #endif
 
     auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(

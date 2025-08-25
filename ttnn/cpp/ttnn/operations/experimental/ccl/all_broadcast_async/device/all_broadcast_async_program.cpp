@@ -25,6 +25,7 @@
 
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <sstream>
 #include <type_traits>
 #include <ranges>
@@ -186,6 +187,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         kernel_defines["SHARDED"] = "1";
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
+    } else {
+        // Append TensorAccessorArgs when not sharded
+        tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
+        tt::tt_metal::TensorAccessorArgs(output_tensors[ring_index].buffer()).append_to(writer_compile_args);
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

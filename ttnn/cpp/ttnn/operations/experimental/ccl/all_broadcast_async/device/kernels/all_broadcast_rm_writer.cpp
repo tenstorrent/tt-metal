@@ -78,8 +78,8 @@ void kernel_main() {
     size_t fab_idx = arg_for_fab + rt_increment;
     auto fabric_connection = FabricConnectionManager::build_from_args(fab_idx);
 #else
-    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    const auto tensor0_addrgen = get_interleaved_addr_gen<is_dram, row_size>(tensor_address0);
+    constexpr auto tensor0_args = TensorAccessorArgs<11>();
+    const auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, row_size);
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
 #endif

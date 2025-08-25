@@ -8,6 +8,7 @@
 #include "ttnn/tensor/types.hpp"
 #include <tt-metalium/device.hpp>
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -105,7 +106,12 @@ args_list_t emit_address_generator_compile_time_args(const tt::tt_metal::Tensor&
             return shard_builder::generate_compile_time_args(t);
             break;
 
-        case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: return {}; break;
+        case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: {
+            // For interleaved tensors, emit TensorAccessorArgs
+            args_list_t args;
+            tt::tt_metal::TensorAccessorArgs(t.buffer()).append_to(args);
+            return args;
+        }
 
         default:
             TT_ASSERT(

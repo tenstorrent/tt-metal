@@ -76,11 +76,8 @@ void kernel_main() {
 #else
     constexpr uint32_t ct_offset = 0;
 
-    constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
-    auto input_tensor_addrgen = InterleavedAddrGenFast<input_tensor_is_dram>{
-        .bank_base_address = input_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_input_id)};
+    constexpr auto input_tensor_args = TensorAccessorArgs<15>();
+    auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, input_tensor_page_size);
 #endif
 
 #ifdef INTERMEDIATE_IS_SHARDED
@@ -102,11 +99,9 @@ void kernel_main() {
 
     arg_idx += intermediate_rt_increment;
 #else
-    constexpr bool intermediate_tensor_is_dram = intermediate_buffer_type == tt::tt_metal::BufferType::DRAM;
-    auto intermediate_tensor_addrgen = InterleavedAddrGenFast<intermediate_tensor_is_dram>{
-        .bank_base_address = intermediate_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_input_id)};
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<15 + ct_offset>();
+    auto intermediate_tensor_addrgen =
+        TensorAccessor(intermediate_tensor_args, intermediate_tensor_address, input_tensor_page_size);
 #endif
 
     ReduceScatterOpReceiver matmul_receiver;

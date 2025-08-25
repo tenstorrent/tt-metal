@@ -57,7 +57,8 @@ void kernel_main() {
         .bank_base_address = tensor_address0, .shard_array = mapping_table};
 #else
     // interleaved addrgen
-    const auto tensor0_addrgen = get_interleaved_addr_gen<is_dram, row_size>(tensor_address0);
+    constexpr auto tensor0_args = TensorAccessorArgs<6>();
+    const auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, row_size);
 #endif
 
     uint32_t row_id = row_id_start;

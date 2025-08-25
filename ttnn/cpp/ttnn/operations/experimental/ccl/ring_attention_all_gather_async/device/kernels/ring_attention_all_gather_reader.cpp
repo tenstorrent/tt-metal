@@ -62,14 +62,11 @@ void kernel_main() {
 
     const uint32_t payload_size_bytes = input_tensor_page_size * contig_pages_advanced;
     // Push out our local slice
-    constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
-    InterleavedAddrGenFast<input_tensor_is_dram> input_tensor_addrgens[num_inputs];
+    constexpr auto input_tensor_args = TensorAccessorArgs<13>();
+    TensorAccessor input_tensor_addrgens[num_inputs];
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        auto input_tensor_addrgen = InterleavedAddrGenFast<input_tensor_is_dram>{
-            .bank_base_address = input_tensor_addresses[input_idx],
-            .page_size = input_tensor_page_size,
-            .data_format = get_dataformat(cb_output_id)};
-        input_tensor_addrgens[input_idx] = input_tensor_addrgen;
+        input_tensor_addrgens[input_idx] =
+            TensorAccessor(input_tensor_args, input_tensor_addresses[input_idx], input_tensor_page_size);
     }
 
     uint32_t tiles_read = input_tile_id_start;
@@ -98,14 +95,11 @@ void kernel_main() {
         output_tile_id_start = 0;
     }
 
-    constexpr bool output_tensor_is_dram = output_buffer_type == tt::tt_metal::BufferType::DRAM;
-    InterleavedAddrGenFast<output_tensor_is_dram> output_tensor_addrgens[num_inputs];
+    constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
+    TensorAccessor output_tensor_addrgens[num_inputs];
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        auto output_tensor_addrgen = InterleavedAddrGenFast<output_tensor_is_dram>{
-            .bank_base_address = output_tensor_addresses[input_idx],
-            .page_size = input_tensor_page_size,
-            .data_format = get_dataformat(cb_output_id)};
-        output_tensor_addrgens[input_idx] = output_tensor_addrgen;
+        output_tensor_addrgens[input_idx] =
+            TensorAccessor(output_tensor_args, output_tensor_addresses[input_idx], input_tensor_page_size);
     }
 
     uint32_t slices_received = 0;

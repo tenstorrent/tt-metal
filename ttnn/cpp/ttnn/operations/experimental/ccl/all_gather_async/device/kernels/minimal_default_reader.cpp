@@ -75,11 +75,8 @@ void kernel_main() {
 #else
     constexpr uint32_t ct_offset = 0;
 
-    constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
-    const InterleavedAddrGenFast<input_tensor_is_dram> input_tensor_addrgen = {
-        .bank_base_address = input_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_output_id)};
+    constexpr auto input_tensor_args = TensorAccessorArgs<12>();
+    const TensorAccessor input_tensor_addrgen(input_tensor_args, input_tensor_address, input_tensor_page_size);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -101,11 +98,8 @@ void kernel_main() {
 
     arg_idx += output_rt_increment;
 #else
-    constexpr bool output_tensor_is_dram = output_buffer_type == tt::tt_metal::BufferType::DRAM;
-    const InterleavedAddrGenFast<output_tensor_is_dram> output_tensor_addrgen = {
-        .bank_base_address = output_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_output_id)};
+    constexpr auto output_tensor_args = TensorAccessorArgs<12 + ct_offset>();
+    const TensorAccessor output_tensor_addrgen(output_tensor_args, output_tensor_address, input_tensor_page_size);
 #endif
 
     OpSignaler op_signaler;
