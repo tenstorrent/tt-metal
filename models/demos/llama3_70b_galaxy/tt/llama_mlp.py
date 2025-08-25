@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
+from loguru import logger
 
 
 def pad_to_next_multiple(tensor):
@@ -54,6 +55,9 @@ class TtLlamaMLP(LightweightModule):
             cache_name = lambda _: None
         else:
             cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}")
+
+        w1_cache_name = cache_name("w1_sharded")
+        logger.info(f"cache_name in MLP: {w1_cache_name}")
 
         w1_w3_mem_config = self.model_config[
             "W1W3_RING_MEMCFG"
@@ -147,16 +151,36 @@ class TtLlamaMLP(LightweightModule):
         logger.info(f"w1_out_reduced: {w1_out_reduced}")
         logger.info(f"w3_out: {w3_out}")
 
-        w3_out_reduced = self.tt_ccl.line_reduce_scatter(
-            w3_out,
-            cluster_axis=1,
-            num_links=self.model_config["GALAXY_NUM_LINKS"],
-            memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"],
-            use_noc1_only=False,
-        )
-        ttnn.deallocate(w3_out)
-        logger.info(f"w3_out_reduced: {w3_out_reduced}")
-        ff1ff3 = ttnn.mul(
+            w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w1_out, cluster_axis=1, num_links=1, memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
+            )
+
+            # breakpoint()
+
+            ttnn.deallocate(w1_out)
+
+            w3_out = ttnn.linear(
+                x,
+                self.w3,
+                compute_kernel_config=self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2,
+                dtype=ttnn.bfloat8_b,
+                program_config=pc_1_3,
+                memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
+                global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+                sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
+            )
+
+            # ttnn.deallocate(x)
+
+            w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w3_out, cluster_axis=1, num_links=1, memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
+            )
+
+            ttnn.deallocate(w3_out)
+
+        ff1ff3 = ttnn.mul(  # [1, 1, 32, 800]
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
