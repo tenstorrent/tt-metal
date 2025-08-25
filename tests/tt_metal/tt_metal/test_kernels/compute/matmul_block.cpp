@@ -23,7 +23,7 @@ void MAIN {
     matmul_block_init(
         tt::CBIndex::c_0, tt::CBIndex::c_2, false, dst_tile_cols - 1, dst_tile_rows - 1, block_tile_dim - 1);
     // Corrected init short with dt
-    matmul_block_init_reconfig_data_format(
+    matmul_block_init_reconfig_data_format_srca(
         tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_2, false, dst_tile_cols, dst_tile_rows, block_tile_dim);
 #elif (WITH_DT == 0)
     // Intentionally wrong init with same data formats
