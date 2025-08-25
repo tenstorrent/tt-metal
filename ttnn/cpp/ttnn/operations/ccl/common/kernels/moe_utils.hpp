@@ -196,25 +196,22 @@ uint32_t get_route(uint32_t linearized_src_mesh_coord, uint32_t linearized_dest_
     }
 }
 
-template <uint32_t FabricMaxPacketSzBytes>
+template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType>
 inline void fabric_send_noc_unicast(
+    AddrGenType addrgen,
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t payload_l1_address,
-    uint64_t noc_payload_write_address,
+    uint64_t noc_page,
     int32_t size_bytes,
     uint32_t alignment) {
     while (size_bytes > 0) {
         uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, (uint32_t)size_bytes);
 
-        packet_header->to_noc_unicast_write(
-            NocUnicastCommandHeader{noc_payload_write_address}, align(curr_packet_size, alignment));
-
-        fabric_connection.wait_for_empty_write_slot();
-
-        fabric_connection.send_payload_without_header_non_blocking_from_address(payload_l1_address, curr_packet_size);
-
-        fabric_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+        tt::tt_fabric::linear::to_noc_unicast_write(
+            align(curr_packet_size, alignment), packet_header, noc_page, addrgen);
+        perform_payload_send(fabric_connection, payload_l1_address, curr_packet_size, packet_header)
+            payload_l1_address += curr_packet_size;
 
         payload_l1_address += curr_packet_size;
         noc_payload_write_address += curr_packet_size;
@@ -230,14 +227,20 @@ enum eth_chan_directions {
     SOUTH = 3,
     COUNT = 4,
 };*/
-template <uint32_t SrcChipId, uint32_t MeshRows, uint32_t MeshCols, int32_t FabricMaxPacketSzBytes>
+template <
+    uint32_t SrcChipId,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    int32_t FabricMaxPacketSzBytes,
+    typename AddrGenType>
 inline void fabric_send_chip_unicast_noc_unicast(
+    AddrGenType addrgen,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint32_t dest_chip_id,
     const uint32_t dest_mesh_id,
     uint32_t payload_l1_address,
-    uint64_t noc_payload_write_address,
+    uint32_t noc_payload_page,
     int32_t size_bytes,
     const uint32_t alignment) {
     const uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
@@ -252,7 +255,47 @@ inline void fabric_send_chip_unicast_noc_unicast(
         MeshCols);
 
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
-        fabric_connections[route], packet_header, payload_l1_address, noc_payload_write_address, size_bytes, alignment);
+        addrgen, fabric_connections[route], packet_header, payload_l1_address, noc_payload_page, size_bytes, alignment);
+}
+
+template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType>
+inline void fabric_send_noc_unicast_with_semaphore(
+    AddrGenType addrgen,
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t payload_l1_address,
+    uint32_t payload_page_id,
+    uint64_t noc_remote_semaphore_address,
+    int32_t size_bytes,
+    uint32_t alignment,
+    uint16_t increment_value,
+    bool flush,
+    uint32_t offset = 0) {
+    while (size_bytes > 0) {
+        uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, (uint32_t)size_bytes);
+
+        if ((uint32_t)size_bytes == curr_packet_size) {
+            // Fill header for fused unicast + atomic increment command when it is the last packet
+            tt::tt_fabric::linear::to_noc_fused_unicast_write_atomic_inc(
+                align(curr_packet_size, alignment),
+                packet_header,
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                    noc_remote_semaphore_address, increment_value, 32, flush},
+                payload_page_id,
+                addrgen,
+                offset);
+        } else {
+            // Fill header for fused unicast + atomic increment command when it is not the last packet
+            tt::tt_fabric::linear::to_noc_unicast_write(
+                align(curr_packet_size, alignment), packet_header, payload_page_id, addrgen);
+        }
+
+        // Send payload followed by header over the fabric.
+        perform_payload_send(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
+        payload_l1_address += curr_packet_size;
+        noc_payload_write_address += curr_packet_size;
+        size_bytes -= curr_packet_size;
+    }
 }
 
 template <uint32_t FabricMaxPacketSzBytes>
@@ -329,6 +372,52 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
         flush);
 }
 
+// Insert helper that handles the remote-device metadata path with fused atomic increment
+template <
+    uint32_t SrcChipId,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    uint32_t FabricMaxPacketSzBytes,
+    typename AddrGenType>
+inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
+    AddrGenType addrgen,
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t dest_chip_id,
+    uint32_t dest_mesh_id,
+    uint32_t payload_l1_address,
+    uint64_t noc_payload_page,
+    uint64_t noc_remote_semaphore_address,
+    int32_t size_bytes,
+    uint32_t alignment,
+    uint16_t increment_value,
+    bool flush,
+    uint32_t offset = 0) {
+    uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
+
+    // Populate packet header with routing information
+    fabric_set_unicast_route(
+        (LowLatencyMeshPacketHeader*)packet_header,
+        static_cast<eth_chan_directions>(fabric_connections[route].direction),
+        SrcChipId,
+        dest_chip_id,
+        dest_mesh_id,
+        MeshCols);
+
+    return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
+        addrgen,
+        fabric_connections[route],
+        packet_header,
+        payload_l1_address,
+        noc_payload_page,
+        noc_remote_semaphore_address,
+        size_bytes,
+        alignment,
+        increment_value,
+        flush,
+        offset);
+}
+
 // Fabric send for NOC unicast semaphore increment only (no payload)
 template <uint32_t SrcChipId, uint32_t MeshRows, uint32_t MeshCols>
 inline void fabric_send_chip_unicast_noc_unicast_semaphore_only(
@@ -365,13 +454,15 @@ template <
     tt::tt_fabric::Topology Topology,
     uint32_t MeshRows,
     uint32_t MeshCols,
-    int32_t FabricMaxPacketSzBytes>
+    int32_t FabricMaxPacketSzBytes,
+    typename AddrGenType>
 inline void fabric_send_chip_unicast_noc_unicast_1d(
+    AddrGenType addrgen,
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint32_t linearized_dest_mesh_coord,
     uint32_t payload_l1_address,
-    uint64_t noc_payload_write_address,
+    uint32_t noc_payload_page,
     int32_t size_bytes,
     const uint32_t alignment) {
     uint32_t distance =
@@ -380,7 +471,14 @@ inline void fabric_send_chip_unicast_noc_unicast_1d(
 
     uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
-        fabric_connections[route], packet_header, payload_l1_address, noc_payload_write_address, size_bytes, alignment);
+        addrgen,
+        fabric_connections[route],
+        packet_header,
+        payload_l1_address,
+        noc_payload_page,
+        noc_payload_write_address,
+        size_bytes,
+        alignment);
 }
 
 template <
@@ -415,6 +513,45 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
         alignment,
         increment_value,
         flush);
+}
+
+template <
+    uint32_t LinearizedSrcMeshCoord,
+    tt::tt_fabric::Topology Topology,
+    uint32_t MeshRows,
+    uint32_t MeshCols,
+    int32_t FabricMaxPacketSzBytes,
+    typename AddrGenType>
+inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
+    AddrGenType addrgen,
+    std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    const uint32_t linearized_dest_mesh_coord,
+    uint32_t payload_l1_address,
+    uint32_t noc_payload_page,
+    uint64_t noc_remote_semaphore_address,
+    int32_t size_bytes,
+    const uint32_t alignment,
+    uint16_t increment_value,
+    bool flush,
+    uint32_t offset = 0) {
+    uint32_t distance =
+        manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    packet_header->to_chip_unicast(distance);
+
+    uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
+    return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
+        addrgen,
+        fabric_connections[route],
+        packet_header,
+        payload_l1_address,
+        noc_payload_page,
+        noc_remote_semaphore_address,
+        size_bytes,
+        alignment,
+        increment_value,
+        flush,
+        offset);
 }
 
 // Fabric send for NOC unicast semaphore increment only in 1D topology (no payload)
