@@ -254,8 +254,10 @@ RunTimeOptions::RunTimeOptions() {
         auto* env = std::getenv("TT_METAL_PROFILER_DIR");
         if (env) {
             profiler_logs_dir_ = std::string(env) + "/";
-        } else {
-            profiler_logs_dir_ = get_root_dir() + "/generated/profiler/.logs/";
+            is_profiler_logs_dir_specified_ = true;
+        } else if (is_root_dir_specified()) {
+            profiler_logs_dir_ = root_dir + "/generated/profiler/.logs/";
+            is_profiler_logs_dir_specified_ = true;
         }
     }
 }
@@ -266,6 +268,12 @@ const std::string& RunTimeOptions::get_root_dir() const {
     }
 
     return root_dir;
+}
+
+const std::string& RunTimeOptions::get_profiler_logs_dir() const {
+    TT_FATAL(is_profiler_logs_dir_specified(), "Cannot determine PROFILER logs directory.");
+
+    return profiler_logs_dir_;
 }
 
 const std::string& RunTimeOptions::get_cache_dir() const {
