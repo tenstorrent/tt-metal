@@ -13,6 +13,7 @@ from loguru import logger
 from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
 
+from models.experimental.gemma3_4b.tt.gemma_model import TtGemma3Model
 from models.tt_transformers.tt.generator import create_submeshes
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
@@ -64,7 +65,7 @@ def create_multimodal_model(
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
-    assert tt_model_args.is_vision(), "This model is multimodal"
+    assert tt_model_args.is_multimodal, "This model is multimodal"
 
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
@@ -76,14 +77,25 @@ def create_multimodal_model(
 
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
-    model = CrossAttentionTransformer(
-        mesh_device,
-        state_dict=checkpoint,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        dtype=dtype,
-        configuration=tt_model_args,
-        use_paged_kv_cache=use_paged_kv_cache,
-    )
+
+    if "gemma-3" in tt_model_args.base_model_name:
+        model = TtGemma3Model(
+            mesh_device=mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
+            dtype=ttnn.bfloat8_b,
+            args=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+        )
+    else:
+        model = CrossAttentionTransformer(
+            mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(dtype),
+            dtype=dtype,
+            configuration=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+        )
     return tt_model_args, model, checkpoint
 
 
