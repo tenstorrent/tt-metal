@@ -5,7 +5,9 @@
  *                   sudo apt install libprotobuf-dev
  *
  *    Compile command: g++ cabling_generator.cpp deployment.pb.cc cabling.pb.cc -o cabling_generator \
- *                     -lprotobuf
+ *                     -lprotobuf -o cabling_generator
+ *
+ *    TODO: Add to CMakeLists.txt for ease of use.
  *
  *    Usage: ./cabling_generator <deployment.textproto> <cabling.textproto>
  */
@@ -100,7 +102,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     output_file.fill('0');
-    output_file << "Source,,,,,,,Destination,,,,,,,Cable Length,Cable Type," << std::endl;
+    output_file << "Source,,,,,,,Destination,,,,,,,Cable Length,Cable Type" << std::endl;
     output_file << "Hall,Aisle,Rack,U,Tray,Port,Label,Hall,Aisle,Rack,U,Tray,Port,Label,," << std::endl;
 
     uint32_t max_host = deployment.hosts_size();
@@ -137,7 +139,7 @@ int main(int argc, char* argv[]) {
                     << connection.ep_b().port() << "," << label.str() << ",";
         output_file << cable_length_str.at(cable_l) << ","                   // Cable Length
                     << ((cable_l == OPTICAL_CABLE) ? "Optical" : "QSFP_DD")  // Cable Type
-                    << "," << std::endl;
+                    << std::endl;
     }
 
     d_input.close();
