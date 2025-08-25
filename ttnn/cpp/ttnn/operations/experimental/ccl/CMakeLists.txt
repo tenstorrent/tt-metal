@@ -46,6 +46,9 @@ target_sources(
         all_gather_async/device/all_gather_async_op.cpp
         all_gather_async/device/all_gather_async_program.cpp
         all_gather_async/device/all_gather_async_program_minimal_variants.cpp
+        all_gather_command_processor_async/all_gather_command_processor_async.cpp
+        all_gather_command_processor_async/device/all_gather_command_processor_async_op.cpp
+        all_gather_command_processor_async/device/all_gather_command_processor_async_program.cpp
         llama_all_gather_matmul_async/llama_all_gather_matmul_async.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_matmul_async_op.cpp
         llama_all_gather_matmul_async/device/llama_all_gather_mm_async_program_factory.cpp
