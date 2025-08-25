@@ -41,7 +41,7 @@ namespace ckernel {
  * | Function   | transpose | The transpose flag for performing transpose operation on B | uint32_t | Any positive value will indicate transpose is set| False    |
  */
 // clang-format on
-ALWI void matmul_init(uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0) {
+ALWI void matmul_init(uint32_t in0_cb_id, uint32_t in1_cb_id, const bool transpose = 0) {
     // CRITICAL: Only matmul-specific hardware configs that differ from generic startup
     UNPACK((llk_unpack_AB_matmul_hw_configure_disaggregated<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
@@ -83,7 +83,7 @@ ALWI void matmul_tile(
     uint32_t in0_tile_index,
     uint32_t in1_tile_index,
     uint32_t dest_tile_index,
-    const uint32_t transpose = 0) {
+    const bool transpose = 0) {
     UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index)));
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(dest_tile_index, transpose)));
 }
@@ -122,8 +122,11 @@ ALWI void matmul_tile_math(uint32_t dest_tile_index) {
  * This function should be used when switching from another operation that used
  * a different data format for srcA. Safe to call multiple times in fused kernels.
  *
- * Unpacker: Reconfigures data format mapping from old_srca_cb to in1_cb_id for srcA path
- * Math Engine: Updates data format configuration for srcA operand processing
+ * IMPORTANT: This function only reconfigures srcA data format. Use matmul_init_reconfig_data_format()
+ * if you need to reconfigure both srcA and srcB data formats.
+ *
+ * Unpacker: Reconfigures data format mapping from old_srca_cb to in1_cb_id for srcA path only
+ * Math Engine: Updates data format configuration for srcA operand processing only
  * Calls matmul_init() for complete matmul-specific hardware setup after reconfiguration
  *
  * Use case:
@@ -141,10 +144,46 @@ ALWI void matmul_tile_math(uint32_t dest_tile_index) {
  * | Function   | transpose    | The transpose flag for performing transpose operation on B | uint32_t | Any positive value will indicate transpose is set| False    |
  */
 // clang-format on
-ALWI void matmul_init_reconfig_data_format(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t old_srca_cb, const uint32_t transpose = 0) {
+ALWI void matmul_init_reconfig_data_format_srca(
+    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t old_srca_cb, const bool transpose = 0) {
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_srca_cb, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_srca_cb, in1_cb_id)));
+    matmul_init(in0_cb_id, in1_cb_id, transpose);
+}
+
+// clang-format off
+/**
+ * Initializes the matmul operation with data format reconfiguration for BOTH srcA and srcB.
+ * This function should be used when switching from another operation that used
+ * different data formats for both operands. Safe to call multiple times in fused kernels.
+ *
+ * IMPORTANT: This function reconfigures BOTH srcA and srcB data formats. Use
+ * matmul_init_reconfig_data_format_srca() if you only need to reconfigure srcA.
+ *
+ * Unpacker: Reconfigures data format mapping for both srcA and srcB operand paths
+ * Math Engine: Updates data format configuration for both operands
+ * Calls matmul_init() for complete matmul-specific hardware setup after reconfiguration
+ *
+ * Use case:
+ * Essential for fused kernels where both operands were previously configured for different
+ * operations with different data formats or CB mappings. Used when transitioning from
+ * operations that affect both input data paths.
+ *
+ * Return value: None
+ *
+ * | Param Type | Name         | Description                                                 | Type     | Valid Range                                      | Required |
+ * |------------|--------------|-------------------------------------------------------------|----------|--------------------------------------------------|----------|
+ * | Function   | in0_cb_id    | The identifier of the first input circular buffer (CB)     | uint32_t | 0 to 31                                          | True     |
+ * | Function   | in1_cb_id    | The identifier of the second input circular buffer (CB)    | uint32_t | 0 to 31                                          | True     |
+ * | Function   | old_in0_cb   | The identifier of the old in0_cb_id circular buffer (CB)   | uint32_t | 0 to 31                                          | True     |
+ * | Function   | old_srca_cb  | The identifier of the old srcA circular buffer (CB)        | uint32_t | 0 to 31                                          | True     |
+ * | Function   | transpose    | The transpose flag for performing transpose operation on B | uint32_t | Any positive value will indicate transpose is set| False    |
+ */
+// clang-format on
+ALWI void matmul_init_reconfig_data_format(
+    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t old_in0_cb, uint32_t old_srca_cb, const bool transpose = 0) {
+    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(old_srca_cb, in1_cb_id, old_in0_cb, in0_cb_id)));
+    MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(old_srca_cb, in1_cb_id, old_in0_cb, in0_cb_id)));
     matmul_init(in0_cb_id, in1_cb_id, transpose);
 }
 
@@ -184,7 +223,7 @@ ALWI void matmul_init_reconfig_data_format(
 ALWI void matmul_block_init(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
-    const uint32_t transpose = 0,
+    const bool transpose = 0,
     uint32_t block_ct_dim = 1,
     uint32_t block_rt_dim = 1,
     uint32_t block_kt_dim = 1) {
@@ -239,7 +278,7 @@ ALWI void matmul_block(
     uint32_t in0_tile_index,
     uint32_t in1_tile_index,
     uint32_t dest_tile_index,
-    const uint32_t transpose,
+    const bool transpose,
     uint32_t block_ct_dim,
     uint32_t block_rt_dim,
     uint32_t block_kt_dim) {
@@ -255,8 +294,11 @@ ALWI void matmul_block(
  * This function should be used when switching from another operation that used
  * a different data format for srcA. Safe to call multiple times in fused kernels.
  *
- * Unpacker: Reconfigures data format mapping from old_in1_cb_id to in1_cb_id for srcA path
- * Math Engine: Updates data format configuration for srcA operand in block operations
+ * IMPORTANT: This function only reconfigures srcA data format. Use matmul_block_init_reconfig_data_format()
+ * if you need to reconfigure both srcA and srcB data formats.
+ *
+ * Unpacker: Reconfigures data format mapping from old_in1_cb_id to in1_cb_id for srcA path only
+ * Math Engine: Updates data format configuration for srcA operand in block operations only
  * Calls matmul_block_init() for complete block-aware matmul hardware setup after reconfiguration
  * Preserves block dimension configurations (ct_dim, rt_dim, kt_dim) across reconfiguration
  *
@@ -283,17 +325,64 @@ ALWI void matmul_block(
  * | Function   | block_kt_dim   | The inner dimension                                         | uint32_t | Must be equal to block A column dimension           | False    |
  */
 // clang-format on
-ALWI void matmul_block_init_reconfig_data_format(
+ALWI void matmul_block_init_reconfig_data_format_srca(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
     uint32_t old_in1_cb_id,
-    const uint32_t transpose = 0,
+    const bool transpose = 0,
     uint32_t block_ct_dim = 1,
     uint32_t block_rt_dim = 1,
     uint32_t block_kt_dim = 1) {
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
     matmul_block_init(in0_cb_id, in1_cb_id, transpose, block_ct_dim, block_rt_dim, block_kt_dim);
+}
+
+// clang-format off
+/**
+ * Initializes the matmul block operation with data format reconfiguration for BOTH srcA and srcB.
+ * This function should be used when switching from another operation that used
+ * different data formats for both operands. Safe to call multiple times in fused kernels.
+ *
+ * IMPORTANT: This function reconfigures BOTH srcA and srcB data formats. Use
+ * matmul_block_init_reconfig_data_format_srca() if you only need to reconfigure srcA.
+ *
+ * Unpacker: Reconfigures data format mapping for both srcA and srcB operand paths
+ * Math Engine: Updates data format configuration for both operands in block operations
+ * Calls matmul_block_init() for complete block-aware matmul hardware setup after reconfiguration
+ * Preserves block dimension configurations (ct_dim, rt_dim, kt_dim) across reconfiguration
+ *
+ * Use case:
+ * Essential for fused kernels where both operands were previously configured for different
+ * operations with different data formats or CB mappings. Used when transitioning from
+ * operations that affect both input data paths (e.g., conv to matmul transitions).
+ *
+ * Return value: None
+ *
+ * | Param Type | Name           | Description                                                 | Type     | Valid Range                                         | Required |
+ * |------------|----------------|-------------------------------------------------------------|----------|-----------------------------------------------------|----------|
+ * | Function   | in0_cb_id      | The identifier of the first input circular buffer (CB)     | uint32_t | 0 to 31                                             | True     |
+ * | Function   | in1_cb_id      | The identifier of the second input circular buffer (CB)    | uint32_t | 0 to 31                                             | True     |
+ * | Function   | old_in0_cb_id  | The identifier of the old in0_cb_id circular buffer (CB)   | uint32_t | 0 to 31                                             | True     |
+ * | Function   | old_in1_cb_id  | The identifier of the old in1_cb_id circular buffer (CB)   | uint32_t | 0 to 31                                             | True     |
+ * | Function   | transpose      | The transpose flag for performing transpose operation on B | uint32_t | Any positive value will indicate transpose is set   | False    |
+ * | Function   | ct_dim         | The column dimension for the output block                  | uint32_t | Must be equal to block B column dimension           | False    |
+ * | Function   | rt_dim         | The row dimension for the output block                     | uint32_t | Must be equal to block A row dimension              | False    |
+ * | Function   | kt_dim         | The inner dimension                                         | uint32_t | Must be equal to block A column dimension           | False    |
+ */
+// clang-format on
+ALWI void matmul_block_init_reconfig_data_format(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t old_in0_cb_id,
+    uint32_t old_in1_cb_id,
+    const uint32_t transpose = 0,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1) {
+    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
+    MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
+    matmul_block_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
 }
 
 }  // namespace ckernel

@@ -59,7 +59,7 @@ void MAIN {
                         }
                         cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
                         // Reconfigure srcA back
-                        matmul_init_reconfig_data_format(in0_cb_id, in1_cb_id, mm_partials_cb_id);
+                        matmul_init_reconfig_data_format_srca(in0_cb_id, in1_cb_id, mm_partials_cb_id);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock

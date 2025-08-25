@@ -138,6 +138,7 @@ void MAIN {
 
     // Initialize matmul block operation
     matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    // mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -179,6 +180,7 @@ void MAIN {
                             in0_cb_id,
                             in1_cb_id,
                             in0_pretilize_cb_id,
+                            in0_pretilize_cb_id,
                             false,
                             out_subblock_w,
                             out_subblock_h,
@@ -202,7 +204,14 @@ void MAIN {
 #endif
 
                     matmul_block_init_reconfig_data_format(
-                        mm_in0_cb_id, in1_cb_id, in0_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+                        mm_in0_cb_id,
+                        in1_cb_id,
+                        in0_cb_id,
+                        in0_cb_id,
+                        false,
+                        out_subblock_w,
+                        out_subblock_h,
+                        in0_block_w);
                 }
 
                 cb_wait_front(mm_in0_cb_id, in0_block_num_tiles);
@@ -238,7 +247,7 @@ void MAIN {
 
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            matmul_block_init_reconfig_data_format(
+                            matmul_block_init_reconfig_data_format_srca(
                                 mm_in0_cb_id,
                                 in1_cb_id,
                                 matmul_partials_cb,

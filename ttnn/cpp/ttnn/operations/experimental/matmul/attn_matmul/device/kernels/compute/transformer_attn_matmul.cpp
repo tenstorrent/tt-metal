@@ -92,7 +92,7 @@ void MAIN {
                 tilize_uninit_with_dt(cb_intermed2, cb_in1, out_cb_id);
 
                 pack_reconfig_data_format(out_cb_id, cb_intermed0);
-                matmul_init_reconfig_data_format(cb_in0, cb_in1, cb_intermed2, transpose_hw);
+                matmul_init_reconfig_data_format_srca(cb_in0, cb_in1, cb_intermed2, transpose_hw);
             }
         }
     }

@@ -52,7 +52,7 @@ void MAIN {
                             copy_tile(tt::CBIndex::c_24, i, i);
                         }
                         cb_pop_front(tt::CBIndex::c_24, out_subblock_num_tiles);
-                        matmul_init_reconfig_data_format(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_24);
+                        matmul_init_reconfig_data_format_srca(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_24);
                     }
 
                     // Compute output sub-block from in0_subblock x in1_subblock
