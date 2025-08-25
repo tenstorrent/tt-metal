@@ -115,16 +115,18 @@ public:
     hall_id_t get_hall_id(const std::string& hostname);
     std::vector<std::string> get_all_hostnames() const;
     std::string my_host_name() const;
-    // uint32_t get_rank_for_hostname() const;
+    uint32_t get_rank_for_hostname(const std::string& host_name) const;
 
     const PhysicalConnectivityGraph& get_system_graph() const { return system_graph_; }
     const std::unordered_map<asic_id_t, ASICDescriptor>& get_asic_descriptors() const { return asic_descriptors_; }
     const std::unordered_map<std::string, std::string>& get_host_mobo_name_map() const { return host_to_mobo_name_; }
+    const std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() const { return host_to_rank_; }
     const ExitNodeConnectionTable& get_exit_node_connection_table() const { return exit_node_connection_table_; }
 
     PhysicalConnectivityGraph& get_system_graph() { return system_graph_; }
     std::unordered_map<asic_id_t, ASICDescriptor>& get_asic_descriptors() { return asic_descriptors_; }
     std::unordered_map<std::string, std::string>& get_host_mobo_name_map() { return host_to_mobo_name_; }
+    std::unordered_map<std::string, uint32_t>& get_host_to_rank_map() { return host_to_rank_; }
     ExitNodeConnectionTable& get_exit_node_connection_table() { return exit_node_connection_table_; }
 
 private:

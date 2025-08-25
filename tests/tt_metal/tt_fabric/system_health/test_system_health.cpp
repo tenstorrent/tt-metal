@@ -320,6 +320,9 @@ TEST(Cluster, TestPhysicalSystemDescriptor) {
 
     if (*(distributed_context.rank()) == 0) {
         physical_system_desc.dump_to_yaml();
+        for (auto host : physical_system_desc.get_all_hostnames()) {
+            std::cout << host << " " << physical_system_desc.get_rank_for_hostname(host) << std::endl;
+        }
     }
 }
 

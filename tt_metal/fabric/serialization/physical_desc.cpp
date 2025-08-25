@@ -47,6 +47,13 @@ std::vector<uint8_t> serialize_physical_descriptor_to_bytes(
         host_to_mobo_maps.push_back(host_mobo_map);
     }
 
+    std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::HostToRankMap>> host_to_rank_maps;
+    for (const auto& [host_name, rank] : physical_descriptor.get_host_to_rank_map()) {
+        auto host_str = builder.CreateString(host_name);
+        auto host_to_rank_map = tt::tt_metal::flatbuffer::CreateHostToRankMap(builder, host_str, rank);
+        host_to_rank_maps.push_back(host_to_rank_map);
+    }
+
     // Serialize exit node connection table
     std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::ExitNodeConnectionTable>> exit_node_tables;
     for (const auto& [host_name, connections] : physical_descriptor.get_exit_node_connection_table()) {
@@ -121,10 +128,11 @@ std::vector<uint8_t> serialize_physical_descriptor_to_bytes(
     // Create final PhysicalSystemDescriptor
     auto asic_desc_vec = builder.CreateVector(asic_descriptor_maps);
     auto host_mobo_vec = builder.CreateVector(host_to_mobo_maps);
+    auto host_rank_vec = builder.CreateVector(host_to_rank_maps);
     auto exit_table_vec = builder.CreateVector(exit_node_tables);
 
     auto physical_system_desc = tt::tt_metal::flatbuffer::CreatePhysicalSystemDescriptor(
-        builder, connectivity_graph, asic_desc_vec, host_mobo_vec, exit_table_vec);
+        builder, connectivity_graph, asic_desc_vec, host_mobo_vec, host_rank_vec, exit_table_vec);
 
     builder.Finish(physical_system_desc);
 
@@ -161,6 +169,11 @@ tt_metal::PhysicalSystemDescriptor deserialize_physical_descriptor_from_bytes(co
     if (fb_desc->host_to_mobo_name()) {
         for (auto fb_host_mobo : *fb_desc->host_to_mobo_name()) {
             result.get_host_mobo_name_map()[fb_host_mobo->host_name()->str()] = fb_host_mobo->mobo_name()->str();
+        }
+    }
+    if (fb_desc->host_to_rank()) {
+        for (auto fb_host_rank : *fb_desc->host_to_rank()) {
+            result.get_host_to_rank_map()[fb_host_rank->host_name()->str()] = fb_host_rank->rank();
         }
     }
     // Deserialize exit node connection table

@@ -63,6 +63,11 @@ table HostToMoboMap {
     mobo_name: string;
 }
 
+table HostToRankMap {
+    host_name: string;
+    rank: uint32;
+}
+
 table ExitNodeConnectionTable {
     host_name: string;
     exit_connections: [ExitNodeConnection];
@@ -72,6 +77,7 @@ table PhysicalSystemDescriptor {
     system_graph: PhysicalConnectivityGraph;
     asic_descriptors: [AsicDescriptorMap];
     host_to_mobo_name: [HostToMoboMap];
+    host_to_rank: [HostToRankMap];
     exit_node_connection_table: [ExitNodeConnectionTable];
 }
 

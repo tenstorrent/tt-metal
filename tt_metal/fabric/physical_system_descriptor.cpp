@@ -113,6 +113,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     auto my_rank = *(distributed_context.rank());
     auto hostname = get_host_name() + "_" + std::to_string(my_rank);
     host_to_mobo_name_[hostname] = get_mobo_name();
+    host_to_rank_[hostname] = my_rank;
 
     std::set<uint32_t, std::greater<uint32_t>> sorted_pcie_slots = {};
     auto& asic_graph = system_graph_.asic_connectivity_graph[hostname];
@@ -195,6 +196,9 @@ void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
     }
     for (auto& [host_name, mobo_name] : other.get_host_mobo_name_map()) {
         host_to_mobo_name_[host_name] = std::move(mobo_name);
+    }
+    for (auto& [host_name, rank] : other.get_host_to_rank_map()) {
+        host_to_rank_[host_name] = std::move(rank);
     }
     for (auto& [host_name, exit_connections] : other.exit_node_connection_table_) {
         exit_node_connection_table_[host_name] = std::move(exit_connections);
@@ -500,6 +504,11 @@ std::vector<std::string> PhysicalSystemDescriptor::get_all_hostnames() const {
 std::string PhysicalSystemDescriptor::my_host_name() const {
     auto my_rank = *(tt::tt_metal::MetalContext::instance().global_distributed_context().rank());
     return get_host_name() + "_" + std::to_string(my_rank);
+}
+
+uint32_t PhysicalSystemDescriptor::get_rank_for_hostname(const std::string& host_name) const {
+    TT_FATAL(host_to_rank_.find(host_name) != host_to_rank_.end(), "Rank for host {} not found", host_name);
+    return host_to_rank_.at(host_name);
 }
 
 std::string PhysicalSystemDescriptor::get_host_name_for_asic(asic_id_t asic_id) const {
