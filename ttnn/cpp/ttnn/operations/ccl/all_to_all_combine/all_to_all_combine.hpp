@@ -18,15 +18,13 @@ struct ExecuteAllToAllCombine {
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& expert_mapping_tensor,
         const ttnn::Tensor& expert_metadata_tensor,
-        const std::optional<GlobalSemaphore>& global_semaphore,
         bool locally_reduced = 1,
         std::optional<uint32_t> num_links = std::nullopt,
         std::optional<tt::tt_fabric::Topology> topology = std::nullopt,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const std::optional<uint32_t>& axis = std::nullopt,
         const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
-        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<GlobalSemaphore>& init_semaphore = std::nullopt);
+        const std::optional<ttnn::Tensor>& optional_output_tensor = std::nullopt);
 };
 
 }  // namespace operations::ccl

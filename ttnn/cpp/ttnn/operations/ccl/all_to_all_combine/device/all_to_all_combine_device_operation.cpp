@@ -98,10 +98,6 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
         operation_attributes.num_links > 0,
         "Number of links must be greater than 0, got {}",
         operation_attributes.num_links);
-    TT_FATAL(
-        operation_attributes.cross_device_semaphore.has_value(),
-        "Cross device semaphore must be specified at the moment");
-    TT_FATAL(operation_attributes.init_semaphore.has_value(), "Init semaphore must be specified at the moment");
 }
 
 void AllToAllCombineDeviceOperation::validate_on_program_cache_hit(
@@ -155,22 +151,19 @@ AllToAllCombineDeviceOperation::invoke(
     const uint32_t num_links,
     const tt::tt_fabric::Topology topology,
     const ttnn::MemoryConfig& memory_config,
-    const std::optional<GlobalSemaphore>& global_semaphore,
     const std::optional<uint32_t>& axis,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::Tensor>& optional_output_tensor,
     const bool locally_reduced,
-    const std::optional<GlobalSemaphore>& init_semaphore) {
+    const CoreRangeSet& worker_core_range_set) {
     return {
         operation_attributes_t{
             .output_mem_config = memory_config,
             .axis = axis,
             .num_links = num_links,
             .topology = topology,
-            .cross_device_semaphore = global_semaphore,
             .locally_reduced = locally_reduced,
-            .subdevice_id = std::move(subdevice_id),
-            .init_semaphore = init_semaphore},
+            .worker_core_range_set = worker_core_range_set,
+        },
         tensor_args_t{
             .input_tensor = input_tensor,
             .mapping_tensor = expert_mapping_tensor,
