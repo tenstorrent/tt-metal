@@ -1,8 +1,4 @@
-set(UNIT_TESTS_TUNNELING_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_lite_fabric.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/build.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/lite_fabric_host_util.cpp
-)
+set(UNIT_TESTS_TUNNELING_SRC ${CMAKE_CURRENT_SOURCE_DIR}/test_lite_fabric.cpp)
 
 function(create_unit_test_executable)
     set(exec_name unit_tests_tunneling)
@@ -14,7 +10,12 @@ function(create_unit_test_executable)
     TT_ENABLE_UNITY_BUILD(${exec_name})
 
     # Link libraries
-    target_link_libraries(${exec_name} PRIVATE test_metal_common_libs)
+    target_link_libraries(
+        ${exec_name}
+        PRIVATE
+            test_metal_common_libs
+            TT::Metalium::FabricLite
+    )
 
     # Set include directories
     target_include_directories(
