@@ -210,6 +210,10 @@ class NanoExabox2x4FabricFixture : public Fixture {
             get_eth_coords_for_2x4_t3k(),
             get_eth_coords_for_2x4_t3k(),
             get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
+            get_eth_coords_for_2x4_t3k(),
             get_eth_coords_for_2x4_t3k()};
     }
 };
