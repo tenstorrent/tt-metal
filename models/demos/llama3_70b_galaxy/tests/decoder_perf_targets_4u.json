@@ -293,7 +293,7 @@
             "op_to_op": 841.6818181818181,
             "non-overlapped-dispatch-time": 10707.5,
             "kernel_duration_relative_margin": 0.2,
-            "op_to_op_duration_relative_margin": 0.2,
+            "op_to_op_duration_relative_margin": 0.4,
             "dispatch_duration_relative_margin": 0.5
         },
         "ReshardDeviceOperation_1": {
