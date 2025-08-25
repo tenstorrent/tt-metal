@@ -255,10 +255,21 @@ class TtC2f:
         self.deallocate_activation = deallocate_activation
         self.output_layout = output_layout
 
-        self.cv1 = TtConv(
+        self.cv1_a = TtConv(
             device,
             self.parameters,
-            f"{self.path}.cv1",
+            f"{self.path}.cv1_a",
+            input_params=self.input_params[0],
+            bfloat8=self.bfloat8,
+            change_shard=self.change_shard,
+            deallocate_activation=self.deallocate_activation,
+            output_layout=self.output_layout,
+        )
+
+        self.cv1_b = TtConv(
+            device,
+            self.parameters,
+            f"{self.path}.cv1_b",
             input_params=self.input_params[0],
             bfloat8=self.bfloat8,
             change_shard=self.change_shard,
@@ -296,15 +307,13 @@ class TtC2f:
             )
 
     def __call__(self, x):
-        cv1, out_h, out_w = self.cv1(x)
-        cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        cv1_a, out_h_a, out_w_a = self.cv1_a(x)
+        cv1_b, out_h_b, out_w_b = self.cv1_b(x)
 
-        y = [
-            cv1[:, :, :, : cv1.shape[-1] // 2],
-            cv1[:, :, :, cv1.shape[-1] // 2 :],
-        ]
+        cv1_a = ttnn.to_memory_config(cv1_a, ttnn.L1_MEMORY_CONFIG)
+        cv1_b = ttnn.to_memory_config(cv1_b, ttnn.L1_MEMORY_CONFIG)
 
-        ttnn.deallocate(cv1)
+        y = [cv1_a, cv1_b]
 
         for i in range(self.n):
             z = self.bottleneck_modules[i](y[-1])
@@ -474,14 +483,14 @@ class TtDetectionModel:
         self.batch_size = batch_size
         sppf_configs = {"input_params": ((1, 1, 0, 320, 640), (1, 1, 0, 640, 1280))}
         c2f_configs = {
-            "model.2": {"input_params": ((1, 1, 0, 160, 160), (1, 1, 0, 160, 400), (3, 1, 1, 80, 80))},
-            "model.4": {"input_params": ((1, 1, 0, 320, 320), (1, 1, 0, 320, 1280), (3, 1, 1, 160, 160))},
-            "model.6": {"input_params": ((1, 1, 0, 640, 640), (1, 1, 0, 640, 2560), (3, 1, 1, 320, 320))},
-            "model.8": {"input_params": ((1, 1, 0, 640, 640), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
-            "model.12": {"input_params": ((1, 1, 0, 640, 1280), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
-            "model.15": {"input_params": ((1, 1, 0, 320, 960), (1, 1, 0, 320, 800), (3, 1, 1, 160, 160))},
-            "model.18": {"input_params": ((1, 1, 0, 640, 960), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
-            "model.21": {"input_params": ((1, 1, 0, 640, 1280), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
+            "model.2": {"input_params": ((1, 1, 0, 80, 160), (1, 1, 0, 160, 400), (3, 1, 1, 80, 80))},
+            "model.4": {"input_params": ((1, 1, 0, 160, 320), (1, 1, 0, 320, 1280), (3, 1, 1, 160, 160))},
+            "model.6": {"input_params": ((1, 1, 0, 320, 640), (1, 1, 0, 640, 2560), (3, 1, 1, 320, 320))},
+            "model.8": {"input_params": ((1, 1, 0, 320, 640), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
+            "model.12": {"input_params": ((1, 1, 0, 320, 1280), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
+            "model.15": {"input_params": ((1, 1, 0, 160, 960), (1, 1, 0, 320, 800), (3, 1, 1, 160, 160))},
+            "model.18": {"input_params": ((1, 1, 0, 320, 960), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
+            "model.21": {"input_params": ((1, 1, 0, 320, 1280), (1, 1, 0, 640, 1600), (3, 1, 1, 320, 320))},
         }
         detect_config = {
             "cv2_params": [
