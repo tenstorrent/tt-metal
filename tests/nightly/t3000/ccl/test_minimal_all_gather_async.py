@@ -336,7 +336,7 @@ def test_all_gather_async(
     ],
 )
 @pytest.mark.parametrize(
-    "enable_trace,num_iters",
+    "enable_trace, num_iters",
     [
         (True, 10),
         (False, 1),
@@ -348,9 +348,10 @@ def test_all_gather_async(
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D_DYNAMIC, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring", "fabric_linear"],
+    ids=["fabric_ring", "fabric_linear", "fabric_2d_dynamic"],
 )
 def test_all_gather_async_training_shapes(
     t3k_mesh_device,
