@@ -1,5 +1,3 @@
-
-
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -10,7 +8,7 @@
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include "tt_metal/impl/context/metal_context.hpp"
-#include "tt_metal/fabric/serialization/intermesh_link_table.hpp"
+#include "tt_metal/fabric/serialization/physical_desc.hpp"
 
 namespace tt::tt_metal {
 
@@ -59,8 +57,18 @@ std::pair<tray_id_t, n_id_t> get_asic_position(
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
         return get_ubb_id(chip_id);
     } else if (cluster_desc->get_board_type(chip_id) == BoardType::N300) {
+        // Derive NID based on the tunnel depth for N300 systems
         auto mmio_device = cluster.get_associated_mmio_device(chip_id);
-        uint32_t n_id = cluster_desc->is_chip_mmio_capable(chip_id) ? 1 : 2;
+        auto tunnels = cluster.get_tunnels_from_mmio_device(mmio_device);
+        n_id_t n_id = 0;
+        for (auto tunnel = 0; tunnel < tunnels.size(); tunnel++) {
+            const auto& devices_on_tunnel = tunnels[tunnel];
+            auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
+            if (device_it != devices_on_tunnel.end()) {
+                n_id = device_it - devices_on_tunnel.begin() + 1;
+            }
+        }
+        // Derive Tray ID based on the Physical PCIe slot for N300 systems
         uint32_t tray_id =
             1 + std::distance(
                     sorted_pcie_slots.begin(), sorted_pcie_slots.find(cluster.get_physical_slot(chip_id).value()));
@@ -80,12 +88,16 @@ struct EthEndpoint {
 
 }  // namespace
 
-PhysicalSystemDescriptor::PhysicalSystemDescriptor(bool perform_global_discovery, bool run_discovery) {
+PhysicalSystemDescriptor::PhysicalSystemDescriptor(bool run_discovery) {
     if (run_discovery) {
-        run_local_discovery();
-        if (perform_global_discovery) {
-            run_global_discovery();
-        }
+        this->run_discovery();
+    }
+}
+
+void PhysicalSystemDescriptor::run_discovery(bool run_global_discovery) {
+    this->run_local_discovery();
+    if (run_global_discovery) {
+        this->run_global_discovery();
     }
 }
 
@@ -157,6 +169,20 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     system_graph_.host_connectivity_graph[hostname] = {};
 }
 
+void PhysicalSystemDescriptor::run_global_discovery() {
+    using namespace tt::tt_metal::distributed::multihost;
+    constexpr uint32_t controller_rank = 0;
+    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+    auto my_rank = *(distributed_context.rank());
+    this->exchange_metadata(true);
+    if (my_rank == controller_rank) {
+        this->remove_unresolved_nodes();
+        this->generate_cross_host_connections();
+    }
+    this->exchange_metadata(false);
+    distributed_context.barrier();
+}
+
 void PhysicalSystemDescriptor::merge(PhysicalSystemDescriptor&& other) {
     for (auto& [host_name, asic_graph] : other.system_graph_.asic_connectivity_graph) {
         system_graph_.asic_connectivity_graph[host_name] = std::move(asic_graph);
@@ -217,7 +243,7 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
     }
 
     if (sender_ranks.find(my_rank) != sender_ranks.end()) {
-        auto serialized_desc = tt_fabric::serialize_physical_descriptor_to_bytes(*this);
+        auto serialized_desc = serialize_physical_descriptor_to_bytes(*this);
         std::size_t desc_size = serialized_desc.size();
 
         for (auto rank : receiver_ranks) {
@@ -245,7 +271,7 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
                     tt::stl::Span<uint8_t>(serialized_peer_desc.data(), serialized_peer_desc.size())),
                 Rank{rank},
                 Tag{0});
-            auto peer_desc = tt_fabric::deserialize_physical_descriptor_from_bytes(serialized_peer_desc);
+            auto peer_desc = deserialize_physical_descriptor_from_bytes(serialized_peer_desc);
             this->merge(std::move(peer_desc));
         }
     }
@@ -278,23 +304,6 @@ void PhysicalSystemDescriptor::generate_cross_host_connections() {
             }
         }
     }
-}
-
-void PhysicalSystemDescriptor::run_global_discovery() {
-    using namespace tt::tt_metal::distributed::multihost;
-    constexpr uint32_t controller_rank = 0;
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
-    auto my_rank = *(distributed_context.rank());
-    this->exchange_metadata(true);
-    if (my_rank == controller_rank) {
-        this->remove_unresolved_nodes();
-        this->generate_cross_host_connections();
-    }
-    this->exchange_metadata(false);
-    if (my_rank != controller_rank) {
-        this->dump_to_yaml("/tmp/physical_system_descriptor.yaml");
-    }
-    distributed_context.barrier();
 }
 
 void PhysicalSystemDescriptor::dump_to_yaml(const std::string& path_to_yaml) {

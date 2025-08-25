@@ -25,18 +25,16 @@ using u_id_t = uint32_t;
 using hall_id_t = uint32_t;
 using aisle_id_t = uint32_t;
 
-// Specifies an ethernet connection between 2 ASICs
-// using channel ids on the src/dst ASICs
-
+// Specify Physical ASIC Attributes
 struct ASICDescriptor {
     tray_id_t tray_id;
     n_id_t n_id;
     BoardType board_type;
     asic_id_t unique_id;
     std::string host_name;
-    // std::vector<chan_id_t>
 };
 
+// Specify an ethernet connection between two ASICs
 struct EthConnection {
     tt_fabric::chan_id_t src_chan;
     tt_fabric::chan_id_t dst_chan;
@@ -53,6 +51,7 @@ struct EthConnection {
     }
 };
 
+// Specify an ethernet connection between two hosts
 struct ExitNodeConnection {
     asic_id_t src_exit_node;
     asic_id_t dst_exit_node;
@@ -74,66 +73,26 @@ struct ExitNodeConnection {
 };
 
 using ExitNodeConnectionTable = std::unordered_map<std::string, std::vector<ExitNodeConnection>>;
-
-// Can be used to specify the downstream ASICs a node in a graph of ASICs connects to.
-// First entry in the pair specifies the Node/ASIC the current node is connected to.
-// Second entry specifies the ethernet connections that build this edge (can have multiple
-// ethernet channels connecting 2 ASICs)
 using AsicConnectionEdge = std::pair<asic_id_t, std::vector<EthConnection>>;
-
-// Can be used to specify the downstream Hosts a node in a graph of hosts connect to.
-// First entry in the pair specifies the Node/Host the current node is connected to.
-// Second entry specifies the exit node cinnections that build this edge (can have multiple
-// exit nodes connecting 2 Compute Nodes).
 using HostConnectionEdge = std::pair<std::string, std::vector<ExitNodeConnection>>;
-
-// Graph of ASICs represented as an adjacency list (each entry in the list is an
-// AsicConnectionEdge to a unique neighbor, each key in the map is a unique ASIC).
 using AsicTopology = std::unordered_map<asic_id_t, std::vector<AsicConnectionEdge>>;
-
-// Graph of Hosts represented as an adjacency list (each entry in the list is a
-// HostConnectionEdge to a unique neighbor, each key in the map is a unique Host).
 using HostTopology = std::unordered_map<std::string, std::vector<HostConnectionEdge>>;
 
-// Top Level Data-Structure Representing connectivity of ASICs (detailed representation) and
+// Graph representing connectivity of ASICs (detailed representation) and
 // Compute Nodes/Hosts (low resolution representation).
 struct PhysicalConnectivityGraph {
-    // Tracks the ASIC Topology per host. Through this, the user can query
-    // information specific to a local cluster.
+    // Track the ASIC Topology per host.
     std::unordered_map<std::string, AsicTopology> asic_connectivity_graph;
-
-    // Tracks the Host Topology across the distributed system. Through this,
-    // the user can query how hosts are connected to each other.
-
-    // By combining the asic_connectivity_graph and host_connectivity_graph,
-    // a user can query how an connectivity information between ASICs mapped
-    // to different hosts.
+    // Track the Host Topology across the distributed system.
     HostTopology host_connectivity_graph;
 };
 
-// Main FSD Software Data-Structure, provoding:
-// 1. Discovery APIs
-// 2. Validation APIs
-// 3. Graph Based Query APIs
-// 4. System Query APIs
+// Top-Level Global System Descriptor Data-Structure.
+
 class PhysicalSystemDescriptor {
 public:
-    // Flexible discovery and validation. Allows users to:
-    // 1. Perform global discovery in a single shot and then validate
-    //    - Simple policy : Can report all errors at once.
-    //    - Global discovery could be costly.
-    // 2. Perform local discovery first, run validation and then run global discovery
-    //    - Benefit: If lightweight local discovery fails, error out immediately instead
-    //      of doing the global discovery.
-    //    - Drawback: All errors can't be reported in a single shot.
-    // 3. Update the physical representation at runtime by discovering the local or
-    //    global cluster
-    //    - This can be used by the provisioning SW to maintain an accurate representation
-    //      of the system
-    //    - Fairly expensive to repeatedly do at runtime for large systems
-    PhysicalSystemDescriptor(bool perform_global_discovery = true, bool run_discovery = true);
-    void run_discovery(bool perform_global_discovery = true);
-    void validate_with_factory_desc(const std::string& path_to_factory_desc);
+    PhysicalSystemDescriptor(bool run_discovery = true);
+    void run_discovery(bool run_global_discovery = true);
     void dump_to_yaml(const std::string& path_to_yaml);
 
     // ASIC Topology Query APIs
@@ -144,14 +103,12 @@ public:
     n_id_t get_n_id(asic_id_t asic_id) const;
     std::vector<asic_id_t> get_asics_connected_to_host(std::string hostname) const;
 
-    // Query APIs for InterHost Connectivity
+    // Host Topology Query APIs
     std::vector<std::string> get_host_neighbors(const std::string& hostname) const;
     std::vector<ExitNodeConnection> get_connecting_exit_nodes(
         const std::string& src_host, const std::string& dst_host) const;
     const HostTopology& get_host_topology() const;
     std::string get_host_name_for_asic(asic_id_t asic_id) const;
-    // Physical info that can be derived from the cabling spec (helps with clearer messages during physical validation).
-    // At this point the FSD anc cabling spec have hostnames
     u_id_t get_u_id(const std::string& hostname);
     rack_id_t get_rack_id(const std::string& hostname);
     aisle_id_t get_aisle_id(const std::string& hostname);
@@ -180,7 +137,6 @@ private:
     std::unordered_map<asic_id_t, ASICDescriptor> asic_descriptors_;
     std::unordered_map<std::string, std::string> host_to_mobo_name_;
     ExitNodeConnectionTable exit_node_connection_table_;
-    // YAML::Node serialized_desc_;
 };
 
 }  // namespace tt::tt_metal

@@ -6,7 +6,6 @@
 
 #include <map>
 #include <tt-metalium/fabric_types.hpp>
-#include <umd/device/tt_cluster_descriptor.h>
 
 namespace tt::tt_fabric {
 
