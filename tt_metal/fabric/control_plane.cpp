@@ -302,7 +302,6 @@ void ControlPlane::initialize_dynamic_routing_plane_counts(
 
             // TODO: specialize by topology for better perf
             if (topology == Topology::Mesh || topology == Topology::Torus) {
-                const auto& mesh_host_ranks = this->routing_table_generator_->mesh_graph->get_host_ranks(mesh_id);
                 const auto rows_min = std::min_element(row_min_planes.begin(), row_min_planes.end());
                 const auto cols_min = std::min_element(col_min_planes.begin(), col_min_planes.end());
                 auto mesh_min = std::min(*rows_min, *cols_min);
@@ -488,8 +487,6 @@ void ControlPlane::load_physical_chip_mapping(
 
 void ControlPlane::validate_mesh_connections(MeshId mesh_id) const {
     MeshShape mesh_shape = routing_table_generator_->mesh_graph->get_mesh_shape(mesh_id);
-    std::uint32_t mesh_ns_size = mesh_shape[0];
-    std::uint32_t mesh_ew_size = mesh_shape[1];
     std::uint32_t num_ports_per_side =
         routing_table_generator_->mesh_graph->get_chip_spec().num_eth_ports_per_direction;
     auto get_physical_chip_id = [&](const MeshCoordinate& mesh_coord) {
@@ -1013,7 +1010,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels(
                     auto connected_host_rank_id = this->routing_table_generator_->mesh_graph
                                                       ->get_host_rank_for_chip(mesh_id, logical_connected_chip_id)
                                                       .value();
-                    const auto& intermesh_links = this->get_intermesh_eth_links(physical_chip_id);
                     auto unique_chip_id =
                         tt::tt_metal::MetalContext::instance().get_cluster().get_unique_chip_ids().at(physical_chip_id);
                     // Look up connected chip's intermesh link table and grab local desc channel
@@ -1474,8 +1470,6 @@ void write_to_worker_or_fabric_tensix_cores(
         mux_cores_translated = tensix_config.get_translated_fabric_or_dispatch_mux_cores();
     }
 
-    size_t mux_cores_written = 0;
-    size_t worker_cores_written = 0;
     for (const auto& tensix_core : all_tensix_cores) {
         CoreCoord core_coord(tensix_core.x, tensix_core.y);
         bool is_mux_core = mux_cores_translated.find(core_coord) != mux_cores_translated.end();
@@ -1608,7 +1602,6 @@ void ControlPlane::write_fabric_connections_to_tensix_cores(MeshId mesh_id, chip
 
     // Get all physically connected ethernet channels directly from the cluster
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    const auto& soc_desc = cluster.get_soc_desc(physical_chip_id);
     const auto& connected_chips_and_eth_cores = cluster.get_ethernet_cores_grouped_by_connected_chips(physical_chip_id);
 
     size_t num_eth_endpoint = 0;
@@ -2038,7 +2031,6 @@ void ControlPlane::generate_local_intermesh_link_table() {
     // Populate the local to remote mapping for all intermesh links
     // This cannot be done by UMD, since it has no knowledge of links marked
     // for intermesh routing (these links are hidden from UMD).
-    const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     intermesh_link_table_.local_mesh_id = local_mesh_binding_.mesh_ids[0];
     intermesh_link_table_.local_host_rank_id = this->get_local_host_rank_id_binding();
@@ -2313,7 +2305,6 @@ void ControlPlane::populate_fabric_connection_info(
     constexpr uint16_t WORKER_FREE_SLOTS_STREAM_ID = 17;
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
-    const auto topology = fabric_context.get_fabric_topology();
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
     const auto sender_channel = is_2d_fabric ? router_direction : 0;
 

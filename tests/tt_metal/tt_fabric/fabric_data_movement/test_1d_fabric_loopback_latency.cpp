@@ -130,7 +130,6 @@ inline void RunPersistent1dFabricLatencyTest(
 
     size_t num_links = 1;
 
-    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     bool is_6u = num_devices == 32 && tt::tt_metal::GetNumPCIeDevices() == num_devices;
     if (num_devices < 4 && !is_6u) {
@@ -196,14 +195,12 @@ inline void RunPersistent1dFabricLatencyTest(
     // OR packet header management is removed from user space, whichever comes first
     constexpr size_t packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
     static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
-    static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
     static constexpr size_t packet_header_cb_size_in_headers = 4;
     std::vector<size_t> dest_buffer_addresses(writer_specs.size(), 0);
 
     auto largest_write_size_bytes = get_largest_write_size(writer_specs);
     TT_FATAL(largest_write_size_bytes > 0, "Largest write size is 0, invalid test configuration");
 
-    const auto writer_message_size_bytes = writer_specs.at(latency_writer_index)->message_size_bytes;
     std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> latency_writer_buffer =
         allocate_mesh_buffer(test_fixture.mesh_device_.get(), largest_write_size_bytes);
     auto latency_writer_buffer_address = latency_writer_buffer->address();
@@ -294,7 +291,6 @@ inline void RunPersistent1dFabricLatencyTest(
         const size_t dest_noc_y = device->worker_core_from_logical_core(worker_core_logical).y;
 
         bool is_latency_packet_sender = std::holds_alternative<LatencyPacketTestWriterSpec>(writer_specs[i]->spec);
-        bool is_datapath_busy_sender = std::holds_alternative<DatapathBusyDataWriterSpec>(writer_specs[i]->spec);
 
         IDevice* backward_device = i == 0 ? is_ring ? devices.at(line_size - 1) : nullptr : devices.at(i - 1);
         IDevice* forward_device = i == line_size - 1 ? is_ring ? devices.at(0) : nullptr : devices.at(i + 1);
@@ -448,7 +444,7 @@ inline void RunPersistent1dFabricLatencyTest(
             tt_metal::CircularBufferConfig(
                 packet_header_cb_size_in_headers * packet_header_size_bytes, {{packet_header_cb_index, cb_df}})
                 .set_page_size(packet_header_cb_index, packet_header_size_bytes);
-        CBHandle sender_workers_cb = CreateCircularBuffer(ack_writer_program, worker_cores, cb_src0_config);
+        CreateCircularBuffer(ack_writer_program, worker_cores, cb_src0_config);
         auto ct_args = std::vector<uint32_t>{enable_fused_payload_with_sync, sem_inc_only};
         auto rt_args = std::vector<uint32_t>{
             latency_writer_buffer_address,

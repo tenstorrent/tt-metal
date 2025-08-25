@@ -253,7 +253,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         pool_type, ceil_mode, ceil_pad_h, ceil_pad_w, count_include_pad, pad_h, pad_w, divisor_override);
 
     const auto& input_shape = input.padded_shape();
-    const auto& output_shape = output.padded_shape();
+    [[maybe_unused]] const auto& output_shape = output.padded_shape();
     const uint32_t in_nbytes_c = in_c / num_shards_c * params.nbytes;  // row of input (channels)
     const uint32_t in_nbytes_padded_c = input_shape[3] / num_shards_c * params.nbytes;
 
@@ -487,7 +487,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_scalar_cb_id_1,              // 10
         out_cb_id,                      // 11
         one_scalar_per_core,
-        num_of_pages_to_reserve_back};          // 12
+        num_of_pages_to_reserve_back};  // 12
 
     auto compute_config = tt::tt_metal::ComputeConfig{
         .math_fidelity = MathFidelity::HiFi4,

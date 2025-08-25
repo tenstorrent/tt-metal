@@ -1053,8 +1053,6 @@ uint32_t calculate_conv_dram_slice_L1_usage(
     TT_FATAL(
         dram_slice_config.num_slices > 0, "Number of slices must be greater than 0 for DRAM L1 usage calculation.");
 
-    const uint32_t input_sliced_dim =
-        dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT ? params.input_height : params.input_width;
     const uint32_t output_sliced_dim = dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT
                                            ? params.output_height
                                            : params.output_width;
@@ -1070,8 +1068,6 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         // In Conv2d DRAM with Outputs in Tile layout, we need to round the slice size to a multiple of TILE_HEIGHT.
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
-
-    uint32_t max_slice_size = 0;
 
     const uint32_t min_output_slice_rounded_size =
         tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;

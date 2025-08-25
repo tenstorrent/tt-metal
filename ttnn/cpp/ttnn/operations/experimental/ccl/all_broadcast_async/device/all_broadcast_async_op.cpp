@@ -15,8 +15,6 @@ void AllBroadcastAsync::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
-    const auto& layout = input_tensors[0].layout();
-    const auto& dtype = input_tensors[0].dtype();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_broadcast need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_broadcast need to be allocated in buffers on device!");

@@ -187,7 +187,6 @@ WhereBroadcastType get_broadcast_type(
         return WhereBroadcastType::OUTER_BCAST;
     }
 
-    bool same_width = (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
     bool same_height = (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2]);
 
     // Row Bcast is not supported for now
