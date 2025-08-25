@@ -162,6 +162,7 @@ class ResBlock:
         bias: bool = True,
         mesh_device=None,
         mesh_axis=None,
+        input_shape=None,
         torch_ref=None,
     ):
         self.num_out_blocks_map = {
@@ -171,7 +172,13 @@ class ResBlock:
             480 * 848: 135,
         }
 
-        self.grid_size = ttnn.CoreGrid(y=mesh_device.core_grid.y, x=mesh_device.core_grid.x)
+        grid_size_y = 4 if torch_ref.channels == 128 else mesh_device.core_grid.y
+        grid_size_x = (
+            min(32 // mesh_device.get_num_devices(), mesh_device.core_grid.x)
+            if torch_ref.channels == 768
+            else mesh_device.core_grid.x
+        )
+        self.grid_size = ttnn.CoreGrid(y=grid_size_y, x=grid_size_x)
 
         self.norm1 = GroupNorm(
             num_groups=32,
@@ -194,6 +201,7 @@ class ResBlock:
             padding_mode=padding_mode,
             bias=bias,
             causal=causal,
+            input_shape=input_shape,
             torch_ref=torch_ref.stack[2] if torch_ref is not None else None,
         )
         self.conv2 = ContextParallelConv3d(
@@ -203,6 +211,7 @@ class ResBlock:
             padding_mode=padding_mode,
             bias=bias,
             causal=causal,
+            input_shape=input_shape,
             torch_ref=torch_ref.stack[5] if torch_ref is not None else None,
         )
 
@@ -274,6 +283,7 @@ class CausalUpsampleBlock:
         mesh_device: ttnn.MeshDevice,
         in_channels: int,
         out_channels: int,
+        input_shape=None,
         torch_ref=None,
         num_res_blocks: int = 0,
         temporal_expansion: int = 2,
@@ -298,6 +308,7 @@ class CausalUpsampleBlock:
                     causal=causal,
                     padding_mode=padding_mode,
                     bias=bias,
+                    input_shape=input_shape,
                     torch_ref=torch_ref.blocks[i],
                 )
             )
@@ -351,11 +362,12 @@ class CausalUpsampleBlock:
 
             x_NTHWC = ttnn.reshape(x_NTHWC, [B, T * texp, H * sexp, W * sexp, self.out_channels])
 
-            if texp > 1 and i == 0:
-                x_NTHWC = ttnn.slice(
-                    x_NTHWC, [0, texp - 1, 0, 0, 0], [B, T * texp, H * sexp, W * sexp, self.out_channels]
-                )
-                # TODO: This messes up the shape of the tensor...
+            # if texp > 1 and i == 0:
+            #     x_NTHWC = ttnn.slice(
+            #         x_NTHWC, [0, texp - 1, 0, 0, 0], [B, T * texp, H * sexp, W * sexp, self.out_channels]
+            #     )
+            #     # TODO: This messes up the shape of the tensor...
+            # TODO fix depth_to_spaceitme multi tensor
 
             return x_NTHWC
 
@@ -367,3 +379,207 @@ class CausalUpsampleBlock:
         x_NTHWC = self.depth_to_spacetime(x_NTHWO)
         ttnn.deallocate(x_NTHWO)
         return x_NTHWC
+
+
+class Decoder:
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        input_shape=None,
+        torch_ref=None,
+        out_channels=3,
+        base_channels=128,
+        channel_multipliers=[1, 2, 4, 6],
+        temporal_expansions=[1, 2, 3],
+        spatial_expansions=[2, 2, 2],
+        num_res_blocks=[3, 3, 4, 6, 3],
+        latent_dim=12,
+        has_attention=[False, False, False, False, False],
+        output_norm=False,
+        nonlinearity="silu",
+        output_nonlinearity="silu",
+        causal=True,
+    ):
+        """
+        TTNN implementation of the VAE Decoder.
+        """
+        self.input_channels = latent_dim
+        self.base_channels = base_channels
+        self.channel_multipliers = channel_multipliers
+        self.num_res_blocks = num_res_blocks
+        self.output_nonlinearity = output_nonlinearity
+        self.mesh_device = mesh_device
+        assert nonlinearity == "silu"
+        assert causal
+        assert not any(has_attention), "Attention is not supported in the decoder"
+        attn_block = None
+        # Calculate channels for each level
+        ch = [mult * base_channels for mult in channel_multipliers]
+        self.num_up_blocks = len(ch) - 1
+        assert len(num_res_blocks) == self.num_up_blocks + 2
+
+        assert len(temporal_expansions) == len(spatial_expansions) == self.num_up_blocks
+        assert len(num_res_blocks) == len(has_attention) == self.num_up_blocks + 2
+
+        first_block_torch_ref = torch_ref.blocks[0]
+        # Create the initial projection from latent space
+        self.input_proj = Conv1x1(
+            mesh_device=mesh_device,
+            in_channels=latent_dim,
+            out_channels=ch[-1],
+            torch_ref=first_block_torch_ref[0],
+        )
+
+        # First set of residual blocks
+        self.first_blocks = []
+        for i in range(num_res_blocks[-1]):
+            self.first_blocks.append(
+                ResBlock(
+                    mesh_device=mesh_device,
+                    causal=causal,
+                    padding_mode="replicate",
+                    input_shape=input_shape,
+                    torch_ref=first_block_torch_ref[i + 1],
+                )
+            )
+
+        # Create upsampling blocks
+        self.up_blocks = []
+        for i in range(self.num_up_blocks):
+            upsample_block_torch_ref = torch_ref.blocks[i + 1]
+            self.up_blocks.append(
+                CausalUpsampleBlock(
+                    mesh_device=mesh_device,
+                    in_channels=ch[-i - 1],
+                    out_channels=ch[-i - 2],
+                    num_res_blocks=num_res_blocks[-i - 2],
+                    attn_block=attn_block,
+                    temporal_expansion=temporal_expansions[-i - 1],
+                    spatial_expansion=spatial_expansions[-i - 1],
+                    causal=causal,
+                    padding_mode="replicate",
+                    input_shape=input_shape,
+                    torch_ref=upsample_block_torch_ref,
+                )
+            )
+
+        last_block_torch_ref = torch_ref.blocks[1 + self.num_up_blocks]
+        # Last set of residual blocks
+        self.last_blocks = []
+        for i in range(num_res_blocks[0]):
+            self.last_blocks.append(
+                ResBlock(
+                    mesh_device=mesh_device,
+                    causal=causal,
+                    padding_mode="replicate",
+                    input_shape=input_shape,
+                    torch_ref=last_block_torch_ref[i],
+                )
+            )
+
+        # Final output projection
+        self.output_proj = Conv1x1(
+            mesh_device=mesh_device,
+            in_channels=ch[0],
+            out_channels=out_channels,
+            bias=True,
+            torch_ref=torch_ref.output_proj,
+        )
+
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
+
+    def dealloc(self):
+        self.input_proj.dealloc()
+        for block in self.first_blocks:
+            block.dealloc()
+        for block in self.up_blocks:
+            block.dealloc()
+        for block in self.last_blocks:
+            block.dealloc()
+        self.output_proj.dealloc()
+
+    def prepare_input(self, z_BCTHW):
+        z_BTHWC = ttnn.from_torch(
+            z_BCTHW.permute(0, 2, 3, 4, 1),
+            device=self.mesh_device,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
+        )
+        return z_BTHWC
+
+    def postprocess_output(self, x_NTHWC):
+        x_NTHWC = ttnn.to_torch(x_NTHWC, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=1))
+        x_NCTHW = x_NTHWC.permute(0, 4, 1, 2, 3)
+        return x_NCTHW
+
+    def __call__(self, x_NTHWC):
+        """
+        Forward pass for the decoder.
+
+        Args:
+            x_NTHWC: Input tensor in NTHWC layout
+
+        Returns:
+            Output tensor in NTHWC layout
+        """
+        # Initial projection
+        x_NTHWC = self.input_proj(x_NTHWC)
+
+        # First set of residual blocks
+        for block in self.first_blocks:
+            x_res_NTHWC = block(x_NTHWC)
+            ttnn.deallocate(x_NTHWC)
+            x_NTHWC = x_res_NTHWC
+
+        # Upsampling blocks
+        for block in self.up_blocks:
+            x_res_NTHWC = block(x_NTHWC)
+            ttnn.deallocate(x_NTHWC)
+            x_NTHWC = x_res_NTHWC
+
+        # Last set of residual blocks
+        for block in self.last_blocks:
+            x_res_NTHWC = block(x_NTHWC)
+            ttnn.deallocate(x_NTHWC)
+            x_NTHWC = x_res_NTHWC
+
+        # Apply output nonlinearity if needed
+        if self.output_nonlinearity == "silu":
+            x_tile_NTHWC = ttnn.to_layout(x_NTHWC, ttnn.TILE_LAYOUT)
+            ttnn.deallocate(x_NTHWC)
+            x_tile_NTHWC = ttnn.silu(x_tile_NTHWC, output_tensor=x_tile_NTHWC)  # in-place
+            x_NTHWC = ttnn.to_layout(x_tile_NTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(x_tile_NTHWC)
+        else:
+            assert not self.output_nonlinearity  # StyleGAN3 omits the to-RGB nonlinearity.
+
+        # Final projection
+        x_NTHWC = self.output_proj(x_NTHWC)
+
+        return x_NTHWC
+
+    @classmethod
+    def from_pretrained(cls, mesh_device, **kwargs):
+        """
+        Create a TtDecoder from pretrained weights.
+
+        Args:
+            mesh_device: TTNN mesh device
+            **kwargs: Additional arguments to pass to the constructor
+
+        Returns:
+            TtDecoder: Initialized decoder
+        """
+        state_dict = load_decoder_weights()
+        if state_dict is None:
+            logger.error("Failed to load decoder weights")
+            return None
+
+        return cls(mesh_device=mesh_device, state_dict=state_dict, **kwargs)
