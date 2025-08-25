@@ -81,7 +81,7 @@ struct WatcherSettings {
     bool dump_all = false;
     bool append = false;
     bool auto_unpause = false;
-    bool no = false;
+    bool noinline = false;
     bool phys_coords = false;
     bool text_start = false;
     bool skip_logging = false;
