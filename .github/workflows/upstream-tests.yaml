@@ -212,28 +212,6 @@ jobs:
         bh-config:
           - runner-label: BH-LLMBox
             image-name: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
-          # - runner-label: BH-DeskBox
-          #   image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
-          # - runner-label: BH-RackBox
-          #   image-name: ${{ needs.get-image-tags.outputs.bh-rackbox-image-tag }}
-    runs-on:
-      - ${{ matrix.bh-config.runner-label }}
-      - in-service
-      - cloud-virtual-machine
-    steps:
-      - name: Run image
-        timeout-minutes: 30
-        env:
-          LLAMA_DIR: ${{ contains(runner.name, 'tt-metal-ci') && !contains(runner.name, 'qb') && '/mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct' || '/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct' }}
-        run: docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent -v $LLAMA_DIR:$LLAMA_DIR:ro -e LLAMA_DIR ${{ matrix.bh-config.image-name }}
-  test-bh-multicard-image-ignore-status:
-    needs:
-      - get-image-tags
-      - build-images
-    strategy:
-      fail-fast: false
-      matrix:
-        bh-config:
           - runner-label: BH-DeskBox
             image-name: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
           - runner-label: BH-RackBox
