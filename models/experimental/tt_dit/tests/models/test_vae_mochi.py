@@ -15,6 +15,8 @@ from ...models.vae.vae_mochi import (
     CausalUpsampleBlock as TtCausalUpsampleBlock,
     Decoder as TtDecoder,
 )
+from ...parallel.manager import CCLManager
+from ...parallel.config import create_vae_parallel_manager
 from loguru import logger
 from genmo.mochi_preview.vae.models import Decoder as RefDecoder
 from genmo.mochi_preview.vae.models import ResBlock as RefResBlock
@@ -37,6 +39,31 @@ decoder_base_args = {
     "output_nonlinearity": "silu",
     "causal": True,
 }
+
+vae_shapes = [
+    # more optimal reshaped versions
+    [16, 60, 106, 768],
+]
+
+
+# Custom pytest mark for shared VAE device configuration
+def vae_device_config(func):
+    """Decorator to apply standard VAE device configuration to tests"""
+    func = pytest.mark.parametrize(
+        "mesh_device",
+        [
+            {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+                os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+            )
+        ],
+        indirect=True,
+    )(func)
+    func = pytest.mark.parametrize(
+        "device_params",
+        [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 20000000}],
+        indirect=True,
+    )(func)
+    return func
 
 
 def get_vae_dir():
@@ -107,15 +134,7 @@ def create_random_conv3d_models(mesh_device, in_channels, out_channels, bias=Tru
     ids=["12->768"],
 )
 @pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
+@vae_device_config
 def test_tt_conv3d_1x1x1(mesh_device, N, C_in, C_out, T, H, W, reset_seeds, divide_T):
     """Test forward pass of TtConv1x1 against Conv3d with 1x1x1 kernel."""
     T = T // divide_T
@@ -155,14 +174,18 @@ resblock_args = {
 }
 
 
-def create_random_resblock_models(mesh_device, mesh_axis, input_shape, **model_args):
+def create_random_resblock_models(mesh_device, mesh_axis, input_shape, parallel_manager, **model_args):
     """Initialize both reference and TT models."""
     # Create reference model
     reference_model = RefResBlock(**model_args)
 
     # Create TT model
     tt_model = TtResBlock(
-        mesh_device=mesh_device, mesh_axis=mesh_axis, input_shape=input_shape, torch_ref=reference_model
+        mesh_device=mesh_device,
+        mesh_axis=mesh_axis,
+        input_shape=input_shape,
+        parallel_manager=parallel_manager,
+        torch_ref=reference_model,
     )
 
     return reference_model, tt_model
@@ -180,22 +203,19 @@ def create_random_resblock_models(mesh_device, mesh_axis, input_shape, **model_a
     ids=["768", "512", "256", "128"],
 )
 @pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
+@vae_device_config
 def test_tt_resblock_forward(mesh_device, N, C, T, H, W, reset_seeds, divide_T):
     """Test complete forward pass of TtResBlock."""
     T = T // divide_T
     block_args = resblock_args.copy()
     block_args["channels"] = C
+
+    vae_parallel_manager = create_vae_parallel_manager(
+        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear), vae_shapes=vae_shapes
+    )
+
     reference_model, tt_model = create_random_resblock_models(
-        mesh_device, mesh_axis=None, input_shape=[N, C, T, H, W], **block_args
+        mesh_device, mesh_axis=None, input_shape=[N, C, T, H, W], parallel_manager=vae_parallel_manager, **block_args
     )
 
     # Create input tensor
@@ -340,15 +360,7 @@ def create_random_causalupsampleblock_models(
 )
 @pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
 @pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
-            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
-        )
-    ],
-    indirect=True,
-)
+@vae_device_config
 def test_upsample(mesh_device, config, divide_T, reset_seeds, use_real_weights):
     """Test TtCausalUpsampleBlock against reference implementation."""
     in_channels = config["in_channels"]
@@ -477,6 +489,7 @@ decoder_test_configs = [
 @pytest.mark.parametrize("divide_T", [8, 1], ids=["T8", "T1"])  # Emulate T fracturing
 @pytest.mark.parametrize("use_real_weights", [False, True], ids=["random_weights", "real_weights"])
 @pytest.mark.parametrize("load_dit_weights", [False, True], ids=["no_dit", "load_dit"])
+@vae_device_config
 def test_decoder(mesh_device, config, divide_T, reset_seeds, use_real_weights, load_dit_weights):
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
