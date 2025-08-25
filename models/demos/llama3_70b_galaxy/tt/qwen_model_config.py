@@ -964,7 +964,7 @@ class TtQwenModelArgs(TtModelArgs):
             # Use padded K and N
             self.model_config["W1W3_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
                 k=1280,
-                n=3200,
+                n=3840,
             )
 
             # Use padded K and N

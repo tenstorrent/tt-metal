@@ -140,7 +140,7 @@ def run_qwen_demo(
         temperature = [temperature] * batch_size
     seed = sampling_params["seed"]
 
-    dummy_weights = weights == "random"
+    dummy_weights = False
 
     # We disregard any warmup iteration for profiling, in favour of just measuring compile time on the first iteration
     N_warmup_iter = {"inference_prefill": 0, "inference_decode": 0}
@@ -594,7 +594,7 @@ def run_qwen_demo(
     [
         (  # full demo, batch 32
             "instruct",
-            80,
+            64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -608,7 +608,7 @@ def run_qwen_demo(
             0,  # start_pos
         ),
         (  # quick 1L demo
-            "random",
+            "instruct",
             1,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -624,7 +624,7 @@ def run_qwen_demo(
         ),
         (  # Stress test: 4*128k generation length
             "instruct",
-            80,
+            64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -639,7 +639,7 @@ def run_qwen_demo(
         ),
         (  # mini stress test
             "instruct",
-            80,
+            64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -669,7 +669,7 @@ def run_qwen_demo(
         ),
         (  # ND hang test
             "instruct",
-            80,
+            64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -711,7 +711,7 @@ def run_qwen_demo(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 266240,
+            "trace_region_size": 10459136,
             "fabric_config": True,
         }
     ],

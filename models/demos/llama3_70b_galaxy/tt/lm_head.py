@@ -87,7 +87,7 @@ class LMHead(LightweightModule):
                         layout=ttnn.TILE_LAYOUT,
                         dtype=dtype,
                         memory_config=memory_config_decode,
-                        # cache_file_name=cache_file_name_decode,
+                        cache_file_name=cache_file_name_decode,
                     )
                 )
                 self.output_weights_prefill.append(  # (2k, 16k) 128* 1024

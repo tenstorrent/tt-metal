@@ -94,9 +94,7 @@ def test_llama_decoder_inference(
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
     partial_state_dict = {
-        k[len(first_layer_prefix) :]: v
-        for k, v in state_dict.items()
-        if k.startswith(first_layer_prefix) and "q_norm" not in k and "k_norm" not in k
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if k.startswith(first_layer_prefix)
     }
     reference_model = TransformerBlock(layer_id=0, args=model_args, llama3=False)
     reference_model.load_state_dict(partial_state_dict)
