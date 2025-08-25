@@ -5,6 +5,7 @@
 #pragma once
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/tensor/enum_types.hpp"
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operation.hpp"
 
@@ -16,8 +17,8 @@ namespace ttnn::operations::experimental::auto_format {
 
 struct FormatParams {
     ttnn::Shape pad_shape;
-    float pad_value;
-    tt::tt_metal::Layout target_layout;
+    float pad_value{};
+    tt::tt_metal::Layout target_layout{tt::tt_metal::Layout::INVALID};
 };
 
 class AutoFormat {

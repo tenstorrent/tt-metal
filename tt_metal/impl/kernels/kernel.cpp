@@ -522,7 +522,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
     const ll_api::memory& binary_mem =
         llrt::get_risc_binary(build_state.get_target_out_path(this->kernel_full_name_), load_type);
     binaries.push_back(&binary_mem);
-    uint32_t binary_size = binary_mem.get_packed_size();
+    [[maybe_unused]] uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
@@ -579,7 +579,7 @@ void EthernetKernel::read_binaries(IDevice* device) {
             }
         });
     binaries.push_back(&binary_mem);
-    uint32_t binary_size = binary_mem.get_packed_size();
+    [[maybe_unused]] uint32_t binary_size = binary_mem.get_packed_size();
     log_debug(LogLoader, "ERISC={}, name={}, size={} (bytes)", erisc_id, this->name(), binary_size);
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
@@ -647,26 +647,6 @@ std::vector<std::string> ComputeKernel::file_paths(IDevice& device) const {
     }
     return file_paths;
 }
-
-RISCV DataMovementKernel::processor() const {
-    switch (this->config_.processor) {
-        case DataMovementProcessor::RISCV_0: return RISCV::BRISC;
-        case DataMovementProcessor::RISCV_1: return RISCV::NCRISC;
-        default: TT_THROW("Unsupported data movement processor");
-    }
-    return RISCV::BRISC;
-}
-
-RISCV EthernetKernel::processor() const {
-    switch (this->config_.processor) {
-        case DataMovementProcessor::RISCV_0: return RISCV::ERISC;
-        case DataMovementProcessor::RISCV_1: return RISCV::ERISC1;
-        default: TT_THROW("Unsupported data movement processor");
-    }
-    return RISCV::ERISC;
-}
-
-RISCV ComputeKernel::processor() const { return RISCV::COMPUTE; }
 
 bool DataMovementKernel::configure(
     IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const {

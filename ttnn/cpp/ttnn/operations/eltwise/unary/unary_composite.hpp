@@ -66,14 +66,6 @@ struct ExecuteUnaryCompositeClamp {
         const std::optional<MemoryConfig>& memory_config = std::nullopt);
 };
 
-struct ExecuteUnaryCompositeThreshold {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float threshold,
-        float value,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
-};
-
 struct ExecuteUnaryCompositeClip {
     static Tensor invoke(
         const Tensor& input_tensor,
@@ -189,8 +181,6 @@ constexpr auto clamp = ttnn::register_operation<"ttnn::clamp", operations::unary
 constexpr auto selu = ttnn::register_operation<
     "ttnn::selu",
     operations::unary::ExecuteUnaryCompositeOpWithFloats<operations::unary::UnaryCompositeOpType::SELU>>();
-constexpr auto threshold =
-    ttnn::register_operation<"ttnn::threshold", operations::unary::ExecuteUnaryCompositeThreshold>();
 constexpr auto glu = ttnn::register_operation<
     "ttnn::glu",
     operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>>();

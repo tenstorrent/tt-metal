@@ -9,6 +9,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::operations::full_like {
@@ -93,6 +94,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
     }
 
     std::vector<uint32_t> writer_compile_time_args = {(uint32_t)cb_fill_value_id};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     auto writer_id = CreateKernel(
         program,

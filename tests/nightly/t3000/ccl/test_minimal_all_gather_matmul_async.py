@@ -9,6 +9,7 @@ from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
@@ -199,12 +200,15 @@ def run_all_gather_impl(
     def run_op(i):
         if use_non_fused:
             if use_legacy_allgather:
-                tt_all_gather_out_tensor = ttnn.all_gather(
-                    input_tensor_mesh_list[i],
-                    dim,
-                    num_links=num_links,
-                    memory_config=mem_config_ag,
-                )
+                pytest.skip(LEGACY_CCL_SKIP)
+                # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+                # tt_all_gather_out_tensor = ttnn.all_gather(
+                #     input_tensor_mesh_list[i],
+                #     dim,
+                #     num_links=num_links,
+                #     memory_config=mem_config_ag,
+                # )
+                assert False, "Legacy ccl call removed until new implementation is done"
             else:
                 tt_all_gather_out_tensor = ttnn.experimental.all_gather_async(
                     input_tensor_mesh_list[i],
@@ -231,20 +235,22 @@ def run_all_gather_impl(
             )
         else:
             if use_legacy_allgather:
-                tt_all_gather_out_tensor, tt_matmul_out_tensor, _ = ttnn.experimental.all_gather_matmul(
-                    input_tensor_mesh_list[i],
-                    weight_tt,
-                    dim,
-                    (0, 6),
-                    bias=bias_tt,
-                    num_links=num_links,
-                    memory_config_ag=mem_config_ag,
-                    memory_config_mm=mem_config_mm,
-                    transpose_a=False,
-                    transpose_b=False,
-                    program_config=program_config,
-                    compute_kernel_config=compute_kernel_config,
-                )
+                pytest.skip(LEGACY_CCL_SKIP)
+                # tt_all_gather_out_tensor, tt_matmul_out_tensor, _ = ttnn.experimental.all_gather_matmul(
+                #     input_tensor_mesh_list[i],
+                #     weight_tt,
+                #     dim,
+                #     (0, 6),
+                #     bias=bias_tt,
+                #     num_links=num_links,
+                #     memory_config_ag=mem_config_ag,
+                #     memory_config_mm=mem_config_mm,
+                #     transpose_a=False,
+                #     transpose_b=False,
+                #     program_config=program_config,
+                #     compute_kernel_config=compute_kernel_config,
+                # )
+                assert False, "Legacy ccl call removed until new implementation is done"
             else:
                 tt_all_gather_out_tensor, tt_matmul_out_tensor = ttnn.experimental.all_gather_matmul_async(
                     input_tensor_mesh_list[i],
@@ -385,10 +391,8 @@ def run_all_gather_impl(
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, False, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, False, ttnn.Topology.Linear),
-        (
-            {"trace_region_size": 90112},
-            True,
-            ttnn.Topology.Ring,
+        pytest.param(
+            {"trace_region_size": 90112}, True, ttnn.Topology.Ring, marks=pytest.mark.skip(reason=LEGACY_CCL_SKIP)
         ),
     ],
     indirect=["device_params"],

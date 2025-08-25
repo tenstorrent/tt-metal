@@ -1,5 +1,7 @@
 name: "(Blackhole) Blackhole nightly tests"
 
+
+
 on:
   workflow_dispatch:
   workflow_call:
@@ -14,6 +16,15 @@ jobs:
     secrets: inherit
     with:
       build-wheel: true
+      version: 22.04
+  build-artifact-profiler:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-wheel: true
+      tracy: true
       version: 22.04
   bh-nightly:
     needs: build-artifact
@@ -56,7 +67,7 @@ jobs:
       extra-tag: ${{ matrix.test-group.extra-tag }}
       num_devices: ${{ matrix.test-group.num_devices }}
   blackhole-multi-card-unit-tests:
-    needs: build-artifact
+    needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
@@ -72,9 +83,9 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   blackhole-multi-card-ttnn-stress-tests:
     needs: build-artifact
     secrets: inherit

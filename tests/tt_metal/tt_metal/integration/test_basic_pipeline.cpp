@@ -267,7 +267,7 @@ TEST_F(CommandQueueProgramFixture, TensixTestPipelineAcrossRows) {
         GTEST_SKIP();
     }
 
-    unit_tests::create_pipeline::PipelineRowConfig test_config;
+    unit_tests::create_pipeline::PipelineRowConfig test_config{};
 
     // // saturate DRAM
     test_config.num_cores = this->device_->compute_with_storage_grid_size().x - 1;
