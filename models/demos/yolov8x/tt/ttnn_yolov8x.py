@@ -414,8 +414,10 @@ class TtDFL:
         b, _, a = x.shape
 
         x = ttnn.reshape(x, (b, 4, c1, a), memory_config=ttnn.L1_MEMORY_CONFIG)
-        x = ttnn.softmax(x, dim=2)
         x = ttnn.permute(x, (0, 1, 3, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = ttnn.softmax(x, dim=-1)
         x, h, w = self.conv(x)
         x = ttnn.permute(x, (0, 3, 1, 2))
         x = ttnn.reshape(x, (x.shape[0], 1, 4, int(x.shape[3] / 4)))
