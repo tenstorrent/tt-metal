@@ -18,11 +18,13 @@ class TtAutoencoderKL(LightweightModule):
         device,
         state_dict,
         model_config,
+        use_tp,
     ):
         super().__init__()
 
         self.device = device
         self.model_config = model_config
+        self.use_tp = use_tp
 
         self.stride = (1, 1)
         self.padding = (0, 0)
@@ -33,6 +35,7 @@ class TtAutoencoderKL(LightweightModule):
             device,
             state_dict,
             model_config,
+            use_tp,
         )
 
         self.encoder = TtEncoder(

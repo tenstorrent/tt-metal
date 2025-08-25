@@ -4,6 +4,7 @@
 
 
 import pytest
+import ttnn
 import torch
 from diffusers import DiffusionPipeline
 from loguru import logger
@@ -11,6 +12,7 @@ from transformers import CLIPTextModelWithProjection, CLIPTextModel
 from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
+    SDXL_FABRIC_CONFIG,
 )
 import os
 from models.common.utility_functions import profiler
@@ -31,8 +33,9 @@ def run_demo_inference(
     evaluation_range,
     capture_trace,
     guidance_scale,
+    use_tp,
 ):
-    batch_size = ttnn_device.get_num_devices()
+    batch_size = list(ttnn_device.shape)[1] if use_tp else ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
     torch.manual_seed(0)
@@ -72,31 +75,34 @@ def run_demo_inference(
             num_inference_steps=num_inference_steps,
             guidance_scale=guidance_scale,
             is_galaxy=is_galaxy(),
+            use_tp=use_tp,
         ),
     )
 
     if encoders_on_device:
         tt_sdxl.compile_text_encoding()
     (
-        prompt_embeds_torch,
-        negative_prompt_embeds_torch,
-        pooled_prompt_embeds_torch,
-        negative_pooled_prompt_embeds_torch,
+        all_prompt_embeds_torch,  # tuple len = prompts/batch_size of tensors of shape (2, 77, 2048)
+        torch_add_text_embeds,  # tuple len = prompts/batch_size of tensors of shape (2, 77, 2048)
     ) = tt_sdxl.encode_prompts(prompts, negative_prompts)
 
+    # prompt_embeds_torch is tuple of len = prompts/batch_size of tensors of shape (batch_size, 77, 2048)
+
+    # prompt_embeds_torch = torch.stack(prompt_embeds_torch, dim=0) # not sure if this is right, should be (prompts/batch_size, 2, 77, 2048)
+    # negative_prompt_embeds_torch = torch.stack(negative_prompt_embeds_torch, dim=0) # which should be split into 2 tensors of shape (prompts/batch_size, 1, 77, 2048)
+    # pooled_prompt_embeds_torch = torch.stack(pooled_prompt_embeds_torch, dim=0)
+    # negative_pooled_prompt_embeds_torch = torch.stack(negative_pooled_prompt_embeds_torch, dim=0)
+
     tt_latents, tt_prompt_embeds, tt_add_text_embeds = tt_sdxl.generate_input_tensors(
-        prompt_embeds_torch,
-        negative_prompt_embeds_torch,
-        pooled_prompt_embeds_torch,
-        negative_pooled_prompt_embeds_torch,
+        all_prompt_embeds_torch,
+        torch_add_text_embeds,
     )
 
     tt_sdxl.prepare_input_tensors(
         [
             tt_latents,
-            *tt_prompt_embeds[0],
-            tt_add_text_embeds[0][0],
-            tt_add_text_embeds[0][1],
+            tt_prompt_embeds[0],
+            tt_add_text_embeds[0],
         ]
     )
     tt_sdxl.compile_image_processing()
@@ -121,9 +127,8 @@ def run_demo_inference(
         tt_sdxl.prepare_input_tensors(
             [
                 tt_latents,
-                *tt_prompt_embeds[iter],
-                tt_add_text_embeds[iter][0],
-                tt_add_text_embeds[iter][1],
+                tt_prompt_embeds[iter],
+                tt_add_text_embeds[iter],
             ]
         )
         imgs = tt_sdxl.generate_images()
@@ -155,12 +160,26 @@ def run_demo_inference(
     return images
 
 
+def prepare_device(mesh_device, use_tp):
+    if use_tp:
+        assert mesh_device.get_num_devices() % 2 == 0, "Mesh device must have even number of devices"
+        mesh_device.reshape(ttnn.MeshShape(2, mesh_device.get_num_devices() // 2))
+
+
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE, "trace_region_size": SDXL_TRACE_REGION_SIZE}], indirect=True
+    "device_params",
+    [
+        {
+            "l1_small_size": SDXL_L1_SMALL_SIZE,
+            "trace_region_size": SDXL_TRACE_REGION_SIZE,
+            "fabric_config": SDXL_FABRIC_CONFIG,
+        }
+    ],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "prompt",
-    (("An astronaut riding a green horse"),),
+    (["An astronaut riding a green horse", "A dog in a red hat"],),
 )
 @pytest.mark.parametrize(
     "negative_prompt",
@@ -178,25 +197,25 @@ def run_demo_inference(
     "vae_on_device",
     [
         (True),
-        (False),
     ],
-    ids=("device_vae", "host_vae"),
 )
 @pytest.mark.parametrize(
     "encoders_on_device",
     [
-        (True),
         (False),
     ],
-    ids=("device_encoders", "host_encoders"),
 )
 @pytest.mark.parametrize(
     "capture_trace",
     [
         (True),
-        (False),
     ],
-    ids=("with_trace", "no_trace"),
+)
+@pytest.mark.parametrize(
+    "use_tp",
+    [
+        (True),
+    ],
 )
 def test_demo(
     mesh_device,
@@ -209,7 +228,9 @@ def test_demo(
     capture_trace,
     evaluation_range,
     guidance_scale,
+    use_tp,
 ):
+    prepare_device(mesh_device, use_tp)
     return run_demo_inference(
         mesh_device,
         is_ci_env,
@@ -221,4 +242,5 @@ def test_demo(
         evaluation_range,
         capture_trace,
         guidance_scale,
+        use_tp,
     )

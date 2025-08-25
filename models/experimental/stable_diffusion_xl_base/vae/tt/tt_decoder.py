@@ -18,9 +18,10 @@ from loguru import logger
 
 
 class TtDecoder(LightweightModule):
-    def __init__(self, device, state_dict, model_config):
+    def __init__(self, device, state_dict, model_config, use_tp):
         super().__init__()
 
+        self.use_tp = use_tp
         self.device = device
 
         self.norm_groups = 32
