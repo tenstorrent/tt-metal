@@ -31,23 +31,21 @@ void kernel_main() {
 
     // ublocks size defined in tiles
     const uint32_t src0_tile_bytes = get_tile_size(cb_inp);
-    const DataFormat src0_data_format = get_dataformat(cb_inp);
     const uint32_t TILE_SIZE = 32 * 32;
     const uint32_t BF16_TILE_BYTES = 2 * TILE_SIZE;
     const uint32_t onetile = 1;
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr uint32_t blk = get_compile_time_arg_val(1);
-    uint32_t reducer_semaphore_addr = get_semaphore(get_compile_time_arg_val(2));  // semaphore for reducer
-    constexpr uint32_t num_cores_to_wait = get_compile_time_arg_val(3);
+    constexpr uint32_t blk = get_compile_time_arg_val(0);
+    uint32_t reducer_semaphore_addr = get_semaphore(get_compile_time_arg_val(1));  // semaphore for reducer
+    constexpr uint32_t num_cores_to_wait = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
     const uint64_t in0_sender_semaphore_noc_addr =
         get_noc_addr(reduce_core_noc_x, reduce_core_noc_y, reducer_semaphore_addr);
     volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reducer_semaphore_addr);
 
-    const InterleavedAddrGenFast<src0_is_dram> src_a = {
-        .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
+    const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
 
     // Generate constant tiles for reduce scalar
     uint32_t scaler = get_arg_val<uint32_t>(8);

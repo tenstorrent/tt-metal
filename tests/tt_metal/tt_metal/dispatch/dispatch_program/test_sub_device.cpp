@@ -167,14 +167,14 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
     EXPECT_EQ(input_1, output_1);
     auto input_1_it = input_1.begin();
     for (const auto& physical_core : physical_cores_1) {
-        auto readback = tt::llrt::read_hex_vec_from_core(
+        auto readback = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
             device->get_devices()[0]->id(), physical_core, buffer_1->address(), page_size_1);
         EXPECT_TRUE(std::equal(input_1_it, input_1_it + page_size_1 / sizeof(uint32_t), readback.begin()));
         input_1_it += page_size_1 / sizeof(uint32_t);
     }
     auto sem_addr = global_semaphore.address();
     auto physical_syncer_core = device->worker_core_from_logical_core(syncer_core);
-    tt::llrt::write_hex_vec_to_core(
+    tt::tt_metal::MetalContext::instance().get_cluster().write_core(
         device->get_devices()[0]->id(), physical_syncer_core, std::vector<uint32_t>{1}, sem_addr);
 
     // Full synchronization

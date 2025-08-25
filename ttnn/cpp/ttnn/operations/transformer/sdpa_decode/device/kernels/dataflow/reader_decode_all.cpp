@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/transformer/sdpa_decode/device/kernels/rt_args_common.hpp"
 #include "dataflow_common.hpp"
+// #include "debug/dprint.h"
 
 void kernel_main() {
     /*
@@ -42,6 +43,8 @@ void kernel_main() {
     constexpr bool reuse_k = get_compile_time_arg_val(24) == 1;
     constexpr bool use_half_tile = get_compile_time_arg_val(25);
     constexpr uint32_t q_chunk_size_bytes = get_compile_time_arg_val(26);
+    constexpr bool is_cur_pos_tensor_sharded = get_compile_time_arg_val(27);
+    constexpr bool is_page_table_sharded = get_compile_time_arg_val(28);
 
     uint32_t arg_idx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -74,14 +77,18 @@ void kernel_main() {
             cur_pos = cur_pos_arg;
         } else {
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
-            const InterleavedAddrGen<true> addrg = {.bank_base_address = pos_addr, .page_size = index_stick_size_B};
-
             cb_reserve_back(cb_index_id, 1);
             uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
-            // index_tensor has one page to read
-            uint64_t tensor_index_noc_addr = get_noc_addr(0, addrg);
-            noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
-            noc_async_read_barrier();
+
+            if constexpr (!is_cur_pos_tensor_sharded) {
+                const InterleavedAddrGen<true> addrg = {.bank_base_address = pos_addr, .page_size = index_stick_size_B};
+
+                // index_tensor has one page to read
+                uint64_t tensor_index_noc_addr = get_noc_addr(0, addrg);
+                noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
+                noc_async_read_barrier();
+            }
+
             cb_push_back(cb_index_id, 1);
             volatile tt_l1_ptr uint32_t* index_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(index_cb_wr_ptr);
             cur_pos = index_ptr[cur_batch / q_heads_parallel_factor];
@@ -206,7 +213,7 @@ void kernel_main() {
 
     // Read attention sink
     if constexpr (use_attention_sink) {
-        constexpr auto attention_sink_args = TensorAccessorArgs<27>();
+        constexpr auto attention_sink_args = TensorAccessorArgs<29>();
         const auto attention_sink_reader =
             TensorAccessor(attention_sink_args, attention_sink_addr, attention_sink_tile_bytes);
 
@@ -222,17 +229,33 @@ void kernel_main() {
     }
 
     volatile tt_l1_ptr uint32_t* page_table_ptr;
+    uint32_t page_table_cb_wr_ptr = 0;
+    // Typed pointers for page table entries in L1
+    volatile tt_l1_ptr uint16_t* page_table_ptr_u16 = nullptr;
+    volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
     if constexpr (is_paged_attention) {
         constexpr uint32_t cb_id_page_table = tt::CBIndex::c_9;
-        const InterleavedAddrGen<true> page_table_gen = {
-            .bank_base_address = page_table_addr, .page_size = page_table_page_size};
-        cb_reserve_back(cb_id_page_table, 1);
-        uint32_t page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
-        uint64_t page_table_noc_addr = get_noc_addr((cur_batch / q_heads_parallel_factor), page_table_gen);
-        noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_page_size);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_page_table, 1);
-        page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+        uint32_t num_pages_to_read = is_page_table_sharded ? B : 1;
+        cb_reserve_back(cb_id_page_table, num_pages_to_read);
+
+        // Read page table from DRAM
+        if constexpr (!is_page_table_sharded) {
+            page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
+            const InterleavedAddrGen<is_paged_attention> page_table_gen = {
+                .bank_base_address = page_table_addr, .page_size = page_table_page_size};
+            uint64_t page_table_noc_addr = get_noc_addr((cur_batch / q_heads_parallel_factor), page_table_gen);
+            noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_page_size);
+            noc_async_read_barrier();
+            page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
+            page_table_ptr_u32 = page_table_ptr;
+
+        } else {  // Read page table from dyanmically allocated L1 buffer
+            page_table_cb_wr_ptr =
+                get_write_ptr(cb_id_page_table) + (cur_batch / q_heads_parallel_factor) * page_table_page_size;
+            page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_cb_wr_ptr);
+        }
+
+        cb_push_back(cb_id_page_table, num_pages_to_read);
     }
 
     for (uint32_t cur_head = cur_head_group * num_heads_per_core;
@@ -255,9 +278,13 @@ void kernel_main() {
                     for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
                         uint32_t k_write_ptr_col = k_write_ptr + row * k_tile_bytes;
                         uint32_t virtual_k_tile_row_num = k_chunk_start_row_num + row;
+
                         uint32_t physical_k_tile_id =
-                            virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, DHt>(
-                                virtual_k_tile_row_num, cur_head, page_table_ptr);
+                            (is_page_table_sharded)
+                                ? virtual_seq_tile_id_to_physical_tile_id<uint16_t, num_kv_heads, block_size_t, DHt>(
+                                      virtual_k_tile_row_num, cur_head, page_table_ptr_u16)
+                                : virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, DHt>(
+                                      virtual_k_tile_row_num, cur_head, page_table_ptr_u32);
                         for (uint32_t col = 0; col < DHt; ++col) {
                             noc_async_read_tile(physical_k_tile_id, k_reader, k_write_ptr_col);
                             physical_k_tile_id += 1;                               // Go to next tile in row
@@ -303,10 +330,15 @@ void kernel_main() {
 
                         for (uint32_t row = 0; row < Sk_chunk_t_dynamic; ++row) {
                             uint32_t virtual_v_tile_row_num = k_chunk_start_row_num + row;
-                            uint32_t physical_v_tile_id = virtual_seq_tile_id_to_physical_tile_id<
-                                num_kv_heads,
-                                block_size_t,
-                                DHt /* Use K's head dim */>(virtual_v_tile_row_num, cur_head, page_table_ptr);
+                            uint32_t physical_v_tile_id =
+                                (is_page_table_sharded)
+                                    ? virtual_seq_tile_id_to_physical_tile_id<
+                                          uint16_t,
+                                          num_kv_heads,
+                                          block_size_t,
+                                          DHt>(virtual_v_tile_row_num, cur_head, page_table_ptr_u16)
+                                    : virtual_seq_tile_id_to_physical_tile_id<num_kv_heads, block_size_t, DHt>(
+                                          virtual_v_tile_row_num, cur_head, page_table_ptr_u32);
                             for (uint32_t col = 0; col < vDHt; ++col) {
                                 noc_async_read_tile(physical_v_tile_id, v_reader, v_write_ptr);
                                 physical_v_tile_id += 1;
