@@ -237,7 +237,7 @@ public:
     int get_watcher_auto_unpause() const { return watcher_settings.auto_unpause; }
     void set_watcher_auto_unpause(bool auto_unpause) { watcher_settings.auto_unpause = auto_unpause; }
     int get_watcher_noinline() const { return watcher_settings.noinline; }
-    void set_watcher_noinline(bool noinline) { watcher_settings.no = noinline; }
+    void set_watcher_noinline(bool noinline) { watcher_settings.noinline = noinline; }
     int get_watcher_phys_coords() const { return watcher_settings.phys_coords; }
     void set_watcher_phys_coords(bool phys_coords) { watcher_settings.phys_coords = phys_coords; }
     bool get_watcher_text_start() const { return watcher_settings.text_start; }
