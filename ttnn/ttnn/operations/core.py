@@ -663,7 +663,7 @@ def as_tensor(
                 mesh_mapper=None if isinstance(mesh_mapper, ttnn.ReplicateTensorToMeshWrapper) else mesh_mapper,
             )
             assert tensor.storage_type() == ttnn.StorageType.HOST, "tensor should be on host"
-            logger.debug(
+            logger.info(
                 f"Generating cache for {cache_file_name} of shape {tensor.shape}, dtype {dtype_name}, layout {layout_name}"
             )
             pathlib.Path(cache_file_name).parent.mkdir(parents=True, exist_ok=True)
@@ -686,9 +686,9 @@ def as_tensor(
                     f"Cached file {cache_file_name} has shape {tensor.shape}, expected {tensor.shape}, regenerating cache"
                 )
                 tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
-            logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
+            logger.info(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
         except RuntimeError as e:
-            logger.warning(f"Failed to load cache for {cache_file_name}: {e}")
+            logger.info(f"Failed to load cache for {cache_file_name}: {e}")
             tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
         return tensor
 
