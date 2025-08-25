@@ -15,6 +15,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using uint32_t = std::uint32_t;
 using namespace tt::constants;
@@ -319,29 +320,27 @@ tt::tt_metal::operation::ProgramWithCallbacks layernorm_post_allgather_multi_cor
     Program program = tt::tt_metal::CreateProgram();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)is_dram(a),
-        (std::uint32_t)is_dram(stats),
-        (std::uint32_t)is_dram(gamma),
-        (std::uint32_t)is_dram(beta),
         (std::uint32_t)block_size,
         (std::uint32_t)stats_tiles_cols,
     };
 
+    uint32_t gamma_stick_size = 0;
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
+        gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(gamma_stick_size);
         TT_FATAL(gamma_stick_size_is_power_of_two, "Only power of 2 gammas are supported");
-        reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
-        // if (gamma_stick_size_is_power_of_two) {
-        uint32_t gamma_log2_stick_size =
-            gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
-        reader_compile_time_args.push_back((std::uint32_t)gamma_log2_stick_size);
     }
+    reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size);
 
-    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)is_dram(output),
-                                                      (std::uint32_t)block_size};
+    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(stats.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
+        .append_to(reader_compile_time_args);
+
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     bool tile_dtype_is_bfloat16 = a.dtype() == tt::tt_metal::DataType::BFLOAT16;
     std::map<std::string, std::string> reader_defines;
