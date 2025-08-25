@@ -47,7 +47,6 @@ void kernel_main() {
     constexpr bool is_page_table_sharded = get_compile_time_arg_val(28);
     constexpr uint32_t q_page_size_bytes = get_compile_time_arg_val(29);
 
-    // TensorAccessorArgs for all buffers
     constexpr auto k_args = TensorAccessorArgs<30>();
     constexpr auto q_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();

@@ -36,7 +36,7 @@ void kernel_main() {
     constexpr bool is_causal = get_compile_time_arg_val(22) == 1;
     constexpr uint32_t max_dynamic_chunk_size = get_compile_time_arg_val(23);
     constexpr uint32_t q_heads_parallel_factor = get_compile_time_arg_val(24);
-    // TensorAccessorArgs for output buffer
+
     constexpr auto out_args = TensorAccessorArgs<25>();
 
     uint32_t arg_idx = 0;
