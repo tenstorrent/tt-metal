@@ -51,31 +51,62 @@ COLORS = [
 
 
 def format_text_concise(text: str) -> str:
-    """Convert verbose argument descriptions to concise format and show only last call frame."""
+    """Convert verbose argument descriptions to concise format and show the most relevant operation call."""
     lines = text.split("\n")
     formatted_lines = []
 
-    # Find the actual test file line (not decorator) and the operation call that follows it
-    test_file_line = None
-    test_file_index = -1
+    # Find the most relevant operation call - look for lines containing ttnn operations or math operators
+    # Start from the end of the stack trace to find the most user-relevant call
+    relevant_file_line = None
     operation_call_line = None
 
-    for i, line in enumerate(lines):
+    for i in range(len(lines) - 1, -1, -1):  # Search backwards through stack trace
+        line = lines[i]
         line_stripped = line.strip()
-        if line_stripped.startswith("File ") and "/tests/" in line_stripped:
-            test_file_line = line
-            test_file_index = i
-        elif (
-            test_file_index != -1
-            and i == test_file_index + 1
-            and "=" in line_stripped
+
+        # Look for operation calls (assignments with ttnn calls or math operators)
+        if (
+            "=" in line_stripped
+            and not line_stripped.startswith("File ")
             and ("ttnn." in line_stripped or any(op in line_stripped for op in [" + ", " - ", " * ", " / "]))
         ):
             operation_call_line = line
+            # Find the corresponding file line (should be right before this)
+            if i > 0 and lines[i - 1].strip().startswith("File "):
+                relevant_file_line = lines[i - 1]
+            break
 
-    # Add only the test file line and operation call
-    if test_file_line:
-        formatted_lines.append(test_file_line)
+    # If no operation found, fallback to finding any meaningful user code (exclude internal/library code)
+    if not operation_call_line:
+        for i in range(len(lines) - 1, -1, -1):
+            line = lines[i]
+            line_stripped = line.strip()
+
+            if line_stripped.startswith("File "):
+                file_path = line_stripped
+                # Skip internal library files, decorators, and framework code
+                if not any(
+                    internal in file_path
+                    for internal in [
+                        "/site-packages/",
+                        "/lib/python",
+                        "decorators.py",
+                        "/pytest/",
+                        "/pluggy/",
+                        "__call__",
+                    ]
+                ):
+                    relevant_file_line = line
+                    # Look for the next line that might be a function call
+                    if i < len(lines) - 1:
+                        next_line = lines[i + 1]
+                        if not next_line.strip().startswith("File ") and next_line.strip():
+                            operation_call_line = next_line
+                    break
+
+    # Add the most relevant file line and operation call
+    if relevant_file_line:
+        formatted_lines.append(relevant_file_line)
     if operation_call_line:
         formatted_lines.append(operation_call_line)
 
