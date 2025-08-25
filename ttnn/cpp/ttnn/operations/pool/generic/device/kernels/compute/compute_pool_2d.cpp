@@ -28,7 +28,6 @@
 namespace NAMESPACE {
 
 void MAIN {
-    uint64_t timestamp = ckernel::read_wall_clock();
     // NOTE: here it is assumed that in_ntiles_hw == 1. General cases not handled yet. When ntiles_hw > 1 the large
     // kernel is called
     constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(0);
@@ -160,6 +159,7 @@ void MAIN {
 
                     cb_reserve_back(tile_tmp_cb_id, topk_output_tiles);
 
+                    uint64_t tilize_start = ckernel::read_wall_clock();
                     tilize_init(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id);
                     // reconfig_data_format_srca(tile_tmp_cb_id);
                     // pack_reconfig_data_format(tile_tmp_cb_id);
@@ -180,6 +180,9 @@ void MAIN {
 
                     cb_push_back(tile_idx_tmp_cb_id, topk_output_tiles);
                     cb_wait_front(tile_idx_tmp_cb_id, topk_output_tiles);
+                    uint64_t tilize_stop = ckernel::read_wall_clock();
+                    uint64_t tilize_duration = tilize_stop - tilize_start;
+                    DPRINT << "tilize_operations time: " << tilize_duration << ENDL();
 
                     // // TODO should we be worried that the indexes appear to be getting scaled by 128 here?
                     // if (n == 0) {
@@ -187,12 +190,13 @@ void MAIN {
                     //     PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id, 0));
                     // }
 
-                    pack_reconfig_data_format(tile_tmp_cb_id);
+                    uint64_t copy_start = ckernel::read_wall_clock();
                     copy_tile_init(tile_tmp_cb_id);
                     copy_tile(tile_tmp_cb_id, 0, data_dst_idx);
-
-                    copy_tile_to_dst_init_short_with_dt(tile_tmp_cb_id, tile_idx_tmp_cb_id);
                     copy_tile(tile_idx_tmp_cb_id, 0, index_dst_idx);
+                    uint64_t copy_stop = ckernel::read_wall_clock();
+                    uint64_t copy_duration = copy_stop - copy_start;
+                    DPRINT << "copy_tile_operations time: " << copy_duration << ENDL();
 
                     // dprint_tensix_dest_reg(0);
                     // dprint_tensix_dest_reg(2);
@@ -202,8 +206,11 @@ void MAIN {
                     // ckernel::topk_local_sort(data_dst_idx, 0, 4, 0);
 
                     // ckernel::max_pool_with_indices_init();
-                    constexpr int KERNEL_SIZE = 9;
-                    ckernel::max_pool_with_indices<KERNEL_SIZE>(data_dst_idx, index_dst_idx);
+                    uint64_t start = ckernel::read_wall_clock();
+                    ckernel::max_pool_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
+                    uint64_t stop = ckernel::read_wall_clock();
+                    uint64_t duration = stop - start;
+                    // MATH(DPRINT << "max_pool_with_indices time: " << duration << ENDL());
 
                     // Pop the temporary circular buffers after processing
                     cb_pop_front(tile_tmp_cb_id, topk_output_tiles);
@@ -226,6 +233,7 @@ void MAIN {
                     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, output_faces);
                 }
             } else {
+                uint64_t pack_start = ckernel::read_wall_clock();
                 tensix_sync();  // make sure tensix is idle for init
                 pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
                 tensix_sync();  // make sure tensix is idle for init
@@ -244,6 +252,9 @@ void MAIN {
                 // }
 
                 pack_untilize_uninit(out_cb_id);
+                uint64_t pack_stop = ckernel::read_wall_clock();
+                uint64_t pack_duration = pack_stop - pack_start;
+                DPRINT << "pack_untilize_operations time: " << pack_duration << ENDL();
             }
             cb_push_back(out_cb_id, output_faces);
             if constexpr (return_indices) {
@@ -255,9 +266,6 @@ void MAIN {
             cb_pop_front(curr_scalar_cb_id, 1);
         }
     }
-    uint64_t timestamp2 = ckernel::read_wall_clock();
-    uint64_t duration = timestamp2 - timestamp;
-    DPRINT << "compute_pool_2d.cpp kernel duration: " << duration << ENDL();
 }
 
 }  // namespace NAMESPACE
