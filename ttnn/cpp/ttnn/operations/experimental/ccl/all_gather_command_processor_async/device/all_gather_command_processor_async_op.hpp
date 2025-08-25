@@ -44,7 +44,8 @@ struct AllGatherCommandProcessorAsync {
         uint32_t num_links,
         MemoryConfig output_mem_config,
         ccl::Topology topology,
-        std::optional<uint32_t> cluster_axis std::optional<tt::tt_metal::SubDeviceId>& sub_device_id, ) :
+        std::optional<uint32_t> cluster_axis,
+        std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) :
         devices(std::move(devices)),
         ring_size(ring_size),
         dim(dim),
@@ -88,7 +89,7 @@ struct AllGatherCommandProcessorAsync {
     tt::tt_metal::operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
-std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> all_gather_command_processor_choose_worker_cores(
     size_t num_links,
     size_t num_workers_per_link,
     IDevice* device,

@@ -19,7 +19,8 @@ namespace ttnn::operations::experimental::ccl {
 namespace {
 
 template <typename ccl_operation_t>
-void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
+void bind_all_gather_command_processor_async(
+    pybind11::module& module, const ccl_operation_t& operation, const char* doc) {
     // namespace py = pybind11;
 
     bind_registered_operation(
