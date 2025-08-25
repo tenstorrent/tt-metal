@@ -148,117 +148,38 @@ void MAIN {
                         reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                     }
                 } else {
-                    uint64_t start_time, stop_time;
-
                     tensix_sync();
-                    start_time = ckernel::read_wall_clock();
                     unary_op_init_common(curr_in_cb_id, tile_tmp_cb_id);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "unary_op_init_common time: " << (stop_time - start_time) << ENDL());
                     tensix_sync();
-
-                    // if (n == 0) {
-                    //     UNPACK(DPRINT << "IN CB " << ENDL());
-                    //     UNPACK(tt::compute::common::print_full_tile(curr_in_cb_id, 0));
-                    // }
 
                     cb_reserve_back(tile_tmp_cb_id, topk_output_tiles);
 
-                    start_time = ckernel::read_wall_clock();
                     tilize_init(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "tilize_init time: " << (stop_time - start_time) << ENDL());
-
-                    // reconfig_data_format_srca(tile_tmp_cb_id);
-                    // pack_reconfig_data_format(tile_tmp_cb_id);
-
-                    start_time = ckernel::read_wall_clock();
                     tilize_block(curr_in_cb_id, topk_output_tiles, tile_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "tilize_block time: " << (stop_time - start_time) << ENDL());
-
-                    start_time = ckernel::read_wall_clock();
                     tilize_uninit_with_dt(curr_in_cb_id, curr_in_idx_cb_id, tile_idx_tmp_cb_id);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "tilize_uninit_with_dt time: " << (stop_time - start_time) << ENDL());
 
                     cb_push_back(tile_tmp_cb_id, topk_output_tiles);
                     cb_wait_front(tile_tmp_cb_id, topk_output_tiles);
-
                     cb_reserve_back(tile_idx_tmp_cb_id, topk_output_tiles);
 
-                    start_time = ckernel::read_wall_clock();
                     tilize_init_short_with_dt(curr_in_cb_id, curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "tilize_init_short_with_dt time: " << (stop_time - start_time) << ENDL());
-
-                    // reconfig_data_format_srca(tile_idx_tmp_cb_id);
-                    // pack_reconfig_data_format(tile_idx_tmp_cb_id);
-
-                    start_time = ckernel::read_wall_clock();
                     tilize_block(
                         curr_in_idx_cb_id, topk_output_tiles, tile_idx_tmp_cb_id, topk_cb_tile_idx, topk_cb_tile_idx);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "tilize_block_idx time: " << (stop_time - start_time) << ENDL());
-
-                    start_time = ckernel::read_wall_clock();
-                    tilize_uninit(curr_in_idx_cb_id, tile_idx_tmp_cb_id);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "tilize_uninit time: " << (stop_time - start_time) << ENDL());
 
                     cb_push_back(tile_idx_tmp_cb_id, topk_output_tiles);
                     cb_wait_front(tile_idx_tmp_cb_id, topk_output_tiles);
 
-                    // // TODO should we be worried that the indexes appear to be getting scaled by 128 here?
-                    // if (n == 0) {
-                    //     PACK(DPRINT << "TILE CB " << ENDL());
-                    //     PACK(tt::compute::common::print_full_tile(tile_tmp_cb_id, 0));
-                    // }
+                    tilize_uninit(curr_in_idx_cb_id, tile_idx_tmp_cb_id);
 
-                    start_time = ckernel::read_wall_clock();
-                    pack_reconfig_data_format(tile_tmp_cb_id);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "pack_reconfig_data_format time: " << (stop_time - start_time) << ENDL());
-
-                    start_time = ckernel::read_wall_clock();
                     copy_tile_init(tile_tmp_cb_id);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "copy_tile_init time: " << (stop_time - start_time) << ENDL());
-
-                    start_time = ckernel::read_wall_clock();
                     copy_tile(tile_tmp_cb_id, 0, data_dst_idx);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "copy_tile_data time: " << (stop_time - start_time) << ENDL());
-
-                    start_time = ckernel::read_wall_clock();
-                    copy_tile_to_dst_init_short_with_dt(tile_tmp_cb_id, tile_idx_tmp_cb_id);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "copy_tile_to_dst_init_short_with_dt time: " << (stop_time - start_time) << ENDL());
-
-                    start_time = ckernel::read_wall_clock();
                     copy_tile(tile_idx_tmp_cb_id, 0, index_dst_idx);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "copy_tile_index time: " << (stop_time - start_time) << ENDL());
 
-                    // dprint_tensix_dest_reg(0);
-                    // dprint_tensix_dest_reg(2);
-
-                    // sort tile 0 descending, phase 0 through 4 which is log2(32-1)
-                    // topk_tile_init();
-                    // ckernel::topk_local_sort(data_dst_idx, 0, 4, 0);
-
-                    // ckernel::max_pool_with_indices_init();
-                    start_time = ckernel::read_wall_clock();
                     ckernel::max_pool_with_indices<window_size_hw>(data_dst_idx, index_dst_idx);
-                    stop_time = ckernel::read_wall_clock();
-                    PACK(DPRINT << "max_pool_with_indices time: " << (stop_time - start_time) << ENDL());
 
                     // Pop the temporary circular buffers after processing
                     cb_pop_front(tile_tmp_cb_id, topk_output_tiles);
                     cb_pop_front(tile_idx_tmp_cb_id, topk_output_tiles);
-
-                    // dprint_tensix_dest_reg(0);
-                    // dprint_tensix_dest_reg(2);
                 }
                 cb_pop_front(curr_in_cb_id, 1);
                 if constexpr (return_indices) {
@@ -274,44 +195,13 @@ void MAIN {
                     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, output_faces);
                 }
             } else {
-                uint64_t start_time, stop_time;
-
                 tensix_sync();
-                start_time = ckernel::read_wall_clock();
                 pack_untilize_dest_init<topk_output_tiles>(out_cb_id, num_out_sticks, output_faces);
-                stop_time = ckernel::read_wall_clock();
-                PACK(DPRINT << "pack_untilize_dest_init time: " << (stop_time - start_time) << ENDL());
                 tensix_sync();
-
-                start_time = ckernel::read_wall_clock();
                 pack_untilize_dest<topk_output_tiles>(out_cb_id, 1, 0, num_out_sticks, output_faces, data_dst_idx);
-                stop_time = ckernel::read_wall_clock();
-                PACK(DPRINT << "pack_untilize_dest_data time: " << (stop_time - start_time) << ENDL());
-
-                // if (n == 0) {
-                //     PACK(DPRINT << "OUT CB " << ENDL());
-                //     PACK(tt::compute::common::print_tile_rows(out_cb_id, 1));
-                // }
-
-                start_time = ckernel::read_wall_clock();
                 pack_reconfig_data_format(out_idx_cb_id);
-                stop_time = ckernel::read_wall_clock();
-                PACK(DPRINT << "pack_reconfig_data_format_idx time: " << (stop_time - start_time) << ENDL());
-
-                start_time = ckernel::read_wall_clock();
                 pack_untilize_dest<topk_output_tiles>(out_idx_cb_id, 1, 0, num_out_sticks, output_faces, index_dst_idx);
-                stop_time = ckernel::read_wall_clock();
-                PACK(DPRINT << "pack_untilize_dest_index time: " << (stop_time - start_time) << ENDL());
-
-                // if (n == 0) {
-                //     PACK(DPRINT << "OUT CB " << ENDL());
-                //     PACK(tt::compute::common::print_tile_rows(out_idx_cb_id, 1));
-                // }
-
-                start_time = ckernel::read_wall_clock();
                 pack_untilize_uninit(out_cb_id);
-                stop_time = ckernel::read_wall_clock();
-                PACK(DPRINT << "pack_untilize_uninit time: " << (stop_time - start_time) << ENDL());
             }
             cb_push_back(out_cb_id, output_faces);
             if constexpr (return_indices) {
