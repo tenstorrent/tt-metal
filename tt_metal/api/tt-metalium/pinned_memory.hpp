@@ -11,6 +11,8 @@
 #include <utility>
 #include <vector>
 
+#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
+
 namespace tt::umd {
 class SysmemBuffer;
 }
@@ -23,8 +25,6 @@ class PinnedMemoryImpl;
 namespace distributed {
 class MeshDevice;
 }
-
-using chip_id_t = int;
 
 /**
  * @brief PinnedMemory manages system memory buffers across multiple devices.
@@ -75,8 +75,8 @@ public:
     std::optional<std::pair<uint64_t, chip_id_t>> get_noc_addr(chip_id_t device_id) const;
 
     /**
-     * @brief Get the buffer size per device
-     * @return Size of each device's buffer in bytes
+     * @brief Get the buffer size.
+     * @return Size of the pinned region in bytes.
      */
     size_t get_buffer_size() const;
 
