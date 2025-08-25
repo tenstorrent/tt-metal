@@ -40,12 +40,9 @@ class TtnnUFLDv2:
     def __call__(self, input, batch_size=1):
         fea = self.res_model(input, batch_size=batch_size)
         fea, out_h, out_w = self.pool(fea)
-        print("output of pool conv", fea.shape)
-        p(fea, "output of pool conv")
-        if fea.is_sharded():
-            fea = ttnn.sharded_to_interleaved(fea, ttnn.L1_MEMORY_CONFIG)
-        fea = ttnn.permute(fea, (0, 1, 3, 2))
-        fea = ttnn.reshape(fea, (fea.shape[0], fea.shape[1], 1, fea.shape[2] * fea.shape[3]))
+        # if fea.is_sharded():
+        #     fea = ttnn.sharded_to_interleaved(fea, ttnn.L1_MEMORY_CONFIG)
+        # print("beforep",fea.shape,fea.memory_config())
         grid_size = (8, 8)
         shard_grid = ttnn.CoreRangeSet(
             {
@@ -55,12 +52,25 @@ class TtnnUFLDv2:
                 )
             }
         )
+        mem_config = ttnn.create_sharded_memory_config_(
+            ttnn.Shape([256 * 8, 32]),
+            shard_grid,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            tile_layout=True,
+        )
+        # print("created config is",mem_config)
+        fea = ttnn.to_memory_config(fea, mem_config)
+        fea = ttnn.permute(fea, (0, 1, 3, 2))
+        # print("afterp",fea.shape,fea.memory_config())
+        fea = ttnn.reshape(fea, (fea.shape[0], fea.shape[1], 1, fea.shape[2] * fea.shape[3]))
+        # print("after reshape",fea.shape,fea.memory_config())
         shard_spec = ttnn.ShardSpec(shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
         width_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
         )
         fea = ttnn.to_memory_config(fea, width_sharded_mem_config)
-        print("input to lin1", fea.shape)
+        # print("input to lin1", fea.shape)
         compute_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.LoFi,  # or HiFi2, HiFi4
             math_approx_mode=False,
@@ -77,24 +87,24 @@ class TtnnUFLDv2:
             transpose_mcast=False,
             fused_activation=None,
         )
-        p(fea, "input to lin1")
+        # p(fea, "input to lin1")
         out = ttnn.linear(
             fea,
             self.conv_pth.cls.linear_1.weight,
             bias=self.conv_pth.cls.linear_1.bias,
-            memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=compute_config,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            # compute_kernel_config=compute_config,
             # program_config=matmul_program_config
         )
         out = ttnn.relu(out)
         print("input to lin2", out.shape)
-        p(out, "input to lin2")
+        # p(out, "input to lin2")
         out = ttnn.linear(
             out,
             self.conv_pth.cls.linear_2.weight,
             bias=self.conv_pth.cls.linear_2.bias,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            compute_kernel_config=compute_config,
-            program_config=matmul_program_config,
+            # compute_kernel_config=compute_config,
+            # program_config=matmul_program_config,
         )
         return out
