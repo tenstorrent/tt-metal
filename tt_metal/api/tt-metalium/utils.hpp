@@ -31,8 +31,8 @@ auto wait_with_timeout(
     auto start_time = std::chrono::high_resolution_clock::now();
 
     do {
-        func_body(std::forward<Args>(args)...);
-        asm("pause");  // Busy wait
+        func_body(args...);
+        std::this_thread::yield();
 
         if (timeout_duration.count() > 0.0f) {
             auto current_time = std::chrono::high_resolution_clock::now();
@@ -43,7 +43,7 @@ auto wait_with_timeout(
                 break;
             }
         }
-    } while (wait_condition(std::forward<Args>(args)...));
+    } while (wait_condition(args...));
 }
 
 // Ripped out of boost for std::size_t so as to not pull in bulky boost dependencies
