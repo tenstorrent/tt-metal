@@ -16,7 +16,7 @@ The YOLO-World Model introduces an advanced, real-time Ultralytics YOLOv8-based 
 ## How to Run
 - Use the following command to run the model:
 ```
-pytest --disable-warnings models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_YoloModel
+pytest --disable-warnings models/demos/yolov8s_world/tests/pcc/test_ttnn_yolov8s_world.py::test_yolo_model
 ```
 
 ### Model Performant with Trace+2CQ
