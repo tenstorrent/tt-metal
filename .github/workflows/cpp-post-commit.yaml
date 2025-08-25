@@ -83,22 +83,8 @@ jobs:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
-    runs-on: >-
-      ${{
-        (startsWith(inputs.runner-label, 'tt-beta-ubuntu') && fromJSON(format('["{0}"]', inputs.runner-label)))
-        || (github.event.pull_request.head.repo.fork == true || inputs.runner-label == 'P150b') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
-      }}
+    runs-on: tt-beta-ubuntu-2204-n150-large-stable
     steps:
-      - name: ⬇️  Setup Job
-        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
-        timeout-minutes: 10
-        with:
-          build-artifact-name: ${{ inputs.build-artifact-name }}
-          # Unsure why these C++ tests need the wheel...  a cleanup to do separately
-          # https://github.com/tenstorrent/tt-metal/issues/20166
-          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-          enable-watcher: ${{ inputs.enable-watcher }}
       - name: ${{ matrix.test-group.name }} tests
         #GH Issue 16167
         if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
