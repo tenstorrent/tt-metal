@@ -106,24 +106,28 @@ int main(int argc, char* argv[]) {
         const auto& connection = cabling.connections(i);
 
         if (connection.ep_a().host() >= max_host || connection.ep_b().host() >= max_host) {
-            std::cerr << "Invalid host index in connection " << i << ": " << std::endl;
+            std::cerr << "Invalid host index in connection " << i
+                      << ": Please review cabling and deployment specifications." << std::endl;
+            break;
         }
-
+        std::stringstream label;
         int32_t host_a = connection.ep_a().host();
         int32_t host_b = connection.ep_b().host();
-        cable_length_t cable_l = calc_cable_length(
-            deployment.hosts(host_a).rack(),
-            deployment.hosts(host_a).shelf_u(),
-            deployment.hosts(host_b).rack(),
-            deployment.hosts(host_b).shelf_u());
 
-        output_file << deployment.hosts(host_a).hall() << "," << deployment.hosts(host_a).aisle() << "," << std::setw(2)
-                    << deployment.hosts(host_a).rack() << "," << deployment.hosts(host_a).shelf_u() << ","
-                    << connection.ep_a().tray() << "," << connection.ep_a().port() << ","
-                    << "WIP," << deployment.hosts(host_b).hall() << "," << deployment.hosts(host_b).aisle() << ","
-                    << std::setw(2) << deployment.hosts(host_b).rack() << "," << deployment.hosts(host_b).shelf_u()
-                    << "," << connection.ep_b().tray() << "," << connection.ep_b().port() << ",WIP,"
-                    << cable_length_str.at(cable_l) << ","                       // Cable Length
+        deployment::Host host_info_a = deployment.hosts(host_a);
+        deployment::Host host_info_b = deployment.hosts(host_b);
+
+        cable_length_t cable_l =
+            calc_cable_length(host_info_a.rack(), host_info_a.shelf_u(), host_info_b.rack(), host_info_b.shelf_u());
+
+        output_file << host_info_a.hall() << "," << host_info_a.aisle() << "," << std::setw(2) << host_info_a.rack()
+                    << "," << host_info_a.shelf_u() << "," << connection.ep_a().tray() << ","
+                    << connection.ep_a().port() << ","
+                    << "WIP,";
+        output_file << host_info_b.hall() << "," << host_info_b.aisle() << "," << std::setw(2) << host_info_b.rack()
+                    << "," << host_info_b.shelf_u() << "," << connection.ep_b().tray() << ","
+                    << connection.ep_b().port() << ",WIP,";
+        output_file << cable_length_str.at(cable_l) << ","                       // Cable Length
                     << ((cable_l == OPTICAL_CABLE) ? "Optical" : "QSFP_DD ACE")  // Cable Type
                     << "," << std::endl;
     }
