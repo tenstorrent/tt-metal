@@ -343,28 +343,34 @@ class TtSppf:
         self.input_params = input_params
         self.batch_size = batch_size
 
-        self.cv1 = TtConv(device, parameters, f"{path}.cv1", input_params=input_params[0], change_shard=True)
-        self.cv2 = TtConv(device, parameters, f"{path}.cv2", input_params=input_params[1], change_shard=True)
+        self.cv1 = TtConv(device, parameters, f"{path}.cv1", input_params=input_params[0], deallocate_activation=True)
+        self.cv2 = TtConv(device, parameters, f"{path}.cv2", input_params=input_params[1])
 
     def __call__(self, x):
         cv1, out_h, out_w = self.cv1(x)
-        cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
+        p = 5 // 2
         y = [cv1]
-
         for i in range(3):
             output = ttnn.max_pool2d(
-                input_tensor=y[-1],
+                input_tensor=(
+                    ttnn.to_layout(ttnn.sharded_to_interleaved(y[-1]), layout=ttnn.ROW_MAJOR_LAYOUT)
+                    if y[-1].is_sharded()
+                    else y[-1]
+                ),
                 batch_size=self.batch_size,
                 input_h=out_h,
                 input_w=out_w,
                 channels=y[-1].shape[-1],
                 kernel_size=[5, 5],
                 stride=[1, 1],
-                padding=[2, 2],
+                padding=[p, p],
                 dilation=[1, 1],
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                applied_shard_scheme=None if y[-1].is_sharded() else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             )
-            output_interleaved = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
-            y.append(output_interleaved)
+            y.append(output)
+
+        y[0] = ttnn.to_layout(y[0], ttnn.ROW_MAJOR_LAYOUT)
 
         x = sharded_concat(y)
         for i in range(len(y)):
@@ -637,6 +643,7 @@ class TtDetectionModel:
             "model.18",
             n=3,
             shortcut=False,
+            block_shard=True,
             input_params=c2f_configs["model.18"]["input_params"],
         )
         self.conv_19 = TtConv(device, parameters, "model.19", input_params=[3, 2, 1, 640, 640], block_shard=True)
