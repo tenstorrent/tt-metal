@@ -124,7 +124,8 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
         input_stick_size_bytes,
         index_stick_size_bytes,
         source_stick_size_bytes,
-        output_stick_size_bytes};
+        output_stick_size_bytes,
+        input_shape.rank()};
     tt::tt_metal::TensorAccessorArgs(*input_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*index_buffer).append_to(compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
@@ -151,24 +152,30 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
             TT_THROW("Core not in any predefined core range.");
         }
 
-        SetRuntimeArgs(
-            program,
-            reader_kernel,
-            core,
-            {input_buffer->address(),
-             index_buffer->address(),
-             src_buffer->address(),
-             stick_offset,
-             sticks_per_core,
-             input_and_output_chunk_size,
-             index_chunk_size,
-             source_chunk_size});
+        std::vector<uint32_t> reader_runtime_args{
+            input_buffer->address(),
+            index_buffer->address(),
+            src_buffer->address(),
+            stick_offset,
+            sticks_per_core,
+            input_and_output_chunk_size,
+            index_chunk_size,
+            source_chunk_size};
+        std::copy(input_shape.cbegin(), input_shape.cend(), reader_runtime_args.end());
+        std::copy(index_shape.cbegin(), index_shape.cend(), reader_runtime_args.end());
 
-        SetRuntimeArgs(
-            program,
-            writer_kernel,
-            core,
-            {output_buffer->address(), stick_offset, sticks_per_core, input_and_output_chunk_size});
+        SetRuntimeArgs(program, reader_kernel, core, reader_runtime_args);
+
+        std::vector<uint32_t> writer_runtime_args{
+            output_buffer->address(),
+            stick_offset,
+            sticks_per_core,
+            input_and_output_chunk_size,
+        };
+        std::copy(input_shape.cbegin(), input_shape.cend(), writer_runtime_args.end());
+        std::copy(index_shape.cbegin(), index_shape.cend(), writer_runtime_args.end());
+
+        SetRuntimeArgs(program, writer_kernel, core, writer_runtime_args);
 
         stick_offset += sticks_per_core;
     }
