@@ -412,9 +412,7 @@ class TtDFL:
         self.parameters = parameters
         self.path = path
         self.input_params = input_params
-        self.conv = TtConv(
-            device, parameters, path, input_params, bfloat8=True, is_fused=False, change_shard=True, is_detect_cv2=True
-        )
+        self.conv = TtConv(device, parameters, path, input_params, bfloat8=True, is_fused=False, is_detect_cv2=True)
 
     def __call__(self, x, c1=16):
         b, _, a = x.shape
