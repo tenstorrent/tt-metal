@@ -194,9 +194,6 @@ class RunTimeOptions {
     // (#25048) TODO: Once all of init is moved to MetalContext, investigate removing this option.
     bool force_context_reinit = false;
 
-    // feature flag to enable 2-erisc mode with fabric on Blackhole, until it is enabled by default
-    bool enable_2_erisc_mode_with_fabric = false;
-
     // Log kernels compilation commands
     bool log_kernels_compilation_commands = false;
 
@@ -454,10 +451,6 @@ public:
     void set_disable_dma_ops(bool disable) { disable_dma_ops = disable; }
 
     bool get_force_context_reinit() const { return force_context_reinit; }
-
-    // Feature flag to specify if fabric is enabled in 2-erisc mode or not.
-    // if true, then the fabric router is parallelized across two eriscs in the Ethernet core
-    bool get_is_fabric_2_erisc_mode_enabled() const { return enable_2_erisc_mode_with_fabric; }
 
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
