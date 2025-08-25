@@ -1366,6 +1366,15 @@ bool Cluster::is_external_cable(chip_id_t physical_chip_id, CoreCoord eth_core) 
         } else {
             is_external_cable = (chan_id != 0 and chan_id != 1);
         }
+    } else if (board_type == BoardType::P150) {
+        is_external_cable = (4 <= chan_id && chan_id <= 11);
+    } else if (board_type == BoardType::P300) {
+        auto asic_loc = this->get_cluster_desc()->get_asic_location(physical_chip_id);
+        if (asic_loc == 1) {
+            is_external_cable = (chan_id == 2 || chan_id == 3 || chan_id == 4 || chan_id == 6);
+        } else if (asic_loc == 0) {
+            is_external_cable = (chan_id == 4 || chan_id == 5 || chan_id == 7 || chan_id == 9);
+        }
     }
     return is_external_cable;
 }
