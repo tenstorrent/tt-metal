@@ -71,6 +71,30 @@ WorkerMemMap generate_worker_mem_map(tt_metal::IDevice* device, Topology topolog
         TEST_RESULTS_SIZE_BYTES};
 }
 
+bool find_device_with_neighbor_in_direction(
+    BaseFabricFixture* fixture,
+    FabricNodeId& src_fabric_node_id,
+    FabricNodeId& dst_fabric_node_id,
+    chip_id_t& src_physical_device_id,
+    chip_id_t& dst_physical_device_id,
+    RoutingDirection direction) {
+    auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto devices = fixture->get_devices();
+    for (auto* device : devices) {
+        src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(device->id());
+
+        // Get neighbours within a mesh in the given direction
+        auto neighbors = control_plane.get_intra_chip_neighbors(src_fabric_node_id, direction);
+        if (neighbors.size() > 0) {
+            src_physical_device_id = device->id();
+            dst_fabric_node_id = FabricNodeId(src_fabric_node_id.mesh_id, neighbors[0]);
+            dst_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
+            return true;
+        }
+    }
+    return false;
+}
+
 void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
@@ -84,14 +108,22 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     }
 
     // Use first two devices for simple smoke test
-    auto* sender_device = devices[0];
-    auto* receiver_device = devices[1];
+    FabricNodeId src_fabric_node_id(MeshId{0}, 0);
+    FabricNodeId dst_fabric_node_id(MeshId{0}, 0);
+    chip_id_t not_used_1;
+    chip_id_t not_used_2;
+    // Find a device with a neighbour in the East direction
+    bool connection_found = find_device_with_neighbor_in_direction(
+        fixture, src_fabric_node_id, dst_fabric_node_id, not_used_1, not_used_2, tt::tt_fabric::RoutingDirection::E);
+    if (!connection_found) {
+        GTEST_SKIP() << "No path found between sender and receivers";
+    }
 
-    auto src_physical_device_id = sender_device->id();
-    auto dst_physical_device_id = receiver_device->id();
+    chip_id_t src_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(src_fabric_node_id);
+    chip_id_t dst_physical_device_id = control_plane.get_physical_chip_id_from_fabric_node_id(dst_fabric_node_id);
 
-    auto src_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(src_physical_device_id);
-    auto dst_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dst_physical_device_id);
+    auto* sender_device = DevicePool::instance().get_active_device(src_physical_device_id);
+    auto* receiver_device = DevicePool::instance().get_active_device(dst_physical_device_id);
 
     CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
     CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
