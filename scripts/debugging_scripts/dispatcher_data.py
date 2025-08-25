@@ -35,6 +35,7 @@ class DispatcherCoreData:
     launch_msg_rd_ptr: int = triage_field("RD PTR")
     kernel_config_base: int = triage_field("Base", hex_serializer)
     kernel_text_offset: int = triage_field("Offset", hex_serializer)
+    kernel_config_host_assigned_id: int = triage_field("Kernel Config Host ID")
     watcher_kernel_id: int = combined_field("kernel_name", "Kernel ID:Name", collection_serializer(":"))
     kernel_offset: int | None = triage_field("Kernel Offset", hex_serializer)
     firmware_path: str = combined_field("kernel_path", "Firmware / Kernel Path", collection_serializer("\n"))
@@ -192,6 +193,13 @@ class DispatcherData:
                 & 0xFFFF
             )
 
+            # Get host_assigned_id from kernel_config
+            host_assigned_id = mem_access(
+                fw_elf,
+                f"mailboxes->launch[{launch_msg_rd_ptr}].kernel_config.host_assigned_id",
+                loc_mem_reader,
+            )[0][0]
+
             kernel = self.inspector_data.kernels.get(watcher_kernel_id)
             go_message_index = mem_access(fw_elf, f"mailboxes->go_message_index", loc_mem_reader)[0][0]
             go_data = mem_access(fw_elf, f"mailboxes->go_messages[{go_message_index}]", loc_mem_reader)[0][0]
@@ -204,6 +212,7 @@ class DispatcherData:
         except:
             kernel_config_base = -1
             kernel_text_offset = -1
+            host_assigned_id = -1
             watcher_kernel_id = -1
             kernel = None
             go_message_index = -1
@@ -244,6 +253,7 @@ class DispatcherData:
             launch_msg_rd_ptr=launch_msg_rd_ptr,
             kernel_config_base=kernel_config_base,
             kernel_text_offset=kernel_text_offset,
+            kernel_config_host_assigned_id=host_assigned_id,
             watcher_kernel_id=watcher_kernel_id,
             subdevice=go_message_index,
             go_message=go_data_state,
