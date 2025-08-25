@@ -2180,6 +2180,50 @@ const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>&
     return host_local_context_;
 }
 
+// Helper function to fill connection info with common fields for fabric router configs
+void fill_connection_info_fields(
+    tt::tt_fabric::fabric_connection_info_t& connection_info,
+    const CoreCoord& virtual_core,
+    const FabricEriscDatamoverConfig& config,
+    uint32_t sender_channel,
+    uint16_t worker_free_slots_stream_id = 17) {
+    connection_info.edm_noc_x = static_cast<uint8_t>(virtual_core.x);
+    connection_info.edm_noc_y = static_cast<uint8_t>(virtual_core.y);
+    connection_info.edm_buffer_base_addr = config.sender_channels_base_address[sender_channel];
+    connection_info.num_buffers_per_channel = config.sender_channels_num_buffers[sender_channel];
+    connection_info.edm_l1_sem_addr = config.sender_channels_local_flow_control_semaphore_address[sender_channel];
+    connection_info.edm_connection_handshake_addr = config.sender_channels_connection_semaphore_address[sender_channel];
+    connection_info.edm_worker_location_info_addr =
+        config.sender_channels_worker_conn_info_base_address[sender_channel];
+    connection_info.buffer_size_bytes = config.channel_buffer_size_bytes;
+    connection_info.buffer_index_semaphore_id = config.sender_channels_buffer_index_semaphore_address[sender_channel];
+    connection_info.worker_free_slots_stream_id = worker_free_slots_stream_id;
+}
+
+// Helper function to fill tensix connection info with tensix-specific configuration
+void fill_tensix_connection_info_fields(
+    tt::tt_fabric::fabric_connection_info_t& connection_info,
+    const CoreCoord& mux_core_virtual,
+    const tt::tt_fabric::FabricTensixDatamoverConfig& tensix_config,
+    chip_id_t physical_chip_id,
+    chan_id_t eth_channel_id,
+    uint32_t sender_channel,
+    uint32_t risc_id) {
+    connection_info.edm_noc_x = static_cast<uint8_t>(mux_core_virtual.x);
+    connection_info.edm_noc_y = static_cast<uint8_t>(mux_core_virtual.y);
+    connection_info.edm_buffer_base_addr = tensix_config.get_channels_base_address(risc_id, sender_channel);
+    connection_info.num_buffers_per_channel = tensix_config.get_num_buffers_per_channel();
+    connection_info.buffer_size_bytes = tensix_config.get_buffer_size_bytes_full_size_channel();
+    connection_info.edm_connection_handshake_addr =
+        tensix_config.get_connection_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
+    connection_info.edm_worker_location_info_addr =
+        tensix_config.get_worker_conn_info_base_address(physical_chip_id, eth_channel_id, sender_channel);
+    connection_info.buffer_index_semaphore_id =
+        tensix_config.get_buffer_index_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
+    connection_info.worker_free_slots_stream_id =
+        tensix_config.get_channel_credits_stream_id(physical_chip_id, eth_channel_id, sender_channel);
+}
+
 void ControlPlane::populate_fabric_connection_info(
     tt::tt_fabric::fabric_connection_info_t& worker_connection_info,
     tt::tt_fabric::fabric_connection_info_t& dispatcher_connection_info,
@@ -2202,41 +2246,20 @@ void ControlPlane::populate_fabric_connection_info(
         fabric_tensix_config,
         static_cast<eth_chan_directions>(sender_channel));
     CoreCoord fabric_router_virtual_core = cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_channel_id);
-    worker_connection_info.edm_noc_x = static_cast<uint8_t>(fabric_router_virtual_core.x);
-    worker_connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
-    worker_connection_info.edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel];
-    worker_connection_info.num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel];
-    worker_connection_info.edm_connection_handshake_addr =
-        edm_config.sender_channels_connection_semaphore_address[sender_channel];
-    worker_connection_info.edm_worker_location_info_addr =
-        edm_config.sender_channels_worker_conn_info_base_address[sender_channel];
-    worker_connection_info.buffer_size_bytes = edm_config.channel_buffer_size_bytes;
-    worker_connection_info.buffer_index_semaphore_id =
-        edm_config.sender_channels_buffer_index_semaphore_address[sender_channel];
-    // TODO: issue #26853, remove hardcoding, and have a common file between host and device for constants
-    worker_connection_info.worker_free_slots_stream_id = WORKER_FREE_SLOTS_STREAM_ID;
 
-    dispatcher_connection_info = worker_connection_info;
+    fill_connection_info_fields(
+        worker_connection_info, fabric_router_virtual_core, edm_config, sender_channel, WORKER_FREE_SLOTS_STREAM_ID);
 
-    // Check if fabric tensix config is enabled, if so populate tensix mux config as well
+    // Check if fabric tensix config is enabled, if so populate different configs for dispatcher and tensix
     if (fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED) {
         // dispatcher uses different fabric router, which still has the default buffer size.
         const auto& default_edm_config = fabric_context.get_fabric_router_config();
-        dispatcher_connection_info.edm_noc_x = static_cast<uint8_t>(fabric_router_virtual_core.x);
-        dispatcher_connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
-        dispatcher_connection_info.edm_buffer_base_addr =
-            default_edm_config.sender_channels_base_address[sender_channel];
-        dispatcher_connection_info.num_buffers_per_channel =
-            default_edm_config.sender_channels_num_buffers[sender_channel];
-        dispatcher_connection_info.edm_connection_handshake_addr =
-            default_edm_config.sender_channels_connection_semaphore_address[sender_channel];
-        dispatcher_connection_info.edm_worker_location_info_addr =
-            default_edm_config.sender_channels_worker_conn_info_base_address[sender_channel];
-        dispatcher_connection_info.buffer_size_bytes = default_edm_config.channel_buffer_size_bytes;
-        dispatcher_connection_info.buffer_index_semaphore_id =
-            default_edm_config.sender_channels_buffer_index_semaphore_address[sender_channel];
-        // TODO: issue #26853, remove hardcoding, and have a common file between host and device for constants
-        dispatcher_connection_info.worker_free_slots_stream_id = WORKER_FREE_SLOTS_STREAM_ID;
+        fill_connection_info_fields(
+            dispatcher_connection_info,
+            fabric_router_virtual_core,
+            default_edm_config,
+            sender_channel,
+            WORKER_FREE_SLOTS_STREAM_ID);
 
         const auto& tensix_config = fabric_context.get_tensix_config();
         CoreCoord mux_core_logical = tensix_config.get_core_for_channel(physical_chip_id, eth_channel_id);
@@ -2244,20 +2267,17 @@ void ControlPlane::populate_fabric_connection_info(
             physical_chip_id, mux_core_logical, CoreType::WORKER);
         // Get the RISC ID that handles this ethernet channel
         auto risc_id = tensix_config.get_risc_id_for_channel(physical_chip_id, eth_channel_id);
-        // Use tensix config methods for mux configuration
-        tensix_connection_info.edm_noc_x = static_cast<uint8_t>(mux_core_virtual.x);
-        tensix_connection_info.edm_noc_y = static_cast<uint8_t>(mux_core_virtual.y);
-        tensix_connection_info.edm_buffer_base_addr = tensix_config.get_channels_base_address(risc_id, sender_channel);
-        tensix_connection_info.num_buffers_per_channel = tensix_config.get_num_buffers_per_channel();
-        tensix_connection_info.buffer_size_bytes = tensix_config.get_buffer_size_bytes_full_size_channel();
-        tensix_connection_info.edm_connection_handshake_addr =
-            tensix_config.get_connection_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
-        tensix_connection_info.edm_worker_location_info_addr =
-            tensix_config.get_worker_conn_info_base_address(physical_chip_id, eth_channel_id, sender_channel);
-        tensix_connection_info.buffer_index_semaphore_id =
-            tensix_config.get_buffer_index_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
-        tensix_connection_info.worker_free_slots_stream_id =
-            tensix_config.get_channel_credits_stream_id(physical_chip_id, eth_channel_id, sender_channel);
+
+        fill_tensix_connection_info_fields(
+            tensix_connection_info,
+            mux_core_virtual,
+            tensix_config,
+            physical_chip_id,
+            eth_channel_id,
+            sender_channel,
+            risc_id);
+    } else {
+        dispatcher_connection_info = worker_connection_info;
     }
 }
 
