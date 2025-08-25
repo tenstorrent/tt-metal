@@ -31,36 +31,24 @@ concept ProgramFactoryConcept = requires {
 };
 
 template <typename T>
-concept MeshWorkloadFactoryConcept =
-    requires { typename T::cached_mesh_workload_t; } &&
-    (
-        // Path A: Factory provides create_mesh_workload directly
-        requires {
-            [](const auto& operation_attributes,
-               const ttnn::MeshCoordinateRangeSet& tensor_coords,
-               const auto& tensor_args,
-               auto& tensor_return_value) {
-                auto cached_workload =
-                    T::create_mesh_workload(operation_attributes, tensor_coords, tensor_args, tensor_return_value);
-                T::override_runtime_arguments(cached_workload, operation_attributes, tensor_args, tensor_return_value);
-            };
-        } ||
-        // Path B: Factory provides create_at (per-coordinate); we still require override_runtime_arguments that
-        // operates on the workload cache type
-        requires {
-            [](const auto& operation_attributes,
-               const ttnn::MeshCoordinate& mesh_coordinate,
-               const ttnn::MeshCoordinateRangeSet& tensor_coords,
-               const auto& tensor_args,
-               auto& tensor_return_value) {
-                auto cached_program = T::create_at(
-                    operation_attributes, mesh_coordinate, tensor_args, tensor_return_value, tensor_coords);
-                using cached_mesh_workload_t = typename T::cached_mesh_workload_t;
-                // Ensure override signature exists on workload
-                cached_mesh_workload_t* workload = nullptr;
-                T::override_runtime_arguments(*workload, operation_attributes, tensor_args, tensor_return_value);
-            };
-        });
+concept HasMeshWorkloadType = requires { typename T::cached_mesh_workload_t; };
+
+template <typename T>
+concept HasCreateMeshWorkload = requires {
+    // Path A: Factory provides create_mesh_workload directly
+    &T::create_mesh_workload;
+    &T::override_runtime_arguments;
+};
+
+template <typename T>
+concept HasCreateAt = requires {
+    // Path B: Factory provides create_at (per-coordinate)
+    &T::create_at;
+    &T::override_runtime_arguments;
+};
+
+template <typename T>
+concept MeshWorkloadFactoryConcept = HasMeshWorkloadType<T> && (HasCreateMeshWorkload<T> || HasCreateAt<T>);
 
 template <typename device_operation_t>
 concept HasComputeOutputSpecs = requires(
