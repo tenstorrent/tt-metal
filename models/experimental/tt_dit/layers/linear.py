@@ -39,16 +39,13 @@ class Linear:
             packer_l1_acc=True,
         )
 
-    def load_state_dict(self, state_dict, transform=None):
+    def load_state_dict(self, state_dict):
         """
         Loads the state dict into the layer.
-        transform is a lambda that takes two tensors and returns two transformed tensors.
         """
         weight = state_dict["weight"].transpose(0, 1)
         bias = state_dict.get("bias", None)
 
-        if transform is not None:
-            weight, bias = transform(weight, bias)
         self.weight = bf16_tensor(weight, device=self.mesh_device)
         if bias is not None:
             bias = bias.reshape(1, -1)
@@ -135,10 +132,9 @@ class ColParallelLinear:
             packer_l1_acc=True,
         )
 
-    def load_state_dict(self, state_dict, transform=None):
+    def load_state_dict(self, state_dict):
         """
         Loads the state dict into the layer.
-        transform is a lambda that takes two tensors and returns two transformed tensors.
         """
         weight = state_dict["weight"].transpose(0, 1)
         bias = state_dict.get("bias", None)
@@ -151,9 +147,6 @@ class ColParallelLinear:
             tensor = tensor.reshape(-1, self.out_features)
             assert tensor.shape[0] in [1, self.in_features]
             return tensor
-
-        if transform is not None:
-            weight, bias = transform(weight, bias)
 
         if self.activation == "swiglu":
             weight = permute_for_swiglu(weight)
@@ -276,16 +269,13 @@ class RowParallelLinear:
             packer_l1_acc=True,
         )
 
-    def load_state_dict(self, state_dict, transform=None):
+    def load_state_dict(self, state_dict):
         """
         Loads the state dict into the layer.
-        transform is a lambda that takes two tensors and returns two transformed tensors.
         """
         weight = state_dict["weight"].transpose(0, 1)
         bias = state_dict.get("bias", None)
 
-        if transform is not None:
-            weight, bias = transform(weight, bias)
         if self.fsdp_mesh_axis is not None:
             self.weight = bf16_tensor_2dshard(
                 weight, device=self.mesh_device, shard_mapping={self.mesh_axis: 0, self.fsdp_mesh_axis: 1}
