@@ -1022,7 +1022,7 @@ uint32_t estimate_halo_output_elems(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> dilation,
     std::array<uint32_t, 4> padding) {
-    uint32_t shard_height = halo_input_shard_shape[0] / input_width;
+    float shard_height = (float)halo_input_shard_shape[0] / (float)input_width;
     uint32_t shard_batches = shard_height / input_height;
     // Halo adds the overlap region of the input tensor that is needed for the convolution.
     //  As width is the faster changing dimension, we typically have the entire width in every shard.
