@@ -24,7 +24,6 @@
 #include "hostdevcommon/profiler_common.h"
 #include "profiler_optional_metadata.hpp"
 #include "profiler_types.hpp"
-#include "profiler_paths.hpp"
 #include "tt-metalium/program.hpp"
 #include "tracy/TracyTTDevice.hpp"
 
