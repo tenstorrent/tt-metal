@@ -90,37 +90,10 @@ def test_group_norm_DRAM(device, N, C, H, W, num_groups, num_out_blocks, cores_y
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     input_tensor_tilized = ttnn.tilize_with_zero_padding(input_tensor_row_major, use_multicore=True)
-    # input mask
-    TILE_WIDTH = 32
-    num_virtual_cols = min(cores_x, num_groups)
-    while (C / num_virtual_cols) % TILE_WIDTH != 0:
-        num_virtual_cols -= 1
-    input_mask_tensor = ttnn.create_group_norm_input_mask(C, num_groups, num_virtual_cols)
-    input_mask_tensor = ttnn.from_torch(
-        input_mask_tensor,
-        dtype=ttnn.DataType.BFLOAT8_B,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
 
-    # gamma/beta
-    gamma = ttnn.create_group_norm_weight_bias_rm(torch_weight, C, num_virtual_cols)
-    beta = ttnn.create_group_norm_weight_bias_rm(torch_bias, C, num_virtual_cols)
-
-    gamma_t = ttnn.from_torch(
-        gamma,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-    beta_t = ttnn.from_torch(
-        beta,
-        dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    # Create dram group norm params
+    [gamma_t, beta_t], input_mask_tensor = ttnn.dram_group_norm_params_from_torch(
+        [torch_weight, torch_bias], C, num_groups, device, core_grid=grid_size, return_mask=True
     )
 
     # groupnorm
