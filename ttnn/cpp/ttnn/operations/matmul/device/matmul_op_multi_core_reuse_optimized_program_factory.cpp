@@ -155,9 +155,6 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     TT_FATAL(num_evenly_divided_output_blocks > 0, "Not all cores from core_range was used!");
 
     // Compile time args
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)in0_last_ktile_w,
     };
