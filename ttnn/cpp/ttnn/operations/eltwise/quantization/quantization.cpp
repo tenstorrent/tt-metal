@@ -391,7 +391,7 @@ Tensor RequantOp::invoke(
         check_zero_point_tensor_args(input_tensor, out_zero_point_p, axis_v, rank, out_zero_point_is_full_size);
 
         // Shape expansion and typecasting for the scale and zero-point tensors.
-        auto expand_or_cast = [&](const Tensor& v, bool is_per_channel, DataType dt) -> Tensor {
+        auto expand_or_cast = [&](const Tensor& v, bool is_full_size, DataType dt) -> Tensor {
             return is_full_size ? reshape_per_channel_vector_args(v, input_shape, axis_v, dt) : ttnn::typecast(v, dt);
         };
 

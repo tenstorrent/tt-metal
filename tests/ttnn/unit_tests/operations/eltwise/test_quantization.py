@@ -536,15 +536,11 @@ def test_requant_per_tensor_to_per_channel_2d(device, x0, x1, input_dtype, axis)
     axis_normalized = (axis + rank) % rank
     out_scale, out_zero_point = calculate_scale_zero_point_per_channel(input_tr, axis_normalized, -64, 63)
 
-    in_scale_tt = in_scale
-    in_zero_point_tt = in_zero_point
     out_scale_tt = ttnn.from_torch(out_scale, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     out_zero_point_tt = ttnn.from_torch(out_zero_point, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
 
-    quantized_tt = ttnn.quantize(input_tt, in_scale_tt, in_zero_point_tt)
-    requantized_tt = ttnn.requantize(
-        quantized_tt, in_scale_tt, in_zero_point_tt, out_scale_tt, out_zero_point_tt, axis=axis
-    )
+    quantized_tt = ttnn.quantize(input_tt, in_scale, in_zero_point)
+    requantized_tt = ttnn.requantize(quantized_tt, in_scale, in_zero_point, out_scale_tt, out_zero_point_tt, axis=axis)
     derequantized_tt = ttnn.dequantize(requantized_tt, out_scale_tt, out_zero_point_tt, axis=axis, dtype=input_dtype)
 
     result_tr = ttnn.to_torch(derequantized_tt)
@@ -569,14 +565,10 @@ def test_requant_per_channel_to_per_tensor_2d(device, x0, x1, input_dtype, axis)
 
     in_scale_tt = ttnn.from_torch(in_scale, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     in_zero_point_tt = ttnn.from_torch(in_zero_point, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
-    out_scale_tt = out_scale
-    out_zero_point_tt = out_zero_point
 
     quantized_tt = ttnn.quantize(input_tt, in_scale_tt, in_zero_point_tt, axis=axis)
-    requantized_tt = ttnn.requantize(
-        quantized_tt, in_scale_tt, in_zero_point_tt, out_scale_tt, out_zero_point_tt, axis=axis
-    )
-    derequantized_tt = ttnn.dequantize(requantized_tt, out_scale_tt, out_zero_point_tt, dtype=input_dtype)
+    requantized_tt = ttnn.requantize(quantized_tt, in_scale_tt, in_zero_point_tt, out_scale, out_zero_point, axis=axis)
+    derequantized_tt = ttnn.dequantize(requantized_tt, out_scale, out_zero_point, dtype=input_dtype)
 
     result_tr = ttnn.to_torch(derequantized_tt)
     check_pcc(input_tr, result_tr, True)
