@@ -236,7 +236,7 @@ class GroupNorm:
         return layer
 
     def load_state_dict(self, state_dict):
-        [self.weight, self.bias], self.mask = ttnn.group_norm_params_from_torch(
+        [self.weight, self.bias], self.mask = ttnn.dram_group_norm_params_from_torch(
             torch_params=[state_dict["weight"], state_dict["bias"]],
             channels_per_device=self.num_channels,
             groups_per_device=self.num_groups,
