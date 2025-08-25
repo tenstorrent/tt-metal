@@ -175,10 +175,9 @@ TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {
 
     constexpr uint32_t num_iterations = 2000;
     std::vector<uint32_t> all_ranks = {0, 1, 2, 3};
-    for (uint32_t sender_rank = 0; sender_rank < *(distributed_context->size()); sender_rank++) {
+    for (uint32_t sender_rank : all_ranks) {
         if (*(distributed_context->rank()) == sender_rank) {
             std::vector<uint32_t> recv_node_ranks;
-
             std::copy_if(
                 all_ranks.begin(),
                 all_ranks.end(),
@@ -196,10 +195,42 @@ TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {
                 }
             }
             log_info(tt::LogTest, "{} rank completed unicast to all receivers", sender_rank);
-        } else {
+        } else if (std::find(all_ranks.begin(), all_ranks.end(), *(distributed_context->rank())) != all_ranks.end()) {
             log_info(tt::LogTest, "{} rank processing unicasts", *(distributed_context->rank()));
             for (uint32_t i = 0; i < num_iterations; i++) {
                 multihost_utils::run_unicast_recv_step(this, tt::tt_metal::distributed::multihost::Rank{sender_rank});
+            }
+            log_info(tt::LogTest, "{} rank done processing unicasts", *(distributed_context->rank()));
+        } else if (*(distributed_context->rank()) == sender_rank + 4) {
+            std::vector<uint32_t> recv_node_ranks;
+
+            std::copy_if(
+                all_ranks.begin(),
+                all_ranks.end(),
+                std::back_inserter(recv_node_ranks),
+                [&sender_rank](const uint32_t& item) { return item != sender_rank; });
+
+            for (auto& recv_rank : recv_node_ranks) {
+                recv_rank += 4;
+            }
+
+            log_info(tt::LogTest, "{} rank starting unicast to all receivers", sender_rank + 4);
+
+            for (uint32_t i = 0; i < num_iterations; i++) {
+                if (i % 100 == 0) {
+                    std::cout << "iter: " << i << std::endl;
+                }
+                for (auto recv_rank : recv_node_ranks) {
+                    multihost_utils::run_unicast_sender_step(
+                        this, tt::tt_metal::distributed::multihost::Rank{recv_rank});
+                }
+            }
+            log_info(tt::LogTest, "{} rank completed unicast to all receivers", sender_rank + 4);
+        } else {
+            log_info(tt::LogTest, "{} rank processing unicasts", *(distributed_context->rank()));
+            for (uint32_t i = 0; i < num_iterations; i++) {
+                multihost_utils::run_unicast_recv_step(
+                    this, tt::tt_metal::distributed::multihost::Rank{sender_rank + 4});
             }
             log_info(tt::LogTest, "{} rank done processing unicasts", *(distributed_context->rank()));
         }
