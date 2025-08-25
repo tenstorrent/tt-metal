@@ -1208,34 +1208,26 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
     uint32_t Wt = W / TILE_WIDTH;
+
     // Compute optimal core grid
+    TT_FATAL(W % TILE_WIDTH == 0, "W (channels): {} must be divisible by {}", W, TILE_WIDTH);
+    TT_FATAL(W % num_groups == 0, "W (channels): {} must be divisible by num_groups: {}", W, num_groups);
     uint32_t num_virtual_cols = std::min<uint32_t>(grid_size.x, num_groups);
-    while ((W / num_virtual_cols) % TILE_WIDTH != 0) {
+    while ((W / num_virtual_cols) % TILE_WIDTH != 0 || (num_groups % num_virtual_cols) != 0) {
         num_virtual_cols -= 1;
     }
 
     uint32_t num_actual_cols =
         (grid_size.x / num_virtual_cols) * num_virtual_cols;  // Largest multiple of virtual cols < 8
     uint32_t num_actual_rows = grid_size.y;
-    uint32_t num_virtual_rows =
-        (grid_size.x / num_virtual_cols) * num_actual_rows;  // TODO: Assert if we don't have enough data
+    uint32_t num_virtual_rows = (grid_size.x / num_virtual_cols) * num_actual_rows;
     uint32_t num_cores = num_actual_cols * num_actual_rows;
     const bool row_wise = false;
     auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, grid_size, row_wise);
 
     TT_FATAL(
-        num_groups % num_virtual_cols == 0, "num_groups: {} must divide cores_y: {}", num_groups, num_virtual_cols);
-    TT_FATAL(
-        ((num_groups / num_virtual_cols) * (W / num_groups)) % TILE_WIDTH == 0,
-        "(num_groups: {}/virtual_cols: {})*(num_channels: {}/num_groups: {}) must be divisible by {}",
-        num_groups,
-        num_virtual_cols,
-        W,
-        num_groups,
-        TILE_WIDTH);
-    TT_FATAL(
         H >= num_virtual_rows,
-        "Total size of a slice across channel dimension:{} must be greater than or equal to num_virtual_rows: {}. "
+        "Total size of a slice across channel dimension:({}) must be greater than or equal to num_virtual_rows: ({}). "
         "Reduce grid_size as needed",
         H,
         num_virtual_rows);
@@ -1262,12 +1254,13 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
     // Compute num_out_blocks if not provided. If this does not provide the best result, num_out_blocks should be
     // computed by testing different powers of 2. This is a heuristic.
     if (num_out_blocks == -1) {
-        const uint32_t heuristic_block_size_per_core = 256 * 256;
+        const uint32_t HEURISTIC_BLOCK_SIZE_BASE = 256 * 256;
+        const uint32_t MAX_HEURISTIC_NUM_OUT_BLOCKS = 256;
         uint32_t heuristic_num_out_blocks =
-            (shape[1] * shape[2] * shape[3]) / (heuristic_block_size_per_core * (num_virtual_cols * num_virtual_rows));
+            (shape[1] * shape[2] * shape[3]) / (HEURISTIC_BLOCK_SIZE_BASE * (num_virtual_cols * num_virtual_rows));
         heuristic_num_out_blocks = heuristic_num_out_blocks ? heuristic_num_out_blocks : 1;
         num_out_blocks = 1;
-        while (num_out_blocks < heuristic_num_out_blocks && num_out_blocks < 256) {
+        while (num_out_blocks < heuristic_num_out_blocks && num_out_blocks < MAX_HEURISTIC_NUM_OUT_BLOCKS) {
             num_out_blocks <<= 1;
         }
     }
