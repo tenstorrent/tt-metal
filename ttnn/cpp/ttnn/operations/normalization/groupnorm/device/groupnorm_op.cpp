@@ -240,9 +240,9 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
                 uint32_t num_cores_x = program_config.compute_with_storage_grid_size.x;
                 uint32_t num_cores_y = program_config.compute_with_storage_grid_size.y;
                 bool inplace = program_config.inplace;
+                uint32_t num_out_blocks = program_config.num_out_blocks;
                 CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
                 uint32_t batch = a.padded_shape()[0];
-                uint32_t num_out_blocks = program_config.num_out_blocks;
 
                 return groupnorm_multi_core(
                     a,
