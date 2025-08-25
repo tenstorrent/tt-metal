@@ -329,26 +329,15 @@ const std::unordered_map<CoreCoord, int32_t>& Cluster::get_virtual_routing_to_pr
 void Cluster::open_driver(const bool &skip_driver_allocs) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
-        std::unordered_set<chip_id_t> pcie_visible_devices;
-        // generate the cluster desc and pull chip ids from there
-        auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
-        if (rtoptions_.is_visible_devices_specified()) {
-            for (auto& visible_device : rtoptions_.get_visible_devices()) {
-                pcie_visible_devices.emplace(visible_device);
-            }
-        }
-        // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
-        // that is later expected to be populated by unrelated APIs
-        // TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1, "Only one target mmio device id allowed.");
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
         // and assert if workload uses more than available.
+        auto temp_cluster_desc = tt::umd::Cluster::create_cluster_descriptor();
         uint32_t num_devices = temp_cluster_desc->get_all_chips().size();
         uint32_t num_host_mem_ch_per_mmio_device = std::min(HOST_MEM_CHANNELS, num_devices);
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = num_host_mem_ch_per_mmio_device,
             .sdesc_path = get_soc_description_file(this->arch_, this->target_type_),
-            .pci_target_devices = pcie_visible_devices,
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
