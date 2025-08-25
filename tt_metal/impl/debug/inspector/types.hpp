@@ -29,12 +29,12 @@ struct KernelData {
     std::string name;
     std::string path;
     std::string source;
-    int watcher_kernel_id;
+    int watcher_kernel_id{};
 };
 
 struct ProgramData {
     std::weak_ptr<const detail::ProgramImpl> program;
-    uint64_t program_id;
+    uint64_t program_id{};
     time_point compile_started_timestamp;
     time_point compile_finished_timestamp;
     std::unordered_map<int, KernelData> kernels;
@@ -43,14 +43,14 @@ struct ProgramData {
 
 struct MeshDeviceData {
     const distributed::MeshDevice* mesh_device;
-    int mesh_id;
+    int mesh_id{};
     std::optional<int> parent_mesh_id;
     bool initialized = false;
 };
 
 struct MeshWorkloadData {
     const distributed::MeshWorkloadImpl* mesh_workload;
-    uint64_t mesh_workload_id;
+    uint64_t mesh_workload_id{};
     std::unordered_map<int, ProgramBinaryStatus> binary_status_per_device;
 };
 
