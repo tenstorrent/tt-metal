@@ -30,6 +30,11 @@ uint32_t get_page_size(const experimental::ShardedAddrGen<ShardingInfoType>& d) 
     return d.CONSTANT_ARGS.page_size_jump;
 }
 
+template <typename DSpec>
+uint32_t get_page_size(const TensorAccessor<DSpec>& d) {
+    return d.page_size;
+}
+
 template <typename AddrGenType>
 FORCE_INLINE uint64_t get_noc_address(const AddrGenType& d, const uint32_t id, uint32_t offset = 0) {
     uint64_t noc_address = d.get_noc_addr(id, offset, edm_to_local_chip_noc);
