@@ -26,7 +26,7 @@ def prepare_input_tensor(input_tensor, C, device, alignment=ALIGNMENT):
     return ttnn.from_torch(tt_input, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
-def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignment=ALIGNMENT):
+def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignment=ALIGNMENT, extra_torch_entries=[0]):
     """Prepare weights and bias for TTNN."""
     w = conv3d_module.weight.data  # out_chan, C, kD, kH, kW
     w = w.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
@@ -43,6 +43,7 @@ def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignm
     w = w.permute(3, 0, 1, 2, 4, 5)
     w = w.reshape(-1, out_channels)
 
+    current_entries_count = device.num_program_cache_entries()
     tt_weight = ttnn.from_torch(w, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT, pad_value=0)
     tt_bias = ttnn.from_torch(
         conv3d_module.bias.data.reshape(1, -1),
@@ -51,12 +52,15 @@ def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, alignm
         layout=ttnn.TILE_LAYOUT,
         pad_value=0,
     )
+    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
     return tt_weight, tt_bias
 
 
-def reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device):
+def reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device, extra_torch_entries=[0]):
     """Reshape and permute TTNN output to match PyTorch format."""
+    current_entries_count = device.num_program_cache_entries()
     tt_output = ttnn.to_torch(tt_output, device=device, dtype=torch.float32)
+    extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
     tt_output = tt_output.reshape(N, D_out, H_out, W_out, out_channels)
     return tt_output.permute(0, 4, 1, 2, 3)
 
@@ -134,7 +138,17 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
     return tt_input, conv3d_module, gt_output, kernel_config, (N, D_out, H_out, W_out)
 
 
-def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=(1, 1)):
+def run_conv3d_test(
+    device,
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    padding,
+    padding_mode,
+    grid_size=(1, 1),
+    extra_torch_entries=[0],
+):
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
         input_shape, out_channels, kernel_size, stride, padding, padding_mode, device
     )
@@ -142,7 +156,9 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
     C = input_shape[1]
 
     # Prepare weights and bias for TTNN
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
+    tt_weight, tt_bias = prepare_weights(
+        conv3d_module, C, out_channels, device, C_in_block=0, extra_torch_entries=extra_torch_entries
+    )
 
     # Create config and run TTNN conv3d
     config = create_conv3d_config(
@@ -158,7 +174,9 @@ def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padd
     )
 
     # Reshape output and verify results
-    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+    tt_output = reshape_output(
+        tt_output, N, D_out, H_out, W_out, out_channels, device, extra_torch_entries=extra_torch_entries
+    )
 
     print(f"gt output shape = {gt_output.shape}")
     print(f"tt output shape = {tt_output.shape}")
@@ -217,12 +235,23 @@ def test_conv3d_cache_hash(device, input_shape, out_channels, kernel_size, strid
     # Test that program cache does not re-use the same program for different inputs
     grid_size = device.compute_with_storage_grid_size()
     dummy = []
+    extra_torch_entries = [0]
     for _ in range(3):
         for i in range(2):
             new_shape = (input_shape[0], input_shape[1] * (i + 1), input_shape[2], input_shape[3], input_shape[4])
+            current_entries_count = device.num_program_cache_entries()
             dummy.append(ttnn.from_torch(torch.randn(new_shape), device=device, layout=ttnn.TILE_LAYOUT))
+            extra_torch_entries[0] += device.num_program_cache_entries() - current_entries_count
             run_conv3d_test(
-                device, new_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size
+                device,
+                new_shape,
+                out_channels,
+                kernel_size,
+                stride,
+                padding,
+                padding_mode,
+                grid_size=grid_size,
+                extra_torch_entries=extra_torch_entries,
             )
 
-    assert device.num_program_cache_entries() == 2
+    assert device.num_program_cache_entries() - extra_torch_entries[0] == 2
