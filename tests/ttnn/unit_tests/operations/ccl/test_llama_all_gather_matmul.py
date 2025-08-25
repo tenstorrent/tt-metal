@@ -225,6 +225,7 @@ def run_llama_all_gather_matmul_impl(
         num_global_cb_receivers=24,
         untilize_out=False,
     )
+    print(f"program_config: {program_config}\n\n\n")
     compute_kernel_config = ttnn.WormholeComputeKernelConfig(
         math_fidelity=fidelity,
         math_approx_mode=True,
@@ -232,6 +233,7 @@ def run_llama_all_gather_matmul_impl(
         packer_l1_acc=packer_l1_acc,
         dst_full_sync_en=True,
     )
+    print(f"compute_kernel_config: {compute_kernel_config}\n\n\n")
 
     # Intermediate shapes
     intermediate_num_cores = cluster_shape[cluster_axis]
@@ -261,7 +263,7 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-
+    print(f"input_mem_config: {input_mem_config}\n\n\n")
     in1_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -271,6 +273,7 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+    print(f"in1_sharded_mem_config: {in1_sharded_mem_config}\n\n\n")
     intermediate_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -280,6 +283,7 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+    print(f"intermediate_mem_config: {intermediate_mem_config}\n\n\n")
     ag_output_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -289,6 +293,7 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+    print(f"ag_output_mem_config: {ag_output_mem_config}\n\n\n")
     mm_output_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
@@ -298,6 +303,7 @@ def run_llama_all_gather_matmul_impl(
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
+    print(f"mm_output_sharded_mem_config: {mm_output_sharded_mem_config}\n\n\n")
     logger.info(f"Input shape: {in0_shape[2:]}, Padded shape: {[M, K_per_device_per_shard * input_num_cores]}")
     in0_tensor = torch.randn(in0_shape)
     tt_input_tensor = ttnn.from_torch(

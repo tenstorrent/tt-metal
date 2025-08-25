@@ -56,7 +56,26 @@ class TtLlamaMLP(LightweightModule):
         w4_name = f"{state_dict_prefix}.w4.weight"
         w4 = self.state_dict[w2_name]
 
-        self.state_dict[w4_name] = F.pad(w4, (0, 8 * 3840 - w4.shape[-1]), mode="constant", value=0)
+        # print(f"w4: {w4.shape}")
+        w4 = w4.reshape(w4.shape[0], -1, w4.shape[-1] // self.mesh_device.shape[0])  # (8192, 28672) -> (8192, 8, 3584)
+        # print(f"w4: {w4.shape}")
+
+        w4 = F.pad(w4, (0, 8 * ttnn.TILE_SIZE), mode="constant", value=0)
+        # print(f"w4: {w4.shape}")
+        self.state_dict[w4_name] = w4.reshape(w4.shape[0], -1).contiguous()
+        # print(f"w2: {self.state_dict[w4_name].shape}")
+
+        # print(f"w4: {w4.shape}")
+        # w4 = w4.reshape(w4.shape[0], -1, w4.shape[-1] // self.mesh_device.shape[0]) # (8192, 28672) -> (8192, 8, 3584)
+        # print(f"w4: {w4.shape}")
+
+        # w4 = w4.reshape(w4.shape[0], self.mesh_device.shape[0], -1,  w4.shape[-1] // self.mesh_device.shape[1]) # (8192, 8, 3584) -> (8192, 8, 4, 896)
+        # # print(f"w4: {w4.shape}")
+        # w4 = F.pad(w4, (0, 2 * ttnn.TILE_SIZE), mode="constant", value=0)
+        # print(f"w4: {w4.shape}")
+        # w4 = w4.reshape(w4.shape[0], self.mesh_device.shape[0], -1)
+        # print(f"w4: {w4.shape}")
+        # self.state_dict[w4_name] = w4.reshape(w4.shape[0], -1).contiguous()
         # print(f"w2: {self.state_dict[w4_name].shape}")
 
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
@@ -177,7 +196,18 @@ class TtLlamaMLP(LightweightModule):
         # ttnn.synchronize_device(self.mesh_device)
         # if self.iter in {0, 9, 10}:
         #     ttnn.device.dump_device_memory_state(self.mesh_device, prefix=f"iter_{self.iter}_before_all_gather_matmul")
+        # print input memory config
+        # print(f'w2 memory config: {self.w2.memory_config()}\n\n\n')
+        # print(f'ag memory config: {self.model_config["AG_MM_RECV_MEMCFG"]}\n\n\n')
+        # print(f'mm memory config: {self.model_config["FF2_OUT_RING_MEMCFG"]}\n\n\n')
+        # print(f'compute_kernel_config: {self.args.compute_kernel_config_hifi2}\n\n\n')
+        # print(f'dtype: {ttnn.bfloat8_b}\n\n\n')
+        # print(f'global_cb: {self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None}\n\n\n')
+        # print(f'buffer_key: AG_MM\n\n\n')
+        # # return ff1ff3 to host
 
+        # print(f'ff1ff3: {ff1ff3.shape}')
+        # breakpoint()
         w2_out = self.tt_ccl.all_gather_matmul(
             ff1ff3,
             self.w2,
