@@ -54,6 +54,8 @@ using namespace tt::test_utils::df;
 
 namespace unit_tests::compute::broadcast {
 
+namespace {
+
 enum BroadcastDim : uint8_t { ROW, COL, SCALAR, NONE, NUM_DIMS };
 
 const map<BroadcastDim, std::string> broadcast_dim_to_type = {
@@ -70,6 +72,8 @@ struct UnaryBroadcastConfig {
     tt::DataFormat out0_t;
     tt::DataFormat out1_t;
 };
+
+}  // namespace
 
 // Assume 1Xn tiles.
 template <class T>
