@@ -71,7 +71,7 @@ while [[ "$found" == "false" ]]; do
 
   # Use and clean the CPM cache that CMake will use
   export CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-/work/.cpmcache}"
-  rm -rf "$CPM_SOURCE_CACHE" build build_Release build_Debug "$PYTHON_ENV_DIR"
+  rm -rf "$CPM_SOURCE_CACHE" build build_Release build_Debug
   mkdir -p "$CPM_SOURCE_CACHE"
 
   export CMAKE_ARGS="-DCPM_SOURCE_CACHE=$CPM_SOURCE_CACHE -DCPM_DOWNLOAD_ALL=ON -DCPM_USE_LOCAL_PACKAGES=OFF"
@@ -103,6 +103,7 @@ while [[ "$found" == "false" ]]; do
   fi
 
   echo "::group::Python env"
+  rm -rf "$PYTHON_ENV_DIR"
   venv_rc=0
   if [ -f "./create_venv.sh" ]; then
     # shellcheck disable=SC1091
