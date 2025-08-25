@@ -8,7 +8,7 @@
 #include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 template <typename T>
-void read_block_to_cb(
+void read_row_to_cb(
     const uint32_t cb_id, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const uint32_t blk) {
     cb_reserve_back(cb_id, blk);
     uint32_t l1_write_addr = get_write_ptr(cb_id);
@@ -76,17 +76,24 @@ void kernel_main() {
         }  // wt loop
 #ifdef FUSE_PRE_ADD
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+        }
+#endif
+#endif
+
+        // Data for Calculating Variance
+        for (uint32_t wt = 0; wt < Wt; wt += blk) {
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
-            read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
 #endif
         }  // wt loop
 
         // Data for calculating the final value
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            read_block_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
+            read_row_to_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
 #ifdef FUSE_PRE_ADD
-            read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
+            read_row_to_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
 #endif
 #ifdef FUSE_GAMMA
             {
