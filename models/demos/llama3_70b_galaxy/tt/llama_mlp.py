@@ -6,6 +6,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
+from loguru import logger
 
 
 def pad_to_next_multiple(tensor):
@@ -54,6 +55,9 @@ class TtLlamaMLP(LightweightModule):
             cache_name = lambda _: None
         else:
             cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}" + "prefetcher")
+
+        w1_cache_name = cache_name("w1_sharded")
+        logger.info(f"cache_name in MLP: {w1_cache_name}")
 
         w1_w3_mem_config = self.model_config[
             "W1W3_RING_MEMCFG"
@@ -170,6 +174,8 @@ class TtLlamaMLP(LightweightModule):
                 w1_out, cluster_axis=1, num_links=1, memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
             )
 
+            # breakpoint()
+
             ttnn.deallocate(w1_out)
 
             w3_out = ttnn.linear(
@@ -227,6 +233,8 @@ class TtLlamaMLP(LightweightModule):
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
             sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
         )
+
+        # breakpoint()
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(  # [1, 1, 1, 2048]
             w2_out,

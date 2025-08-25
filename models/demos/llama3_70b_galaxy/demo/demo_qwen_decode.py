@@ -168,9 +168,9 @@ def run_qwen_demo(
     # Load model args, weights, and tokenizer - Use TtQwenModelArgs instead of TtModelArgs
     model_args = TtQwenModelArgs(
         mesh_device,
-        max_batch_size=batch_size,
-        max_seq_len=max_seq_len,
-        dummy_weights=dummy_weights,
+        max_batch_size=32,
+        max_seq_len=256,
+        dummy_weights=False,
     )
     model_args.n_layers = layers
 
@@ -316,8 +316,6 @@ def run_qwen_demo(
             mode="decode",
             page_table=page_table_tt,
         )
-
-        breakpoint()
 
         # Sampling
         _ = tt_sampling(tt_out[0], top_k, top_p, seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
@@ -708,13 +706,12 @@ def run_qwen_demo(
     ],
     indirect=True,
 )
-@pytest.mark.parametrize(  # Worker size is selected to give 120kB ringbuffer size
+@pytest.mark.parametrize(
     "device_params",
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 23887872,
-            "worker_l1_size": 1344544,
+            "trace_region_size": 266240,
             "fabric_config": True,
         }
     ],
