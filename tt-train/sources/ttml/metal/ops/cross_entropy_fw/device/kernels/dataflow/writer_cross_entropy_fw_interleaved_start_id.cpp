@@ -18,7 +18,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1U;
 
     const uint32_t tile_bytes = get_tile_size(cb_output_idx);
-    constexpr auto output_args = TensorAccessorArgs<3>();
+    constexpr auto output_args = TensorAccessorArgs<2>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
 
     uint32_t end_row = start_row + num_rows_to_process;

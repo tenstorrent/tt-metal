@@ -26,7 +26,7 @@ void kernel_main() {
 
     const float scaler = uint32_to_float(scaler_bits);
     const uint32_t tile_bytes = get_tile_size(cb_output_idx);
-    constexpr auto output_args = TensorAccessorArgs<4>();
+    constexpr auto output_args = TensorAccessorArgs<3>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr, tile_bytes);
 
     uint32_t end_row = start_row + num_rows_to_process;
