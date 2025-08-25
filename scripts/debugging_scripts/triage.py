@@ -443,30 +443,31 @@ def serialize_result(script: TriageScript | None, result):
 
         # Create table header
         header = []
-        generate_header(header, result[0], fields(result[0]))
-        table = [header]
-        for item in result:
-            row = []
-            generate_row(row, item, fields(item))
-            multilined_row = [r.splitlines() for r in row]
-            multirow = max([len(r) for r in multilined_row])
-            if multirow == 1:
-                table.append(row)
-            else:
-                # If multirow, add empty rows for each line in the row
-                for i in range(multirow):
-                    multirow_row = []
-                    for lines in multilined_row:
-                        if i < len(lines):
-                            multirow_row.append(lines[i])
-                        else:
-                            multirow_row.append("")
-                    table.append(multirow_row)
+        if len(result) > 0:
+            generate_header(header, result[0], fields(result[0]))
+            table = [header]
+            for item in result:
+                row = []
+                generate_row(row, item, fields(item))
+                multilined_row = [r.splitlines() for r in row]
+                multirow = max([len(r) for r in multilined_row])
+                if multirow == 1:
+                    table.append(row)
+                else:
+                    # If multirow, add empty rows for each line in the row
+                    for i in range(multirow):
+                        multirow_row = []
+                        for lines in multilined_row:
+                            if i < len(lines):
+                                multirow_row.append(lines[i])
+                            else:
+                                multirow_row.append("")
+                        table.append(multirow_row)
 
-        from tabulate import tabulate
-        from utils import DEFAULT_TABLE_FORMAT
+            from tabulate import tabulate
+            from utils import DEFAULT_TABLE_FORMAT
 
-        print(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
+            print(tabulate(table, headers="firstrow", tablefmt=DEFAULT_TABLE_FORMAT))
 
 
 def _enforce_dependencies(args: ScriptArguments) -> None:
