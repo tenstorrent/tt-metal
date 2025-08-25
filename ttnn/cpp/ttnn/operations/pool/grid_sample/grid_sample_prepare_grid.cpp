@@ -9,6 +9,7 @@
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "tt-metalium/bfloat16.hpp"
 #include "tt-metalium/host_buffer.hpp"
+#include "ttnn/tensor/types.hpp"
 #include <cmath>
 #include <algorithm>
 #include <vector>
@@ -110,14 +111,6 @@ tt::tt_metal::HostBuffer create_host_buffer_for_grid_preprocessing(
                     output_buffer[base_idx + 3] = bfloat16(weight_ne);
                     output_buffer[base_idx + 4] = bfloat16(weight_sw);
                     output_buffer[base_idx + 5] = bfloat16(weight_se);
-                } else {
-                    // For other types, store as-is (mainly for float32)
-                    output_buffer[base_idx + 0] = static_cast<OutputType>(h0_clamped);
-                    output_buffer[base_idx + 1] = static_cast<OutputType>(w0_clamped);
-                    output_buffer[base_idx + 2] = static_cast<OutputType>(weight_nw);
-                    output_buffer[base_idx + 3] = static_cast<OutputType>(weight_ne);
-                    output_buffer[base_idx + 4] = static_cast<OutputType>(weight_sw);
-                    output_buffer[base_idx + 5] = static_cast<OutputType>(weight_se);
                 }
             }
         }
@@ -165,6 +158,9 @@ ttnn::Tensor prepare_grid_sample_grid(
     TT_FATAL(grid.logical_shape()[-1] == 2, "Grid tensor last dimension must be 2 (x, y coordinates)");
     TT_FATAL(padding_mode == "zeros", "Currently only 'zeros' padding mode is supported");
     TT_FATAL(input_shape.size() == 4, "Input shape must have 4 dimensions [N, H, W, C]");
+    TT_FATAL(
+        output_dtype == DataType::BFLOAT16 || !output_dtype.has_value(),
+        "Currently only BFLOAT16 is supported for the grid output dtype");
 
     // Determine output data type
     DataType out_dtype = output_dtype.value_or(DataType::BFLOAT16);
@@ -180,7 +176,6 @@ ttnn::Tensor prepare_grid_sample_grid(
     switch (out_dtype) {
         case DataType::BFLOAT16:
             return convert_grid_tensor<float, bfloat16>(grid, output_shape, input_shape, out_dtype);
-        case DataType::FLOAT32: return convert_grid_tensor<float, float>(grid, output_shape, input_shape, out_dtype);
         default: TT_THROW("Unsupported output data type for prepare_grid_sample_grid: {}", out_dtype);
     }
 }
