@@ -94,7 +94,7 @@ void kernel_main() {
                 const auto addrg = TensorAccessor(pos_args, pos_addr, index_stick_size_B);
 
                 // index_tensor has one page to read
-                uint64_t tensor_index_noc_addr = get_noc_addr(0, addrg);
+                uint64_t tensor_index_noc_addr = addrg.get_noc_addr(0);
                 noc_async_read(tensor_index_noc_addr, index_cb_wr_ptr, index_stick_size_B);
                 noc_async_read_barrier();
             }
@@ -243,7 +243,7 @@ void kernel_main() {
         if constexpr (!is_page_table_sharded) {
             page_table_cb_wr_ptr = get_write_ptr(cb_id_page_table);
             const auto page_table_gen = TensorAccessor(page_table_args, page_table_addr, page_table_page_size);
-            uint64_t page_table_noc_addr = get_noc_addr((cur_batch / q_heads_parallel_factor), page_table_gen);
+            uint64_t page_table_noc_addr = page_table_gen.get_noc_addr((cur_batch / q_heads_parallel_factor));
             noc_async_read(page_table_noc_addr, page_table_cb_wr_ptr, page_table_page_size);
             noc_async_read_barrier();
             page_table_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_wr_ptr);
