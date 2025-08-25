@@ -714,6 +714,18 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine
                     }
                 }
             }
+            if (checker) {
+                for (auto& sender : test_config.senders) {
+                    sender.patterns.erase(
+                        std::remove_if(
+                            sender.patterns.begin(),
+                            sender.patterns.end(),
+                            [&](const auto& pattern) {
+                                return pattern.ntype.has_value() && pattern.ntype.value() != ntype;
+                            }),
+                        sender.patterns.end());
+                }
+            }
             if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ntype.has_value()) {
                 checker = test_config.defaults.value().ntype.value() == ntype.value();
             }
@@ -746,6 +758,18 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine
                             break;
                         }
                     }
+                }
+            }
+            if (checker) {
+                for (auto& sender : test_config.senders) {
+                    sender.patterns.erase(
+                        std::remove_if(
+                            sender.patterns.begin(),
+                            sender.patterns.end(),
+                            [&](const auto& pattern) {
+                                return pattern.ftype.has_value() && pattern.ftype.value() != ftype.value();
+                            }),
+                        sender.patterns.end());
                 }
             }
             if (!checker && test_config.defaults.has_value() && test_config.defaults.value().ftype.has_value()) {
@@ -781,6 +805,18 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine
                     }
                 }
             }
+            if (checker) {
+                for (auto& sender : test_config.senders) {
+                    sender.patterns.erase(
+                        std::remove_if(
+                            sender.patterns.begin(),
+                            sender.patterns.end(),
+                            [&](const auto& pattern) {
+                                return pattern.num_packets.has_value() && pattern.num_packets.value() != num_packets;
+                            }),
+                        sender.patterns.end());
+                }
+            }
             if (!checker && test_config.defaults.has_value() && test_config.defaults.value().num_packets.has_value()) {
                 checker = test_config.defaults.value().num_packets.value() == num_packets;
             }
@@ -811,6 +847,19 @@ inline bool CmdlineParser::check_filter(ParsedTestConfig& test_config, bool fine
                             break;
                         }
                     }
+                }
+            }
+
+            if (checker) {
+                for (auto& sender : test_config.senders) {
+                    sender.patterns.erase(
+                        std::remove_if(
+                            sender.patterns.begin(),
+                            sender.patterns.end(),
+                            [&](const auto& pattern) {
+                                return pattern.size.has_value() && pattern.size.value() != size;
+                            }),
+                        sender.patterns.end());
                 }
             }
             if (!checker && test_config.defaults.has_value() && test_config.defaults.value().size.has_value()) {
