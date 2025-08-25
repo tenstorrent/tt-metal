@@ -175,7 +175,7 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     if (available_cores.num_cores() < num_workers_preferred) {
         log_warning(
             tt::LogOp,
-            "AllGather is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
+            "CCL operation is being launched on a subdevice with fewer worker cores available than ideal. Ideally {} "
             "cores ({} per link and {} links) are made available but only {} are available. This may lead to "
             "performance loss.",
             num_workers_preferred,
