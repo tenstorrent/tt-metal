@@ -2186,7 +2186,7 @@ void fill_connection_info_fields(
     const CoreCoord& virtual_core,
     const FabricEriscDatamoverConfig& config,
     uint32_t sender_channel,
-    uint16_t worker_free_slots_stream_id = 17) {
+    uint16_t worker_free_slots_stream_id) {
     connection_info.edm_noc_x = static_cast<uint8_t>(virtual_core.x);
     connection_info.edm_noc_y = static_cast<uint8_t>(virtual_core.y);
     connection_info.edm_buffer_base_addr = config.sender_channels_base_address[sender_channel];
