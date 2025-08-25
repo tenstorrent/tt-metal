@@ -659,3 +659,88 @@ def test_all_gather_async_interleaved_to_sharded(
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
+
+
+def get_max_chunks_per_sync(ag_output_shape):
+    packet_elems = 2048
+    total_elems = math.prod(ag_output_shape)
+    return total_elems // packet_elems
+
+
+@skip_for_blackhole("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("num_links", [1], ids=["1link"])
+@pytest.mark.parametrize(
+    "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
+    [
+        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ],
+    ids=[
+        "gather_dim_0",
+    ],
+)
+@pytest.mark.parametrize(
+    "mem_config_input, mem_config_ag",
+    [
+        (
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+        )
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace,num_iters",
+    [
+        (True, 40),
+    ],
+    ids=["perf"],
+)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+@pytest.mark.parametrize("chunks_per_sync", ["MAX", 160, 80, 40, 20, 10, 5, 2, 1])
+def test_all_gather_chunks_per_sync(
+    t3k_mesh_device,
+    num_devices,
+    ag_output_shape,
+    dim,
+    num_links,
+    ag_input_dtype,
+    layout,
+    mem_config_input,
+    mem_config_ag,
+    enable_trace,
+    all_gather_topology,
+    num_iters,
+    chunks_per_sync,
+):
+    total_elems = math.prod(ag_output_shape)
+    if chunks_per_sync == "MAX":
+        chunks_per_sync = get_max_chunks_per_sync(ag_output_shape)
+
+    if total_elems % chunks_per_sync != 0:
+        pytest.skip("Total elements must be divisible by chunks per sync")
+
+    logger.info(f"Running with chunks_per_sync: {chunks_per_sync}")
+
+    run_all_gather_impl(
+        t3k_mesh_device,
+        num_devices,
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        use_barrier=True,
+        use_persistent_buffers=False,
+        chunks_per_sync=chunks_per_sync,
+    )
