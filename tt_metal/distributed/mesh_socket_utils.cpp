@@ -8,7 +8,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/system_mesh.hpp>
 #include "impl/context/metal_context.hpp"
-
+#include <tt-metalium/tt_align.hpp>
 #include "tt_metal/hw/inc/socket.h"
 
 using namespace tt::tt_metal::distributed::multihost;
@@ -19,13 +19,12 @@ namespace {
 
 struct SocketSenderSize {
     const uint32_t l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    const uint32_t md_size_bytes = ((sizeof(sender_socket_md) + l1_alignment - 1) / l1_alignment) * l1_alignment;
-    const uint32_t ack_size_bytes = ((sizeof(uint32_t) + l1_alignment - 1) / l1_alignment) * l1_alignment;
-    const uint32_t enc_size_bytes =
-        ((sizeof(sender_downstream_encoding) + l1_alignment - 1) / l1_alignment) * l1_alignment;
+    const uint32_t md_size_bytes = tt::align(sizeof(sender_socket_md), l1_alignment);
+    const uint32_t ack_size_bytes = tt::align(sizeof(uint32_t), l1_alignment);
+    const uint32_t enc_size_bytes = tt::align(sizeof(sender_downstream_encoding), l1_alignment);
 };
 
-// need to index the connections to properly read the FabricNodeId from peer descriptor.
+// Need to index the connections to properly read the FabricNodeId from peer descriptor.
 // This will get cleaned up with the improved socket APIs. See Issue #27207
 std::unordered_map<MeshCoordinate, std::unordered_map<CoreCoord, std::vector<std::pair<uint32_t, SocketConnection>>>>
 group_socket_connections(const SocketConfig& config, SocketEndpoint socket_endpoint) {

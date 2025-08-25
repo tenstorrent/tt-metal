@@ -196,7 +196,6 @@ bool test_socket_send_recv(
                 auto recv_program = CreateProgram();
 
                 auto recv_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
-                auto output_virtual_coord = recv_data_buffer->device()->worker_core_from_logical_core(recv_core);
 
                 KernelHandle recv_kernel = CreateKernel(
                     recv_program,

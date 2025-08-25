@@ -640,7 +640,7 @@ void MeshSocketYamlParser::validate_socket_config(
             *receiver_mesh_id);
 
         // Check for duplicate sender endpoints
-        auto sender_insert_result = sender_endpoints.insert(sender_mesh_coord);
+        sender_endpoints.insert(sender_mesh_coord);
 
         // Check for duplicate receiver endpoints
         auto receiver_insert_result = receiver_endpoints.insert(receiver_mesh_coord);

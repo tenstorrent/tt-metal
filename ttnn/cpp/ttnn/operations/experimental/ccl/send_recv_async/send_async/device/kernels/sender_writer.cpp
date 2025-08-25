@@ -67,7 +67,7 @@ void kernel_main() {
     SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
     set_sender_socket_page_size(sender_socket, socket_block_size);
 
-    // Only one downstream in this test
+    // Only one downstream in this op
     sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, 0);
     fabric_set_unicast_route(data_packet_header_addr, downstream_enc);
 
