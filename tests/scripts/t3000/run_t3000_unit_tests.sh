@@ -15,7 +15,7 @@ run_t3000_ttmetal_tests() {
   echo "LOG_METAL: Running run_t3000_ttmetal_tests"
   ./build/test/tt_metal/distributed/distributed_unit_tests
 
-  echo "LOG_METAL: Testing TT_METAL_VISIBLE_DEVICES functionality"
+  echo "LOG_METAL: Testing TT_VISIBLE_DEVICES functionality"
   ./tests/tt_metal/distributed/multiprocess/run_visible_devices_mp_tests.sh ; fail+=$?
 
   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_eth --gtest_filter="DeviceFixture.ActiveEthKernelsDirectSendAllConnectedChips" ; fail+=$?
