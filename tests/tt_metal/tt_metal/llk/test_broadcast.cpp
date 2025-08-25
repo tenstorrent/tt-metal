@@ -69,8 +69,6 @@ enum BroadcastDim : uint8_t { ROW = 0, COL = 1, SCALAR = 2 };
 
 enum TileShape : uint8_t { FULL_TILE = 0, TINY_TILE_16x32 = 1 };
 
-}  // namespace
-
 const map<EltwiseOp, std::string> eltwise_op_to_type = {
     {EltwiseOp::ADD, "EltwiseBinaryType::ELWADD"},
     {EltwiseOp::SUB, "EltwiseBinaryType::ELWSUB"},
@@ -103,6 +101,8 @@ struct BroadcastConfig {
     TileShape tile_shape = TileShape::FULL_TILE;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 };
+
+}  // namespace
 
 void mask_src_b_for_broadcast(std::vector<bfloat16>& tile, const std::vector<uint32_t>& shape, BroadcastDim dim) {
     int num_rows = shape.at(0);

@@ -58,8 +58,6 @@ namespace {
 
 enum BroadcastDim : uint8_t { ROW, COL, SCALAR, NONE, NUM_DIMS };
 
-}  // namespace
-
 const map<BroadcastDim, std::string> broadcast_dim_to_type = {
     {BroadcastDim::ROW, "BroadcastType::ROW"},
     {BroadcastDim::COL, "BroadcastType::COL"},
@@ -74,6 +72,8 @@ struct UnaryBroadcastConfig {
     tt::DataFormat out0_t;
     tt::DataFormat out1_t;
 };
+
+}  // namespace
 
 // Assume 1Xn tiles.
 template <class T>
