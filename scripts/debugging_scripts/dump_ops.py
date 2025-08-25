@@ -9,7 +9,7 @@ Usage:
 
 Options:
     --mapping-file=<file>  YAML file containing kernel config host-assigned ID to python callstack/args mappings
-    --max-width=<width>    Maximum column width for wrapping text [default: 100]
+    --max-width=<width>    Maximum column width for wrapping text [default: 120]
     --verbose              Show detailed argument information (default: concise)
 
 Description:
@@ -55,27 +55,27 @@ def format_text_concise(text: str) -> str:
     lines = text.split("\n")
     formatted_lines = []
 
-    # Find the last File line and the operation call that follows it
-    last_file_line = None
-    last_file_index = -1
+    # Find the actual test file line (not decorator) and the operation call that follows it
+    test_file_line = None
+    test_file_index = -1
     operation_call_line = None
 
     for i, line in enumerate(lines):
         line_stripped = line.strip()
-        if line_stripped.startswith("File "):
-            last_file_line = line
-            last_file_index = i
+        if line_stripped.startswith("File ") and "/tests/" in line_stripped:
+            test_file_line = line
+            test_file_index = i
         elif (
-            last_file_index != -1
-            and i == last_file_index + 1
+            test_file_index != -1
+            and i == test_file_index + 1
             and "=" in line_stripped
-            and ("(" in line_stripped or any(op in line_stripped for op in [" + ", " - ", " * ", " / "]))
+            and ("ttnn." in line_stripped or any(op in line_stripped for op in [" + ", " - ", " * ", " / "]))
         ):
             operation_call_line = line
 
-    # Add only the last file line and operation call
-    if last_file_line:
-        formatted_lines.append(last_file_line)
+    # Add only the test file line and operation call
+    if test_file_line:
+        formatted_lines.append(test_file_line)
     if operation_call_line:
         formatted_lines.append(operation_call_line)
 
@@ -304,7 +304,13 @@ def load_host_id_mapping(mapping_file: str | None) -> dict:
 
     try:
         with open(mapping_file, "r") as f:
-            return yaml.safe_load(f) or {}
+            yaml_data = yaml.safe_load(f) or []
+            # Convert list of operations to dict keyed by operation_id
+            mapping = {}
+            for op in yaml_data:
+                if isinstance(op, dict) and "operation_id" in op:
+                    mapping[str(op["operation_id"])] = op
+            return mapping
     except Exception:
         return {}
 
@@ -343,13 +349,15 @@ def dump_ops(
 
             # If we found a valid kernel_config_host_id, add one entry for this location
             if kernel_config_host_id is not None:
-                host_key = str(kernel_config_host_id)
+                # Use kernel_config_host_assigned_id as operation_id to look up in mapping
+                # Decrement by 1 since kernel_config_host_assigned_id starts at 1 but operation_id starts at 0
+                operation_id_key = str(kernel_config_host_id - 1)
 
                 # Get callstack and args from mapping if available
                 callstack = ""
                 args = ""
-                if host_key in host_id_mapping:
-                    mapping = host_id_mapping[host_key]
+                if operation_id_key in host_id_mapping:
+                    mapping = host_id_mapping[operation_id_key]
                     callstack = mapping.get("callstack", "")
                     args = mapping.get("arguments", "")
 
