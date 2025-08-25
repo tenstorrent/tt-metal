@@ -14,6 +14,7 @@
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -25,9 +26,24 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_mesh_workload(
     tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+
+    auto mesh_device = tensor_args.input_tensor.mesh_device();
+    auto init_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+    auto final_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
+    tt::tt_metal::distributed::Synchronize(
+        mesh_device, std::nullopt, {});  // interaction with subdevice needs to be investigated
+
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program =
-            create_at(operation_attributes, coord, tensor_coords.coords(), tensor_args, tensor_return_value);
+        auto cached_program = create_at(
+            operation_attributes,
+            coord,
+            tensor_coords.coords(),
+            tensor_args,
+            tensor_return_value,
+            init_barrier_semaphore,
+            final_barrier_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -40,7 +56,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const std::vector<ttnn::MeshCoordinate>& all_mesh_coordinates,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& tensor_return_value,
+    const GlobalSemaphore& init_semaphore,
+    const GlobalSemaphore& cross_device_semaphore) {
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
@@ -136,10 +154,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         CircularBufferConfig(num_headers * CLIENT_INTERFACE_SIZE, {{client_interface_cb_id, tt::DataFormat::UInt32}})
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
 
-    const auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, subdevice_id);
-
-    const auto subdevice_cores = corerange_to_cores(subdevice_core_range_set);
+    const auto subdevice_cores = corerange_to_cores(operation_attributes.worker_core_range_set);
 
     TT_FATAL(
         subdevice_cores.size() >= num_links,
@@ -152,7 +167,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     uint32_t tokens_per_core = tt::div_up(tokens_per_device, num_links);
     uint32_t num_cores = std::min(num_links, tt::div_up(tokens_per_device, tokens_per_core));
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
-        subdevice_cores.at(0), num_cores, subdevice_core_range_set, true);
+        subdevice_cores.at(0), num_cores, operation_attributes.worker_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
 
     // create circular buffers
@@ -271,8 +286,8 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     for (uint32_t i = 0; i < sender_cores.size(); i++) {
         std::vector<uint32_t> writer_runtime_args = {
             output_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate)->address(),
-            (uint32_t)operation_attributes.cross_device_semaphore->address(),
-            (uint32_t)operation_attributes.init_semaphore->address(),
+            (uint32_t)cross_device_semaphore.address(),
+            (uint32_t)init_semaphore.address(),
             0,
             0,
         };
@@ -287,7 +302,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
             sender_cores.at(i),
             reader_runtime_args[3],
             reader_runtime_args[4],
-            (uint32_t)operation_attributes.cross_device_semaphore->address());
+            (uint32_t)cross_device_semaphore.address());
 
         for (auto& neighbor_coordinate : neighbors) {
             const auto neighbor_fabric_id = mesh_device->get_fabric_node_id(neighbor_coordinate);
@@ -303,7 +318,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         std::move(program),
         {.ternary_reader_kernel_id = ternary_reader_kernel_id,
          .unary_writer_kernel_id = unary_writer_kernel_id,
-         .cores = sender_cores}};
+         .cores = sender_cores,
+         .init_semaphore = init_semaphore,
+         .cross_device_semaphore = cross_device_semaphore}};
 }
 
 void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime_arguments(
@@ -329,8 +346,8 @@ void AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::override_runtime
             reader_runtime_args.at(2) = tensor_args.input_tensor.mesh_buffer()->get_device_buffer(coord)->address();
 
             writer_runtime_args.at(0) = tensor_return_value.mesh_buffer()->get_device_buffer(coord)->address();
-            writer_runtime_args.at(1) = (uint32_t)operation_attributes.cross_device_semaphore->address();
-            writer_runtime_args.at(2) = (uint32_t)operation_attributes.init_semaphore->address();
+            writer_runtime_args.at(1) = (uint32_t)shared_variables.cross_device_semaphore.address();
+            writer_runtime_args.at(2) = (uint32_t)shared_variables.init_semaphore.address();
         }
     }
 }
