@@ -104,12 +104,10 @@ void kernel_main() {
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;  // E[x] partial reduce
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
-    constexpr uint32_t cb_ex2_global = tt::CBIndex::c_14;  // E[x]^2 global reduce
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;         // input cb
     constexpr uint32_t cb_repack = tt::CBIndex::c_26;
     constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
-    constexpr uint32_t cb_x = tt::CBIndex::c_24;
     constexpr uint32_t cb_reread_out = tt::CBIndex::c_23;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);  // tile size
@@ -200,15 +198,7 @@ void kernel_main() {
                         cb_push_back(cb_in0, out_block_hw_normal);
                     }
 #endif
-                    if (cur_read_iteration == 0) {
-                        //Section for wating for local reduce to be pushed to a cb_ex_partial
-                        //Wait for local avg calculation
-                        cb_wait_front(cb_ex_partial, 2);
-                        noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-                        noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-                        cb_pop_front(cb_ex_partial, 2);
-                        noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-                    } else if (cur_read_iteration == 2) {
+                    if (cur_read_iteration == 2) {
                         const InterleavedAddrGenFast<out_is_dram> dst_a = {
                             .bank_base_address = out_addr,
                             .page_size = single_tile_size_bytes,
@@ -239,11 +229,19 @@ void kernel_main() {
                 }
 
                 if (cur_read_iteration == 0) {
-                    cb_reserve_back(cb_ex_global, 1);
-                    cb_reserve_back(cb_ex2_global, 1);
+                    cb_reserve_back(cb_ex_global, 2);
+
+                    cb_wait_front(cb_ex_partial, 2);
+                    // Signal to sender that our partial data is ready
+                    noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
+                    // Wait for sender to signal that it has received our partial data
                     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-                    cb_push_back(cb_ex_global, 1);
-                    cb_push_back(cb_ex2_global, 1);
+                    noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+                    cb_pop_front(cb_ex_partial, 2);
+
+                    // Wait for sender to signal that it has sent the global data
+                    noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+                    cb_push_back(cb_ex_global, 2);
                 }
             }
 

@@ -224,13 +224,11 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduce_receiver_semaphore_addr);
 
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;
-    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
+    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;  // sharded cb
     constexpr uint32_t cb_repack = tt::CBIndex::c_26;
     constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
-    constexpr uint32_t cb_x = tt::CBIndex::c_24;
     constexpr uint32_t cb_reread_out = tt::CBIndex::c_23;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);
@@ -287,11 +285,6 @@ void kernel_main() {
                     uint32_t out_block_start_id_offset = 0;
                     uint32_t cb_ex_external_bytes_written = 0;
 
-                    if (cur_read_iteration == 0) {
-                        cb_reserve_back(cb_ex_external, cb_ex_external_tiles_required);
-                    }
-                    uint32_t l1_write_addr_external = get_write_ptr(cb_ex_external);
-
                     for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                         uint32_t out_block_h_actual;
                         if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
@@ -325,62 +318,7 @@ void kernel_main() {
                             cb_push_back(cb_in0, out_block_hw_normal);
                         }
 #endif
-                        if (cur_read_iteration == 0) {
-                            // wait for local data ready
-                            cb_wait_front(cb_ex_partial, 2);
-
-                            // read self Ex partial - on the first iteration, read a full tile for overwriting
-                            // garbage in L1, on subsequent just treat it as another core
-                            uint32_t l1_read_addr_ex_par = get_read_ptr(cb_ex_partial);
-                            uint64_t noc_addr_ex_par =
-                                get_noc_addr(noc_coord_x[0], noc_coord_y[0], l1_read_addr_ex_par);
-                            uint32_t read_size = (cb_ex_external_bytes_written % single_tile_size_bytes > 0)
-                                                     ? num_bytes_read
-                                                     : single_tile_size_bytes;
-                            noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, read_size);
-                            l1_write_addr_external += 16;
-                            cb_ex_external_bytes_written += 16;
-                            noc_async_read_barrier();
-
-                            if constexpr (num_mcast_cores > 1) {
-                                // wait for all other cores data ready
-                                noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
-                                noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-
-                                // read data from other cores
-                                for (uint32_t i = 0; i < num_mcast_cores - 1; ++i) {
-                                    uint64_t noc_addr_ex_par =
-                                        get_noc_addr(noc_coord_x[i + 1], noc_coord_y[i + 1], l1_read_addr_ex_par);
-                                    noc_async_read_one_packet(noc_addr_ex_par, l1_write_addr_external, num_bytes_read);
-                                    l1_write_addr_external += 16;
-                                    cb_ex_external_bytes_written += 16;
-                                    noc_async_read_barrier();
-                                }
-                            }
-                            cb_pop_front(cb_ex_partial, 2);
-
-                            if constexpr (num_mcast_cores > 1) {
-                                noc_semaphore_set_multicast(
-                                    reduce_sender_semaphore_addr,
-                                    reduce_sender_semaphore_noc_addr,
-                                    num_mcast_cores_mid_group,
-                                    false);
-                                if (has_mcast_first_group) {
-                                    noc_semaphore_set_multicast(
-                                        reduce_sender_semaphore_addr,
-                                        reduce_sender_first_group_semaphore_noc_addr,
-                                        num_mcast_cores_first_group,
-                                        false);
-                                }
-                                if (has_mcast_last_group) {
-                                    noc_semaphore_set_multicast(
-                                        reduce_sender_semaphore_addr,
-                                        reduce_sender_last_group_semaphore_noc_addr,
-                                        num_mcast_cores_last_group,
-                                        false);
-                                }
-                            }
-                        } else if (cur_read_iteration == 2) {
+                        if (cur_read_iteration == 2) {
                             const InterleavedAddrGenFast<out_is_dram> dst_a = {
                                 .bank_base_address = out_addr,
                                 .page_size = single_tile_size_bytes,
@@ -410,14 +348,49 @@ void kernel_main() {
                         }
                         out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                     }
-                    if (cur_read_iteration == 0) {
-                        cb_push_back(cb_ex_external, cb_ex_external_tiles_required);
-                        if constexpr (num_mcast_cores > 1) {
-                            // global reduce
-                            cb_wait_front(cb_ex, 2);
 
+                    if (cur_read_iteration == 0) {
+                        cb_reserve_back(cb_ex_global, 2);
+
+                        cb_wait_front(cb_ex_partial, 2);
+
+                        if constexpr (num_mcast_cores > 1) {
+                            // Wait until all other cores have signaled that their partial data is ready
+                            noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
+                            noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+
+                            // TODO: Read partial data from all other cores into this core's cb_ex_partial
+
+                            // Signal to receiver that their partial data has been received
+                            noc_semaphore_set_multicast(
+                                reduce_sender_semaphore_addr,
+                                reduce_sender_semaphore_noc_addr,
+                                num_mcast_cores_mid_group,
+                                false);
+                            if (has_mcast_first_group) {
+                                noc_semaphore_set_multicast(
+                                    reduce_sender_semaphore_addr,
+                                    reduce_sender_first_group_semaphore_noc_addr,
+                                    num_mcast_cores_first_group,
+                                    false);
+                            }
+                            if (has_mcast_last_group) {
+                                noc_semaphore_set_multicast(
+                                    reduce_sender_semaphore_addr,
+                                    reduce_sender_last_group_semaphore_noc_addr,
+                                    num_mcast_cores_last_group,
+                                    false);
+                            }
+                        }
+
+                        // TODO: Combine all partial data into a single global data (mean and variance)
+                        // Write this to cb_ex_global
+
+                        cb_pop_front(cb_ex_partial, 2);
+
+                        if constexpr (num_mcast_cores > 1) {
                             // mcast to other cores
-                            uint32_t l1_read_addr_ex = get_read_ptr(cb_ex);
+                            uint32_t l1_read_addr_ex = get_read_ptr(cb_ex_global); // TODO: Fix this
                             noc_async_write_multicast(
                                 l1_read_addr_ex,
                                 multicast_data_noc | l1_read_addr_ex,
@@ -458,8 +431,9 @@ void kernel_main() {
                                     false);
                             }
                             noc_async_write_barrier();
-                            cb_pop_front(cb_ex, 1);
                         }
+
+                        cb_push_back(cb_ex_global, 2);
                     }
                 }
                 if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
