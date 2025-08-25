@@ -23,17 +23,25 @@ class TtCausalSelfAttention(nn.Module):
 
         self.device = device
         # Get the weights
-        self.tt_weight_c_attn = ttnn.load_tensor(tt_cache_path + base_address + ".c_attn.weight" + str(dtype) + ".bin")
+        self.tt_weight_c_attn = ttnn.load_tensor(
+            tt_cache_path + base_address + ".c_attn.weight" + str(dtype) + ".tensorbin"
+        )
 
-        self.tt_weight_c_proj = ttnn.load_tensor(tt_cache_path + base_address + ".c_proj.weight" + str(dtype) + ".bin")
+        self.tt_weight_c_proj = ttnn.load_tensor(
+            tt_cache_path + base_address + ".c_proj.weight" + str(dtype) + ".tensorbin"
+        )
 
         self.tt_weight_c_attn = ttnn.transpose(self.tt_weight_c_attn, -2, -1)
         self.tt_weight_c_proj = ttnn.transpose(self.tt_weight_c_proj, -2, -1)
 
         # Load biases
-        self.tt_bias_c_attn = ttnn.load_tensor(tt_cache_path + base_address + ".c_attn.bias" + str(dtype) + ".bin")
+        self.tt_bias_c_attn = ttnn.load_tensor(
+            tt_cache_path + base_address + ".c_attn.bias" + str(dtype) + ".tensorbin"
+        )
 
-        self.tt_bias_c_proj = ttnn.load_tensor(tt_cache_path + base_address + ".c_proj.bias" + str(dtype) + ".bin")
+        self.tt_bias_c_proj = ttnn.load_tensor(
+            tt_cache_path + base_address + ".c_proj.bias" + str(dtype) + ".tensorbin"
+        )
 
         self.n_head = self.config.n_head
         self.n_embd = self.config.n_embd

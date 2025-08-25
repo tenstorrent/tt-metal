@@ -187,11 +187,11 @@ class TtMultiHeadAttentionModel:
                 interleaved_str = f"interleaved_{model_config['QKV_INTERLEAVED']}_"
             qkv_weight_cache_path = str(
                 f"{tt_cache_path}/"
-                f"{layer_name}.qkv.weight_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.bin"
+                f"{layer_name}.qkv.weight_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_WEIGHTS_DTYPE'].name}.tensorbin"
             )
             qkv_bias_cache_path = str(
                 f"{tt_cache_path}/"
-                f"{layer_name}.qkv.bias_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}.bin"
+                f"{layer_name}.qkv.bias_{interleaved_str}{model_config['OP1_FUSED_QKV_MM_BIAS_DTYPE'].name}.tensorbin"
             )
 
         def compute_qkv_weight():

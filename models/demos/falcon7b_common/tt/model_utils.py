@@ -51,7 +51,6 @@ def get_weights_cached(
             memory_config=model_config[f"{weight_config_str}_MEMCFG"],
             cache_file_name=str(path),
             preprocess=preprocess_weights,
-            enable_multihost_format=True,
         )
 
         # Save weights for reuse between prefill/decode

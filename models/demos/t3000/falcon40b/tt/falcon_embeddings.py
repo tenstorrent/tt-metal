@@ -26,7 +26,6 @@ class TtFalconEmbeddings(torch.nn.Module):
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_path / base_name,
-            enable_multihost_format=True,
             mesh_mapper=ShardTensorToMesh(mesh_device, dim=-1),
             preprocess=lambda x: x.reshape(1, 1, *x.shape),
         )
