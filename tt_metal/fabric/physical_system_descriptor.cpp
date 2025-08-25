@@ -107,6 +107,15 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     for (const auto& [chip_id, unique_id] : chip_unique_ids) {
         sorted_pcie_slots.insert(cluster.get_physical_slot(chip_id).value());
     }
+    if (my_rank == 0) {
+        std::cout << "Phys Position to Eth Coords: " << std::endl;
+        for (const auto chip : cluster.user_exposed_chip_ids()) {
+            auto [tray_id, n_id] = get_asic_position(chip, sorted_pcie_slots);
+            auto eth_coord = cluster.get_user_chip_ethernet_coordinates().at(chip);
+            std::cout << "Tray: " << tray_id << " N: " << n_id << " Chip: " << chip << " eth_x: " << eth_coord.x
+                      << "eth_y" << eth_coord.y << std::endl;
+        }
+    }
 
     for (const auto& [src, conn] : eth_connections) {
         auto src_unique_id = chip_unique_ids.at(src);
@@ -289,7 +298,7 @@ void PhysicalSystemDescriptor::run_global_discovery() {
         this->generate_cross_host_connections();
     }
     this->exchange_metadata(false);
-    if (my_rank != controller_rank) {
+    if (my_rank == controller_rank) {
         this->dump_to_yaml("/tmp/physical_system_descriptor.yaml");
     }
     distributed_context.barrier();

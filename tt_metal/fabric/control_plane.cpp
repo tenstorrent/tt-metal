@@ -1814,18 +1814,18 @@ void ControlPlane::initialize_intermesh_eth_links() {
         std::vector<std::pair<CoreCoord, chan_id_t>> intermesh_eth_links;
         const auto& soc_desc = cluster.get_soc_desc(chip_id);
         // Remote connections visible to UMD
-        auto remote_connections = cluster.get_ethernet_connections_to_remote_devices().find(chip_id);
-        if (remote_connections != cluster.get_ethernet_connections_to_remote_devices().end()) {
-            for (auto [link, _] : remote_connections->second) {
-                // Find the CoreCoord for this channel
-                for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
-                    if (channel == link) {
-                        intermesh_eth_links.push_back({core_coord, link});
-                        break;
-                    }
-                }
-            }
-        }
+        // auto remote_connections = cluster.get_ethernet_connections_to_remote_devices().find(chip_id);
+        // if (remote_connections != cluster.get_ethernet_connections_to_remote_devices().end()) {
+        //     for (auto [link, _] : remote_connections->second) {
+        //         // Find the CoreCoord for this channel
+        //         for (const auto& [core_coord, channel] : soc_desc.logical_eth_core_to_chan_map) {
+        //             if (channel == link) {
+        //                 intermesh_eth_links.push_back({core_coord, link});
+        //                 break;
+        //             }
+        //         }
+        //     }
+        // }
         if (cluster.get_board_type(chip_id) != BoardType::UBB) {
             // TODO: remove branch here once get_ethernet_connections_to_remote_devices() contains
             // all cross host links, currently on T3K there are some cross host links that are not
@@ -2046,7 +2046,6 @@ void ControlPlane::generate_local_intermesh_link_table() {
         tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::ETH_LINK_REMOTE_INFO);
     for (const auto& chip_id : cluster.user_exposed_chip_ids()) {
         if (this->has_intermesh_links(chip_id)) {
-            std::cout << "Intermesh Info In Control Plane: " << chip_id << std::endl;
             for (const auto& [eth_core, chan_id] : this->get_intermesh_eth_links(chip_id)) {
                 // TODO: remove below logic, should at very least be using UMD apis to get ids
                 // But all this data can be provided by UMD
@@ -2078,8 +2077,6 @@ void ControlPlane::generate_local_intermesh_link_table() {
                     .board_id = remote_board_id,
                     .chan_id = remote_chan_id,
                 };
-                std::cout << "Eth Channel: " << chan_id << " Dest Chip: " << remote_board_id
-                          << " Dest Chan: " << remote_chan_id << std::endl;
 
                 intermesh_link_table_.intermesh_links[local_eth_chan_desc] = remote_eth_chan_desc;
                 chip_id_to_asic_id_[chip_id] = local_board_id;
