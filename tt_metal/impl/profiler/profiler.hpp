@@ -50,19 +50,7 @@ struct pair_hash {
 constexpr uint32_t TRACE_RISC_ID = 6;
 constexpr uint32_t ERISC_RISC_ID = 5;
 
-// defined locally in profiler.cpp
 class FabricRoutingLookup;
-
-struct DispatchMetaData {
-    // Dispatch command queue command type
-    std::string cmd_type = "";
-
-    // Worker's runtime id
-    uint32_t worker_runtime_id = 0;
-
-    // dispatch command subtype.
-    std::string cmd_subtype = "";
-};
 
 struct SyncInfo {
     double cpu_time = 0.0;
@@ -108,16 +96,6 @@ private:
     // Device-Core tracy context
     std::unordered_map<std::pair<uint16_t, CoreCoord>, TracyTTCtx, pair_hash<uint16_t, CoreCoord>>
         device_tracy_contexts;
-
-    // Iterator on the previous marker that was processed
-    // std::unordered_set<tracy::TTDeviceMarker>::iterator prev_marker_it;
-
-    // std::stack<std::tuple<CoreCoord, std::unordered_set<tracy::TTDeviceMarker>::iterator, int>> start_marker_stack;
-    // std::map<std::pair<CoreCoord, int>, std::stack<std::set<tracy::TTDeviceMarker>::iterator>>
-    //     start_marker_stack_map;
-
-    // Holding current data collected for dispatch command queue zones
-    DispatchMetaData current_dispatch_meta_data;
 
     // (cpu time, device time, frequency) for sync propagated from root device
     SyncInfo device_sync_info;
@@ -205,6 +183,9 @@ private:
     // Dump device results to files
     void dumpDeviceResults(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) const;
 
+    // Iterate over all markers and update their data if needed
+    void processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers);
+
 public:
     DeviceProfiler(const IDevice* device, bool new_logs);
 
@@ -277,8 +258,6 @@ public:
     void setLastFDReadAsNotDone();
 
     bool isLastFDReadDone() const;
-
-    void processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers);
 };
 
 // IMPORTANT: This function creates a vector of references to the TTDeviceMarker objects stored in
