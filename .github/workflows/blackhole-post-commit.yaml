@@ -48,8 +48,6 @@ on:
   # Pause this since not enough runners to support every commit to main
   # push:
   #  branches: ["main"]
-  push:
-    branches: ["jlakis/bh-20cores-image"]
 
 run-name: ${{ inputs.enable-llmbox-tests == true && 'Blackhole LLMBox tests' || (inputs.enable-watcher == true && 'Blackhole post-commit tests (watcher enabled)') || ((github.event_name == 'schedule' && github.event.schedule == '0 7 * * *') && 'Blackhole post-commit tests (P100 nightly)') || 'Blackhole post-commit tests' }}
 
@@ -124,7 +122,6 @@ jobs:
       version: "22.04"
       build-umd-tests: true
   build-artifact-profiler:
-    if: ${{ false }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -136,7 +133,6 @@ jobs:
       version: "22.04"
       build-umd-tests: true
   run-profiler-regression:
-    if: ${{ false }}
     needs: [build-artifact-profiler, generate-matrix]
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
@@ -152,7 +148,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   umd-unit-tests:
-    if: ${{ false }}
     needs: [build-artifact, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
@@ -166,7 +161,6 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   sd-unit-tests:
-    if: ${{ false }}
     needs: [build-artifact, generate-matrix]
     uses: ./.github/workflows/build-and-unit-tests.yaml
     secrets: inherit
@@ -182,7 +176,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   fd-unit-tests:
-    if: ${{ false }}
     needs: [build-artifact, generate-matrix]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     secrets: inherit
@@ -199,7 +192,6 @@ jobs:
       enable-watcher: ${{ inputs.enable-watcher || false }}
   # FD C++ Unit Tests
   cpp-unit-tests:
-    if: ${{ false }}
     needs: [build-artifact, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/cpp-post-commit.yaml
@@ -215,7 +207,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   models-unit-tests:
-    if: ${{ false }}
     needs: [build-artifact, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/models-post-commit.yaml
@@ -231,7 +222,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
   blackhole-demo-tests:
-    if: ${{ false }}
     needs: [build-artifact, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
@@ -246,7 +236,6 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   ttnn-unit-tests:
-    if: ${{ false }}
     needs: [build-artifact, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
@@ -289,7 +278,6 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-metalium
   ttnn-smoke-tests:
-    if: ${{ false }}
     needs: [build-artifact, generate-matrix]
     strategy:
       fail-fast: false
@@ -303,7 +291,6 @@ jobs:
       product: tt-nn
 
   test-ttnn-tutorials:
-    if: ${{ false }}
     needs: [build-artifact, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
@@ -386,7 +373,6 @@ jobs:
 
   # Multi-card post-commit tests
   blackhole-multi-card-post-commit-tests:
-    if: ${{ false }}
     needs: build-artifact
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-post-commit-tests-impl.yaml
