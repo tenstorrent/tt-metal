@@ -54,6 +54,7 @@ def _run_model_pipeline(
         l1_input_memory_config=input_mem_config,
     )
 
+    logger.info(f"Running model warmup with input shape {list(tt_inputs_host.shape)}")
     profiler.start("compile")
     pipeline.compile(tt_inputs_host)
     profiler.end("compile")
@@ -68,6 +69,9 @@ def _run_model_pipeline(
         ttnn.ROW_MAJOR_LAYOUT,
     )
 
+    logger.info(
+        f"Starting performance pipline for {num_measurement_iterations} iterations with batch_size={test_infra.batch_size} and num_devices={test_infra.num_devices}"
+    )
     if use_signpost:
         signpost(header="start")
     profiler.start(f"run")
