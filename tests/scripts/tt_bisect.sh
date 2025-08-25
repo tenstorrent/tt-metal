@@ -106,7 +106,12 @@ while [[ "$found" == "false" ]]; do
   venv_rc=0
   if [ -f "./create_venv.sh" ]; then
     # shellcheck disable=SC1091
+
+    set +u
+    # shellcheck disable=SC1091
     source ./create_venv.sh || venv_rc=$?
+    set -u
+
   fi
   PYTHON_ENV_DIR="${PYTHON_ENV_DIR:-./.venv}"
   if [ ! -d "$PYTHON_ENV_DIR" ]; then
