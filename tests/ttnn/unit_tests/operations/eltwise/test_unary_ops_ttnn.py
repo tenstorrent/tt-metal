@@ -453,11 +453,24 @@ def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, device):
     [
         (torch.float32, ttnn.float32),
         (torch.bfloat16, ttnn.bfloat16),
+        (torch.int32, ttnn.uint16),  # Use int32 in torch for uint16 ttnn since torch doesn't have uint16
+        (torch.int32, ttnn.int32),
+        (torch.int64, ttnn.uint32),  # Use int64 in torch for uint32 ttnn since torch uint32 doesn't exist
     ],
 )
 def test_unary_logical_not_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     num_elements = max(int(torch.prod(torch.tensor(input_shapes)).item()), 1)
-    in_data = torch.linspace(-100, 100, num_elements, dtype=torch_dtype)
+
+    # Handle different data types with appropriate ranges
+    if ttnn_dtype == ttnn.uint16:
+        in_data = torch.linspace(0, 65535, num_elements, dtype=torch_dtype)
+    elif ttnn_dtype == ttnn.uint32:
+        in_data = torch.linspace(0, 4294967295, num_elements, dtype=torch_dtype)
+    elif ttnn_dtype == ttnn.int32:
+        in_data = torch.linspace(-2147483648, 2147483647, num_elements, dtype=torch_dtype)
+    else:
+        in_data = torch.linspace(-100, 100, num_elements, dtype=torch_dtype)
+
     in_data[::5] = 0  # every 5th element is zero
     in_data = in_data[:num_elements].reshape(input_shapes).nan_to_num(0.0)
 

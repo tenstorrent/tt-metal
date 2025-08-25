@@ -16,7 +16,7 @@ parameters = {
     "batch_sizes": [(1,)],
     "height": [384, 1024],
     "width": [1024, 4096],
-    "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+    "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint16, ttnn.uint32, ttnn.int32],
     "input_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
@@ -34,6 +34,11 @@ def skip(
 ) -> Tuple[bool, Optional[str]]:
     if input_dtype == ttnn.bfloat8_b:
         return True, "Skipped as bfloat8_b not supported"
+
+    # Skip integer types with ROW_MAJOR_LAYOUT if not supported
+    if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype in [ttnn.uint16, ttnn.uint32, ttnn.int32]:
+        return True, f"Skipped {input_dtype} with ROW_MAJOR_LAYOUT"
+
     return False, None
 
 
@@ -50,10 +55,21 @@ def run(
 ) -> Tuple[bool, Optional[str]]:
     input_shape = (*batch_sizes, height, width)
 
-    low = -100
-    high = 100
+    # Set appropriate ranges for different data types
+    if input_dtype == ttnn.uint16:
+        low, high = 0, 65535
+        torch_dtype = torch.int32  # Use int32 for uint16 since torch doesn't have uint16
+    elif input_dtype == ttnn.uint32:
+        low, high = 0, 4294967295
+        torch_dtype = torch.int64  # Use int64 for uint32 since torch doesn't have uint32
+    elif input_dtype == ttnn.int32:
+        low, high = -2147483648, 2147483647
+        torch_dtype = torch.int32
+    else:
+        low, high = -100, 100
+        torch_dtype = torch.float32
 
-    torch_input_tensor = torch_random(input_shape, low, high, dtype=torch.float32)
+    torch_input_tensor = torch_random(input_shape, low, high, dtype=torch_dtype)
     torch_output_tensor = torch.logical_not(torch_input_tensor)
 
     input_tensor = ttnn.from_torch(
