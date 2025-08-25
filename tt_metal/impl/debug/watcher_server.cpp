@@ -140,7 +140,16 @@ void WatcherServer::Impl::attach_devices() {
 
 void WatcherServer::Impl::detach_devices() {
     // If server isn't running, and wasn't killed due to an error, nothing to do here.
+    auto close_file = [](FILE*& file) {
+        if (file != nullptr) {
+            std::fclose(file);
+            file = nullptr;
+        }
+    };
     if (!server_thread_ and !server_killed_due_to_error_) {
+        close_file(logfile_);
+        close_file(kernel_file_);
+        close_file(kernel_elf_file_);
         return;
     }
 
@@ -179,10 +188,9 @@ void WatcherServer::Impl::detach_devices() {
 
         // Watcher server closed, can use dma library again.
         MetalContext::instance().rtoptions().set_disable_dma_ops(false);
-
-        // Close files
-        std::fclose(logfile_);
-        logfile_ = nullptr;
+        close_file(logfile_);
+        close_file(kernel_file_);
+        close_file(kernel_elf_file_);
     }
 }
 

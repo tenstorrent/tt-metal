@@ -12,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <optional>
 
@@ -273,43 +274,24 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     ////////////////////////////////////////////////////////////////////////////
     Program program = CreateProgram();
 
-    std::vector<uint32_t> reader_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)is_dram(a),
-                                                      (std::uint32_t)is_dram(b),
-                                                      (std::uint32_t)is_dram(gamma),
-                                                      (std::uint32_t)is_dram(beta),
-                                                      (std::uint32_t)block_size};
+    std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)block_size};
+    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b ? b->buffer() : nullptr).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(reader_compile_time_args);
 
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
-        bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
-        reader_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
-        if (gamma_stick_size_is_power_of_two) {
-            uint32_t gamma_log2_stick_size =
-                gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
-            reader_compile_time_args.push_back((std::uint32_t)gamma_log2_stick_size);
-        } else {
-            reader_compile_time_args.push_back(gamma_stick_size);
-        }
+        reader_compile_time_args.push_back(gamma_stick_size);
     } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
         auto beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
-        bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
-        reader_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
-        if (beta_stick_size_is_power_of_two) {
-            uint32_t beta_log2_stick_size =
-                beta_stick_size_is_power_of_two ? (std::uint32_t)std::log2(beta_stick_size) : 0;
-            reader_compile_time_args.push_back((std::uint32_t)beta_log2_stick_size);
-        } else {
-            reader_compile_time_args.push_back(beta_stick_size);
-        }
+        reader_compile_time_args.push_back(beta_stick_size);
     } else {
-        reader_compile_time_args.push_back(0);
-        reader_compile_time_args.push_back(0);
+        reader_compile_time_args.push_back(tile_size(datatype_to_dataformat_converter(a.dtype())));
     }
 
-    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)is_dram(output),
-                                                      (std::uint32_t)block_size};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)block_size};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> compute_defines;
@@ -1113,52 +1095,30 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
         1,  // is_all_to_all_worker
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
-        (std::uint32_t)is_dram(gamma),
-        (std::uint32_t)is_dram(beta),
         (std::uint32_t)block_wt};
+    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr)
+        .append_to(writer_mcast_sender_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr).append_to(writer_mcast_sender_compile_time_args);
+
     std::vector<uint32_t> writer_mcast_receiver_compile_time_args = {
         0,  // is_all_to_all_worker
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
-        (std::uint32_t)is_dram(gamma),
-        (std::uint32_t)is_dram(beta),
         (std::uint32_t)block_wt};
+    tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr)
+        .append_to(writer_mcast_receiver_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(beta ? beta->buffer() : nullptr)
+        .append_to(writer_mcast_receiver_compile_time_args);
 
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[-1] * gamma.value().element_size();
-        bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
-        writer_mcast_sender_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
-        writer_mcast_receiver_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
-        if (gamma_stick_size_is_power_of_two) {
-            uint32_t gamma_log2_stick_size =
-                gamma_stick_size_is_power_of_two ? (std::uint32_t)std::log2(gamma_stick_size) : 0;
-            writer_mcast_sender_compile_time_args.push_back((std::uint32_t)gamma_log2_stick_size);
-            writer_mcast_receiver_compile_time_args.push_back((std::uint32_t)gamma_log2_stick_size);
-        } else {
-            writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
-            writer_mcast_receiver_compile_time_args.push_back(gamma_stick_size);
-        }
+        writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
+        writer_mcast_receiver_compile_time_args.push_back(gamma_stick_size);
     } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
         auto beta_stick_size = beta.value().padded_shape()[-1] * beta.value().element_size();
-        bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
-        writer_mcast_sender_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
-        writer_mcast_receiver_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
-        if (beta_stick_size_is_power_of_two) {
-            uint32_t beta_log2_stick_size =
-                beta_stick_size_is_power_of_two ? (std::uint32_t)std::log2(beta_stick_size) : 0;
-            writer_mcast_sender_compile_time_args.push_back((std::uint32_t)beta_log2_stick_size);
-            writer_mcast_receiver_compile_time_args.push_back((std::uint32_t)beta_log2_stick_size);
-        } else {
-            writer_mcast_sender_compile_time_args.push_back(beta_stick_size);
-            writer_mcast_receiver_compile_time_args.push_back(beta_stick_size);
-        }
-    } else {
-        writer_mcast_sender_compile_time_args.push_back(0);
-        writer_mcast_sender_compile_time_args.push_back(0);
-        writer_mcast_receiver_compile_time_args.push_back(0);
-        writer_mcast_receiver_compile_time_args.push_back(0);
+        writer_mcast_sender_compile_time_args.push_back(beta_stick_size);
+        writer_mcast_receiver_compile_time_args.push_back(beta_stick_size);
     }
-
     writer_mcast_sender_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);
     writer_mcast_sender_compile_time_args.push_back(beta_cb_data_format == tt::DataFormat::Float32);
     writer_mcast_receiver_compile_time_args.push_back(gamma_cb_data_format == tt::DataFormat::Float32);

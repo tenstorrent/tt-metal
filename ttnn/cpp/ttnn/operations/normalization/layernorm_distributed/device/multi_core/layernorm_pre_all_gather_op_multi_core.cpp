@@ -10,6 +10,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <optional>
 #include <string>
 #include <variant>
@@ -149,16 +150,14 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core_2d(
     auto reducer_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)is_dram(a),
         (std::uint32_t)block_size,
         (std::uint32_t)reducer_semaphore_id,
         (std::uint32_t)cores_y,
     };
+    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)is_dram(output),
-                                                      (std::uint32_t)writer_block_size};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)writer_block_size};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> compute_defines;
 
@@ -426,14 +425,12 @@ operation::ProgramWithCallbacks layernorm_pre_allgather_multi_core(
     Program program = CreateProgram();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        // interleaved accessor args
-        (std::uint32_t)is_dram(a),
         (std::uint32_t)block_size,
     };
+    tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
 
-    std::vector<uint32_t> writer_compile_time_args = {// interleaved accessor args
-                                                      (std::uint32_t)is_dram(output),
-                                                      (std::uint32_t)writer_block_size};
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)writer_block_size};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> compute_defines;
 

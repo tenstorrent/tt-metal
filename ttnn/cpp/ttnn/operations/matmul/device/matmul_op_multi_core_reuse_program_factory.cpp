@@ -6,6 +6,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
@@ -110,12 +111,12 @@ tt_metal::operation::ProgramWithCallbacks create_program(
             .set_page_size(interm0_cb_index, out_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    bool in0_is_dram = in0_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    bool in1_is_dram = in1_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)in0_is_dram, (uint32_t)in1_is_dram};
+    std::vector<uint32_t> reader_compile_time_args = {};
+    tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(reader_compile_time_args);
 
-    bool out_is_dram = out_buffer->buffer_type() == tt_metal::BufferType::DRAM;
-    std::vector<uint32_t> writer_compile_time_args = {(uint32_t)out_is_dram};
+    std::vector<uint32_t> writer_compile_time_args = {};
+    tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(writer_compile_time_args);
 
     // Create reader and writer kernels per core
     auto mm_reader_kernel_id = tt_metal::CreateKernel(
