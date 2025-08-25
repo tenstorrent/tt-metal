@@ -103,7 +103,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto pad_metadata = sliding_window::generate_pad_metadata(config_);
     auto op_trace_metadata = sliding_window::generate_op_trace_metadata(config_);
     auto shard_boundaries = sliding_window::generate_shard_boundaries(config_, op_trace_metadata);
-    uint32_t input_shard_height = input_tensor.memory_config().shard_spec()->shape[0];
+    const uint32_t input_shard_height = input_tensor.memory_config().shard_spec()->shape[0];
     auto tensor_metadata = sliding_window::generate_tensor_metadata(pad_metadata, config_, input_shard_height);
 
     Program program = CreateProgram();
@@ -113,11 +113,13 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         const DataType dtype = input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
         const tt::DataFormat data_format = datatype_to_dataformat_converter(dtype);
         const uint32_t nbytes = datum_size(data_format);
-        const uint32_t channels_padded = input_tensor.padded_shape()[3];
-        const uint32_t num_shards_c = this->config_.num_cores_c;
-        const uint32_t stick_size = channels_padded / num_shards_c * nbytes;
-        uint32_t aligned_delta_size = align_buffer(this->max_out_nsticks_per_core_ * stick_size) / stick_size -
-                                      align_buffer(this->in_nsticks_per_core_ * stick_size) / stick_size;
+        const uint32_t input_shard_width = input_tensor.memory_config().shard_spec()->shape[1];
+        const uint32_t output_shard_width = output_tensor.memory_config().shard_spec()->shape[1];
+        const uint32_t input_width_bytes = input_shard_width * nbytes;
+        const uint32_t output_width_bytes = output_shard_width * nbytes;
+        uint32_t aligned_delta_size =
+            align_buffer(this->max_out_nsticks_per_core_ * output_width_bytes) / output_width_bytes -
+            align_buffer(this->in_nsticks_per_core_ * input_width_bytes) / input_width_bytes;
         int32_t in_out_shard_size_delta = (this->in_place_ && is_in_tiled)
                                               ? 0
                                               : aligned_delta_size;  // for in place with tilized data we untilize
