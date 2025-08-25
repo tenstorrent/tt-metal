@@ -711,7 +711,7 @@ class TtDetectionModel:
         c2f_4, out_h, out_w = self.c2f_4(conv_3)
         ttnn.deallocate(conv_3)
         c2f_4 = ttnn.sharded_to_interleaved(c2f_4, ttnn.L1_MEMORY_CONFIG)
-        c2f_4 = ttnn.reallocate(c2f_4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        c2f_4 = ttnn.reallocate(c2f_4, memory_config=ttnn.L1_MEMORY_CONFIG)  # Removing this reduces the pcc to 0.98
         conv_5, out_h, out_w = self.conv_5(c2f_4)
         c2f_6, out_h, out_w = self.c2f_6(conv_5)
         ttnn.deallocate(conv_5)
