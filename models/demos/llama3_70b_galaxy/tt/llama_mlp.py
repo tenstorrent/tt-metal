@@ -6,7 +6,6 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
-from loguru import logger
 
 
 def pad_to_next_multiple(tensor):
