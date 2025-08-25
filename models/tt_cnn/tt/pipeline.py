@@ -114,7 +114,9 @@ class Pipeline:
     def preallocate_output_tensors_on_host(
         self, number_of_tensors_to_allocate, output_shape, output_dtype, output_layout
     ):
-        logger.debug(f"Preallocating memory for {number_of_tensors_to_allocate} output tensors on host")
+        logger.debug(
+            f"Preallocating memory for {number_of_tensors_to_allocate} output tensors (shape={list(output_shape)}, dype={output_dtype}, layout={output_layout}) on host"
+        )
         self.preallocated_output_tensors = True
         if not isinstance(output_shape, ttnn.Shape):
             output_shape = ttnn.Shape(output_shape)
