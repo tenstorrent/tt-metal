@@ -8,12 +8,14 @@
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
-    // Extended to 3-tensor ternary pattern (27 args total)
-    const uint32_t src_addr = get_arg_val<uint32_t>(0);  // predicate address
-    const uint32_t start_tile_id = get_arg_val<uint32_t>(1);
-    const uint32_t src_num_tiles = get_arg_val<uint32_t>(2);
-    const uint32_t dst_num_tiles = get_arg_val<uint32_t>(3);
-    const uint32_t dst_shard_width = get_arg_val<uint32_t>(4);
+    // Standard first 5 arguments (matching column broadcast pattern)
+    const uint32_t src0_addr = get_arg_val<uint32_t>(0);  // predicate address
+    const uint32_t src1_addr = get_arg_val<uint32_t>(1);  // true tensor address
+    const uint32_t src2_addr = get_arg_val<uint32_t>(2);  // false tensor address
+    const uint32_t num_tiles = get_arg_val<uint32_t>(3);  // num_tiles_per_core
+    const uint32_t start_id = get_arg_val<uint32_t>(4);   // start_tile_id
+
+    // Predicate tensor parameters (args 5-14)
     const uint32_t nD_stride = get_arg_val<uint32_t>(5);
     const uint32_t d_stride = get_arg_val<uint32_t>(6);
     const uint32_t n_stride = get_arg_val<uint32_t>(7);
@@ -24,50 +26,64 @@ void kernel_main() {
     const uint32_t Ht = get_arg_val<uint32_t>(12);
     const uint32_t Wt = get_arg_val<uint32_t>(13);
     const uint32_t cND = get_arg_val<uint32_t>(14);         // collapsed dims > 5
-    const uint32_t src_addr_b = get_arg_val<uint32_t>(15);  // true tensor address
-    const uint32_t nD_stride_b = get_arg_val<uint32_t>(16);
-    const uint32_t d_stride_b = get_arg_val<uint32_t>(17);
-    const uint32_t n_stride_b = get_arg_val<uint32_t>(18);
-    const uint32_t c_stride_b = get_arg_val<uint32_t>(19);
-    const uint32_t src_num_tiles_b = get_arg_val<uint32_t>(20);
-    const uint32_t src_addr_c = get_arg_val<uint32_t>(21);  // false tensor address
-    const uint32_t nD_stride_c = get_arg_val<uint32_t>(22);
-    const uint32_t d_stride_c = get_arg_val<uint32_t>(23);
-    const uint32_t n_stride_c = get_arg_val<uint32_t>(24);
-    const uint32_t c_stride_c = get_arg_val<uint32_t>(25);
-    const uint32_t src_num_tiles_c = get_arg_val<uint32_t>(26);
+
+    // True tensor parameters (args 15-19)
+    const uint32_t nD_stride_b = get_arg_val<uint32_t>(15);
+    const uint32_t d_stride_b = get_arg_val<uint32_t>(16);
+    const uint32_t n_stride_b = get_arg_val<uint32_t>(17);
+    const uint32_t c_stride_b = get_arg_val<uint32_t>(18);
+    const uint32_t src_num_tiles_b = get_arg_val<uint32_t>(19);
+
+    // False tensor parameters (args 20-24)
+    const uint32_t nD_stride_c = get_arg_val<uint32_t>(20);
+    const uint32_t d_stride_c = get_arg_val<uint32_t>(21);
+    const uint32_t n_stride_c = get_arg_val<uint32_t>(22);
+    const uint32_t c_stride_c = get_arg_val<uint32_t>(23);
+    const uint32_t src_num_tiles_c = get_arg_val<uint32_t>(24);
+
+    // Final parameters (args 25-26)
+    const uint32_t dst_shard_width = get_arg_val<uint32_t>(25);
+    const uint32_t src_num_tiles = get_arg_val<uint32_t>(26);
+
+    // For compatibility, map to old variable names
+    const uint32_t src_addr = src0_addr;       // predicate address
+    const uint32_t src_addr_b = src1_addr;     // true tensor address
+    const uint32_t src_addr_c = src2_addr;     // false tensor address
+    const uint32_t start_tile_id = start_id;   // start tile id
+    const uint32_t dst_num_tiles = num_tiles;  // num tiles per core
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;    // predicate CB
     constexpr auto cb_id_src_b = tt::CBIndex::c_1;  // true tensor CB
     constexpr auto cb_id_src_c = tt::CBIndex::c_2;  // false tensor CB
 
-    constexpr auto src_args = TensorAccessorArgs<0>();
-    constexpr auto src_b_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
-    constexpr auto src_c_args = TensorAccessorArgs<src_b_args.next_compile_time_args_offset()>();
+    // Compile-time args layout mirrors column broadcast reader: 3 CB ids, then 3 TensorAccessorArgs blocks
+    constexpr auto src0_args = TensorAccessorArgs<3>();
+    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+    constexpr auto src2_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
 #if SRC_SHARDED
     cb_reserve_back(cb_id_src, src_num_tiles);
     cb_push_back(cb_id_src, src_num_tiles);
 #else
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
+    const auto src = TensorAccessor(src0_args, src_addr, src_tile_bytes);
 #endif
 #if SRC_SHARDED_B
     cb_reserve_back(cb_id_src_b, src_num_tiles_b);
     cb_push_back(cb_id_src_b, src_num_tiles_b);
 #else
     const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
-    const auto src_b = TensorAccessor(src_b_args, src_addr_b, src_tile_bytes_b);
+    const auto src_b = TensorAccessor(src1_args, src_addr_b, src_tile_bytes_b);
 #endif
 #if SRC_SHARDED_C
     cb_reserve_back(cb_id_src_c, src_num_tiles_c);
     cb_push_back(cb_id_src_c, src_num_tiles_c);
 #else
     const uint32_t src_tile_bytes_c = get_tile_size(cb_id_src_c);
-    const auto src_c = TensorAccessor(src_c_args, src_addr_c, src_tile_bytes_c);
+    const auto src_c = TensorAccessor(src2_args, src_addr_c, src_tile_bytes_c);
 #endif
 #if !SRC_SHARDED || !SRC_SHARDED_B || !SRC_SHARDED_C
     constexpr uint32_t onetile = 1;
-    constexpr bool has_sharding = get_compile_time_arg_val(src_c_args.next_compile_time_args_offset()) == 1;
+    constexpr bool has_sharding = 0;
     const uint32_t HtWt = Ht * Wt;
 
     const uint32_t tiles_per_n = C * HtWt;

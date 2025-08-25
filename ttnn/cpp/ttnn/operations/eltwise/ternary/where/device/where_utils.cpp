@@ -175,21 +175,24 @@ WhereBroadcastType get_broadcast_type(
     // Check for column broadcast pattern:
     // Examples: (1,1,32,32), (1,1,32,1), (1,1,32,32) or (1,1,32,1), (1,1,32,1), (1,1,32,32)
     // Column broadcast means one or more tensors have last dimension = 1 while at least one has full width
-
+    std::cout << "get_broadcast_type: " << std::endl;
     if ((predicate_shape == true_shape) && (predicate_shape == false_shape)) {
+        std::cout << "NONE" << std::endl;
         return WhereBroadcastType::NONE;
     }
 
     if ((predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]) &&
         (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2])) {
+        std::cout << "OUTER_BCAST" << std::endl;
         return WhereBroadcastType::OUTER_BCAST;
     }
 
     bool same_width = (predicate_shape[-1] == true_shape[-1]) && (predicate_shape[-1] == false_shape[-1]);
     bool same_height = (predicate_shape[-2] == true_shape[-2]) && (predicate_shape[-2] == false_shape[-2]);
 
-    // Row Bcast is not supported for now
-    if (!same_height) {
+    // Multi-dimensional ROW and COL broadcast is not supported for now
+    if (!same_height && !same_width) {
+        std::cout << "INVALID_BCAST" << std::endl;
         return WhereBroadcastType::INVALID_BCAST;
     }
 
@@ -198,13 +201,14 @@ WhereBroadcastType get_broadcast_type(
     auto true_w = true_shape[-1];
     auto false_w = false_shape[-1];
 
-    auto pred_h = pred_shape[-2];  // height (second-to-last dimension)
+    auto pred_h = predicate_shape[-2];  // height (second-to-last dimension)
     auto true_h = true_shape[-2];
     auto false_h = false_shape[-2];
 
     // Check if all dimensions except last two are the same
-    for (int i = 0; i < static_cast<int>(pred_shape.rank()) - 2; ++i) {
-        if (pred_shape[i] != true_shape[i] || pred_shape[i] != false_shape[i]) {
+    for (int i = 0; i < static_cast<int>(predicate_shape.rank()) - 2; ++i) {
+        if (predicate_shape[i] != true_shape[i] || predicate_shape[i] != false_shape[i]) {
+            std::cout << "INVALID_BCAST 2" << std::endl;
             return WhereBroadcastType::INVALID_BCAST;
         }
     }
@@ -218,6 +222,7 @@ WhereBroadcastType get_broadcast_type(
     // Row broadcast case: at least one tensor is broadcasting in height and widths are same
     if ((pred_row_broadcasted || true_row_broadcasted || false_row_broadcasted) &&
         (pred_w == true_w && pred_w == false_w)) {
+        std::cout << "ROW_BCAST" << std::endl;
         return WhereBroadcastType::ROW_BCAST;
     }
 
