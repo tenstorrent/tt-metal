@@ -64,3 +64,31 @@ def siglip_attention(
     attn_output = F.linear(attn_output, state_dict["wo"]["weight"], state_dict["wo"].get("bias"))
 
     return attn_output, attn_weights
+
+
+# https://github.com/google/gemma_pytorch/blob/main/gemma/siglip_vision/siglip_vision_model.py#L93 as function for easier testing
+def gelu_tanh(x):
+    return (
+        0.5
+        * x
+        * (1 + torch.tanh(torch.sqrt(torch.tensor(2.0 / torch.pi, device=x.device)) * (x + 0.044715 * torch.pow(x, 3))))
+    )
+
+
+def siglip_mlp(
+    mesh_device,
+    hidden_states: torch.Tensor,
+    state_dict: Dict,
+    state_dict_prefix: str,
+    weight_cache_path: str,
+    dtype: torch.dtype = torch.bfloat16,
+    vision_dim: int = 1152,
+    vision_mlp_ratio: float = 4.0,
+) -> torch.Tensor:
+    hidden_states = F.linear(hidden_states, state_dict["c_fc"]["weight"], state_dict["c_fc"].get("bias"))
+
+    hidden_states = gelu_tanh(hidden_states)
+
+    hidden_states = F.linear(hidden_states, state_dict["c_proj"]["weight"], state_dict["c_proj"].get("bias"))
+
+    return hidden_states

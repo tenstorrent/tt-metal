@@ -30,6 +30,7 @@ def test_ci_dispatch(model_weights):
     exit_code = pytest.main(
         [
             "models/demos/siglip/tests/test_attention.py",
+            "models/demos/siglip/tests/test_mlp.py",
         ]
         + ["-x"]  # Fail if one of the tests fails
     )
