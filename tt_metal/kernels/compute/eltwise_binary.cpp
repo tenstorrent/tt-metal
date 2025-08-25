@@ -8,6 +8,9 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/tile_move_copy.h"
+
+#include "tools/profiler/kernel_profiler.hpp"
+
 namespace NAMESPACE {
 void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
@@ -66,6 +69,7 @@ void MAIN {
 #endif
 
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            DeviceZoneScopedN("COMPUTE");
 #ifdef ELTWISE_DEST_REUSE_TYPE
             binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(cb_inp0, i, i);
 #else
