@@ -352,7 +352,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         }
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .chip_type = tt::umd::ChipType::MOCK,
-            .sdesc_path = get_soc_description_file(this->arch_, this->target_type_),
+            .sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_.get_root_dir()),
             .cluster_descriptor = mock_cluster_desc.get(),
         });
     }
