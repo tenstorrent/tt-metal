@@ -187,7 +187,7 @@ void MAIN {
                             }
                             cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            matmul_init_reconfig_data_format(
+                            matmul_init_reconfig_data_format_srca(
                                 tilize_in0 ? tilized_in0_cb_id : in0_cb_id, in1_cb_id, matmul_partials_cb);
                         }  // enable_reload
                         // Compute output sub-block from in0_subblock x in1_subblock

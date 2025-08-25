@@ -36,7 +36,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
     // Reconfigure srcA back
-    matmul_block_init_reconfig_data_format(
+    matmul_block_init_reconfig_data_format_srca(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 }
 
