@@ -44,7 +44,6 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
 
     // Layout validation
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Input tensor must be ROW_MAJOR layout");
-    TT_FATAL(grid_tensor.layout() == Layout::ROW_MAJOR, "Grid tensor must be ROW_MAJOR layout");
 
     // Parameter validation - currently only support fixed configuration
     TT_FATAL(mode_ == "bilinear", "Only bilinear interpolation mode is currently supported");

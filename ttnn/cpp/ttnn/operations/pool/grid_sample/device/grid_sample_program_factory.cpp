@@ -64,27 +64,64 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t output_stick_nbytes = output_shape[-1] * output_tensor.element_size();
     const uint32_t aligned_output_stick_nbytes = tt::round_up(output_stick_nbytes, dst_buffer_alignment);
 
-    // Calculate number of output sticks (total rows to process)
-    uint32_t output_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
-
     // Get device grid for multicore
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t total_cores = num_cores_x * num_cores_y;
 
-    // Work distribution - distribute output sticks across cores
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, output_nsticks);
+    // Work distribution varies based on grid tensor layout
+    const bool is_grid_tiled = (grid_tensor.layout() == tt::tt_metal::Layout::TILE);
+    uint32_t grid_work_units_to_split;
+    uint32_t grid_cb_required_pages;
+
+    if (is_grid_tiled) {
+        // For tiled grid: work unit is a row of tiles, similar to upsample
+        const uint32_t grid_tensor_width = grid_tensor.padded_shape()[-1];
+        const uint32_t grid_tensor_height = grid_tensor.physical_volume() / grid_tensor_width;
+
+        const auto& tile_shape = grid_tensor.tensor_spec().tile().get_tile_shape();
+        const uint32_t tile_height = tile_shape[0];
+        const uint32_t tile_width = tile_shape[1];
+
+        const uint32_t num_grid_tiles_in_row = grid_tensor_width / tile_width;
+        const uint32_t num_grid_tiles_in_col = grid_tensor_height / tile_height;
+
+        grid_cb_required_pages = num_grid_tiles_in_row;    // Pages needed for one row of tiles
+        grid_work_units_to_split = num_grid_tiles_in_col;  // Distribute rows of tiles across cores
+    } else {
+        // For row-major grid: work unit is a single stick (row)
+        grid_cb_required_pages = 1;                                                 // One page per stick
+        grid_work_units_to_split = grid_tensor.physical_volume() / grid_shape[-1];  // Total sticks
+    }
+
+    // Work distribution - distribute grid work units across cores
+    auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_group_1, work_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, grid_work_units_to_split);
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
 
     const uint32_t buffering_factor = 2;
 
-    // CB0: Grid data buffer (holds grid coordinates for current output position)
-    const uint32_t grid_cb_num_pages = buffering_factor;
+    // CB0: Grid data buffer - size depends on grid layout
+    uint32_t grid_cb_page_size;
+    uint32_t grid_cb_num_pages;
+
+    if (is_grid_tiled) {
+        // For tiled grid: page size is tile size, need pages for one row of tiles
+        grid_cb_page_size = tt::tt_metal::detail::TileSize(grid_cb_data_format);
+        grid_cb_num_pages = grid_cb_required_pages;  // Row of tiles
+        if (work_per_core_group_1 > 1) {
+            grid_cb_num_pages *= buffering_factor;  // Double buffer for multi-work cores
+        }
+    } else {
+        // For row-major grid: stick-based access
+        grid_cb_page_size = aligned_grid_stick_nbytes;
+        grid_cb_num_pages = buffering_factor;
+    }
+
     const auto [grid_cb_index, grid_cb_handle] = tt::tt_metal::create_cb(
-        next_cb_index++, program, all_cores, aligned_grid_stick_nbytes, grid_cb_num_pages, grid_cb_data_format);
+        next_cb_index++, program, all_cores, grid_cb_page_size, grid_cb_num_pages, grid_cb_data_format);
 
     const uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[-1] / tt::constants::TILE_WIDTH);
     const uint32_t input_cb_page_size = in_ntiles_c * tt::constants::TILE_HW * input_tensor.element_size();
@@ -142,20 +179,20 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     // Kernel for core group 1
     if (core_group_1.num_cores() > 0) {
         std::vector<uint32_t> compute_compile_time_args_1 = {
-            in_ntiles_c,                  // 0: Input tiles per channel
-            reduction_size,               // 1: Reduction size (4 for bilinear)
-            split_reader,                 // 2: Split reader flag
-            num_sticks_per_core_group_1,  // 3: Work per core for group 1
-            channels_per_shard,           // 4: Channels per shard
-            in_nblocks_c,                 // 5: Channel blocks
-            max_rows_for_reduction,       // 6: Max rows
-            input_cb_index,               // 7: Input CB
-            dummy_cb_id,                  // 8: Input CB 1 (unused)
-            scalar_cb_index,              // 9: Scalar CB
-            dummy_cb_id,                  // 10: Scalar CB 1 (unused)
-            output_cb_index,              // 11: Output CB
-            one_scalar_per_core,          // 12: Scalar mode
-            in_ntiles_c                   // 13: Tiles per channel (for CB space reservation)
+            in_ntiles_c,             // 0: Input tiles per channel
+            reduction_size,          // 1: Reduction size (4 for bilinear)
+            split_reader,            // 2: Split reader flag
+            work_per_core_group_1,   // 3: Work per core for group 1
+            channels_per_shard,      // 4: Channels per shard
+            in_nblocks_c,            // 5: Channel blocks
+            max_rows_for_reduction,  // 6: Max rows
+            input_cb_index,          // 7: Input CB
+            dummy_cb_id,             // 8: Input CB 1 (unused)
+            scalar_cb_index,         // 9: Scalar CB
+            dummy_cb_id,             // 10: Scalar CB 1 (unused)
+            output_cb_index,         // 11: Output CB
+            one_scalar_per_core,     // 12: Scalar mode
+            in_ntiles_c              // 13: Tiles per channel (for CB space reservation)
         };
 
         compute_kernel_group_1 = tt::tt_metal::CreateKernel(
@@ -173,20 +210,20 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     // Kernel for core group 2 (if it exists)
     if (core_group_2.num_cores() > 0) {
         std::vector<uint32_t> compute_compile_time_args_2 = {
-            in_ntiles_c,                  // 0: Input tiles per channel
-            reduction_size,               // 1: Reduction size (4 for bilinear)
-            split_reader,                 // 2: Split reader flag
-            num_sticks_per_core_group_2,  // 3: Work per core for group 2
-            channels_per_shard,           // 4: Channels per shard
-            in_nblocks_c,                 // 5: Channel blocks
-            max_rows_for_reduction,       // 6: Max rows
-            input_cb_index,               // 7: Input CB
-            dummy_cb_id,                  // 8: Input CB 1 (unused)
-            scalar_cb_index,              // 9: Scalar CB
-            dummy_cb_id,                  // 10: Scalar CB 1 (unused)
-            output_cb_index,              // 11: Output CB
-            one_scalar_per_core,          // 12: Scalar mode
-            in_ntiles_c                   // 13: Tiles per channel (for CB space reservation)
+            in_ntiles_c,             // 0: Input tiles per channel
+            reduction_size,          // 1: Reduction size (4 for bilinear)
+            split_reader,            // 2: Split reader flag
+            work_per_core_group_2,   // 3: Work per core for group 2
+            channels_per_shard,      // 4: Channels per shard
+            in_nblocks_c,            // 5: Channel blocks
+            max_rows_for_reduction,  // 6: Max rows
+            input_cb_index,          // 7: Input CB
+            dummy_cb_id,             // 8: Input CB 1 (unused)
+            scalar_cb_index,         // 9: Scalar CB
+            dummy_cb_id,             // 10: Scalar CB 1 (unused)
+            output_cb_index,         // 11: Output CB
+            one_scalar_per_core,     // 12: Scalar mode
+            in_ntiles_c              // 13: Tiles per channel (for CB space reservation)
         };
 
         compute_kernel_group_2 = tt::tt_metal::CreateKernel(
@@ -243,31 +280,47 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         0   // set in loop, start_stick_id
     };
 
-    for (uint32_t i = 0, sticks_processed = 0; i < num_cores; i++) {
+    for (uint32_t i = 0, work_units_processed = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t sticks_per_core = 0;
+        uint32_t work_units_per_core = 0;
         tt::tt_metal::KernelHandle compute_kernel_for_core = 0;
 
         if (core_group_1.contains(core)) {
-            sticks_per_core = num_sticks_per_core_group_1;
+            work_units_per_core = work_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            sticks_per_core = num_sticks_per_core_group_2;
+            work_units_per_core = work_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        reader_rt_arguments[2] = sticks_per_core;   // num sticks for this core
-        reader_rt_arguments[3] = sticks_processed;  // start stick id
+        // For tiled grid, reader processes pages (tiles); for row-major, processes sticks
+        uint32_t reader_units = is_grid_tiled ? work_units_per_core * grid_cb_required_pages : work_units_per_core;
+        reader_rt_arguments[2] = reader_units;  // num units for this core
+        reader_rt_arguments[3] =
+            is_grid_tiled ? work_units_processed * grid_cb_required_pages : work_units_processed;  // start unit id
 
         // Compute runtime arguments - pool kernel expects no runtime args (all compile-time)
 
-        writer_rt_arguments[1] = sticks_per_core;   // num sticks for this core
-        writer_rt_arguments[2] = sticks_processed;  // start stick id
+        // Writer expects output stick positions, need to map from grid work units
+        uint32_t output_sticks_per_core, start_output_stick;
+        if (is_grid_tiled) {
+            // For tiled grid: each work unit = tile row = TILE_HEIGHT * W_out output positions
+            const uint32_t output_sticks_per_tile_row = tt::constants::TILE_HEIGHT * output_width;
+            output_sticks_per_core = work_units_per_core * output_sticks_per_tile_row;
+            start_output_stick = work_units_processed * output_sticks_per_tile_row;
+        } else {
+            // For row-major grid: each work unit = 1 output position (unchanged)
+            output_sticks_per_core = work_units_per_core;
+            start_output_stick = work_units_processed;
+        }
+
+        writer_rt_arguments[1] = output_sticks_per_core;  // num output sticks for this core
+        writer_rt_arguments[2] = start_output_stick;      // start output stick id
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_arguments);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_arguments);
 
-        sticks_processed += sticks_per_core;
+        work_units_processed += work_units_per_core;
     }
 
     // Runtime arguments callback following upsample pattern
