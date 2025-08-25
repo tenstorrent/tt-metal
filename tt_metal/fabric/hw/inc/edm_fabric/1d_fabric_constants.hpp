@@ -424,7 +424,6 @@ constexpr bool ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES = is_2d_fabric;
 // NoC Programming Constants
 constexpr bool ENABLE_FORWARD_WRITE_STATEFUL_API_USE = !is_2d_fabric && !ENABLE_NOC_SWAPPING_ON_RECEIVER_CHANNEL_WRITES;
 
-static_assert(!ENABLE_FORWARD_WRITE_STATEFUL_API_USE, "ENABLE_FORWARD_WRITE_STATEFUL_API_USE must be false");
 namespace tt::tt_fabric {
 static_assert(
     receiver_channel_local_write_noc_ids[0] == edm_to_local_chip_noc,

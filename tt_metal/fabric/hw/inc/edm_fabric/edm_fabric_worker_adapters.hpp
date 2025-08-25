@@ -558,7 +558,6 @@ private:
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc, uint8_t vc) {
         if constexpr (stateful_api) {
-            static_assert(!stateful_api, "Stateful API is not supported for EDM to EDM paths");
             if constexpr (enable_deadlock_avoidance) {
                 noc_inline_dw_write_with_state<true, false, true>(
                     0,  // val unused
