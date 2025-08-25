@@ -154,11 +154,6 @@ struct tensix_fabric_connections_l1_info_t {
     fabric_aligned_connection_info_t read_write[MAX_FABRIC_ENDPOINTS];
 };
 
-// uint8_t get_router_direction(uint32_t eth_channel) {
-//     tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
-//             reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
-//     return connection_info->read_only[eth_channel].edm_direction;
-//}
 }  // namespace tt::tt_fabric
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
