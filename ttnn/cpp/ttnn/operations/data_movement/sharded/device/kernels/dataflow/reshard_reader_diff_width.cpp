@@ -76,12 +76,7 @@ void kernel_main() {
                     }
                     l1_write_addr += stride_size_in_bytes;
 
-                    // addr_offset_in_bytes += stride_data_in_pages * unit_size; //was page_size
-                    if (stride_x == 0 and stride_y == 0) {
-                        addr_offset_in_bytes += (stride_data_in_pages * unit_size + stride_data_in_pages * unit_size);
-                    } else {
-                        addr_offset_in_bytes += (stride_data_in_pages * unit_size);
-                    }
+                    addr_offset_in_bytes += stride_size_in_bytes + (stride_data_in_pages * unit_size);
                     core_id_x_index += stride_x;
                     core_id_y_index += stride_y;
                 }
