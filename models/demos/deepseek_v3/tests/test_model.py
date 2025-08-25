@@ -170,9 +170,11 @@ def test_forward_pass(
         weight_config = Model1D.convert_weights(hf_config, state_dict, tensor_cache_path, mesh_device)
         with open(weight_config_path, "w") as f:
             json.dump(weight_config, f)
+        logger.info(f"Saved weight config to {weight_config_path}")
     else:
         with open(weight_config_path, "r") as f:
             weight_config = json.load(f)
+        logger.info(f"Loaded weight config from {weight_config_path}")
 
     if mode == "prefill":
         model_config = Model1D.prefill_model_config(hf_config, mesh_device)

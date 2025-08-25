@@ -123,7 +123,10 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
 
 def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
     if isinstance(model_state_config_item, FromWeightConfig) and isinstance(weight_config_item, str):
-        return ttnn.load_tensor(weight_config_item, device=model_state_config_item.mesh_device)
+        # Always use multihost format since that's what the test is using
+        return ttnn.load_tensor(
+            weight_config_item, device=model_state_config_item.mesh_device, enable_multihost_format=True
+        )
 
     if weight_config_item is None:
         assert not isinstance(
