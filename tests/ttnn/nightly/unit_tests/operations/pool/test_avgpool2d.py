@@ -230,6 +230,9 @@ def run_avg_pool2d(
         )
         print(ttnn_output)
         print(ttnn_output1)
+        t0 = ttnn.to_torch(ttnn_output)
+        t1 = ttnn.to_torch(ttnn_output1)
+        assert torch.equal(t0, t1)
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
     if padding_is_4d:

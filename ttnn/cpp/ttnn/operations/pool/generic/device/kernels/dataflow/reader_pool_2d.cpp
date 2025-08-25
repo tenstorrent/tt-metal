@@ -340,6 +340,7 @@ void kernel_main() {
 
     uint32_t reader_indices_on_core = 0;
 
+    // NOTE: print on compute kernel.
     if (split_reader) {
         if (reader_id == 0) {
             reader_indices_on_core = (reader_nindices + 1) / 2;
