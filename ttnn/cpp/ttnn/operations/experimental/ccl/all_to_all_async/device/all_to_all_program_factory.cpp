@@ -296,7 +296,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         num_targets_forward,                              // num_targets_forward_direction
         num_targets_backward                              // num_targets_backward_direction
     };
-    // Append TensorAccessorArgs for input tensor
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_kernel_config.compile_args);
     log_trace(tt::LogOp, "Reader Compile Args:");
     for ([[maybe_unused]] const auto& arg : reader_kernel_config.compile_args) {
@@ -327,7 +326,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         contig_pages_advanced,                             // contig_pages_advanced
         N_DRAM_BANKS                                       // num_dram_banks
     };
-    // Append TensorAccessorArgs for intermediate and output buffers
     tt::tt_metal::TensorAccessorArgs(intermediate_buffer.buffer()).append_to(writer_kernel_config.compile_args);
     tt::tt_metal::TensorAccessorArgs(output_buffer.buffer()).append_to(writer_kernel_config.compile_args);
     for ([[maybe_unused]] const auto& arg : writer_kernel_config.compile_args) {
@@ -351,7 +349,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         num_chunks_per_shard,
         op_config.get_page_size(),
         receiver_cb_index};
-    // Append TensorAccessorArgs for receiver writer
     tt::tt_metal::TensorAccessorArgs(output_buffer.buffer()).append_to(receiver_writer_kernel_config.compile_args);
 
     auto receiver_writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -373,7 +370,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_to_all_async_minimal(
         receiver_cb_index,
         pages_per_packet,
         N_DRAM_BANKS};
-    // Append TensorAccessorArgs for receiver reader
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(receiver_reader_kernel_config.compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediate_buffer.buffer())
         .append_to(receiver_reader_kernel_config.compile_args);

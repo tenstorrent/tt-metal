@@ -347,15 +347,12 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         linearized_mesh_coord,
     };
 
-    // Append TensorAccessorArgs for each buffer
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
 
-    // Writer also has output tensor (in addition to metadata that reader also has)
     auto writer_compile_time_args = reader_compile_time_args;
-    // Writer needs output tensor accessor args (already has metadata from reader)
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines = {

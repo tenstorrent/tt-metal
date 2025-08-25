@@ -181,7 +181,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         operation_attributes.locally_reduced,
     };
 
-    // Append TensorAccessorArgs for each buffer
     tt::tt_metal::TensorAccessorArgs(metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate))
         .append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate))
@@ -225,7 +224,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         operation_attributes.locally_reduced,
     };
 
-    // Append TensorAccessorArgs for output buffer
     tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate))
         .append_to(writer_compile_time_args);
 

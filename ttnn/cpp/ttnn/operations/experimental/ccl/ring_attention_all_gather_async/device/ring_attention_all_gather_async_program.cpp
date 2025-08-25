@@ -203,7 +203,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         1,                                                 // direction
         fuse_op,                                           // fused op
     };
-    // Append TensorAccessorArgs for input and output tensors
     tt::tt_metal::TensorAccessorArgs(input_tensor[0].buffer())
         .append_to(sender_reader_forward_kernel_config.compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor[0].buffer())
@@ -234,7 +233,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         num_inputs,                                        // num_inputs
         1,                                                 // direction
     };
-    // Append TensorAccessorArgs for output tensor
     tt::tt_metal::TensorAccessorArgs(output_tensor[0].buffer())
         .append_to(sender_writer_forward_kernel_config.compile_args);
     auto worker_sender_writer_forward_kernel_id = tt::tt_metal::CreateKernel(
@@ -262,7 +260,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         0,                                                 // direction
         fuse_op,                                           // fused op
     };
-    // Append TensorAccessorArgs for input and output tensors
     tt::tt_metal::TensorAccessorArgs(input_tensor[0].buffer())
         .append_to(sender_reader_backward_kernel_config.compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor[0].buffer())
@@ -293,7 +290,6 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         num_inputs,                                        // num_inputs
         0,                                                 // direction
     };
-    // Append TensorAccessorArgs for output tensor
     tt::tt_metal::TensorAccessorArgs(output_tensor[0].buffer())
         .append_to(sender_writer_backward_kernel_config.compile_args);
     auto worker_sender_writer_backward_kernel_id = tt::tt_metal::CreateKernel(

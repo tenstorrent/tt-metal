@@ -107,7 +107,6 @@ args_list_t emit_address_generator_compile_time_args(const tt::tt_metal::Tensor&
             break;
 
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: {
-            // For interleaved tensors, emit TensorAccessorArgs
             args_list_t args;
             tt::tt_metal::TensorAccessorArgs(t.buffer()).append_to(args);
             return args;

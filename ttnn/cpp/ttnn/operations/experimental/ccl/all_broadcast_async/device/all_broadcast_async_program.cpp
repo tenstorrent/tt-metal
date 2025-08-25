@@ -188,7 +188,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_broadcast_async_multicore(
         shard_builder::extend_sharding_compile_time_args(input_tensor, reader_compile_args);
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_args);
     } else {
-        // Append TensorAccessorArgs when not sharded
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(output_tensors[ring_index].buffer()).append_to(writer_compile_args);
     }

@@ -693,12 +693,8 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     writer_compile_time_args.push_back(stats_filled_semaphore);
     writer_compile_time_args.push_back(signaling_cb);
     writer_compile_time_args.push_back(num_blocks);
-    // Append TensorAccessorArgs for gamma
-    if (gamma.has_value()) {
-        tt::tt_metal::TensorAccessorArgs(gamma.value().buffer()).append_to(writer_compile_time_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs().append_to(writer_compile_time_args);
-    }
+    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
+        .append_to(writer_compile_time_args);
 
     tt::tt_metal::NOC reader_noc = NOC::NOC_1;
     tt::tt_metal::NOC writer_noc = NOC::NOC_1;

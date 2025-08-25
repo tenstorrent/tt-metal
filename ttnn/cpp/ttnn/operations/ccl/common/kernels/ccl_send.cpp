@@ -227,8 +227,6 @@ auto build_source_address_generator(
     using addrgen_type = typename source_tensor_addrgen<tensor_layout, buffer_type, page_layout>::type;
 
     if constexpr (tensor_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
-        // For interleaved layout, use TensorAccessor
-        // The compile-time args start at index 12 for non-sharded mode (5 base args + 7 sharding placeholder args)
         constexpr uint32_t ct_args_offset = is_sharded_mode ? 5 + 7 : 5;
         constexpr auto tensor_args = TensorAccessorArgs<ct_args_offset>();
         return TensorAccessor(tensor_args, tensor_address, page_size);
