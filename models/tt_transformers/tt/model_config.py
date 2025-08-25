@@ -134,17 +134,17 @@ class ModelOptimizations:
                 inst = cls(
                     {
                         "TensorPrecision": {
-                            TensorGroup.WQKV: PrecisionSetting.BF16,
-                            TensorGroup.KV_CACHE: PrecisionSetting.BF16,
-                            TensorGroup.WO: PrecisionSetting.BF16,
+                            TensorGroup.WQKV: PrecisionSetting.BFP8,
+                            TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+                            TensorGroup.WO: PrecisionSetting.BFP8,
                         },
                         "OpFidelity": {
-                            OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI4,
-                            OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI4,
-                            OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI4,
-                            OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
-                            OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI4,
-                            OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI4,
+                            OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2_FP16,
+                            OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2_FP16,
+                            OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_FP16,
+                            OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI2_FP16,
+                            OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2_FP16,
+                            OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2_FP16,
                         },
                     }
                 )
