@@ -7,7 +7,16 @@ from models.demos.ufld_v2.ttnn.common import TtnnUFLDV2Conv2D
 
 
 class TtnnBasicBlock:
-    def __init__(self, conv_args, conv_pth, device, is_downsample=False, blk_sharded=False, precision=ttnn.bfloat16):
+    def __init__(
+        self,
+        conv_args,
+        conv_pth,
+        device,
+        is_downsample=False,
+        blk_sharded=False,
+        precision=ttnn.bfloat16,
+        core_count=None,
+    ):
         self.is_downsample = is_downsample
 
         self.conv1 = TtnnUFLDV2Conv2D(
@@ -17,6 +26,7 @@ class TtnnBasicBlock:
             activation="relu",
             is_blk=blk_sharded,
             activation_dtype=ttnn.bfloat8_b,
+            core_count=core_count,
         )
         self.conv2 = TtnnUFLDV2Conv2D(
             conv_args.conv2,
@@ -25,6 +35,7 @@ class TtnnBasicBlock:
             activation="",
             is_blk=blk_sharded,
             activation_dtype=precision,
+            core_count=core_count,
         )
         if is_downsample:
             self.downsample = TtnnUFLDV2Conv2D(
@@ -34,6 +45,7 @@ class TtnnBasicBlock:
                 activation="",
                 is_blk=blk_sharded,
                 activation_dtype=ttnn.bfloat8_b,
+                core_count=core_count,
             )
 
     def __call__(self, input):
@@ -47,6 +59,9 @@ class TtnnBasicBlock:
                 memory_config_req = x.memory_config()
                 memory_config_req.shard_spec.shape = x_identity.memory_config().shard_spec.shape
                 memory_config_req.shard_spec.grid = x_identity.memory_config().shard_spec.grid
+                print("configs before reshard")
+                print("1st ", x.memory_config())
+                print("2nd ", memory_config_req)
                 x = ttnn.reshard(x, memory_config_req)
         x = ttnn.add(x, x_identity, memory_config=x.memory_config())
         x = ttnn.relu(x)
