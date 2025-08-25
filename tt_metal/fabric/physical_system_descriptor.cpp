@@ -34,6 +34,7 @@ std::string get_mobo_name() {
     return motherboard;
 }
 
+// TODO: UBB specific code here is duplicated. This needs to be exposed as a UMD API.
 const std::unordered_map<tt::ARCH, std::vector<std ::uint16_t>> ubb_bus_ids = {
     {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
     {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
@@ -58,6 +59,7 @@ std::pair<tray_id_t, n_id_t> get_asic_position(
     if (cluster_desc->get_board_type(chip_id) == BoardType::UBB) {
         return get_ubb_id(chip_id);
     } else if (cluster_desc->get_board_type(chip_id) == BoardType::N300) {
+        auto mmio_device = cluster.get_associated_mmio_device(chip_id);
         uint32_t n_id = cluster_desc->is_chip_mmio_capable(chip_id) ? 1 : 2;
         uint32_t tray_id =
             1 + std::distance(
