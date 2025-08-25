@@ -33,7 +33,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 )
 @pytest.mark.parametrize(
     "batch_size",
-    (1,),
+    (32,),
 )
 @pytest.mark.parametrize(
     "device_params",
@@ -131,10 +131,9 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
         logger.info("llama MLP Done")
+        tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]  # (1, 8, bsz, 8192) -> (1, 1, bsz, 8192)
 
-        tt_output_torch = tt_output_torch[:, :1, :, : model_args.dim]
-
-        reference_output = reference_model(torch_input[:, :, :1, : model_args.dim])
+        reference_output = reference_model(torch_input[:, :, :, : model_args.dim])
 
         pcc_required = 0.99
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)

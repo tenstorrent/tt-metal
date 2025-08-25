@@ -46,7 +46,7 @@ def test_gemma_vision(
     #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     # }
 
-    image_size = model_args.vision_chunk_size
+    image_size = model_args.image_size
     in_channels = model_args.vision_in_channels
 
     input_tensor = torch.rand((bsz, in_channels, image_size, image_size))

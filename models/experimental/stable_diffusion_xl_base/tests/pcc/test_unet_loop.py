@@ -24,7 +24,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 import matplotlib.pyplot as plt
 from models.common.utility_functions import is_wormhole_b0
 
-UNET_LOOP_PCC = {"10": 0.85, "50": 0.88}
+UNET_LOOP_PCC = {"10": 0.872, "50": 0.895}
 
 
 def run_tt_denoising(

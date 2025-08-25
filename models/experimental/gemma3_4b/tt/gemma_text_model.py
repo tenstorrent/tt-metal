@@ -23,10 +23,9 @@ import torch
 from models.experimental.gemma3_4b.tt.lm_head import LMHead
 from models.tt_transformers.tt.model_config import TensorGroup
 from models.tt_transformers.tt.common import copy_host_to_device
-from models.common.utility_functions import nearest_32
 
 
-class Gemma3_4BTransformer(LightweightModule):
+class Gemma3Transformer(LightweightModule):
     def __init__(
         self,
         args,
@@ -134,90 +133,25 @@ class Gemma3_4BTransformer(LightweightModule):
 
         self.embed_scale = args.dim**0.5
 
-        self.host_embed = self.args.reference_embedding()
-
-    def setup_cache(self, max_batch_size):
-        self.cache_is_setup = True
-
-        # Prepare xattn_caches
-        chunk_length = nearest_32(self.args.image_size)
-        vision_seq_len = self.args.vision_max_num_chunks * chunk_length
-        xattn_cache = [
-            [
-                ttnn.from_torch(
-                    torch.zeros(max_batch_size, self.args.n_kv_heads, vision_seq_len, self.args.head_dim),
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat16,
-                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=1),
-                )
-                for _ in range(2)
-            ]
-            for l in range(len(self.cross_attention_layers))
-        ]
-
-        return xattn_cache
-
     def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None, **kwargs):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
         TODO: Debate whether this function is responsible for padding
         """
-        if not kwargs.get("processed_inputs", None):
-            tokens = tokens.reshape(1, 1, 1, -1)
-            S = tokens.shape[-1]
-            tokens = ttnn.from_torch(
-                tokens,
-                device=self.mesh_device,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-            tokens_embd = self.embd(tokens)
-            tokens_embd = ttnn.multiply(tokens_embd, self.embed_scale)
-        else:
-            S = tokens.shape[-1]
-            tokens_embd = self.host_embed(tokens)
 
-            tokens_embd = ttnn.from_torch(
-                tokens_embd,
-                device=self.mesh_device,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-
-            pixel_values = kwargs["processed_inputs"]["pixel_values"]
-            if pixel_values is not None:
-                vision_model = kwargs["vision_model"]
-                input_ids = kwargs["processed_inputs"]["input_ids"]
-
-                vision_output = vision_model(pixel_values)
-
-                tokens_embd = ttnn.to_torch(tokens_embd)
-                comp_vision_output = ttnn.to_torch(ttnn.from_device(vision_output))
-                comp_vision_output = torch.nn.functional.pad(
-                    comp_vision_output, (0, 0, 0, tokens_embd.shape[1] - comp_vision_output.shape[1]), "constant", 0
-                )
-
-                input_ids = torch.nn.functional.pad(
-                    input_ids, (0, tokens_embd.shape[1] - input_ids.shape[1]), "constant", 0
-                )
-                image_features = comp_vision_output.squeeze(0)
-                special_image_mask = (input_ids == self.args.image_token_index).unsqueeze(-1)
-                special_image_mask = special_image_mask.expand_as(tokens_embd)
-                image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
-                tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
-                tokens_embd = ttnn.from_torch(
-                    tokens_embd,
-                    dtype=ttnn.bfloat16,
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                )
-
+        assert tokens.dim() == 2, "tokens must be a 2D tensor"
+        tokens = tokens.reshape(1, 1, 1, -1)
+        S = tokens.shape[-1]
+        tokens = ttnn.from_torch(
+            tokens,
+            device=self.mesh_device,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        tokens_embd = self.embd(tokens)
+        tokens_embd = ttnn.multiply(tokens_embd, self.embed_scale)
         tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         # Slice the rot mats to the prefill seqlen
@@ -459,12 +393,21 @@ class Gemma3_4BTransformer(LightweightModule):
 
         # Gather the output across all devices and untilize the tensor (for argmax)
         if self.args.num_devices > 1:
-            tt_logits = ag_on_padded_dim_3(
+            cluster_axis = 0 if self.args.is_galaxy else None
+            num_links = 2 if self.args.is_galaxy else 1
+            tt_logits = ttnn.experimental.all_gather_async(
                 tt_logits,
-                self.tt_ccl,
-                cluster_axis=0 if self.args.is_galaxy else None,
-                num_links=2 if self.args.is_galaxy else 1,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=num_links,
+                memory_config=tt_logits.memory_config(),
+                cluster_axis=cluster_axis,
                 topology=self.args.ccl_topology(),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
 
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
@@ -479,6 +422,7 @@ class Gemma3_4BTransformer(LightweightModule):
             ttnn.copy(tt_logits.reshape(x.shape), x)
         elif not self.args.is_galaxy:
             # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
+            # TODO Investigate why moving to DRAM fails, it never should!
             # tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
             pass
 

@@ -89,6 +89,16 @@ def test_decoder_inference(
     )
     transformation_mats = rope_setup.get_both_trans_mats()
 
+    rope_local_setup = RotarySetup(
+        mesh_device,
+        batch_size,
+        model_args.head_dim,
+        model_args.max_seq_len,
+        model_args.rope_theta_local,
+        None,  # No scaling for local RoPE
+    )
+    transformation_mats_local = rope_local_setup.get_both_trans_mats()
+
     # Prepare page table for paged attention
     page_table_tt = None
     paged_attention_config = None
@@ -127,6 +137,7 @@ def test_decoder_inference(
         layer_num=0,
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=transformation_mats,
+        transformation_mats_local=transformation_mats_local,
         paged_attention_config=paged_attention_config,
     )
 
