@@ -92,7 +92,7 @@ while [[ "$found" == "false" ]]; do
   grep -R "(&(*handle).decode_str).len()" "$CPM_SOURCE_CACHE/tokenizers-cpp" -n || true
 
   if [ $build_rc -eq 0 ]; then
-    cmake --build build --target install --verbose || build_rc=$?
+    cmake --build build --target install|| build_rc=$?
   fi
   echo "::endgroup::"
 
