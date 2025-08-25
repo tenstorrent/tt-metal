@@ -421,9 +421,6 @@ void read_k_chunks(
         }
     }
     noc_async_read_barrier(reader_id);
-
-    // noc_async_write_barrier();
-
     cb_push_back(cb_k_in, k_chunk_tiles);
 }
 

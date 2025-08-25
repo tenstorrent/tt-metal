@@ -282,10 +282,10 @@ void kernel_main() {
 
                 {
                     DeviceZoneScopedN("Reading K first half");
-                    cb_reserve_back(cb_k_in, Sk_chunk_t_dynamic * DHt / 2);
-                    cb_push_back(cb_k_in, Sk_chunk_t_dynamic * DHt / 2);
-                    // read_k_chunks<num_kv_heads, block_size_t, DHt, enable_split_reader, true>(
-                    //     k_tile_bytes, Sk_chunk_t_dynamic, cb_k_in, k_chunk, cur_head, page_table_ptr, k_reader, 0);
+                    // cb_reserve_back(cb_k_in, Sk_chunk_t_dynamic * DHt / 2);
+                    // cb_push_back(cb_k_in, Sk_chunk_t_dynamic * DHt / 2);
+                    read_k_chunks<num_kv_heads, block_size_t, DHt, enable_split_reader, true>(
+                        k_tile_bytes, Sk_chunk_t_dynamic, cb_k_in, k_chunk, cur_head, page_table_ptr, k_reader, 0);
                 }
                 if constexpr (use_attention_mask) {
                     DeviceZoneScopedN("Read mask chunk");
