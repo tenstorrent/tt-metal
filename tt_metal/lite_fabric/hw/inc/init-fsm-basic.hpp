@@ -18,10 +18,10 @@
 #include "ethernet/dataflow_api.h"
 #include "dataflow_api.h"
 #include "ethernet/tunneling.h"
-#include "lite_fabric_memory_config.h"
+#include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
 #include "risc_common.h"
-#include "lite_fabric.hpp"
-#include "risc_interface.hpp"
+#include "host_interface.hpp"
+#include "tt_metal/lite_fabric/hw/inc/risc_interface.hpp"
 
 namespace lite_fabric {
 
@@ -33,7 +33,7 @@ void wait_val(uint32_t addr, uint32_t val) {
     } while (reinterpret_cast<volatile uint32_t*>(addr)[0] != val);
 }
 
-void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
+void routing_init(volatile lite_fabric::FabricLiteConfig* config_struct) {
     invalidate_l1_cache();
     // This value should not be used. It comes from metal.
     // auto my_y = get_absolute_logical_y();
@@ -53,7 +53,7 @@ void routing_init(volatile lite_fabric::LiteFabricConfig* config_struct) {
             0,
             (uintptr_t)config_struct >> 4,
             (uintptr_t)config_struct >> 4,
-            sizeof(lite_fabric::LiteFabricConfig) >> 4);
+            sizeof(lite_fabric::FabricLiteConfig) >> 4);
     };
 
     auto original_init_state = config_struct->initial_state;

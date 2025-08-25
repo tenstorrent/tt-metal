@@ -6,13 +6,13 @@
 
 #include <stdint.h>
 #include <cstdint>
-#include "lite_fabric.hpp"
-#include "lite_fabric_constants.hpp"
-#include "lite_fabric_header.hpp"
+#include "tt_metal/lite_fabric/hw/inc/constants.hpp"
+#include "tt_metal/lite_fabric/hw/inc/header.hpp"
+#include "tt_metal/lite_fabric/hw/inc/host_interface.hpp"
+#include "tt_metal/lite_fabric/hw/inc/types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_flow_control_helpers.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_transaction_id_tracker.hpp"
-#include "lite_fabric_types.hpp"
 
 namespace lite_fabric {
 
@@ -29,16 +29,18 @@ extern ReceiverChannelPointersTupleImpl receiver_channel_pointers_tuple;
 /////////////////////
 // Sender Channel
 /////////////////////
+template <uint32_t CHANNEL_INDEX>
 FORCE_INLINE void send_next_data(
     SenderEthChannelBuffer& sender_buffer_channel,
-    lite_fabric::OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS_ARRAY[0]>& outbound_to_receiver_channel_pointers,
+    lite_fabric::OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>&
+        outbound_to_receiver_channel_pointers,
     ReceiverEthChannelBuffer& receiver_buffer_channel) {
     auto& remote_receiver_buffer_index = outbound_to_receiver_channel_pointers.remote_receiver_buffer_index;
     auto& remote_receiver_num_free_slots = outbound_to_receiver_channel_pointers.num_free_slots;
     constexpr uint32_t sender_txq_id = 0;
     uint32_t src_addr = sender_buffer_channel.get_cached_next_buffer_slot_addr();
 
-    volatile auto* pkt_header = reinterpret_cast<volatile lite_fabric::LiteFabricHeader*>(src_addr);
+    volatile auto* pkt_header = reinterpret_cast<volatile lite_fabric::FabricLiteHeader*>(src_addr);
 
     if (pkt_header->get_base_send_type() == lite_fabric::NocSendTypeEnum::WRITE_REG) {
         const uint32_t reg_address = pkt_header->command_fields.write_reg.reg_address;
@@ -60,10 +62,11 @@ FORCE_INLINE void send_next_data(
     internal_::eth_send_packet_bytes_unsafe(sender_txq_id, src_addr, dest_addr, payload_size_bytes);
 
     host_interface->d2h.fabric_sender_channel_index =
-        tt::tt_fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[0]>(host_interface->d2h.fabric_sender_channel_index);
+        tt::tt_fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(
+            host_interface->d2h.fabric_sender_channel_index);
 
     remote_receiver_buffer_index = tt::tt_fabric::BufferIndex{
-        tt::tt_fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[0]>(remote_receiver_buffer_index.get())};
+        tt::tt_fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(remote_receiver_buffer_index.get())};
     receiver_buffer_channel.set_cached_next_buffer_slot_addr(
         receiver_buffer_channel.get_buffer_address(remote_receiver_buffer_index));
     sender_buffer_channel.set_cached_next_buffer_slot_addr(sender_buffer_channel.get_buffer_address(
@@ -72,38 +75,42 @@ FORCE_INLINE void send_next_data(
     // update the remote reg
     static constexpr uint32_t packets_to_forward = 1;
     while (internal_::eth_txq_is_busy(sender_txq_id));
-    remote_update_ptr_val<to_receiver_0_pkts_sent_id, sender_txq_id>(packets_to_forward);
+    remote_update_ptr_val<to_receiver_pkts_sent_ids[CHANNEL_INDEX], sender_txq_id>(packets_to_forward);
 }
 
+template <uint32_t CHANNEL_INDEX>
 FORCE_INLINE void run_sender_channel_step() {
-    auto& outbound_to_receiver_channel_pointers = outbound_to_receiver_channel_pointers_tuple.template get<0>();
-    auto& local_sender_channel = lite_fabric::local_sender_channels.template get<0>();
-    auto& remote_receiver_channel = remote_receiver_channels.template get<0>();
+    auto& outbound_to_receiver_channel_pointers =
+        outbound_to_receiver_channel_pointers_tuple.template get<CHANNEL_INDEX>();
+    auto& local_sender_channel = lite_fabric::local_sender_channels.template get<CHANNEL_INDEX>();
+    auto& remote_receiver_channel = remote_receiver_channels.template get<CHANNEL_INDEX>();
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
     bool has_unsent_packet =
         host_interface->h2d.sender_host_write_index != host_interface->d2h.fabric_sender_channel_index;
     bool can_send = receiver_has_space_for_packet && has_unsent_packet;
 
     if (can_send) {
-        send_next_data(local_sender_channel, outbound_to_receiver_channel_pointers, remote_receiver_channel);
+        send_next_data<CHANNEL_INDEX>(
+            local_sender_channel, outbound_to_receiver_channel_pointers, remote_receiver_channel);
     }
 
     // Process COMPLETIONs from receiver
-    int32_t completions_since_last_check = get_ptr_val(to_sender_0_pkts_completed_id);
+    int32_t completions_since_last_check = get_ptr_val(to_sender_pkts_completed_ids[CHANNEL_INDEX]);
     if (completions_since_last_check) {
         outbound_to_receiver_channel_pointers.num_free_slots += completions_since_last_check;
-        increment_local_update_ptr_val(to_sender_0_pkts_completed_id, -completions_since_last_check);
+        increment_local_update_ptr_val(to_sender_pkts_completed_ids[CHANNEL_INDEX], -completions_since_last_check);
     }
 }
 
 /////////////////////
 // Receiver Channel
 /////////////////////
+template <uint32_t CHANNEL_INDEX>
 __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_request(
-    tt_l1_ptr lite_fabric::LiteFabricHeader* const packet_start,
+    tt_l1_ptr lite_fabric::FabricLiteHeader* const packet_start,
     uint16_t payload_size_bytes,
     uint32_t transaction_id,
-    tt::tt_fabric::EthChannelBuffer<lite_fabric::LiteFabricHeader, SENDER_NUM_BUFFERS_ARRAY[0]>&
+    tt::tt_fabric::EthChannelBuffer<lite_fabric::FabricLiteHeader, SENDER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>&
         sender_buffer_channel) {
     invalidate_l1_cache();
     const auto& header = *packet_start;
@@ -116,7 +123,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
     switch (noc_send_type) {
         case lite_fabric::NocSendTypeEnum::NOC_UNICAST_WRITE: {
             const uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) +
-                                                   sizeof(lite_fabric::LiteFabricHeader) + header.unaligned_offset;
+                                                   sizeof(lite_fabric::FabricLiteHeader) + header.unaligned_offset;
 
             const auto dest_address = header.command_fields.noc_unicast.noc_address;
 
@@ -137,10 +144,10 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
                 // the tunnel depth is only 1 at the moment
                 uint32_t dst_address = sender_buffer_channel.get_cached_next_buffer_slot_addr();
                 uint32_t payload_dst_address =
-                    dst_address + sizeof(lite_fabric::LiteFabricHeader) + header.unaligned_offset;
+                    dst_address + sizeof(lite_fabric::FabricLiteHeader) + header.unaligned_offset;
                 // Create packet header for writing back
-                tt_l1_ptr lite_fabric::LiteFabricHeader* packet_header_in_sender_ch =
-                    reinterpret_cast<lite_fabric::LiteFabricHeader*>(dst_address);
+                tt_l1_ptr lite_fabric::FabricLiteHeader* packet_header_in_sender_ch =
+                    reinterpret_cast<lite_fabric::FabricLiteHeader*>(dst_address);
                 *packet_header_in_sender_ch = header;
                 // Read the data into the buffer
                 // This is safe only if the data at the sender buffer slot has been flushed out
@@ -151,7 +158,7 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
                 // Tell ourselves there is data to send
                 // NOTE: sender_buffer_channel index will be incremented in send_next_data
                 host_interface->h2d.sender_host_write_index =
-                    tt::tt_fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[0]>(
+                    tt::tt_fabric::wrap_increment<SENDER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(
                         host_interface->h2d.sender_host_write_index);
             }
         } break;
@@ -166,36 +173,32 @@ __attribute__((optimize("jump-tables"))) FORCE_INLINE void service_fabric_reques
     };
 }
 
-// MUST CHECK !is_eth_txq_busy() before calling
-FORCE_INLINE void receiver_send_completion_ack(uint8_t src_id) {
-    while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ));
-    remote_update_ptr_val<DEFAULT_ETH_TXQ>(to_sender_0_pkts_completed_id, 1);
-}
-
+template <uint32_t CHANNEL_INDEX>
 FORCE_INLINE void run_receiver_channel_step() {
-    auto& receiver_channel_pointers = receiver_channel_pointers_tuple.template get<0>();
-    auto& local_sender_channel = lite_fabric::local_sender_channels.template get<0>();
-    auto& remote_receiver_channel = remote_receiver_channels.template get<0>();
-    auto pkts_received_since_last_check = get_ptr_val<to_receiver_0_pkts_sent_id>();
+    auto& receiver_channel_pointers = receiver_channel_pointers_tuple.template get<CHANNEL_INDEX>();
+    auto& local_sender_channel = lite_fabric::local_sender_channels.template get<CHANNEL_INDEX>();
+    auto& remote_receiver_channel = remote_receiver_channels.template get<CHANNEL_INDEX>();
+    auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_ids[CHANNEL_INDEX]>();
     auto& wr_sent_counter = receiver_channel_pointers.wr_sent_counter;
     bool unwritten_packets = pkts_received_since_last_check != 0;
 
     if (unwritten_packets) {
         invalidate_l1_cache();
         auto receiver_buffer_index = wr_sent_counter.get_buffer_index();
-        tt_l1_ptr lite_fabric::LiteFabricHeader* packet_header = const_cast<lite_fabric::LiteFabricHeader*>(
-            remote_receiver_channel.template get_packet_header<lite_fabric::LiteFabricHeader>(receiver_buffer_index));
+        tt_l1_ptr lite_fabric::FabricLiteHeader* packet_header = const_cast<lite_fabric::FabricLiteHeader*>(
+            remote_receiver_channel.template get_packet_header<lite_fabric::FabricLiteHeader>(receiver_buffer_index));
 
         receiver_channel_pointers.set_src_chan_id(receiver_buffer_index, packet_header->src_ch_id);
 
         uint8_t trid = receiver_channel_0_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(
             receiver_buffer_index);
         // lite fabric tunnel depth is 1 so any fabric cmds being sent here will be writes to/reads from this chip
-        service_fabric_request(packet_header, packet_header->payload_size_bytes, trid, local_sender_channel);
+        service_fabric_request<CHANNEL_INDEX>(
+            packet_header, packet_header->payload_size_bytes, trid, local_sender_channel);
 
         wr_sent_counter.increment();
         // decrement the to_receiver_0_pkts_sent_id stream register by 1 since current packet has been processed.
-        increment_local_update_ptr_val<to_receiver_0_pkts_sent_id>(-1);
+        increment_local_update_ptr_val<to_receiver_pkts_sent_ids[CHANNEL_INDEX]>(-1);
     }
 
     // flush and completion are fused, so we only need to update one of the counters
@@ -208,17 +211,21 @@ FORCE_INLINE void run_receiver_channel_step() {
     bool can_send_completion = unflushed_writes && next_trid_flushed;
     if (on_mmio_chip) {
         can_send_completion =
-            can_send_completion && (((host_interface->d2h.fabric_receiver_channel_index + 1) %
-                                     RECEIVER_NUM_BUFFERS_ARRAY[0]) != host_interface->h2d.receiver_host_read_index);
+            can_send_completion &&
+            (((host_interface->d2h.fabric_receiver_channel_index + 1) % RECEIVER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]) !=
+             host_interface->h2d.receiver_host_read_index);
     }
 
     if (can_send_completion) {
-        receiver_send_completion_ack(receiver_channel_pointers.get_src_chan_id(receiver_buffer_index));
+        // Completion pointer is to the host
+        while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ));
+        remote_update_ptr_val<DEFAULT_ETH_TXQ>(to_sender_pkts_completed_ids[CHANNEL_INDEX], 1);
+
         receiver_channel_0_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
         completion_counter.increment();
         if (on_mmio_chip) {
             host_interface->d2h.fabric_receiver_channel_index =
-                tt::tt_fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[0]>(
+                tt::tt_fabric::wrap_increment<RECEIVER_NUM_BUFFERS_ARRAY[CHANNEL_INDEX]>(
                     host_interface->d2h.fabric_receiver_channel_index);
         }
     }

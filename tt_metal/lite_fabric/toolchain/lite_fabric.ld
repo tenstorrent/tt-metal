@@ -12,8 +12,8 @@ OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv", "elf32-littleriscv")
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
 
-/* Include shared memory definitions */
-#include "lite_fabric_memory_defs.h"
+/* Not to be confused with dev_mem_map.h which is for tt-metal kernels and firmware */
+#include "lf_dev_mem_map.hpp"
 
 PHDRS {
     attributes 0x70000003;

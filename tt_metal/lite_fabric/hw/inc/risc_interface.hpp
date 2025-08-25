@@ -6,7 +6,7 @@
 #include "blackhole/noc_nonblocking_api.h"
 #include "ethernet/tunneling.h"
 #include "risc_common.h"
-#include "lite_fabric_memory_config.h"
+#include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
 
 namespace lite_fabric {
 
