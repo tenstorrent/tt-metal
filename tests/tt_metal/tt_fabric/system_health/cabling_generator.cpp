@@ -111,6 +111,7 @@ int main(int argc, char* argv[]) {
             break;
         }
         std::stringstream label;
+        label.fill('0');
         int32_t host_a = connection.ep_a().host();
         int32_t host_b = connection.ep_b().host();
 
@@ -120,13 +121,18 @@ int main(int argc, char* argv[]) {
         cable_length_t cable_l =
             calc_cable_length(host_info_a.rack(), host_info_a.shelf_u(), host_info_b.rack(), host_info_b.shelf_u());
 
+        label << host_info_a.hall() << host_info_a.aisle() << std::setw(2) << host_info_a.rack() << "U" << std::setw(2)
+              << host_info_a.shelf_u() << "-" << connection.ep_a().tray() << "-" << connection.ep_a().port();
+
         output_file << host_info_a.hall() << "," << host_info_a.aisle() << "," << std::setw(2) << host_info_a.rack()
                     << "," << host_info_a.shelf_u() << "," << connection.ep_a().tray() << ","
-                    << connection.ep_a().port() << ","
-                    << "WIP,";
+                    << connection.ep_a().port() << "," << label.str() << ",";
+        label.str("");  // Clear the stringstream for reuse
+        label << host_info_b.hall() << host_info_b.aisle() << std::setw(2) << host_info_b.rack() << "U" << std::setw(2)
+              << host_info_b.shelf_u() << "-" << connection.ep_b().tray() << "-" << connection.ep_b().port();
         output_file << host_info_b.hall() << "," << host_info_b.aisle() << "," << std::setw(2) << host_info_b.rack()
                     << "," << host_info_b.shelf_u() << "," << connection.ep_b().tray() << ","
-                    << connection.ep_b().port() << ",WIP,";
+                    << connection.ep_b().port() << "," << label.str() << ",";
         output_file << cable_length_str.at(cable_l) << ","                       // Cable Length
                     << ((cable_l == OPTICAL_CABLE) ? "Optical" : "QSFP_DD ACE")  // Cable Type
                     << "," << std::endl;
