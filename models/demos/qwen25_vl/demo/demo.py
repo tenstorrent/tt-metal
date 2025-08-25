@@ -154,7 +154,7 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-1 run with full model for more stable BLEU checks (CI only)
+        (  # Batch-32 run with single decoder layer in vision model (CI only) - 32 users
             "models/demos/qwen25_vl/demo/sample_prompts/test_bleu_score.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
@@ -168,6 +168,19 @@ def create_tt_model(
             True,  # ci_only
         ),
         (  # Batch-1 run with single decoder layer in vision model (CI only)
+            "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",
+            True,  # instruct mode
+            1,  # repeat_batches to simulate multiple users with the same prompt
+            4096,  # max_seq_len, allow for image tokens
+            1,  # batch_size -- samples to load from the prompt JSON
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            True,  # ci_only
+        ),
+        (  # Batch-1 run with single decoder layer in vision model (CI only) - one users
             "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
