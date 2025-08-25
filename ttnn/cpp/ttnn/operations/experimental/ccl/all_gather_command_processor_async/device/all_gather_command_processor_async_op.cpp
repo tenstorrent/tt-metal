@@ -288,8 +288,8 @@ Tensor all_gather_command_processor_async(
 std::vector<Tensor> all_gather_command_processor_async(
     const std::vector<Tensor>& input_tensors,
     int32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer,
+    const GlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     ttnn::ccl::Topology topology,
@@ -301,8 +301,8 @@ std::vector<Tensor> all_gather_command_processor_async(
         output_tensors.push_back(all_gather_command_processor_async_impl(
             input_tensors[i],
             dim,
-            multi_device_global_semaphore[i],
-            persistent_output_buffer,
+            multi_device_global_semaphore,
+            persistent_output_buffer[i],
             num_links,
             memory_config,
             topology,
