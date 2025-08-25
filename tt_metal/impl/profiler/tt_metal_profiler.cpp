@@ -871,17 +871,6 @@ void FreshProfilerDeviceLog() {
 #endif
 }
 
-void DumpDeviceProfilerResults(IDevice* device) {
-#if defined(TRACY_ENABLE)
-    if (getDeviceProfilerState()) {
-        auto profiler_it = tt_metal_device_profiler_map.find(device->id());
-        if (profiler_it != tt_metal_device_profiler_map.end()) {
-            profiler_it->second.dumpDeviceResults();
-        }
-    }
-#endif
-}
-
 constexpr uint32_t DEVICE_ID_NUM_BITS = 10;
 constexpr uint32_t DEVICE_OP_ID_NUM_BITS = 31;
 

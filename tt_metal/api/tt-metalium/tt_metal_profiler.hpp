@@ -93,18 +93,5 @@ void SetDeviceProfilerDir(const std::string& output_dir = "");
  * */
 void FreshProfilerDeviceLog();
 
-/**
- * Dump profiler results to files
- *
- * Return value: void
- *
- * | Argument      | Description                                       | Type            | Valid Range               |
- * Required |
- * |---------------|---------------------------------------------------|-----------------|---------------------------|----------|
- * | device        | The device to dump profiler results for           | IDevice*        |                           |
- * True     |
- * */
-void DumpDeviceProfilerResults(IDevice* device);
-
 }  // namespace detail
 }  // namespace tt::tt_metal

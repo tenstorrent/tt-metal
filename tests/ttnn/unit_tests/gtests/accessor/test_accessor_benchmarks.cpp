@@ -130,8 +130,6 @@ void benchmark_all_args_combinations_single_core(
         log_info(tt::LogTest, "Program finished!");
     }
     tt::tt_metal::detail::ReadDeviceProfilerResults(local_device);
-    // Dump results for this rank to ensure separate files for each rank
-    tt::tt_metal::detail::DumpDeviceProfilerResults(local_device);
 }
 
 TEST_P(AccessorBenchmarks, GetNocAddr) {
