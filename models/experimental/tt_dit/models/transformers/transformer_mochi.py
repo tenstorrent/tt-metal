@@ -176,6 +176,96 @@ class MochiTransformerBlock:
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
 
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        # Cache linear layers
+        norm1_linear_cache = self.norm1_linear.to_cached_state_dict(path_prefix + "norm1_linear.")
+        norm1_context_linear_cache = self.norm1_context_linear.to_cached_state_dict(
+            path_prefix + "norm1_context_linear."
+        )
+
+        # Add prefixes for linear layers
+        for key, value in norm1_linear_cache.items():
+            cache_dict[f"norm1_linear.{key}"] = value
+        for key, value in norm1_context_linear_cache.items():
+            cache_dict[f"norm1_context_linear.{key}"] = value
+
+        # Cache normalization layers
+        norm1_norm_cache = self.norm1_norm.to_cached_state_dict(path_prefix + "norm1_norm.")
+        norm1_context_norm_cache = self.norm1_context_norm.to_cached_state_dict(path_prefix + "norm1_context_norm.")
+        norm2_norm_cache = self.norm2_norm.to_cached_state_dict(path_prefix + "norm2_norm.")
+        norm3_norm_cache = self.norm3_norm.to_cached_state_dict(path_prefix + "norm3_norm.")
+        norm4_norm_cache = self.norm4_norm.to_cached_state_dict(path_prefix + "norm4_norm.")
+
+        # Add prefixes for norm layers
+        for key, value in norm1_norm_cache.items():
+            cache_dict[f"norm1_norm.{key}"] = value
+        for key, value in norm1_context_norm_cache.items():
+            cache_dict[f"norm1_context_norm.{key}"] = value
+        for key, value in norm2_norm_cache.items():
+            cache_dict[f"norm2_norm.{key}"] = value
+        for key, value in norm3_norm_cache.items():
+            cache_dict[f"norm3_norm.{key}"] = value
+        for key, value in norm4_norm_cache.items():
+            cache_dict[f"norm4_norm.{key}"] = value
+
+        # Cache optional context norm layers
+        if self.norm2_context_norm is not None:
+            norm2_context_norm_cache = self.norm2_context_norm.to_cached_state_dict(path_prefix + "norm2_context_norm.")
+            for key, value in norm2_context_norm_cache.items():
+                cache_dict[f"norm2_context_norm.{key}"] = value
+
+        if self.norm3_context_norm is not None:
+            norm3_context_norm_cache = self.norm3_context_norm.to_cached_state_dict(path_prefix + "norm3_context_norm.")
+            for key, value in norm3_context_norm_cache.items():
+                cache_dict[f"norm3_context_norm.{key}"] = value
+
+        if self.norm4_context_norm is not None:
+            norm4_context_norm_cache = self.norm4_context_norm.to_cached_state_dict(path_prefix + "norm4_context_norm.")
+            for key, value in norm4_context_norm_cache.items():
+                cache_dict[f"norm4_context_norm.{key}"] = value
+
+        # Cache attention layer
+        attn1_cache = self.attn1.to_cached_state_dict(path_prefix + "attn1.")
+        for key, value in attn1_cache.items():
+            cache_dict[f"attn1.{key}"] = value
+
+        # Cache feedforward layers
+        ff_cache = self.ff.to_cached_state_dict(path_prefix + "ff.")
+        for key, value in ff_cache.items():
+            cache_dict[f"ff.{key}"] = value
+
+        if self.ff_context is not None:
+            ff_context_cache = self.ff_context.to_cached_state_dict(path_prefix + "ff_context.")
+            for key, value in ff_context_cache.items():
+                cache_dict[f"ff_context.{key}"] = value
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.norm1_linear.from_cached_state_dict(substate(cache_dict, "norm1_linear"))
+        self.norm1_context_linear.from_cached_state_dict(substate(cache_dict, "norm1_context_linear"))
+
+        self.norm1_norm.from_cached_state_dict(substate(cache_dict, "norm1_norm"))
+        self.norm1_context_norm.from_cached_state_dict(substate(cache_dict, "norm1_context_norm"))
+        self.norm2_norm.from_cached_state_dict(substate(cache_dict, "norm2_norm"))
+        self.norm3_norm.from_cached_state_dict(substate(cache_dict, "norm3_norm"))
+        self.norm4_norm.from_cached_state_dict(substate(cache_dict, "norm4_norm"))
+
+        if self.norm2_context_norm is not None:
+            self.norm2_context_norm.from_cached_state_dict(substate(cache_dict, "norm2_context_norm"))
+        if self.norm3_context_norm is not None:
+            self.norm3_context_norm.from_cached_state_dict(substate(cache_dict, "norm3_context_norm"))
+        if self.norm4_context_norm is not None:
+            self.norm4_context_norm.from_cached_state_dict(substate(cache_dict, "norm4_context_norm"))
+
+        self.attn1.from_cached_state_dict(substate(cache_dict, "attn1"))
+        self.ff.from_cached_state_dict(substate(cache_dict, "ff"))
+
+        if self.ff_context is not None:
+            self.ff_context.from_cached_state_dict(substate(cache_dict, "ff_context"))
+
     def load_state_dict(self, state_dict):
         self.norm1_linear.load_state_dict(substate(state_dict, "norm1.linear"))
         context_linear_key = "norm1_context.linear" if not self.context_pre_only else "norm1_context.linear_1"
@@ -493,6 +583,65 @@ class MochiTransformer3DModel:
 
         device_grid = self.mesh_device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(x=device_grid.x, y=device_grid.y)
+
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        # Cache patch embedding
+        patch_embed_cache = self.patch_embed.to_cached_state_dict(path_prefix + "patch_embed.")
+        for key, value in patch_embed_cache.items():
+            cache_dict[f"patch_embed.{key}"] = value
+
+        # Cache transformer blocks
+        for i, block in enumerate(self.transformer_blocks):
+            block_cache = block.to_cached_state_dict(path_prefix + f"transformer_blocks.{i}.")
+            for key, value in block_cache.items():
+                cache_dict[f"transformer_blocks.{i}.{key}"] = value
+
+        # Cache fracture spatial input layer
+        fracture_spatial_input_cache = self.fracture_spatial_input.to_cached_state_dict(
+            path_prefix + "fracture_spatial_input."
+        )
+        for key, value in fracture_spatial_input_cache.items():
+            cache_dict[f"fracture_spatial_input.{key}"] = value
+
+        # Cache norm out layers
+        norm_out_norm_cache = self.norm_out_norm.to_cached_state_dict(path_prefix + "norm_out_norm.")
+        norm_out_linear_cache = self.norm_out_linear.to_cached_state_dict(path_prefix + "norm_out_linear.")
+        proj_out_cache = self.proj_out.to_cached_state_dict(path_prefix + "proj_out.")
+
+        for key, value in norm_out_norm_cache.items():
+            cache_dict[f"norm_out_norm.{key}"] = value
+        for key, value in norm_out_linear_cache.items():
+            cache_dict[f"norm_out_linear.{key}"] = value
+        for key, value in proj_out_cache.items():
+            cache_dict[f"proj_out.{key}"] = value
+
+        # Torch fallbacks
+        torch.save(self.time_embed.state_dict(), path_prefix + "time_embed.pt")
+        torch.save(self.pos_frequencies.data, path_prefix + "pos_frequencies.pt")
+        torch.save(self.rope.state_dict(), path_prefix + "rope.pt")
+        cache_dict["time_embed"] = path_prefix + "time_embed.pt"
+        cache_dict["pos_frequencies"] = path_prefix + "pos_frequencies.pt"
+        cache_dict["rope"] = path_prefix + "rope.pt"
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.patch_embed.from_cached_state_dict(substate(cache_dict, "patch_embed"))
+
+        for i, block in enumerate(self.transformer_blocks):
+            block.from_cached_state_dict(substate(cache_dict, f"transformer_blocks.{i}"))
+
+        self.fracture_spatial_input.from_cached_state_dict(substate(cache_dict, "fracture_spatial_input"))
+        self.norm_out_norm.from_cached_state_dict(substate(cache_dict, "norm_out_norm"))
+        self.norm_out_linear.from_cached_state_dict(substate(cache_dict, "norm_out_linear"))
+        self.proj_out.from_cached_state_dict(substate(cache_dict, "proj_out"))
+
+        # Torch fallbacks
+        self.time_embed.load_state_dict(torch.load(cache_dict["time_embed"]))
+        self.pos_frequencies.data = torch.load(cache_dict["pos_frequencies"])
+        self.rope.load_state_dict(torch.load(cache_dict["rope"]))
 
     def load_state_dict(self, state_dict):
         self.patch_embed.load_state_dict(substate(state_dict, "patch_embed"))

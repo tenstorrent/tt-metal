@@ -21,6 +21,22 @@ class TimestepEmbedding:
         self.linear_1 = Linear(in_channels, time_embed_dim, bias=True, mesh_device=mesh_device, init=init)
         self.linear_2 = Linear(time_embed_dim, time_embed_dim, bias=True, mesh_device=mesh_device, init=init)
 
+    def to_cached_state_dict(self, path_prefix):
+        linear_1_cache = self.linear_1.to_cached_state_dict(path_prefix + "linear_1.")
+        linear_2_cache = self.linear_2.to_cached_state_dict(path_prefix + "linear_2.")
+        cache_dict = {}
+        # Add linear_1. prefix to all keys from linear_1_cache
+        for key, value in linear_1_cache.items():
+            cache_dict[f"linear_1.{key}"] = value
+        # Add linear_2. prefix to all keys from linear_2_cache
+        for key, value in linear_2_cache.items():
+            cache_dict[f"linear_2.{key}"] = value
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.linear_1.from_cached_state_dict(substate(cache_dict, "linear_1"))
+        self.linear_2.from_cached_state_dict(substate(cache_dict, "linear_2"))
+
     def load_state_dict(self, state_dict):
         self.linear_1.load_state_dict(substate(state_dict, "linear_1"))
         self.linear_2.load_state_dict(substate(state_dict, "linear_2"))
@@ -39,6 +55,22 @@ class PixartAlphaTextProjection:
 
         self.linear_1 = Linear(in_features, hidden_size, bias=True, mesh_device=mesh_device, init=init)
         self.linear_2 = Linear(hidden_size, hidden_size, bias=True, mesh_device=mesh_device, init=init)
+
+    def to_cached_state_dict(self, path_prefix):
+        linear_1_cache = self.linear_1.to_cached_state_dict(path_prefix + "linear_1.")
+        linear_2_cache = self.linear_2.to_cached_state_dict(path_prefix + "linear_2.")
+        cache_dict = {}
+        # Add linear_1. prefix to all keys from linear_1_cache
+        for key, value in linear_1_cache.items():
+            cache_dict[f"linear_1.{key}"] = value
+        # Add linear_2. prefix to all keys from linear_2_cache
+        for key, value in linear_2_cache.items():
+            cache_dict[f"linear_2.{key}"] = value
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.linear_1.from_cached_state_dict(substate(cache_dict, "linear_1"))
+        self.linear_2.from_cached_state_dict(substate(cache_dict, "linear_2"))
 
     def load_state_dict(self, state_dict):
         self.linear_1.load_state_dict(substate(state_dict, "linear_1"))
@@ -62,6 +94,24 @@ class SD35CombinedTimestepTextProjEmbeddings:
         )
 
         self.time_proj_factor = self._create_time_proj_factor(256)
+
+    def to_cached_state_dict(self, path_prefix):
+        timestep_embedder_cache = self.timestep_embedder.to_cached_state_dict(path_prefix + "timestep_embedder.")
+        text_embedder_cache = self.text_embedder.to_cached_state_dict(path_prefix + "text_embedder.")
+
+        cache_dict = {}
+        # Add timestep_embedder. prefix to all keys from timestep_embedder_cache
+        for key, value in timestep_embedder_cache.items():
+            cache_dict[f"timestep_embedder.{key}"] = value
+        # Add text_embedder. prefix to all keys from text_embedder_cache
+        for key, value in text_embedder_cache.items():
+            cache_dict[f"text_embedder.{key}"] = value
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.timestep_embedder.from_cached_state_dict(substate(cache_dict, "timestep_embedder"))
+        self.text_embedder.from_cached_state_dict(substate(cache_dict, "text_embedder"))
 
     def load_state_dict(self, state_dict):
         self.timestep_embedder.load_state_dict(substate(state_dict, "timestep_embedder"))
@@ -147,6 +197,33 @@ class PatchEmbed:
         spatial_pos_embed = pos_embed_param.reshape([1, pos_embed_max_size, pos_embed_max_size, -1])
         spatial_pos_embed = spatial_pos_embed[:, top : top + self.height, left : left + self.width, :]
         return spatial_pos_embed.reshape([1, -1, spatial_pos_embed.shape[-1]])
+
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        # Cache proj_weight
+        proj_weight_path = path_prefix + "proj_weight"
+        ttnn.dump_tensor(proj_weight_path, self.proj_weight)
+        cache_dict["proj_weight"] = proj_weight_path
+
+        # Cache proj_bias if it exists
+        if self.proj_bias is not None:
+            proj_bias_path = path_prefix + "proj_bias"
+            ttnn.dump_tensor(proj_bias_path, self.proj_bias)
+            cache_dict["proj_bias"] = proj_bias_path
+
+        # Cache pos_embed
+        pos_embed_path = path_prefix + "pos_embed"
+        ttnn.dump_tensor(pos_embed_path, self.pos_embed)
+        cache_dict["pos_embed"] = pos_embed_path
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.proj_weight = ttnn.load_tensor(cache_dict["proj_weight"], device=self.mesh_device)
+        if "proj_bias" in cache_dict:
+            self.proj_bias = ttnn.load_tensor(cache_dict["proj_bias"], device=self.mesh_device)
+        self.pos_embed = ttnn.load_tensor(cache_dict["pos_embed"], device=self.mesh_device)
 
     def load_state_dict(self, state_dict):
         """Load weights from PyTorch state dict."""
@@ -272,6 +349,27 @@ class MochiPatchEmbed:
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         )
+
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        # Cache proj_weight
+        proj_weight_path = path_prefix + "proj_weight"
+        ttnn.dump_tensor(proj_weight_path, self.proj_weight)
+        cache_dict["proj_weight"] = proj_weight_path
+
+        # Cache proj_bias if it exists
+        if self.proj_bias is not None:
+            proj_bias_path = path_prefix + "proj_bias"
+            ttnn.dump_tensor(proj_bias_path, self.proj_bias)
+            cache_dict["proj_bias"] = proj_bias_path
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        self.proj_weight = ttnn.load_tensor(cache_dict["proj_weight"], device=self.mesh_device)
+        if "proj_bias" in cache_dict:
+            self.proj_bias = ttnn.load_tensor(cache_dict["proj_bias"], device=self.mesh_device)
 
     def load_state_dict(self, state_dict):
         """Load weights from PyTorch state dict."""
