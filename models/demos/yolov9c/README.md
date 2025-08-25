@@ -1,7 +1,7 @@
 # Yolov9c
 
 ## Platforms:
-    Wormhole (n150, n300)
+Wormhole (n150, n300)
 
 ## Introduction:
 Yolov9 marks a significant advancement in real-time object detection, introducing groundbreaking techniques such as Programmable Gradient Information (PGI) and the Generalized Efficient Layer Aggregation Network (GELAN). Yolov9c is a compact and optimized variant of Yolov9, designed for efficient object detection with reduced computational overhead. It balances speed and accuracy.
@@ -106,7 +106,7 @@ Note: To test the demo with your own images, replace images with `models/demos/y
 ### Performant evaluation with Trace+2CQ for Detection task
 - Use the following command to run the performant evaluation with Trace+2CQs:
   ```
-  pytest models/experimental/yolo_eval/evaluate.py::test_yolov9c[res0-device_params0-tt_model]
+  pytest models/demos/yolo_eval/evaluate.py::test_yolov9c[res0-device_params0-tt_model]
   ```
 Note: The model is evaluated with 500 samples.
 
