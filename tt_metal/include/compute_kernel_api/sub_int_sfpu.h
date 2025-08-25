@@ -47,8 +47,8 @@ ALWI void sub_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::LO16, false>(idst0, idst1, odst)));
 }
 
-ALWI void rsub_int32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_rsub_int32<APPROX>(idst0, idst1)));
+ALWI void rsub_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_rsub_int32<APPROX>(idst0, idst1, odst)));
 }
 
 /**

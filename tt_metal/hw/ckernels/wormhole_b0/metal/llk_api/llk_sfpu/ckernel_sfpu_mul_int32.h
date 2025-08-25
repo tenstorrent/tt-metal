@@ -121,9 +121,9 @@ inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const 
 
         // Load operands again to extract a3 and b3
         // operand A - int32
-        TTI_SFPLOAD(p_sfpu::LREG2, INT32, ADDR_MOD_3, 0);
+        TT_SFPLOAD(p_sfpu::LREG2, INT32, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
         // operand B - int32
-        TT_SFPLOAD(p_sfpu::LREG3, INT32, ADDR_MOD_3, dst_offset * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG3, INT32, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
         // mask
         TTI_SFPLOADI(p_sfpu::LREG4, SFPLOADI_MOD0_USHORT, 0xFF);
 
