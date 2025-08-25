@@ -5,7 +5,6 @@
 #pragma once
 
 #include <tt-metalium/multi_mesh_types.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
 
 namespace tt::tt_fabric {
 
