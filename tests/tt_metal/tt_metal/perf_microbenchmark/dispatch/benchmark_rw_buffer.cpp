@@ -39,7 +39,7 @@ using namespace tt::tt_metal::distributed;
 // Benchmark Matrix:
 // Read & Write
 // Page Size (Bytes): 32, 64, 128, 256, 512, 1024, 2048
-// Transfer Size: 64 MB
+// Transfer Size: 32 MB
 // Buffer Type: DRAM, L1
 // Sharding: Default (interleave), Horizontal
 // Device: 0 (local), 1 (remote) (when possible)
@@ -57,26 +57,29 @@ using namespace tt::tt_metal::distributed;
 static const auto KB = 1024;
 static const auto MB = 1024 * KB;
 
-static const int64_t TRANSFER_SIZE = 64 * MB;
+// This is the maximum transfer size we can test for on L1 for sharded cases, note the bandwidth improvement after
+// increasing this transfer size is minimal (see spreadsheet above)
+static const int64_t TRANSFER_SIZE = 32 * MB;
 
 // This is page sizes for non-sharded (interleaved) buffers
 static const std::vector<int64_t> PAGE_SIZES = benchmark::CreateRange(32, 2048, 2);
 // This is page sizes we test for sharded buffers
-static const std::vector<int64_t> SHARDED_PAGE_SIZES = {4096};
+static const std::vector<int64_t> SHARDED_PAGE_SIZES = {2048, 4096};
 static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, BufferType::L1};
 // Interleaved is the default sharding config.
 static constexpr std::array<TensorMemoryLayout, 3> SHARD_ORIENTATIONS = {
     TensorMemoryLayout::INTERLEAVED, TensorMemoryLayout::HEIGHT_SHARDED, TensorMemoryLayout::WIDTH_SHARDED};
 
-// Short-hand for page dimension = 32x32
+// Default page shape
 static constexpr std::uint32_t PAGE_SIDE = 32;
+static constexpr std::array<std::uint32_t, 2> PAGE_SHAPE = {PAGE_SIDE, PAGE_SIDE};
 
 /**
  * Compute the element side after sharding across num_cores.
  *
  * The result needs to round up to a multiple of PAGE_SIDE.
  */
-static constexpr auto compute_shard_side(auto element_side, auto num_cores) {
+static constexpr auto compute_sharded_side_size(auto element_side, auto num_cores) {
     auto shard_side = element_side / num_cores;
     shard_side += (element_side % num_cores > 0 ? 1 : 0);
     // Rounding up to the nearest multiple of PAGE_HEIGHT
@@ -85,45 +88,56 @@ static constexpr auto compute_shard_side(auto element_side, auto num_cores) {
 }
 
 // Quick test case
-static_assert(compute_shard_side(4096, 12) == 352);
+static_assert(compute_sharded_side_size(4096, 12) == 352);
+
+static constexpr auto compute_shard_shape(auto element_shape, auto num_cores, TensorMemoryLayout sharding) {
+    auto element_div_side = sharding == TensorMemoryLayout::HEIGHT_SHARDED ? element_shape[0] : element_shape[1];
+    auto shard_side = compute_sharded_side_size(element_div_side, num_cores);
+    std::array<uint32_t, 2> shard_shape = element_shape;
+    if (sharding == TensorMemoryLayout::HEIGHT_SHARDED) {
+        shard_shape[0] = shard_side;
+    } else {  // width sharded
+        shard_shape[1] = shard_side;
+    }
+    return shard_shape;
+}
+
+// float32 of 4096x4096 is 64MB (transfer size)
+static constexpr std::array<std::uint32_t, 2> ELEMENT_SHAPE_4K = {2048, 4096};
+static_assert(sizeof(float) * ELEMENT_SHAPE_4K[0] * ELEMENT_SHAPE_4K[1] == TRANSFER_SIZE);
+static_assert(sizeof(float) * PAGE_SIDE * PAGE_SIDE == 4096);
+
+// uint16 of 8192x4096 is 64MB (transfer size)
+static constexpr std::array<std::uint32_t, 2> ELEMENT_SHAPE_2K = {4096, 4096};
+static_assert(sizeof(std::uint16_t) * ELEMENT_SHAPE_2K[0] * ELEMENT_SHAPE_2K[1] == TRANSFER_SIZE);
+static_assert(sizeof(std::uint16_t) * PAGE_SIDE * PAGE_SIDE == 2048);
+
+static BufferShardingArgs create_sharding_args(
+    auto mesh_device, auto page_size, BufferType buffer_type, TensorMemoryLayout sharding) {
+    // Default behavior
+    if (sharding == TensorMemoryLayout::INTERLEAVED) {
+        return {};
+    }
+
+    auto grid_size =
+        buffer_type == BufferType::L1 ? mesh_device->compute_with_storage_grid_size() : mesh_device->dram_grid_size();
+    CoreRangeSet core_range_set{CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1))};
+    auto element_shape = page_size == 4096 ? ELEMENT_SHAPE_4K : ELEMENT_SHAPE_2K;
+
+    ShardSpec shard_spec{core_range_set, compute_shard_shape(element_shape, core_range_set.num_cores(), sharding)};
+
+    std::array<uint32_t, 2> tensor2d_shape_in_pages{element_shape[0] / PAGE_SIDE, element_shape[1] / PAGE_SIDE};
+    ShardSpecBuffer shard_spec_buffer(shard_spec, PAGE_SHAPE, tensor2d_shape_in_pages);
+
+    return {shard_spec_buffer, TensorMemoryLayout::HEIGHT_SHARDED};
+}
 
 static std::shared_ptr<MeshBuffer> create_device_buffer(
     std::shared_ptr<MeshDevice> mesh_device, int64_t page_size, BufferType buffer_type, TensorMemoryLayout sharding) {
-    // float32 of 4096x4096 is 64MB (transfer size)
-    static constexpr std::uint32_t ELEMENT_SHAPE_SIDE = 4096;
-    static_assert(ELEMENT_SHAPE_SIDE * ELEMENT_SHAPE_SIDE * sizeof(float) == TRANSFER_SIZE);
-
-    BufferShardingArgs sharding_args;
-
-    if (sharding != TensorMemoryLayout::INTERLEAVED) {
-        auto grid_size = buffer_type == BufferType::L1 ? mesh_device->compute_with_storage_grid_size()
-                                                       : mesh_device->dram_grid_size();
-        CoreRangeSet core_range_set({CoreRange(CoreCoord(0, 0), CoreCoord(grid_size.x - 1, grid_size.y - 1))});
-        auto total_num_cores = core_range_set.num_cores();
-        auto shard_side = compute_shard_side(ELEMENT_SHAPE_SIDE, total_num_cores);
-
-        std::array<uint32_t, 2> shard_shape;
-        if (sharding == TensorMemoryLayout::HEIGHT_SHARDED) {
-            shard_shape = {shard_side, ELEMENT_SHAPE_SIDE};
-        } else {  // width sharded
-            shard_shape = {ELEMENT_SHAPE_SIDE, shard_side};
-        }
-
-        ShardSpec shard_spec(core_range_set, shard_shape);
-
-        log_info(LogTest, "shard_shape: {}", shard_shape);
-
-        std::array<uint32_t, 2> tensor2d_shape_in_pages{ELEMENT_SHAPE_SIDE / PAGE_SIDE, ELEMENT_SHAPE_SIDE / PAGE_SIDE};
-        ShardSpecBuffer shard_spec_buffer(shard_spec, {PAGE_SIDE, PAGE_SIDE}, tensor2d_shape_in_pages);
-
-        log_info(LogTest, "tensor2d_shape_in_pages: {}", tensor2d_shape_in_pages);
-
-        sharding_args = BufferShardingArgs(shard_spec_buffer, TensorMemoryLayout::HEIGHT_SHARDED);
-    }
-
     DeviceLocalBufferConfig device_local_config{
-        .page_size = page_size, .buffer_type = buffer_type, .sharding_args = sharding_args};
-
+        .page_size = page_size,
+        .buffer_type = buffer_type,
+        .sharding_args = create_sharding_args(mesh_device, page_size, buffer_type, sharding)};
     return MeshBuffer::create(ReplicatedBufferConfig{TRANSFER_SIZE}, device_local_config, mesh_device.get());
 }
 
@@ -216,8 +230,8 @@ int main(int argc, char** argv) {
         auto sharding_args = benchmark::CreateDenseRange(0, SHARD_ORIENTATIONS.size() - 1, 1);
         auto benchmark_args = {SHARDED_PAGE_SIZES, buffer_type_args, sharding_args, {device_id}};
 
-        benchmark::RegisterBenchmark("Write", BM_write, device)->ArgsProduct(benchmark_args)->UseRealTime();
-        benchmark::RegisterBenchmark("Read", BM_read, device)->ArgsProduct(benchmark_args)->UseRealTime();
+        benchmark::RegisterBenchmark("sharded_Write", BM_write, device)->ArgsProduct(benchmark_args)->UseRealTime();
+        benchmark::RegisterBenchmark("sharded_Read", BM_read, device)->ArgsProduct(benchmark_args)->UseRealTime();
     }
 
     benchmark::RunSpecifiedBenchmarks();
