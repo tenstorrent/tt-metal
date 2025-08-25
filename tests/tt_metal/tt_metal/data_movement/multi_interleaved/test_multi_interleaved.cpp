@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "device_fixture.hpp"
+#include "multi_device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "dm_common.hpp"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 namespace tt::tt_metal {
 
@@ -29,16 +31,19 @@ struct MultiInterleavedConfig {
 };
 
 /// @brief Does Interleaved buffer --> Reader --> L1 --> Writer --> Interleaved buffer
-/// @param device
+/// @param mesh_device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool run_dm(IDevice* device, const MultiInterleavedConfig& test_config) {
+bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterleavedConfig& test_config) {
     log_info(
         tt::LogTest,
         "num transaction {}, num pages: {}, page size bytes: {}",
         test_config.num_of_transactions,
         test_config.num_pages,
         test_config.page_size_bytes);
+
+    // Get the actual device for this single-device test
+    IDevice* device = mesh_device->get_device(0);
 
     // Program
     Program program = CreateProgram();
@@ -99,7 +104,7 @@ bool run_dm(IDevice* device, const MultiInterleavedConfig& test_config) {
 
     std::vector<uint32_t> l1_addrs;
     for (auto& core : corerange_to_cores(test_config.cores)) {
-        auto [l1_addr, l1_size] = get_l1_address_and_size(device, core);
+        auto [l1_addr, l1_size] = get_l1_address_and_size(mesh_device, core);
         assert(l1_size >= total_size_bytes);
         l1_addrs.push_back(l1_addr);
     }
@@ -159,7 +164,15 @@ bool run_dm(IDevice* device, const MultiInterleavedConfig& test_config) {
         MetalContext::instance().get_cluster().l1_barrier(device->id());
     }
 
-    detail::LaunchProgram(device, program);
+    auto mesh_workload = distributed::CreateMeshWorkload();
+    vector<uint32_t> coord_data = {0, 0};
+    auto target_devices =
+        distributed::MeshCoordinateRange(distributed::MeshCoordinate(coord_data));  // Single device at (0,0)
+    distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), target_devices);
+
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
+    Finish(cq);
 
     vector<uint32_t> packed_output;
     bool pcc = false;
@@ -195,9 +208,7 @@ bool run_dm(IDevice* device, const MultiInterleavedConfig& test_config) {
 }
 
 void directed_ideal_test(
-    tt::ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
+    shared_ptr<distributed::MeshDevice> mesh_device,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
     CoreCoord mst_grid_size,
@@ -205,7 +216,7 @@ void directed_ideal_test(
     bool write) {
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     // Parameters
     uint32_t page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
@@ -229,15 +240,11 @@ void directed_ideal_test(
         .write_kernel = write};
 
     // Run
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-    }
+    EXPECT_TRUE(run_dm(mesh_device, test_config));
 }
 
 void packet_sizes_test(
-    tt::ARCH arch_,
-    vector<IDevice*>& devices_,
-    uint32_t num_devices_,
+    shared_ptr<distributed::MeshDevice> mesh_device,
     uint32_t test_case_id,
     CoreCoord mst_start_coord,
     CoreCoord mst_grid_size,
@@ -245,7 +252,7 @@ void packet_sizes_test(
     bool write) {
     // Physical Constraints
     auto [flit_size_bytes, max_transmittable_bytes, max_transmittable_flits] =
-        tt::tt_metal::unit_tests::dm::compute_physical_constraints(arch_, devices_.at(0));
+        tt::tt_metal::unit_tests::dm::compute_physical_constraints(mesh_device);
 
     // Parameters
     uint32_t max_page_size_bytes = 256 * flit_size_bytes;  // 1 packet = 16 kB for BH, 8 kB for WH
@@ -279,9 +286,7 @@ void packet_sizes_test(
                 .write_kernel = write};
 
             // Run
-            for (unsigned int id = 0; id < num_devices_; id++) {
-                EXPECT_TRUE(run_dm(devices_.at(id), test_config));
-            }
+            EXPECT_TRUE(run_dm(mesh_device, test_config));
         }
     }
 }
@@ -289,171 +294,183 @@ void packet_sizes_test(
 }  // namespace unit_tests::dm::multi_interleaved
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovementMultiInterleavedDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedDirectedIdeal) {
+    auto mesh_device = get_mesh_device();
+    auto device = mesh_device->get_device(0);
+
     uint32_t test_case_id = 110;
     CoreCoord mst_start_coord = {0, 0};
-    CoreCoord mst_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, true);
+        mesh_device, test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovementMultiInterleavedSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedSizes) {
+    auto mesh_device = get_mesh_device();
+    auto device = mesh_device->get_device(0);
+
     uint32_t test_case_id = 111;
     CoreCoord mst_start_coord = {0, 0};
-    CoreCoord mst_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, true);
+        mesh_device, test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovementMultiInterleavedReadDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadDirectedIdeal) {
+    auto mesh_device = get_mesh_device();
+    auto device = mesh_device->get_device(0);
+
     uint32_t test_case_id = 112;
     CoreCoord mst_start_coord = {0, 0};
-    CoreCoord mst_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, false);
+        mesh_device, test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovementMultiInterleavedReadSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedReadSizes) {
+    auto mesh_device = get_mesh_device();
+    auto device = mesh_device->get_device(0);
+
     uint32_t test_case_id = 113;
     CoreCoord mst_start_coord = {0, 0};
-    CoreCoord mst_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, false);
+        mesh_device, test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovementMultiInterleavedWriteDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteDirectedIdeal) {
+    auto mesh_device = get_mesh_device();
+    auto device = mesh_device->get_device(0);
+
     uint32_t test_case_id = 114;
     CoreCoord mst_start_coord = {0, 0};
-    CoreCoord mst_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, false, true);
+        mesh_device, test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovementMultiInterleavedWriteSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovementMultiInterleavedWriteSizes) {
+    auto mesh_device = get_mesh_device();
+    auto device = mesh_device->get_device(0);
+
     uint32_t test_case_id = 115;
     CoreCoord mst_start_coord = {0, 0};
-    CoreCoord mst_grid_size = {
-        devices_.at(0)->compute_with_storage_grid_size().x, devices_.at(0)->compute_with_storage_grid_size().y};
+    CoreCoord mst_grid_size = {device->compute_with_storage_grid_size().x, device->compute_with_storage_grid_size().y};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, false, true);
+        mesh_device, test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovement2x2MultiInterleavedDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedDirectedIdeal) {
     uint32_t test_case_id = 116;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, true);
+        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovement2x2MultiInterleavedSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedSizes) {
     uint32_t test_case_id = 117;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, true);
+        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovement2x2MultiInterleavedReadDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedReadDirectedIdeal) {
     uint32_t test_case_id = 118;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, false);
+        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovement2x2MultiInterleavedReadSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedReadSizes) {
     uint32_t test_case_id = 119;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, false);
+        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovement2x2MultiInterleavedWriteDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedWriteDirectedIdeal) {
     uint32_t test_case_id = 120;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, false, true);
+        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovement2x2MultiInterleavedWriteSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovement2x2MultiInterleavedWriteSizes) {
     uint32_t test_case_id = 121;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {2, 2};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, false, true);
+        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovement6x6MultiInterleavedDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedDirectedIdeal) {
     uint32_t test_case_id = 122;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, true);
+        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovement6x6MultiInterleavedSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedSizes) {
     uint32_t test_case_id = 123;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, true);
+        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, true);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovement6x6MultiInterleavedReadDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedReadDirectedIdeal) {
     uint32_t test_case_id = 124;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, false);
+        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovement6x6MultiInterleavedReadSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedReadSizes) {
     uint32_t test_case_id = 125;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, true, false);
+        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, true, false);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovement6x6MultiInterleavedWriteDirectedIdeal) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedWriteDirectedIdeal) {
     uint32_t test_case_id = 126;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::directed_ideal_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, false, true);
+        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
 /* ========== Test case for varying number of pages; Test id = 61 ========== */
-TEST_F(DeviceFixture, TensixDataMovement6x6MultiInterleavedWriteSizes) {
+TEST_F(GenericMeshDeviceFixture, TensixDataMovement6x6MultiInterleavedWriteSizes) {
     uint32_t test_case_id = 127;
     CoreCoord mst_start_coord = {0, 0};
     CoreCoord mst_grid_size = {6, 6};
     unit_tests::dm::multi_interleaved::packet_sizes_test(
-        arch_, devices_, num_devices_, test_case_id, mst_start_coord, mst_grid_size, false, true);
+        get_mesh_device(), test_case_id, mst_start_coord, mst_grid_size, false, true);
 }
 
 }  // namespace tt::tt_metal
