@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "lite_fabric.hpp"
+#include "tt_metal/lite_fabric/hw/inc/host_interface.hpp"
 
 #include "tt_cluster.hpp"
 #include "core_coord.hpp"

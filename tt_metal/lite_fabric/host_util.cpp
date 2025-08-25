@@ -2,26 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "lite_fabric_host_util.hpp"
+#include "host_util.hpp"
 #include <enchantum/entries.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <fstream>
-#include "build.hpp"
-#include "lite_fabric.hpp"
-#include "lite_fabric_memory_defs.h"
+#include "tt_metal/lite_fabric/build.hpp"
+#include "tt_metal/lite_fabric/hw/inc/host_interface.hpp"
+#include "tt_metal/lite_fabric/hw/inc/lf_dev_mem_map.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
+#include <tt-metalium/hal_types.hpp>
 
 namespace {
 uint32_t GetStateAddressMetal() {
     uint32_t state_addr =
         tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
-            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::FABRIC_LITE_CONFIG) +
-        offsetof(lite_fabric::LiteFabricMemoryMap, config) + offsetof(lite_fabric::LiteFabricConfig, current_state);
+            tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LITE_FABRIC_CONFIG) +
+        offsetof(lite_fabric::FabricLiteMemoryMap, config) + offsetof(lite_fabric::FabricLiteConfig, current_state);
     return state_addr;
 }
-uint32_t GetStateAddress() { return LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::LiteFabricConfig, current_state); }
+uint32_t GetStateAddress() { return LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteConfig, current_state); }
 
-lite_fabric::LiteFabricConfig GetInitLiteFabricConfig(const lite_fabric::SystemDescriptor& desc) {
-    lite_fabric::LiteFabricConfig config{};
+lite_fabric::FabricLiteConfig GetInitFabricLiteConfig(const lite_fabric::SystemDescriptor& desc) {
+    lite_fabric::FabricLiteConfig config{};
     config.is_primary = true;
     config.is_mmio = true;
     config.initial_state = lite_fabric::InitState::ETH_INIT_NEIGHBOUR;
@@ -133,8 +135,8 @@ void LaunchLiteFabric(
     constexpr uint32_t k_FirmwareStart = LITE_FABRIC_TEXT_START;
     constexpr uint32_t k_PcResetAddress = LITE_FABRIC_RESET_PC;
 
-    lite_fabric::LiteFabricConfig config = GetInitLiteFabricConfig(desc);
-    auto config_addr = lite_fabric::LiteFabricMemoryMap::get_address();
+    lite_fabric::FabricLiteConfig config = GetInitFabricLiteConfig(desc);
+    auto config_addr = lite_fabric::FabricLiteMemoryMap::get_address();
 
     for (const auto& tunnel_1x : desc.tunnels_from_mmio) {
         lite_fabric::SetResetState(cluster, tunnel_1x.mmio_cxy_virtual(), true);
@@ -159,7 +161,7 @@ void LaunchLiteFabric(
 
         // Set up configuration
         cluster.write_core(
-            (void*)&config, sizeof(lite_fabric::LiteFabricConfig), tunnel_1x.mmio_cxy_virtual(), config_addr);
+            (void*)&config, sizeof(lite_fabric::FabricLiteConfig), tunnel_1x.mmio_cxy_virtual(), config_addr);
 
         // Write entire binary as single operation to device memory
         log_debug(tt::LogMetal, "Writing flat binary to {:#x} size {} B", LITE_FABRIC_TEXT_START, bin_size);
@@ -197,10 +199,10 @@ void LaunchLiteFabric(tt::Cluster& cluster, const tt::tt_metal::Hal& hal, const 
     auto home_directory = std::filesystem::path(std::getenv("TT_METAL_HOME"));
     auto output_directory = home_directory / "lite_fabric";
     // Throw exception if any of these return non zero
-    if (lite_fabric::CompileLiteFabric(cluster, home_directory, output_directory)) {
+    if (lite_fabric::CompileFabricLite(cluster, home_directory, output_directory)) {
         throw std::runtime_error("Failed to compile lite fabric");
     }
-    if (lite_fabric::LinkLiteFabric(home_directory, output_directory, output_directory / "lite_fabric.elf")) {
+    if (lite_fabric::LinkFabricLite(home_directory, output_directory, output_directory / "lite_fabric.elf")) {
         throw std::runtime_error("Failed to link lite fabric");
     }
 
@@ -217,15 +219,15 @@ void ResumeLiteFabric(
 
     // NOTE: If we didn't want to reinit back to firmware start we could set the PC to the service routing, and update
     // the host interface pointers by reading from the device.
-    lite_fabric::LiteFabricConfig config = GetInitLiteFabricConfig(desc);
-    auto config_addr = lite_fabric::LiteFabricMemoryMap::get_address();
+    lite_fabric::FabricLiteConfig config = GetInitFabricLiteConfig(desc);
+    auto config_addr = lite_fabric::FabricLiteMemoryMap::get_address();
 
     host_interface.init();
     for (const auto& tunnel_1x : desc.tunnels_from_mmio) {
         lite_fabric::SetResetState(cluster, tunnel_1x.mmio_cxy_virtual(), true);
         lite_fabric::SetPC(cluster, tunnel_1x.mmio_cxy_virtual(), k_PcResetAddress, k_FirmwareStart);
         cluster.write_core(
-            (void*)&config, sizeof(lite_fabric::LiteFabricConfig), tunnel_1x.mmio_cxy_virtual(), config_addr);
+            (void*)&config, sizeof(lite_fabric::FabricLiteConfig), tunnel_1x.mmio_cxy_virtual(), config_addr);
     }
 
     for (auto tunnel_1x : desc.tunnels_from_mmio) {
@@ -246,8 +248,8 @@ void ResumeLiteFabric(
 }
 
 void TerminateLiteFabric(tt::Cluster& cluster, const SystemDescriptor& desc) {
-    uint32_t routing_enabled_address = LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::LiteFabricMemoryMap, config) +
-                                       offsetof(lite_fabric::LiteFabricConfig, routing_enabled);
+    uint32_t routing_enabled_address = LITE_FABRIC_CONFIG_START + offsetof(lite_fabric::FabricLiteMemoryMap, config) +
+                                       offsetof(lite_fabric::FabricLiteConfig, routing_enabled);
     uint32_t enabled = 0;
     for (const auto& tunnel_1x : desc.tunnels_from_mmio) {
         log_debug(

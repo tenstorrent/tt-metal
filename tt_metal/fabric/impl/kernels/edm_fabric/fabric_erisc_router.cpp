@@ -2356,7 +2356,6 @@ void kernel_main() {
 
     // initialize the local sender channel worker interfaces
     if constexpr (is_sender_channel_serviced[0]) {
-        DPRINT << "Sender channel servied" << ENDL();
         init_local_sender_channel_worker_interfaces(
             local_sender_connection_live_semaphore_addresses,
             local_sender_connection_info_addresses,
@@ -2403,13 +2402,10 @@ void kernel_main() {
         wait_for_other_local_erisc();
     }
     if constexpr (enable_ethernet_handshake) {
-        DPRINT << "enable_ethernet_handshake" << ENDL();
         if constexpr (is_handshake_sender) {
-            DPRINT << "handhake sender" << ENDL();
             erisc::datamover::handshake::sender_side_handshake(
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         } else {
-            DPRINT << "handhake receiver" << ENDL();
             erisc::datamover::handshake::receiver_side_handshake(
                 handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
         }

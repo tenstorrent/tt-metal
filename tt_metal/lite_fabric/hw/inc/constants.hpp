@@ -2,14 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Substitute for 1d_fabric_constants.hpp
-
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <array>
-#include "lite_fabric_header.hpp"
+#include "tt_metal/lite_fabric/hw/inc/header.hpp"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
@@ -26,12 +24,24 @@ constexpr uint32_t to_sender_0_pkts_acked_id = 24;
 // receivers updates the reg on this stream
 constexpr uint32_t to_sender_0_pkts_completed_id = 25;
 
+constexpr uint32_t to_receiver_1_pkts_sent_id = 24;
+constexpr uint32_t to_sender_1_pkts_acked_id = 25;
+constexpr uint32_t to_sender_1_pkts_completed_id = 26;
+
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = 2;
 
 constexpr size_t MAX_NUM_SENDER_CHANNELS = 5;
 
+constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_pkts_sent_ids = {
+    to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id};
+constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_pkts_acked_ids = {
+    to_sender_0_pkts_acked_id, to_sender_1_pkts_acked_id, 0, 0, 0};
+constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_pkts_completed_ids = {
+    to_sender_0_pkts_completed_id, to_sender_1_pkts_completed_id, 0, 0, 0};
+
 // Only 1 receiver because 1 erisc
 constexpr uint32_t NUM_RECEIVER_CHANNELS = 1;
+
 constexpr uint32_t NUM_USED_RECEIVER_CHANNELS = 1;
 
 // Only 1 sender because no upstream edm
@@ -50,7 +60,7 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
 static_assert(NUM_SENDER_CHANNELS == 1);
 
 // Additional 16B to be used only for unaligned reads/writes
-constexpr uint32_t CHANNEL_BUFFER_SIZE = 2048 + 16 + sizeof(lite_fabric::LiteFabricHeader);
+constexpr uint32_t CHANNEL_BUFFER_SIZE = 2048 + 16 + sizeof(lite_fabric::FabricLiteHeader);
 
 constexpr size_t RECEIVER_CHANNEL_BASE_ID = NUM_SENDER_CHANNELS;
 constexpr size_t SENDER_CHANNEL_BASE_ID = 0;
