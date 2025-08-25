@@ -4,6 +4,7 @@
 
 #include "running_statistics_device_operation.hpp"
 
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include <cmath>
@@ -237,13 +238,29 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     auto [tmp3_cb, tmp3_cb_handle] =
         create_cb(tt::CBIndex::c_11, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
 
-    auto a_is_dram = static_cast<uint32_t>(batch_mean_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    auto b_is_dram = static_cast<uint32_t>(batch_var_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    auto c_is_dram = static_cast<uint32_t>(output.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
-    const auto d_is_dram =
-        running_mean_has_value and running_mean_tensor->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
-    const auto e_is_dram =
-        running_var_has_value and running_var_tensor->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+    std::vector<uint32_t> reader_compile_time_args = {
+        batch_mean_tensor_cb,
+        momentum_cb,
+        one_cb,
+    };
+    tt::tt_metal::TensorAccessorArgs(batch_mean_tensor.buffer()).append_to(reader_compile_time_args);
+
+    std::vector<uint32_t> writer_compile_time_args = {
+        static_cast<uint32_t>(running_mean_has_value),
+        static_cast<uint32_t>(running_var_has_value),
+        batch_var_tensor_cb,
+        output_tensor_cb,
+        old_running_mean_tensor_cb,
+        old_running_var_tensor_cb,
+        updated_m_cb,
+        updated_v_cb,
+    };
+    tt::tt_metal::TensorAccessorArgs(batch_var_tensor.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(running_mean_tensor ? running_mean_tensor->buffer() : nullptr)
+        .append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(running_var_tensor ? running_var_tensor->buffer() : nullptr)
+        .append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> dataflow_defines;  // Currently support only for fp32, bf16
     if (batch_mean_tensor.dtype() == DataType::FLOAT32) {
@@ -260,8 +277,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_running_statistics.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig(
-            {a_is_dram, batch_mean_tensor_cb, momentum_cb, one_cb}, std::move(reader_defines)));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, std::move(reader_defines)));
 
     // WRITER KERNEL
     auto writer_defines = dataflow_defines;
@@ -269,22 +285,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_running_statistics.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig(
-            {
-                b_is_dram,
-                c_is_dram,
-                d_is_dram,
-                e_is_dram,
-                static_cast<uint32_t>(running_mean_has_value),
-                static_cast<uint32_t>(running_var_has_value),
-                batch_var_tensor_cb,
-                output_tensor_cb,
-                old_running_mean_tensor_cb,
-                old_running_var_tensor_cb,
-                updated_m_cb,
-                updated_v_cb,
-            },
-            std::move(writer_defines)));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, std::move(writer_defines)));
 
     // COMPUTE KERNEL
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =

@@ -14,30 +14,27 @@ void kernel_main() {
     const uint32_t tile_offset = get_arg_val<uint32_t>(4);
     const uint32_t Wt = get_arg_val<uint32_t>(5);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
+    constexpr auto src0_args = TensorAccessorArgs<0>();
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0, cb_id_in1 = tt::CBIndex::c_1;
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
-    const DataFormat src0_data_format = get_dataformat(cb_id_in0);
 
 #if FUSED_SCALE_MASK
     uint32_t Ht = get_arg_val<uint32_t>(6);
     uint32_t mask_addr = get_arg_val<uint32_t>(7);
     uint32_t start_ht = get_arg_val<uint32_t>(8);
     uint32_t start_mask_id = get_arg_val<uint32_t>(9);
-    constexpr bool mask_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto mask_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_attn = 4;
     uint32_t mask_tile_bytes = get_tile_size(cb_id_attn);
-    const DataFormat mask_data_format = get_dataformat(cb_id_attn);
 
-    const InterleavedAddrGenFast<mask_is_dram> addr_mask = {
-        .bank_base_address = mask_addr, .page_size = mask_tile_bytes, .data_format = mask_data_format};
+    const auto addr_mask = TensorAccessor(mask_args, mask_addr, mask_tile_bytes);
 
 #if CAUSAL_MASK
-    constexpr uint32_t num_tiles_causal_mask = get_compile_time_arg_val(2);
+    constexpr uint32_t num_tiles_causal_mask = get_compile_time_arg_val(mask_args.next_compile_time_args_offset());
     uint32_t mask_start_ht = get_arg_val<uint32_t>(12);
     uint32_t mask_offset = get_arg_val<uint32_t>(13);
 
@@ -53,8 +50,7 @@ void kernel_main() {
     generate_bcast_unary_scalar(cb_fused_scale, pre_scale);
 #endif
 
-    const InterleavedAddrGenFast<src0_is_dram> src_a = {
-        .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
+    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
 
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
     {

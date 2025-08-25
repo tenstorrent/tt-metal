@@ -45,9 +45,6 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
 # jit-build is cross compiling; shlibdeps does not find dependencies on the host; it should be self-contained anyway.
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SHLIBDEPS FALSE)
 
-# FIXME(afuller): Sucks for Ubuntu 22.04, but I'm not about to start packaging Boost.
-set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "libboost-dev (>= 1.78) | libboost1.81-dev")
-
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
     ${PROJECT_BINARY_DIR}/tt-metalium-config-version.cmake
