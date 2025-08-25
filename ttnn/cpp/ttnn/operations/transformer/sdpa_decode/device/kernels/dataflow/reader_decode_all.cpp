@@ -133,8 +133,6 @@ void kernel_main() {
     uint32_t v_chunk_tiles = Sk_chunk_t_dynamic * vDHt;
     uint32_t mask_chunk_tiles = PNHt * Sk_chunk_t_dynamic;
 
-    constexpr bool is_dram = true;
-
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_q_rm = tt::CBIndex::c_10;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;

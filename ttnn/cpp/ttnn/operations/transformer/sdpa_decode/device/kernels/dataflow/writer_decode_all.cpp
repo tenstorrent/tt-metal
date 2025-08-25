@@ -110,7 +110,6 @@ void kernel_main() {
     }
     uint32_t num_tiles_to_wait = (out_chunk_tiles + 2 * PNHt) * num_cores_to_wait;
 
-    constexpr bool is_dram = true;
     constexpr uint32_t cb_out = tt::CBIndex::c_20;
     constexpr uint32_t cb_intermed_out =
         tt::CBIndex::c_19;  // this cb holds the output intermediates from other worker cores
