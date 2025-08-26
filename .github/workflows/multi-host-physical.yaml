@@ -17,14 +17,14 @@ on:
         type: boolean
 
 jobs:
-  # build-artifact:
-  #   uses: ./.github/workflows/build-artifact.yaml
-  #   permissions:
-  #     packages: write
-  #   secrets: inherit
-  #   with:
-  #     version: 22.04
-  #     build-wheel: true
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      version: 22.04
+      build-wheel: true
   multi-host-t3k:
     if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.t3k_multihost == 'true' }}
     runs-on:
@@ -33,7 +33,7 @@ jobs:
       - arch-wormhole_b0
       - bare-metal
       - in-service
-    # needs: build-artifact
+    needs: build-artifact
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -83,7 +83,7 @@ jobs:
       - arch-wormhole_b0
       - bare-metal
       - in-service
-    # needs: build-artifact
+    needs: build-artifact
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
