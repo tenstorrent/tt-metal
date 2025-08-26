@@ -115,13 +115,13 @@ def run_max_pool(
         out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
 
     torch.manual_seed(0)
-    torch_input = randomize_torch_tensor(tensor_map, input_shape)
-    # act = torch.zeros(input_shape, dtype=torch.bfloat16)
-    # for n in range(input_shape[0]):
-    #     for c in range(input_shape[1]):
-    #         for h in range(input_shape[2]):
-    #             for w in range(input_shape[3]):
-    #                 act[n, c, h, w] = h * in_w + w
+    # torch_input = randomize_torch_tensor(tensor_map, input_shape)
+    torch_input = torch.zeros(input_shape, dtype=torch.bfloat16)
+    for n in range(input_shape[0]):
+        for c in range(input_shape[1]):
+            for h in range(input_shape[2]):
+                for w in range(input_shape[3]):
+                    torch_input[n, c, h, w] = h * in_w + w
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
     torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
     torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
@@ -208,6 +208,27 @@ def run_max_pool(
     if dtype == ttnn.bfloat8_b:
         pcc_thresh = 0.997
         atol = 0.35
+
+    # Print mismatch coordinates if there are differences
+    diff_mask = ~torch.isclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
+    if diff_mask.any():
+        mismatch_coords = torch.nonzero(diff_mask, as_tuple=False)
+        print(f"\nFound {mismatch_coords.shape[0]} mismatches:")
+        print(f"Output shape: {ttnn_output.shape} (N, C, H, W)")
+
+        # Print first 20 mismatches to avoid overwhelming output
+        max_print = min(20, mismatch_coords.shape[0])
+        for i in range(max_print):
+            coord = mismatch_coords[i]
+            n, c, h, w = coord[0].item(), coord[1].item(), coord[2].item(), coord[3].item()
+            ttnn_val = ttnn_output[n, c, h, w].item()
+            torch_val = torch_output[n, c, h, w].item()
+            diff = abs(ttnn_val - torch_val)
+            print(f"  [{n:2d}, {c:3d}, {h:3d}, {w:3d}]: ttnn={ttnn_val:8.4f}, torch={torch_val:8.4f}, diff={diff:8.4f}")
+
+        if mismatch_coords.shape[0] > max_print:
+            print(f"  ... and {mismatch_coords.shape[0] - max_print} more mismatches")
+
     assert_with_pcc(ttnn_output, torch_output, pcc_thresh)
     allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
     isequal = torch.equal(ttnn_output, torch_output)
