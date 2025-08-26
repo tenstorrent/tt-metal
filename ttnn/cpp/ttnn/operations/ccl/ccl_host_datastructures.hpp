@@ -95,7 +95,7 @@ private:
         uint32_t num_eth_messages_to_forward;
         uint32_t channel;
         uint32_t largest_message_size_bytes;
-        uint32_t num_buffers;
+        uint32_t num_buffers{};
         bool is_sender;
     };
 
@@ -305,7 +305,7 @@ public:
     void dump_to_log() const {
         auto const rt_args = this->get_runtime_args();
         log_trace(tt::LogOp, "EDM RT Args:");
-        for (auto const& arg : rt_args) {
+        for ([[maybe_unused]] const auto& arg : rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
     };

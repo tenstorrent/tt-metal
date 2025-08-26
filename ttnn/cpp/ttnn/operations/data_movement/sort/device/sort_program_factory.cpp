@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <cmath>
 #include <cstdint>
@@ -33,10 +34,6 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     auto input_buffer = tensor_args.input_tensor.buffer();
     auto value_buffer = output_tensors.at(0).buffer();
     auto index_buffer = output_tensors.at(1).buffer();
-
-    const bool input_tensor_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool value_tensor_is_dram = value_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool index_tensor_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const auto input_shape = tensor_args.input_tensor.padded_shape();
     const uint32_t Ht = (input_shape[0] * input_shape[1] * input_shape[2]) / tt::constants::TILE_HEIGHT;
@@ -153,16 +150,16 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
     tt::tt_metal::CreateCircularBuffer(program, core_range, synchronization_cb_config);
 
     // Kernels
-    const std::vector<uint32_t> reader_compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_index,
         index_tensor_output_cb_index,
-        static_cast<uint32_t>(input_tensor_is_dram),
-        static_cast<uint32_t>(index_tensor_is_dram),
         Wt,
         Ht,
         total_number_of_cores,
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y};
+    TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*index_buffer).append_to(reader_compile_time_args);
     const std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -175,16 +172,16 @@ SortProgramFactorySingleRowSingleCore::cached_program_t SortProgramFactorySingle
          index_buffer->address(),
          all_core_utilization_loop_count ? all_core_utilization_loop_count : 1});
 
-    const std::vector<uint32_t> writer_compile_time_args = {
+    std::vector<uint32_t> writer_compile_time_args = {
         value_tensor_cb_index,
         index_tensor_cb_index,
-        static_cast<uint32_t>(value_tensor_is_dram),
         Wt,
         Ht,
         total_number_of_cores,
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y,
         static_cast<uint32_t>(is_32_bit_data)};
+    TensorAccessorArgs(*value_buffer).append_to(writer_compile_time_args);
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_single_core.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -315,10 +312,6 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     auto value_buffer = output_tensors.at(0).buffer();
     auto index_buffer = output_tensors.at(1).buffer();
 
-    const bool input_tensor_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool value_tensor_is_dram = value_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool index_tensor_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
 
@@ -432,8 +425,6 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     const tt::DataFormat physical_core_lookup_table_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(physical_core_lookup_table_tensor.dtype());
     const uint32_t physical_core_lookup_table_tile_size = tile_size(physical_core_lookup_table_cb_data_format);
-    const bool physical_core_lookup_table_is_dram =
-        physical_core_lookup_table_tensor_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     // Circular buffers
     constexpr uint32_t cb_scale_factor = 2;
@@ -533,7 +524,7 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
     const uint32_t semaphore_barrier = CreateSemaphore(program, core_range, 0);
 
     // Kernels
-    const std::vector<uint32_t> reader_compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y,
         input_tensor_cb_index,
@@ -543,9 +534,6 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         value_tensor_peer_cb_index,
         index_tensor_peer_cb_index,
         physical_core_lookup_table_cb_index,
-        input_tensor_is_dram,
-        index_tensor_is_dram,
-        physical_core_lookup_table_is_dram,
         Ht,
         Wt,
         number_of_tiles_per_core,
@@ -554,6 +542,9 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         semaphore_exchange_readers,
         semaphore_barrier,
     };
+    TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*index_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*physical_core_lookup_table_tensor_buffer).append_to(reader_compile_time_args);
     const std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_cross_core_data_exchange.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -564,20 +555,20 @@ SortProgramFactoryCrossCoreDataExchange::cached_program_t SortProgramFactoryCros
         core_range,
         {input_buffer->address(), index_buffer->address(), physical_core_lookup_table_tensor_buffer->address()});
 
-    const std::vector<uint32_t> writer_compile_time_args = {
+    std::vector<uint32_t> writer_compile_time_args = {
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y,
         index_tensor_cb_index,
         value_tensor_cb_index,
         value_tensor_peer_cb_index,
         physical_core_lookup_table_cb_index,
-        value_tensor_is_dram,
         Wt,
         Ht,
         number_of_tiles_per_core,
         total_number_of_cores_virtual,
         semaphore_exchange_readers,
         static_cast<uint32_t>(is_32_bit_data)};
+    TensorAccessorArgs(*value_buffer).append_to(writer_compile_time_args);
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_cross_core_data_exchange.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
@@ -708,10 +699,6 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     const auto input_buffer = tensor_args.input_tensor.buffer();
     const auto value_buffer = output_tensors.at(0).buffer();
     const auto index_buffer = output_tensors.at(1).buffer();
-
-    const bool input_tensor_is_dram = input_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool value_tensor_is_dram = value_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    const bool index_tensor_is_dram = index_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
 
     const auto tile_width = tensor_args.input_tensor.tensor_spec().tile().get_width();
     const auto tile_height = tensor_args.input_tensor.tensor_spec().tile().get_height();
@@ -848,7 +835,7 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
     const auto end_core_physical_coord = device->worker_core_from_logical_core(coordinator_core);
 
     // Kernels
-    const std::vector<uint32_t> coordinator_compile_time_args = {
+    std::vector<uint32_t> coordinator_compile_time_args = {
         total_work_units,
         Wt,
         Ht,
@@ -856,10 +843,10 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
         number_of_available_cores,
         input_tensor_cb_index,
         index_tensor_cb_index,
-        static_cast<uint32_t>(input_tensor_is_dram),
-        static_cast<uint32_t>(value_tensor_is_dram),
-        static_cast<uint32_t>(index_tensor_is_dram),
         static_cast<uint32_t>(is_32_bit_data)};
+    TensorAccessorArgs(*input_buffer).append_to(coordinator_compile_time_args);
+    TensorAccessorArgs(*value_buffer).append_to(coordinator_compile_time_args);
+    TensorAccessorArgs(*index_buffer).append_to(coordinator_compile_time_args);
     const std::string coordinator_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle coordinator_kernel_id = tt::tt_metal::CreateKernel(
@@ -882,17 +869,17 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
          value_buffer->address(),
          index_buffer->address()});
 
-    const std::vector<uint32_t> reader_compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         input_tensor_cb_index,
         index_tensor_cb_index,
-        static_cast<uint32_t>(value_tensor_is_dram),
-        static_cast<uint32_t>(index_tensor_is_dram),
         Wt,
         Ht,
         total_number_of_cores,
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y,
         number_of_available_cores};
+    TensorAccessorArgs(*value_buffer).append_to(reader_compile_time_args);
+    TensorAccessorArgs(*index_buffer).append_to(reader_compile_time_args);
     const std::string reader_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
@@ -908,17 +895,17 @@ SortProgramFactorySingleRowMultiCore::cached_program_t SortProgramFactorySingleR
          coordinator_to_cores_semaphore_id,
          cores_to_coordinator_semaphore_id});
 
-    const std::vector<uint32_t> writer_compile_time_args = {
+    std::vector<uint32_t> writer_compile_time_args = {
         input_tensor_output_cb_index,
         index_tensor_output_cb_index,
-        static_cast<uint32_t>(value_tensor_is_dram),
-        static_cast<uint32_t>(index_tensor_is_dram),
         Wt,
         Ht,
         total_number_of_cores,
         compute_with_storage_grid_size.x,
         compute_with_storage_grid_size.y,
         number_of_available_cores};
+    TensorAccessorArgs(*value_buffer).append_to(writer_compile_time_args);
+    TensorAccessorArgs(*index_buffer).append_to(writer_compile_time_args);
     const std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp";
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(

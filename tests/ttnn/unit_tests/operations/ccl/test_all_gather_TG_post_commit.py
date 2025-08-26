@@ -7,6 +7,7 @@ import pytest
 from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from models.utility_functions import skip_for_grayskull
 from ttnn import ShardTensor2dMesh, ConcatMesh2dToTensor
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -84,15 +85,17 @@ def run_with_trace(
             subdevice_id=worker_sub_device_id,
         )
     else:
-        tt_out_tensor = ttnn.all_gather(
-            input_tensor,
-            dim=dim,
-            cluster_axis=cluster_axis,
-            mesh_device=mesh_device,
-            num_links=num_links,
-            memory_config=output_mem_config,
-            topology=all_gather_topology,
-        )
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+        pytest.skip(LEGACY_CCL_SKIP)
+        # tt_out_tensor = ttnn.all_gather(
+        #     input_tensor,
+        #     dim=dim,
+        #     cluster_axis=cluster_axis,
+        #     mesh_device=mesh_device,
+        #     num_links=num_links,
+        #     memory_config=output_mem_config,
+        #     topology=all_gather_topology,
+        # )
     ttnn.synchronize_device(mesh_device)
 
     # Capture trace
@@ -120,15 +123,17 @@ def run_with_trace(
                     subdevice_id=worker_sub_device_id,
                 )
             else:
-                tt_out_tensor = ttnn.all_gather(
-                    input_tensor,
-                    dim=dim,
-                    cluster_axis=cluster_axis,
-                    mesh_device=mesh_device,
-                    num_links=num_links,
-                    memory_config=output_mem_config,
-                    topology=all_gather_topology,
-                )
+                # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+                pytest.skip(LEGACY_CCL_SKIP)
+                # tt_out_tensor = ttnn.all_gather(
+                #     input_tensor,
+                #     dim=dim,
+                #     cluster_axis=cluster_axis,
+                #     mesh_device=mesh_device,
+                #     num_links=num_links,
+                #     memory_config=output_mem_config,
+                #     topology=all_gather_topology,
+                # )
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)
         return trace_id
@@ -319,15 +324,17 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         subdevice_id=worker_sub_device_id,
                     )
                 else:
-                    ttnn_tensor_out = ttnn.all_gather(
-                        ttnn_tensor,
-                        dim=dim,
-                        cluster_axis=cluster_axis,
-                        mesh_device=mesh_device,
-                        num_links=num_links,
-                        memory_config=output_mem_config,
-                        topology=all_gather_topology,
-                    )
+                    # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
+                    pytest.skip(LEGACY_CCL_SKIP)
+                    # ttnn_tensor_out = ttnn.all_gather(
+                    #     ttnn_tensor,
+                    #     dim=dim,
+                    #     cluster_axis=cluster_axis,
+                    #     mesh_device=mesh_device,
+                    #     num_links=num_links,
+                    #     memory_config=output_mem_config,
+                    #     topology=all_gather_topology,
+                    # )
             ttnn.synchronize_device(mesh_device, sub_device_ids=sub_device_stall_group)
             signpost("stop")
     except Exception as e:

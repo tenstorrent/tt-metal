@@ -29,6 +29,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "hostdevcommon/kernel_structs.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -127,19 +128,22 @@ void set_math_fid_masks_binary(
 }
 
 void add_reader_writer_kernels(
-    tt_metal::Program& program,
+    distributed::MeshWorkload& workload,
+    distributed::MeshCoordinateRange& device_range,
     const CoreCoord& logical_core,
     const ReduceConfig& test_config,
-    const std::shared_ptr<tt_metal::Buffer>& src_dram_buffer,
-    const std::shared_ptr<tt_metal::Buffer>& dst_dram_buffer) {
+    const std::shared_ptr<distributed::MeshBuffer>& src_dram_buffer,
+    const std::shared_ptr<distributed::MeshBuffer>& dst_dram_buffer) {
     uint32_t tile_H = test_config.tile_shape.get_tile_shape()[0], tile_W = test_config.tile_shape.get_tile_shape()[1];
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1] * test_config.shape[0];
-    uint32_t HW = H * W;
     uint32_t N = test_config.shape[0] * test_config.shape[1];
     uint32_t Wt = W / tile_W;
     uint32_t Ht = H / tile_H;
     uint32_t num_tensor_tiles = NC * H * W / (tile_W * tile_H);
     float scaler = get_scaler(test_config);
+
+    auto& program = workload.get_programs().at(device_range);
+
     switch (test_config.reduce_dim) {
         case ReduceDim::H: {
             bfloat16 bfloat_scaler_value = bfloat16(scaler);
@@ -252,15 +256,20 @@ std::string get_compute_kernel_name(const ReduceDim& reduce_dim) {
     return compute_kernel_name;
 }
 
-void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfig& test_config) {
+void run_single_core_reduce_program(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, const ReduceConfig& test_config) {
+    auto& cq = mesh_device->mesh_command_queue();
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
     CoreCoord core = {0, 0};
 
     uint32_t tile_H = test_config.tile_shape.get_tile_shape()[0], tile_W = test_config.tile_shape.get_tile_shape()[1];
     uint32_t W = test_config.shape[3], H = test_config.shape[2], NC = test_config.shape[1] * test_config.shape[0];
-    uint32_t HW = H * W;
-    uint32_t N = test_config.shape[0] * test_config.shape[1];
     TT_FATAL((tile_H == 16 && tile_W == 32) || (tile_H == 32 && tile_W == 32), "Error: Invalid tile shape");
     TT_FATAL(W % tile_W == 0 && H % tile_H == 0, "Error: Tensor height/width must be multiple of tile height/width");
     TT_FATAL(H > 0 && W > 0 && NC > 0, "Error: All tensor dims must be greater than 0");
@@ -293,11 +302,9 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
     uint32_t src_page_size = single_tile_bytes;
     uint32_t dst_page_size = single_tile_bytes;
 
-    tt_metal::InterleavedBufferConfig src_config{
-        .device = device,
-        .size = dram_buffer_size,
-        .page_size = src_page_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig src_local_config{
+        .page_size = src_page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig src_buffer_config{.size = dram_buffer_size};
 
     uint32_t output_size_bytes;
     switch (test_config.reduce_dim) {
@@ -307,14 +314,14 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
         default: TT_THROW("Unsupported reduce dim!");
     }
 
-    tt_metal::InterleavedBufferConfig dst_config{
-        .device = device,
-        .size = output_size_bytes,
-        .page_size = dst_page_size,
-        .buffer_type = tt_metal::BufferType::DRAM};
+    distributed::DeviceLocalBufferConfig dst_local_config{
+        .page_size = dst_page_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = false};
+    distributed::ReplicatedBufferConfig dst_buffer_config{.size = output_size_bytes};
 
-    std::shared_ptr<tt_metal::Buffer> src_dram_buffer = CreateBuffer(src_config);
-    std::shared_ptr<tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dst_config);
+    std::shared_ptr<distributed::MeshBuffer> src_dram_buffer =
+        distributed::MeshBuffer::create(src_buffer_config, src_local_config, mesh_device.get());
+    std::shared_ptr<distributed::MeshBuffer> dst_dram_buffer =
+        distributed::MeshBuffer::create(dst_buffer_config, dst_local_config, mesh_device.get());
 
     uint32_t src0_cb_index = 0;
     uint32_t num_buffer_tiles = 32;
@@ -323,7 +330,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
             num_buffer_tiles * single_tile_bytes, {{src0_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(src0_cb_index, single_tile_bytes)
             .set_tile_dims(src0_cb_index, test_config.tile_shape);
-    auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_src0_config);
 
     uint32_t ouput_cb_index = tt::CBIndex::c_16;
     uint32_t num_output_buffer_tiles = 32;
@@ -332,15 +339,15 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
             num_output_buffer_tiles * single_tile_bytes, {{ouput_cb_index, tt::DataFormat::Float16_b}})
             .set_page_size(ouput_cb_index, single_tile_bytes)
             .set_tile_dims(ouput_cb_index, test_config.tile_shape);
-    auto cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_output_config);
 
     tt_metal::CircularBufferConfig cb_temp_reduce_tile_config =
         tt_metal::CircularBufferConfig(2 * (2 * TILE_WIDTH * TILE_HEIGHT), {{CBIndex::c_2, tt::DataFormat::Float16_b}})
             .set_page_size(CBIndex::c_2, single_tile_bytes)
             .set_tile_dims(CBIndex::c_2, tt_metal::Tile({32, 32}));
-    auto cb_temp_reduce_tile = tt_metal::CreateCircularBuffer(program, core, cb_temp_reduce_tile_config);
+    tt_metal::CreateCircularBuffer(program_, core, cb_temp_reduce_tile_config);
 
-    add_reader_writer_kernels(program, core, test_config, src_dram_buffer, dst_dram_buffer);
+    add_reader_writer_kernels(workload, device_range, core, test_config, src_dram_buffer, dst_dram_buffer);
 
     vector<uint32_t> compute_kernel_args = {
         uint(Ht),
@@ -369,8 +376,8 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
 
     std::string compute_kernel_name = get_compute_kernel_name(test_config.reduce_dim);
 
-    auto reduce_compute_kernel = tt_metal::CreateKernel(
-        program,
+    tt_metal::CreateKernel(
+        program_,
         compute_kernel_name,
         core,
         tt_metal::ComputeConfig{
@@ -380,18 +387,16 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
             .compile_args = compute_kernel_args,
             .defines = reduce_defines});
 
-    auto seed = std::chrono::system_clock::now().time_since_epoch().count();
-
     vector<uint32_t> src_vec = create_random_vector_of_bfloat16(
         dram_buffer_size, test_config.data_gen_rand_max, test_config.data_gen_seed, test_config.data_gen_offset);
 
-    tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
+    distributed::WriteShard(cq, src_dram_buffer, src_vec, zero_coord);
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     // The kernel will view the input as TILED_NFACES
     std::vector<uint32_t> result_vec;
-    tt_metal::detail::ReadFromBuffer(dst_dram_buffer, result_vec);
+    distributed::ReadShard(cq, result_vec, dst_dram_buffer, zero_coord);
 
     EXPECT_EQ(result_vec.size(), num_golden_elements);
 
@@ -454,7 +459,7 @@ void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfi
 
 using namespace unit_tests::compute::reduce;
 
-TEST_F(DeviceFixture, TensixComputeReduceH) {
+TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
     if (this->arch_ != tt::ARCH::BLACKHOLE) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -491,7 +496,7 @@ TEST_F(DeviceFixture, TensixComputeReduceH) {
     }
 }
 
-TEST_F(DeviceFixture, TensixComputeReduceW) {
+TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
     std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -527,7 +532,7 @@ TEST_F(DeviceFixture, TensixComputeReduceW) {
     }
 }
 
-TEST_F(DeviceFixture, TensixComputeReduceHW) {
+TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
     std::vector<uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -563,7 +568,7 @@ TEST_F(DeviceFixture, TensixComputeReduceHW) {
     }
 }
 
-TEST_F(DeviceFixture, TensixComputeReduceHMathOnly) {
+TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
     if (this->arch_ != tt::ARCH::BLACKHOLE) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
@@ -600,7 +605,7 @@ TEST_F(DeviceFixture, TensixComputeReduceHMathOnly) {
     }
 }
 
-TEST_F(DeviceFixture, TensixComputeReduceWMathOnly) {
+TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
     std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -636,7 +641,7 @@ TEST_F(DeviceFixture, TensixComputeReduceWMathOnly) {
     }
 }
 
-TEST_F(DeviceFixture, TensixComputeReduceHWMathOnly) {
+TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
     std::vector<uint32_t> shape = {1, 2, 7 * TILE_HEIGHT, 5 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], 32, 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
@@ -673,7 +678,7 @@ TEST_F(DeviceFixture, TensixComputeReduceHWMathOnly) {
     }
 }
 
-TEST_F(DeviceFixture, TensixComputeReduceWTinyTiles) {
+TEST_F(MeshDeviceFixture, TensixComputeReduceWTinyTiles) {
     tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT / 2, TILE_WIDTH});
     std::vector<uint32_t> shape = {1, 1, 1 * tile_shape.get_tile_shape()[0], 13 * tile_shape.get_tile_shape()[1]};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], tile_shape.get_tile_shape()[1]};

@@ -199,6 +199,21 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
  * |                          | no       |
  */
 uint32_t EncodePerDeviceProgramID(uint32_t base_program_id, uint32_t device_id, bool is_host_fallback_op = false);
+
+/**
+ * Decode per device program ID to get encoded values (base program id, device id, and a flag indicating whether
+ * it's an op run entirely on host).
+ *
+ * Return value: tuple<uint32_t, uint32_t, bool>
+ *
+ * | Argument             | Description                                                                         |  Data
+ * type            | Valid range              | required |
+ * |----------------------|-------------------------------------------------------------------------------------|-----------------------|--------------------------|----------|
+ * | device_program_id    | Encoded device specific id used by the performance profiler  |
+ * uint32_t        | 0 - 2^32 - 1             | yes      |
+ */
+DeviceProgramId DecodePerDeviceProgramID(uint32_t device_program_id);
+
 /**
  * Copies data from a host buffer into a buffer within the device DRAM channel
  *

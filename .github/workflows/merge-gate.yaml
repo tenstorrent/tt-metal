@@ -8,6 +8,14 @@ name: Merge Gate
 #   This includes the cost of checking out the code, preparing a runner, etc.
 # - Individual test cases must be less than 5s.
 
+run-name: >-
+  ${{ github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'merged' && format('[Merge Queue] 🎯 Merged {0}', github.sha) ||
+      github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'dequeued' && format('[Merge Queue] ↩️ Dequeued {0}', github.sha) ||
+      github.event_name == 'merge_group' && github.event.action == 'destroyed' && github.event.reason == 'invalidated' && format('[Merge Queue] 💔 Invalidated {0}', github.sha) ||
+      github.event_name == 'merge_group' && github.event.action == 'destroyed' && format('[Merge Queue] {0} {1}', github.event.reason, github.sha) ||
+      github.event_name == 'merge_group' && format('[Merge Queue] 💫 Processing {0}: {1}', github.actor, github.sha) ||
+      '' }}
+
 on:
   workflow_dispatch:
   pull_request:
@@ -17,9 +25,26 @@ on:
       - synchronize
       - ready_for_review
   merge_group:
+    types:
+      - checks_requested
+      - destroyed
   push:
     branches:
       - main # Builds on main will populate the shared ccache to speed up builds on branches
+
+concurrency:
+  # Groups to control cancelling of obsolete runs.
+  # main (or any protected branch): run_id (ie: never cancel other jobs)
+  # PRs: PR #
+  # Merge Queue: branch name; will be paired with the 'destroyed' trigger to cause a cancel when it leaves or moves in the queue.
+  #              See https://github.com/orgs/community/discussions/137976#discussioncomment-14004793
+  # All others: branch name (ie: one run per branch)
+  group: >-
+    ${{ github.workflow }}-
+    ${{ (github.ref_protected && github.run_id)
+        || github.event.pull_request.number
+        || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -32,7 +57,7 @@ jobs:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
     # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
     # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
-    if: github.event_name != 'pull_request'
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
 
@@ -40,14 +65,23 @@ jobs:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
     # We must have this workflow trigger on PRs in order to allow us to require them in the merge queue.
     # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
-    if: github.event_name != 'pull_request'
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:
       version: 22.04
 
+  fail-fast:
+    if: failure()
+    runs-on: ubuntu-latest
+    needs: [code-analysis]
+    permissions:
+      actions: write
+    steps:
+      - uses: action-pack/cancel@bb57491c99942855e9da36ffbe86a686b2bd35a3
+
   find-changes:
-    if: github.event_name != 'pull_request'
+    if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     outputs:
       any-code-changed: ${{ steps.find-changes.outputs.any-code-changed }}
@@ -129,7 +163,6 @@ jobs:
         platform: [
           "N300-viommu",
           "N300-llmbox",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -143,6 +176,7 @@ jobs:
     needs: [find-changes, build-tsan]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
@@ -152,7 +186,6 @@ jobs:
         platform: [
           "N300-viommu",
           "N300-llmbox",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -191,7 +224,6 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/basic.yaml
     with:
@@ -205,6 +237,7 @@ jobs:
     needs: [build-asan, find-changes]
     if: ${{ github.ref_name == 'main' ||
             needs.find-changes.outputs.cmake-changed == 'true' ||
+            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
             needs.find-changes.outputs.tt-nn-changed == 'true' ||
             needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
         }}
@@ -213,7 +246,6 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
-          "P150b-viommu",
         ]
     uses: ./.github/workflows/basic.yaml
     with:

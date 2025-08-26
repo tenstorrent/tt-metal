@@ -33,12 +33,12 @@
  * @param in_vals Pointer to L1 memory containing input values with data type determined by data_format template
  * parameter
  */
-template <bool src_is_dram, bool reduce_all, DataFormat data_format>
+template <bool reduce_all, DataFormat data_format, typename AddrGen>
 inline void find_argmax_for_core(
     const uint32_t inner_dim_units,
     const uint32_t outer_idx,
     const uint32_t src_offset,
-    const InterleavedAddrGen<src_is_dram>& s_src,
+    const AddrGen& s_src,
     const uint32_t src_cb_addr,
     const uint32_t src_read_size,
     const uint32_t red_dim_offset,
@@ -96,7 +96,9 @@ inline void find_argmax_for_core(
                     });
 
             } else {
-                static_assert(data_format != data_format, "Unsupported data format in find_argmax_for_core");
+                // We need a value-dependent expression (gcc-12) that is not
+                // tautologically false (gcc-15)
+                static_assert(data_format == DataFormat::Float16_b, "Unsupported data format in find_argmax_for_core");
             }
         }
 
@@ -191,8 +193,11 @@ inline uint32_t find_argmax_from_intermediate_outputs(
                 inner_idx, i_red_vals, i_red_idxs, max_val, max_idx, [](uint32_t a, uint32_t b) { return a > b; });
 
         } else {
+            // We need a value-dependent expression (gcc-12) that is not
+            // tautologically false (gcc-15)
             static_assert(
-                data_format != data_format, "Unsupported data format in find_argmax_from_intermediate_outputs");
+                data_format == DataFormat::Float16_b,
+                "Unsupported data format in find_argmax_from_intermediate_outputs");
         }
     }
     return max_idx;
@@ -231,65 +236,66 @@ void kernel_main() {
     // This CB holds intermediate outputs (values) in each core
     constexpr uint32_t red_vals_cb_idx = get_compile_time_arg_val(3);
 
-    constexpr bool src_is_dram = (bool)get_compile_time_arg_val(4);
-    constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(5);
-    constexpr uint32_t src_page_size = get_compile_time_arg_val(6);
-    constexpr uint32_t dst_page_size = get_compile_time_arg_val(7);
-    constexpr uint32_t red_idx_size_per_core = get_compile_time_arg_val(8);
-    constexpr uint32_t red_val_size_per_core = get_compile_time_arg_val(9);
+    constexpr uint32_t src_page_size = get_compile_time_arg_val(4);
+    constexpr uint32_t dst_page_size = get_compile_time_arg_val(5);
+    constexpr uint32_t red_idx_size_per_core = get_compile_time_arg_val(6);
+    constexpr uint32_t red_val_size_per_core = get_compile_time_arg_val(7);
 
     // This is the number of elements in the output, excluding the last two dimensions.
     // i.e. for an input tensor of shape (.., N, C, H, W), this is (.. * N * C)
     // It also depends on the `keepdim`
-    constexpr uint32_t outer_dim_units = get_compile_time_arg_val(10);
+    constexpr uint32_t outer_dim_units = get_compile_time_arg_val(8);
 
     // This is the number of elements in the last dimension of the output
     // i.e. for an input tensor of shape (.., N, C, H, W), this is H.
     // This dictates the page size in the output cb
-    constexpr uint32_t inner_dim_units = get_compile_time_arg_val(11);
+    constexpr uint32_t inner_dim_units = get_compile_time_arg_val(9);
 
     // This is the number of elements in the input tensor along the reduction dim (W)
-    constexpr uint32_t red_dim_units = get_compile_time_arg_val(12);
+    constexpr uint32_t red_dim_units = get_compile_time_arg_val(10);
 
     // Boolean to indicate if we reduce across _all_ dimensions or just on the reduction dim (last dim)
-    constexpr bool reduce_all = (bool)get_compile_time_arg_val(13);
+    constexpr bool reduce_all = (bool)get_compile_time_arg_val(11);
 
     // Total number of cores participating in this op
-    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(12);
 
     // Pick the core that will collate the intermediate outputs
-    constexpr uint32_t reduce_core_id = (bool)get_compile_time_arg_val(15);
+    constexpr uint32_t reduce_core_id = (bool)get_compile_time_arg_val(13);
 
-    constexpr uint32_t reduce_core_x = get_compile_time_arg_val(16);
-    constexpr uint32_t reduce_core_y = get_compile_time_arg_val(17);
+    constexpr uint32_t reduce_core_x = get_compile_time_arg_val(14);
+    constexpr uint32_t reduce_core_y = get_compile_time_arg_val(15);
 
     // start and end coordinates of the cores that will be used to compute the intermediate outputs
     // At maximum, there can be two groups of cores (suffix 0 and 1)
-    constexpr uint32_t start_core_x0 = get_compile_time_arg_val(18);
-    constexpr uint32_t start_core_y0 = get_compile_time_arg_val(19);
-    constexpr uint32_t end_core_x0 = get_compile_time_arg_val(20);
-    constexpr uint32_t end_core_y0 = get_compile_time_arg_val(21);
+    constexpr uint32_t start_core_x0 = get_compile_time_arg_val(16);
+    constexpr uint32_t start_core_y0 = get_compile_time_arg_val(17);
+    constexpr uint32_t end_core_x0 = get_compile_time_arg_val(18);
+    constexpr uint32_t end_core_y0 = get_compile_time_arg_val(19);
 
-    constexpr uint32_t start_core_x1 = get_compile_time_arg_val(22);
-    constexpr uint32_t start_core_y1 = get_compile_time_arg_val(23);
-    constexpr uint32_t end_core_x1 = get_compile_time_arg_val(24);
-    constexpr uint32_t end_core_y1 = get_compile_time_arg_val(25);
+    constexpr uint32_t start_core_x1 = get_compile_time_arg_val(20);
+    constexpr uint32_t start_core_y1 = get_compile_time_arg_val(21);
+    constexpr uint32_t end_core_x1 = get_compile_time_arg_val(22);
+    constexpr uint32_t end_core_y1 = get_compile_time_arg_val(23);
 
-    constexpr uint32_t num_cores0 = get_compile_time_arg_val(26);  // Number of cores in group 0
-    constexpr uint32_t num_cores1 = get_compile_time_arg_val(27);  // Number of cores in group 1
+    constexpr uint32_t num_cores0 = get_compile_time_arg_val(24);  // Number of cores in group 0
+    constexpr uint32_t num_cores1 = get_compile_time_arg_val(25);  // Number of cores in group 1
 
     // Semaphore to fire when intermediate outputs can be started to compute
-    constexpr uint32_t start_sem_idx = get_compile_time_arg_val(28);
+    constexpr uint32_t start_sem_idx = get_compile_time_arg_val(26);
 
     // Semaphore to fire when intermediate outputs for one page are ready
-    constexpr uint32_t done_sem_idx = get_compile_time_arg_val(29);
+    constexpr uint32_t done_sem_idx = get_compile_time_arg_val(27);
+
+    constexpr auto s_src_args = TensorAccessorArgs<28>();
+    constexpr auto s_dst_args = TensorAccessorArgs<s_src_args.next_compile_time_args_offset()>();
 
     //-------------------------------------------------------------------------
     // Flag to identify if this core will collate intermediate outputs
     const bool is_reduce_core = (core_id == reduce_core_id);
 
-    const InterleavedAddrGen<src_is_dram> s_src = {.bank_base_address = src_base_addr, .page_size = src_page_size};
-    const InterleavedAddrGen<dst_is_dram> s_dst = {.bank_base_address = dst_base_addr, .page_size = dst_page_size};
+    const auto s_src = TensorAccessor(s_src_args, src_base_addr, src_page_size);
+    const auto s_dst = TensorAccessor(s_dst_args, dst_base_addr, dst_page_size);
 
     // CB in L1 memory for storing input
     constexpr DataFormat src_cb_addr_data_format = get_dataformat(src_cb_idx);
@@ -369,7 +375,7 @@ void kernel_main() {
             noc_semaphore_wait(start_sem_local_ptr, k + 1);
         }
 
-        find_argmax_for_core<src_is_dram, reduce_all, src_cb_addr_data_format>(
+        find_argmax_for_core<reduce_all, src_cb_addr_data_format>(
             inner_dim_units,
             k,
             src_offset,

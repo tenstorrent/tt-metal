@@ -8,6 +8,10 @@ FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV CARGO_HOME=/usr/local/cargo
+ENV PATH="$CARGO_HOME/bin:$PATH"
+
 # Install runtime deps
 COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 COPY /tt_metal/sfpi-version.sh /opt/tt_metal_infra/scripts/docker/sfpi-version.sh
@@ -90,12 +94,11 @@ COPY /docs/requirements-docs.txt ${TT_METAL_INFRA_DIR}/tt-metal/docs/.
 COPY /tests/sweep_framework/requirements-sweeps.txt ${TT_METAL_INFRA_DIR}/tt-metal/tests/sweep_framework/.
 COPY /tt_metal/python_env/requirements-dev.txt ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/.
 
+# TODO: Why do we need the chmod?
 RUN python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu && \
     python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/tt_metal/python_env/requirements-dev.txt && \
-    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt
-
-# Adjust permissions to allow any user to use and modify the venv
-RUN chmod -R 777 $VIRTUAL_ENV
+    python3 -m pip install --no-cache-dir -r ${TT_METAL_INFRA_DIR}/tt-metal/docs/requirements-docs.txt && \
+    chmod -R 777 $VIRTUAL_ENV
 
 #############################################################
 
@@ -115,6 +118,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-server \
     vim \
     libgl1 \
+    ipmitool \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # IWYU could be useful to developers
@@ -131,8 +135,8 @@ RUN mkdir -p /tmp/iwyu \
 RUN [ "$UBUNTU_VERSION" != "24.04" ] && apt-get remove -y gdb || true
 RUN [ "$UBUNTU_VERSION" != "24.04" ] \
     && mkdir -p /tmp/gdb-build && cd /tmp/gdb-build/ \
-    && wget -O /tmp/gdb-build/gdb.tar.gz https://ftp.gnu.org/gnu/gdb/gdb-14.2.tar.gz \
-    && tar -xvf /tmp/gdb-build/gdb.tar.gz -C /tmp/gdb-build --strip-components=1 \
+    && wget -O /tmp/gdb-build/gdb.tar.xz https://mirror.csclub.uwaterloo.ca/gnu/gdb/gdb-14.2.tar.xz \
+    && tar -xvf /tmp/gdb-build/gdb.tar.xz -C /tmp/gdb-build --strip-components=1 \
     && /tmp/gdb-build/configure --prefix=/usr/local \
     && make -j$(nproc) \
     && make install \
@@ -164,3 +168,44 @@ RUN mkdir -p /etc && \
 ARG WHEEL_FILENAME
 ADD $WHEEL_FILENAME $WHEEL_FILENAME
 RUN pip3 install $WHEEL_FILENAME
+
+# Set up virtual environment
+RUN python3 -m venv $PYTHON_ENV_DIR
+
+#############################################################
+
+FROM base AS release-models
+
+# Set up virtual environment and TT_METAL_HOME
+ENV PYTHON_ENV_DIR=/opt/venv
+ENV TT_METAL_HOME=/tt-metal
+ENV PYTHONPATH=/tt-metal
+
+# Clone tt-metal
+RUN /bin/bash -c "git clone --filter=blob:none --recurse-submodules --tags \
+    https://github.com/tenstorrent/tt-metal.git ${TT_METAL_HOME} \
+    && cd ${TT_METAL_HOME}"
+
+WORKDIR /tt-metal
+
+# Build tt-metal and venv, then clear cache
+run /bin/bash -c "./build_metal.sh \
+				&& ./create_venv.sh \
+				&& source $PYTHON_ENV_DIR/bin/activate \
+				&& pip install -r models/tt_transformers/requirements.txt \
+				&& rm -rf /root/.cache /root/.cargo /tt-metal/.cpmcache"
+
+# Ensure the virtual environment is used for all Python-related commands
+ENV PATH="$PYTHON_ENV_DIR/bin:$PATH"
+ENV VIRTUAL_ENV="$PYTHON_ENV_DIR"
+
+# Ensure the virtual environment is activated on shell startup
+RUN echo "source $PYTHON_ENV_DIR/bin/activate" >> /etc/bash.bashrc
+
+# Extra system deps
+RUN apt-get update && apt-get install -y \
+		# required
+		gosu \
+		libgl1 \
+		libsndfile1 \
+		&& rm -rf /var/lib/apt/lists/*

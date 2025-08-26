@@ -50,7 +50,7 @@ void write_go_signal(
             true);
     }
 
-    go_msg_t run_program_go_signal;
+    go_msg_t run_program_go_signal{};
     run_program_go_signal.signal = RUN_MSG_GO;
     run_program_go_signal.master_x = dispatch_core.x;
     run_program_go_signal.master_y = dispatch_core.y;
@@ -63,7 +63,7 @@ void write_go_signal(
     // When running without dispatch_s:
     //   - dispatch_d handles sending the go signal to all workers
     // There is no need for dispatch_d to barrier before sending the dispatch_s notification or go signal,
-    // since this go signal is not preceeded by NOC txns for program config data
+    // since this go signal is not preceded by NOC txns for program config data
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
         uint16_t index_bitmask = 1 << sub_device_index;
@@ -76,9 +76,10 @@ void write_go_signal(
         expected_num_workers_completed,
         *reinterpret_cast<uint32_t*>(&run_program_go_signal),
         MetalContext::instance().dispatch_mem_map().get_dispatch_stream_index(sub_device_index),
-        send_mcast ? device->num_noc_mcast_txns(sub_device_id) : 0,
+        (send_mcast && device->has_noc_mcast_txns(sub_device_id)) ? *sub_device_id
+                                                                  : CQ_DISPATCH_CMD_GO_NO_MULTICAST_OFFSET,
         send_unicasts ? device->num_virtual_eth_cores(sub_device_id) : 0,
-        device->noc_data_start_index(sub_device_id, send_mcast, send_unicasts), /* noc_data_start_idx */
+        device->noc_data_start_index(sub_device_id, send_unicasts), /* noc_data_start_idx */
         dispatcher_for_go_signal);
 
     TT_ASSERT(go_signal_cmd_sequence.size_bytes() == go_signal_cmd_sequence.write_offset_bytes());

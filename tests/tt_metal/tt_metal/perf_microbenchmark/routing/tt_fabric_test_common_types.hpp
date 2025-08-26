@@ -96,12 +96,15 @@ enum class HighLevelTrafficPattern {
     UnidirectionalLinear,
     FullRing,
     HalfRing,
+    AllDevicesUniformPattern,
 };
 
 struct TestFabricSetup {
-    tt::tt_fabric::Topology topology;
+    tt::tt_fabric::Topology topology{0};
     std::optional<RoutingType> routing_type;
-    uint32_t num_links;
+    std::optional<tt_fabric::FabricTensixConfig> fabric_tensix_config;
+    uint32_t num_links{};
+    std::optional<std::string> torus_config;  // For Torus topology: "X", "Y", or "XY"
 };
 
 struct HighLevelPatternConfig {
@@ -125,7 +128,7 @@ struct ParsedTestConfig {
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
-    uint32_t seed;
+    uint32_t seed{};
 };
 
 struct TestConfig {
@@ -144,7 +147,7 @@ struct TestConfig {
     bool global_sync = false;     // Enable sync for device synchronization. Typically used for benchmarking to minimize
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
-    uint32_t seed;
+    uint32_t seed{};
 };
 
 // ======================================================================================

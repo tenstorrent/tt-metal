@@ -23,9 +23,9 @@
 #include "device_impl.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "env_lib.hpp"
-#include "erisc_datamover_builder.hpp"
-#include "fabric_edm_packet_header.hpp"
 #include "hostdevcommon/fabric_common.h"
+#include <tt_metal/fabric/erisc_datamover_builder.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric_types.hpp"
 #include "hal.hpp"
 #include "host_api.hpp"
@@ -331,6 +331,10 @@ void DevicePool::initialize(
     _inst->skip_remote_devices = skip;
     _inst->use_max_eth_core_count_on_all_devices_ = use_max_eth_core_count_on_all_devices;
     _inst->add_devices_to_pool(device_ids_to_open);
+
+    // Initialize fabric tensix datamover config after devices are added to the pool
+    tt::tt_metal::MetalContext::instance().initialize_fabric_tensix_datamover_config();
+
     _inst->init_firmware_on_active_devices();
 }
 
@@ -853,6 +857,36 @@ bool DevicePool::close_devices(const std::vector<IDevice*>& devices, bool skip_s
         const auto& fabric_context = control_plane.get_fabric_context();
         auto [termination_signal_address, signal] = fabric_context.get_fabric_router_termination_address_and_signal();
         std::vector<uint32_t> termination_signal(1, signal);
+
+        // Terminate fabric tensix configs (mux cores) if enabled
+        // TODO: issue #26855, move the termination process to device
+        bool tensix_config_enabled = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config() !=
+                                     tt::tt_fabric::FabricTensixConfig::DISABLED;
+        if (tensix_config_enabled) {
+            const auto& tensix_config = fabric_context.get_tensix_config();
+
+            for (const auto& dev : this->get_all_active_devices()) {
+                if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {
+                    continue;
+                }
+
+                const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+                const auto fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(dev->id());
+                const auto& active_fabric_eth_channels = control_plane.get_active_fabric_eth_channels(fabric_node_id);
+
+                for (const auto& [eth_chan_id, direction] : active_fabric_eth_channels) {
+                    auto [tensix_termination_address, tensix_signal] =
+                        tensix_config.get_termination_address_and_signal(dev->id(), eth_chan_id);
+                    std::vector<uint32_t> tensix_termination_signal(1, tensix_signal);
+                    auto mux_core = tensix_config.get_core_for_channel(dev->id(), eth_chan_id);
+
+                    tt_metal::detail::WriteToDeviceL1(
+                        dev, mux_core, tensix_termination_address, tensix_termination_signal, CoreType::WORKER);
+                }
+
+                tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(dev->id());
+            }
+        }
 
         for (const auto& dev : this->get_all_active_devices()) {
             if (fabric_context.get_num_fabric_initialized_routers(dev->id()) == 0) {

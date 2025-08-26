@@ -49,6 +49,10 @@ run_tg_tests() {
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_dispatch_TG.py --timeout=500 ; fail+=$?
     TT_METAL_ENABLE_ERISC_IRAM=1 pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_all_to_all_combine_TG.py --timeout=500 ; fail+=$?
 
+  elif [[ "$1" == "sd35" ]]; then
+    echo "LOG_METAL: running stable diffusion 3.5 Large run_tg_frequent_tests"
+    pytest -n auto models/experimental/stable_diffusion_35_large/tests/test_fun_transformer_block.py -k "tg_cfg2_sp4_tp4" ; fail+=$?
+
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1
@@ -56,7 +60,7 @@ run_tg_tests() {
 
   if [[ $fail -ne 0 ]]; then
     echo "LOG_METAL: run_tg_frequent_tests failed"
-    # exit 1
+    exit 1
   fi
 
 }

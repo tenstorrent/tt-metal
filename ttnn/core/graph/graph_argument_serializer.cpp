@@ -7,6 +7,7 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/types.hpp"
 #include <boost/algorithm/string/replace.hpp>
+#include <tt_stl/small_vector.hpp>
 
 namespace ttnn::graph {
 
@@ -81,9 +82,9 @@ std::unordered_map<std::type_index, GraphArgumentSerializer::ConvertionFunction>
 
 template <typename T, std::size_t N>
 void GraphArgumentSerializer::register_small_vector() {
-    registry()[typeid(std::reference_wrapper<tt::stl::SmallVector<T, N>>)] = [](const std::any& value) -> std::string {
+    registry()[typeid(std::reference_wrapper<ttsl::SmallVector<T, N>>)] = [](const std::any& value) -> std::string {
         std::ostringstream oss;
-        auto referenced_value = std::any_cast<std::reference_wrapper<tt::stl::SmallVector<T, N>>>(value);
+        auto referenced_value = std::any_cast<std::reference_wrapper<ttsl::SmallVector<T, N>>>(value);
         oss << referenced_value.get();
         return oss.str();
     };
@@ -156,7 +157,8 @@ std::vector<std::string> GraphArgumentSerializer::to_list(const std::span<std::a
         } else {
             // for debugging reasons, I want to report the type that is not managed
             std::ostringstream oss;
-            oss << "[ unsupported type" << " , ";
+            oss << "[ unsupported type"
+                << " , ";
             auto demangled_name = graph_demangle(element.type().name());
             boost::algorithm::replace_all(demangled_name, "__1::", "");
             oss << demangled_name;

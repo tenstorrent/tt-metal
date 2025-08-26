@@ -15,9 +15,17 @@ Each model is benchmarked using standard segmentation metrics:
 
 ## To run the test of ttnn vs ground truth, please follow the following commands:
 
-**Vanilla Unet (320x320):**
+**Vanilla Unet (480x640):**
+
+**_Single-Device (BS-1):_**<br>
+
 ```sh
-pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet[res0-device_params0-tt_model]
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet[res0-device_params0-1-tt_model]
+```
+**_Multi-Device (DP-2,N300):_**<br>
+
+```sh
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet_dp[wormhole_b0-res0-device_params0-1-tt_model]
 ```
 Note: If vanilla unet evaluation test fails with the error: `ValueError: Sample larger than population or is negative`
 Try deleting the "imageset" folder in "models/experimental/segmentation_evaluation" directory and try running again.
@@ -39,15 +47,29 @@ pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::te
 ```
 
 **Segformer-b0 (512x512):**
+
+**_Single-Device (BS-1):_**<br>
 ```sh
-pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer[res0-tt_model-device_params0]
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval[res0-1-tt_model-device_params0]
+```
+
+**_Multi-Device (DP-2,N300):_**<br>
+```sh
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp[wormhole_b0-res0-1-tt_model-device_params0]
 ```
 
 ## To run the test of torch vs ground truth, please follow the following commands:
 
-**Vanilla Unet (320x320):**
+**Vanilla Unet (480x640):**
+**_Single-Device (BS-1):_**<br>
+
 ```sh
-pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet[res0-device_params0-torch_model]
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet[res0-device_params0-1-torch_model]
+```
+
+**_Multi-Device (DP-2,N300):_**<br>
+```sh
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_vanilla_unet_dp[wormhole_b0-res0-device_params0-1-torch_model]
 ```
 
 **VGG Unet (256x256):**
@@ -67,8 +89,15 @@ pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::te
 ```
 
 **Segformer-b0 (512x512):**
+
+**_Single-Device (BS-1):_**<br>
 ```sh
-pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer[res0-torch_model-device_params0]
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval[res0-1-torch_model-device_params0]
+```
+
+**_Multi-Device (DP-2,N300):_**<br>
+```sh
+pytest models/experimental/segmentation_evaluation/test_segmentation_eval.py::test_segformer_eval_dp[wormhole_b0-res0-1-torch_model-device_params0]
 ```
 
 ## Evaluation Table

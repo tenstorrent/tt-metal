@@ -7,6 +7,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.t3000.mixtral8x7b.reference.model import TransformerBlock, precompute_freqs_cis
+from models.demos.t3000.mixtral8x7b.tt.mixtral_ccl import TT_CCL
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat, prepare_inputs_ttnn
 from models.demos.t3000.mixtral8x7b.tt.mixtral_decoder import TtTransformerBlock
 from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
@@ -21,6 +22,7 @@ from ttnn import ConcatMeshToTensor
         16,
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
     """
     b: batch
@@ -47,8 +49,10 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
     reference_model.load_state_dict(partial_state_dict)
 
     # Initialize TT model
+    tt_ccl = TT_CCL(t3k_mesh_device)
     tt_model = TtTransformerBlock(
         mesh_device=t3k_mesh_device,
+        tt_ccl=tt_ccl,
         state_dict=state_dict,
         args=model_args,
         layer_num=0,

@@ -4,38 +4,50 @@
 
 import pytest
 import torch
-from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight, preprocess_model_parameters
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.segformer.common import load_config, load_torch_model
 from models.demos.segformer.reference.segformer_mixffn import SegformerMixFFN
 from models.demos.segformer.tests.pcc.test_segformer_dwconv import (
-    create_custom_preprocessor as create_custom_preprocessor_dwconv,
+    create_custom_mesh_preprocessor as create_custom_preprocessor_dwconv,
 )
+from models.demos.segformer.tt.common import get_mesh_mappers, preprocess_linear_bias, preprocess_linear_weight
 from models.demos.segformer.tt.ttnn_segformer_mix_ffn import TtSegformerMixFFN
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    def custom_preprocessor(model, name, mesh_mapper=None):
         parameters = {}
         if isinstance(model, SegformerMixFFN):
             parameters["dense1"] = {}
-            parameters["dense1"]["weight"] = preprocess_linear_weight(model.dense1.weight, dtype=ttnn.bfloat8_b)
-            parameters["dense1"]["bias"] = preprocess_linear_bias(model.dense1.bias, dtype=ttnn.bfloat8_b)
+            parameters["dense1"]["weight"] = preprocess_linear_weight(
+                model.dense1.weight, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
+            )
+            parameters["dense1"]["bias"] = preprocess_linear_bias(
+                model.dense1.bias, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
+            )
 
             parameters["dwconv"] = {}
-            dwconv_preprocessor = create_custom_preprocessor_dwconv(device)
-            parameters["dwconv"] = dwconv_preprocessor(model.dwconv, None, None)
+            dwconv_preprocessor = create_custom_preprocessor_dwconv(mesh_mapper=mesh_mapper)
+            parameters["dwconv"] = dwconv_preprocessor(model.dwconv, None, None, None)
 
             parameters["dense2"] = {}
-            parameters["dense2"]["weight"] = preprocess_linear_weight(model.dense2.weight, dtype=ttnn.bfloat8_b)
-            parameters["dense2"]["bias"] = preprocess_linear_bias(model.dense2.bias, dtype=ttnn.bfloat8_b)
+            parameters["dense2"]["weight"] = preprocess_linear_weight(
+                model.dense2.weight, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
+            )
+            parameters["dense2"]["bias"] = preprocess_linear_bias(
+                model.dense2.bias, dtype=ttnn.bfloat8_b, mesh_mapper=mesh_mapper
+            )
 
         return parameters
 
-    return custom_preprocessor
+    return custom_mesh_preprocessor
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
@@ -85,9 +97,11 @@ def test_segformer_mix_ffn(
     )
 
     torch_output = reference_model(torch_input_tensor, height, width)
-
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=None,
     )
     parameters["dense1"]["weight"] = ttnn.to_device(parameters["dense1"]["weight"], device=device)
     parameters["dense1"]["bias"] = ttnn.to_device(parameters["dense1"]["bias"], device=device)

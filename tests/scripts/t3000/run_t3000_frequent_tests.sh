@@ -256,6 +256,8 @@ run_t3000_tteager_tests() {
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_mesh_partition_t3000.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/ccl/test_moe_ccl_end_to_end.py ; fail+=$?
   pytest -n auto tests/ttnn/unit_tests/operations/point_to_point/test_send_receive.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/data_movement/test_moe_expert_token_remap_t3k.py ; fail+=$?
+  pytest -n auto tests/ttnn/unit_tests/operations/debug/test_apply_device_delay_t3000.py ; fail+=$?
 
   # distributed layernorm
   pytest tests/ttnn/unit_tests/operations/test_distributed_layernorm.py ; fail+=$?

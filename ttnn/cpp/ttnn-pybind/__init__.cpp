@@ -36,6 +36,7 @@
 #include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
 #include "ttnn/operations/ccl/ccl_pybind.hpp"
 #include "ttnn/operations/conv/conv_pybind.hpp"
+#include "ttnn/operations/debug/debug_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward_pybind.hpp"
@@ -64,6 +65,7 @@
 #include "ttnn/operations/pool/generic/generic_pools_pybind.hpp"
 #include "ttnn/operations/pool/global_avg_pool/global_avg_pool_pybind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_pybind.hpp"
+#include "ttnn/operations/pool/grid_sample/grid_sample_pybind.hpp"
 #include "ttnn/operations/prefetcher/prefetcher_pybind.hpp"
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
@@ -119,6 +121,9 @@ void py_module(py::module& module) {
     auto m_ccl = module.def_submodule("ccl", "collective communication operations");
     ccl::py_module(m_ccl);
 
+    auto m_debug = module.def_submodule("debug", "debug operations");
+    debug::py_module(m_debug);
+
     auto m_creation = module.def_submodule("creation", "creation operations");
     creation::py_module(m_creation);
 
@@ -150,6 +155,7 @@ void py_module(py::module& module) {
     pool::py_module(m_pool);
     avgpool::py_module(m_pool);
     upsample::py_module(m_pool);
+    grid_sample::py_bind_grid_sample(m_pool);
 
     auto m_normalization = module.def_submodule("normalization", "normalization operations");
     normalization::py_module(m_normalization);

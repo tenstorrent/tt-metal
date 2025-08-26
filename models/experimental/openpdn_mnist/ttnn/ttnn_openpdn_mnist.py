@@ -116,7 +116,7 @@ class TtOpenPDNMnist:
             batch_size=self.parameters.pool3.batch_size,
             input_h=self.parameters.pool3.input_height,
             input_w=self.parameters.pool3.input_width,
-            channels=self.parameters.conv2.out_channels,
+            channels=self.parameters.conv1.out_channels,
             kernel_size=[self.parameters.pool3.kernel_size, self.parameters.pool3.kernel_size],
             stride=[self.parameters.pool3.stride, self.parameters.pool3.stride],
             padding=[self.parameters.pool3.padding, self.parameters.pool3.padding],

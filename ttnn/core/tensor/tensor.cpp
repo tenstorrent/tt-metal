@@ -461,7 +461,10 @@ template uint8_t Tensor::item<uint8_t>(ttnn::QueueId cq_id) const;
 template uint16_t Tensor::item<uint16_t>(ttnn::QueueId cq_id) const;
 template uint32_t Tensor::item<uint32_t>(ttnn::QueueId cq_id) const;
 
-Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) const {
+Tensor Tensor::to_device(
+    distributed::MeshDevice* mesh_device,
+    ttsl::optional_reference<const MemoryConfig> mem_config,
+    QueueId cq_id) const {
     return tensor_ops::tensor_to_device(*this, mesh_device, mem_config, cq_id);
 }
 
@@ -715,7 +718,7 @@ void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& r
 }
 
 Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
-    auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(device, tensor_spec);
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
     std::vector<distributed::MeshCoordinate> coords;
     coords.reserve(device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
@@ -727,14 +730,19 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
 }
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
-    auto distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
+
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
-        distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
+        coords.push_back(coord);
     }
 
-    distributed_host_buffer = distributed_host_buffer.transform(
-        [&](const HostBuffer&) { return tensor_impl::allocate_host_buffer(tensor_spec); },
+    distributed_host_buffer.emplace_shards(
+        coords,
+        [&](const auto&) { return tensor_impl::allocate_host_buffer(tensor_spec); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+
     // TODO (#25340): Implement correct logic and add test for this
     return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, ReplicateTensor{}, TensorTopology{});
 }
@@ -749,7 +757,7 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, QueueId cq_id) 
         dst.storage_type());
 
     if (is_device_tensor(src)) {
-        tensor_impl::copy_to_host_tensor_wrapper(src, dst, blocking, cq_id);
+        tensor_impl::copy_to_host_wrapper(src, dst, blocking, cq_id);
         return;
     }
 
@@ -759,7 +767,7 @@ void write_tensor(const Tensor& src, Tensor& dst, bool blocking, QueueId cq_id) 
 
     auto mesh_buffer = dst.device_storage().mesh_buffer;
     TT_FATAL(!blocking, "Blocking is not supported for host to device copy");
-    tensor_impl::copy_to_device_tensor_wrapper(src, dst, cq_id);
+    tensor_impl::copy_to_device_wrapper(src, dst, cq_id);
 }
 
 Tensor set_tensor_id(const Tensor& tensor) {

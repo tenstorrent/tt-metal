@@ -45,6 +45,7 @@ def generate_cos_sin_cache(
         memory_config=model_config["COS_CACHED_WEIGHTS_MEMCFG"],
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
         cache_file_name=cos_cached_path,
+        enable_multihost_format=True,
     )
 
     sin_cached_path = tt_cache_path / f"{layer_name}.sin_cached_{model_config['SIN_CACHED_WEIGHTS_DTYPE'].name}"
@@ -57,6 +58,7 @@ def generate_cos_sin_cache(
         memory_config=model_config["SIN_CACHED_WEIGHTS_MEMCFG"],
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
         cache_file_name=sin_cached_path,
+        enable_multihost_format=True,
     )
 
     return tt_cos_cached, tt_sin_cached
@@ -116,6 +118,7 @@ class TtFalconAttention:
     def __init__(
         self,
         mesh_device,
+        tt_ccl,
         state_dict,
         base_url,
         layer_num,
@@ -133,6 +136,7 @@ class TtFalconAttention:
         self.max_position_embeddings = max_position_embeddings
         self.num_devices = mesh_device.get_num_devices()
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.state_dict = state_dict
         self.model_config = model_config
         self.num_heads_per_device = self.num_heads // mesh_device.get_num_devices()
@@ -165,6 +169,7 @@ class TtFalconAttention:
             mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-1),
             cache_file_name=query_key_value_path,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
+            enable_multihost_format=True,
         )
 
         selfout_path = tt_cache_path / f"{selfout_str}_{self.model_config['SELFOUT_MM_WEIGHTS_DTYPE'].name}"
@@ -178,6 +183,7 @@ class TtFalconAttention:
             mesh_mapper=ShardTensorToMesh(self.mesh_device, dim=-1),
             cache_file_name=selfout_path,
             preprocess=lambda x: torch.transpose(x.reshape(1, 1, *x.shape), -2, -1),
+            enable_multihost_format=True,
         )
         self.rotary_embedding = TtFalconRotaryEmbedding(
             self.mesh_device,
@@ -218,6 +224,7 @@ class TtFalconAttention:
                 memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=kv_cache_path,
+                enable_multihost_format=True,
             )
 
             v_cache = ttnn.as_tensor(
@@ -228,6 +235,7 @@ class TtFalconAttention:
                 memory_config=self.model_config["DRAM_MEMCFG"],
                 mesh_mapper=ReplicateTensorToMesh(self.mesh_device),
                 cache_file_name=kv_cache_path,
+                enable_multihost_format=True,
             )
 
             self.layer_past = (
@@ -363,11 +371,17 @@ class TtFalconAttention:
             attn_output,
             memory_config=self.model_config["CONCAT_HEADS_OUTPUT_MEMCFG"],
         )
-        attn_output = ttnn.all_gather(
+        attn_output = ttnn.experimental.all_gather_async(
             attn_output,
+            persistent_output_buffer=None,
             dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
         attn_output = falcon_prefill_matmul(
             attn_output,
@@ -584,11 +598,17 @@ class TtFalconAttention:
             attn_output,
             memory_config=self.model_config["DEFAULT_MEMCFG"],
         )
-        attn_output = ttnn.all_gather(
+        attn_output = ttnn.experimental.all_gather_async(
             attn_output,
+            persistent_output_buffer=None,
             dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
             num_links=self.model_config["ALL_GATHER_NUM_LINKS"],
             memory_config=self.model_config["DEFAULT_MEMCFG"],
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
         )
         attn_output = ttnn.interleaved_to_sharded(
             attn_output,

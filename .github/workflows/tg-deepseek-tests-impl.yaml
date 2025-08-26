@@ -27,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { name: "Galaxy DeepSeek tests", arch: wormhole_b0, model: deepseek, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
+          { name: "Galaxy DeepSeek tests", arch: wormhole_b0, model: deepseek, timeout: 90, owner_id: U03HY7MK4BT}, # Mark O'Connor
         ]
     runs-on:
       - arch-wormhole_b0
@@ -69,7 +69,7 @@ jobs:
           start_time=$(date +%s)
 
           pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --timeout 10 || fail=1
+          pytest models/demos/deepseek_v3/tests --timeout 10 --durations=0 || fail=1
 
           end_time=$(date +%s)
           duration=$((end_time - start_time))

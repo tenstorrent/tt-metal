@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from dataclasses import dataclass, fields
+from pathlib import Path
 from typing import Any, Union
 
 import ttnn
@@ -32,6 +33,12 @@ class MeshDeviceStub:
 
     def __init__(self, mesh_shape: tuple[int, int] | ttnn.MeshShape):
         object.__setattr__(self, "mesh_shape", tuple(mesh_shape))
+
+
+@dataclass
+class SavedWeight:  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+    path: Path
+    memory_config: ttnn.MemoryConfig | None = None
 
 
 ConfigDevice = ttnn.MeshDevice | MeshDeviceStub
@@ -105,13 +112,17 @@ class AllReduceConfig(OpConfigBase):
 class AllGatherAsyncConfig(OpConfigBase):
     """Common parameters for a ttnn.experimental.all_gather_async op"""
 
-    mesh_device: ConfigDevice | None = None
-    cluster_axis: int | None = None
     dim: int | None = None
-    multi_device_global_semaphore: object | None = None
+    cluster_axis: int | None = None
+    mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
+    topology: ttnn._ttnn.operations.ccl.Topology | None = None
+    multi_device_global_semaphore: ttnn._ttnn.operations.experimental.ccl_experimental.GlobalSemaphoreArg | None = None
+    persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
     num_links: int | None = None
-    memory_config: ttnn.MemoryConfig | None = None
-    topology: ttnn.Topology | None = None
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+    use_optimal_ccl_for_llama: bool | None = None
+    barrier_semaphore: ttnn._ttnn.global_semaphore.global_sempahore | None = None
 
 
 @dataclass
@@ -127,6 +138,17 @@ class ReduceScatterAsyncConfig(OpConfigBase):
     num_links: int | None = None
     memory_config: ttnn.MemoryConfig | None = None
     topology: ttnn.Topology | None = None
+
+
+@dataclass
+class PointToPointConfig(OpConfigBase):
+    """Common parameters for a ttnn.point_to_point op"""
+
+    receiver_coord: ttnn.MeshCoordinate | None = None
+    sender_coord: ttnn.MeshCoordinate | None = None
+    topology: ttnn.Topology = ttnn.Topology.Linear
+    semaphore: ttnn._ttnn.global_semaphore.global_sempahore | None = None
+    optional_output_tensor: ttnn.Tensor | None = None
 
 
 @dataclass
@@ -242,7 +264,6 @@ class AllToAllDispatchConfig(OpConfigBase):
     cluster_axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    global_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
     subdevice_id: int | None = None
 
@@ -254,7 +275,6 @@ class AllToAllCombineConfig(OpConfigBase):
     axis: int
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
-    global_semaphore: object | None = None
     topology: ttnn.Topology = ttnn.Topology.Linear
 
 
@@ -263,3 +283,30 @@ class RepeatConfig(OpConfigBase):
     """Common parameters for a ttnn.repeat op"""
 
     repeat_dims: ttnn.Shape
+
+
+@dataclass
+class TopKFallbackConfig(OpConfigBase):
+    """Common parameters for a ttnn.topk_fallback op"""
+
+    mesh_device: ttnn.Device
+    dtype: ttnn.DataType
+    memory_config: ttnn.MemoryConfig
+    use_bitonic_sort: bool = False
+
+
+@dataclass
+class LinearFallbackConfig(OpConfigBase):
+    """Common parameters for a ttnn.linear_fallback op"""
+
+    mesh_device: ttnn.Device
+    dtype: ttnn.DataType
+
+
+@dataclass
+class TypecastConfig(OpConfigBase):
+    """Common parameters for a ttnn.typecast op"""
+
+    dtype: ttnn.DataType
+    memory_config: ttnn.MemoryConfig | None = None
+    sub_core_grids: ttnn.CoreRangeSet | None = None

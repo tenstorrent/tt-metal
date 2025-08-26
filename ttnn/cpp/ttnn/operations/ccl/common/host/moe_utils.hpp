@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::ccl::common {
 
-std::pair<std::vector<tt::tt_metal::IDevice*>, std::array<bool, 4>> get_neighbors(
+std::pair<std::vector<ttnn::MeshCoordinate>, std::array<bool, 4>> get_neighbors(
     const ttnn::distributed::MeshDeviceView& mesh_view,
     const ttnn::distributed::MeshCoordinate& mesh_coordinate,
     tt::tt_fabric::Topology topology,
@@ -28,5 +28,8 @@ std::string stringify(const T& vec) {
 }
 
 uint32_t get_linearized_index(const ttnn::MeshCoordinate& mesh_coordinate, const ttnn::MeshDeviceView& mesh_view);
+
+size_t get_num_links(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<size_t> cluster_axis = std::nullopt);
 
 }  // namespace ttnn::operations::ccl::common

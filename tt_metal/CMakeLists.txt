@@ -81,7 +81,6 @@ target_sources(
             api/tt-metalium/buffer_types.hpp
             api/tt-metalium/circular_buffer_constants.h
             api/tt-metalium/constants.hpp
-            api/tt-metalium/fabric_edm_packet_header.hpp
             api/tt-metalium/fabric_edm_types.hpp
             api/tt-metalium/edm_fabric_counters.hpp
             core_descriptors/blackhole_140_arch.yaml
@@ -93,9 +92,11 @@ target_sources(
             fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p150_x2_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/p150_x4_mesh_graph_descriptor.yaml
+            fabric/mesh_graph_descriptors/p150_x8_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
+            fabric/fabric_edm_packet_header.hpp
             ${FABRIC_HW_INC}
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
@@ -105,6 +106,7 @@ target_sources(
             soc_descriptors/blackhole_140_arch.yaml
             soc_descriptors/wormhole_b0_80_arch.yaml
             tools/profiler/kernel_profiler.hpp
+            tools/profiler/fabric_event_profiler.hpp
             # Kernel sources
             impl/dispatch/kernels/cq_dispatch.cpp
             impl/dispatch/kernels/cq_dispatch_subordinate.cpp
@@ -145,8 +147,6 @@ target_link_libraries(
         detail
         distributed
         fabric
-        HAL::wormhole
-        HAL::blackhole
         FlatBuffers::FlatBuffers
         TT::Metalium::Logging
 )
@@ -232,7 +232,6 @@ if(TT_INSTALL)
             reflect
             enchantum
             TracyClient
-            small_vector
             tt-logger
         EXPORT Metalium
         FILE_SET

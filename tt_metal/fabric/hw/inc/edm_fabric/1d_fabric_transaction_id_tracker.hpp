@@ -15,6 +15,10 @@
 
 template <uint8_t MAX_TRANSACTION_IDS>
 struct TransactionIdCounter {
+    explicit TransactionIdCounter() = default;
+
+    FORCE_INLINE void init() { this->next_trid = 0; }
+
     FORCE_INLINE void increment() {
         this->next_trid = tt::tt_fabric::wrap_increment<MAX_TRANSACTION_IDS>(this->next_trid);
     }
@@ -22,10 +26,15 @@ struct TransactionIdCounter {
     FORCE_INLINE uint8_t get() const { return this->next_trid; }
 
 private:
-    uint8_t next_trid = 0;
+    uint8_t next_trid;
 };
 
-template <uint8_t NUM_CHANNELS, size_t MAX_TRANSACTION_IDS, size_t OFFSET>
+template <
+    uint8_t NUM_CHANNELS,
+    size_t MAX_TRANSACTION_IDS,
+    size_t OFFSET,
+    uint8_t EDM_TO_LOCAL_NOC,
+    uint8_t EDM_TO_DOWNSTREAM_NOC>
 struct WriteTransactionIdTracker {
     static constexpr size_t NUM_CHANNELS_PARAM = NUM_CHANNELS;
     static constexpr size_t MAX_TRANSACTION_IDS_PARAM = MAX_TRANSACTION_IDS;
@@ -39,7 +48,10 @@ struct WriteTransactionIdTracker {
     static constexpr bool BOTH_PARAMS_ARE_EQUAL = NUM_CHANNELS_PARAM == MAX_TRANSACTION_IDS_PARAM;
     static_assert(OFFSET_PARAM + MAX_TRANSACTION_IDS - 1 <= NOC_MAX_TRANSACTION_ID, "Invalid transaction ID");
 
-    WriteTransactionIdTracker() {
+    explicit WriteTransactionIdTracker() = default;
+
+    FORCE_INLINE void init() {
+        this->trid_counter.init();
         if constexpr (!(BOTH_PARAMS_ARE_EQUAL || BOTH_PARAMS_ARE_POW2)) {
             for (size_t i = 0; i < NUM_CHANNELS_PARAM; i++) {
                 this->buffer_slot_trids[i] = INVALID_TRID;
@@ -84,20 +96,20 @@ struct WriteTransactionIdTracker {
     }
     FORCE_INLINE bool transaction_flushed(tt::tt_fabric::BufferIndex buffer_index) const {
         auto trid = this->get_buffer_slot_trid(buffer_index);
-        if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
-            return ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_local_chip_noc, trid);
+        if constexpr (EDM_TO_LOCAL_NOC == EDM_TO_DOWNSTREAM_NOC) {
+            return ncrisc_noc_nonposted_write_with_transaction_id_sent(EDM_TO_LOCAL_NOC, trid);
         } else {
-            return ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_downstream_noc, trid) &&
-                   ncrisc_noc_nonposted_write_with_transaction_id_sent(tt::tt_fabric::edm_to_local_chip_noc, trid);
+            return ncrisc_noc_nonposted_write_with_transaction_id_sent(EDM_TO_DOWNSTREAM_NOC, trid) &&
+                   ncrisc_noc_nonposted_write_with_transaction_id_sent(EDM_TO_LOCAL_NOC, trid);
         }
     }
     FORCE_INLINE void all_buffer_slot_transactions_acked() const {
         for (uint8_t trid = OFFSET_PARAM; trid < INVALID_TRID; ++trid) {
-            if constexpr (tt::tt_fabric::local_chip_noc_equals_downstream_noc) {
-                noc_async_write_barrier_with_trid(trid, tt::tt_fabric::edm_to_local_chip_noc);
+            if constexpr (EDM_TO_LOCAL_NOC == EDM_TO_DOWNSTREAM_NOC) {
+                noc_async_write_barrier_with_trid(trid, EDM_TO_LOCAL_NOC);
             } else {
-                noc_async_write_barrier_with_trid(trid, tt::tt_fabric::edm_to_downstream_noc);
-                noc_async_write_barrier_with_trid(trid, tt::tt_fabric::edm_to_local_chip_noc);
+                noc_async_write_barrier_with_trid(trid, EDM_TO_DOWNSTREAM_NOC);
+                noc_async_write_barrier_with_trid(trid, EDM_TO_LOCAL_NOC);
             }
         }
     }

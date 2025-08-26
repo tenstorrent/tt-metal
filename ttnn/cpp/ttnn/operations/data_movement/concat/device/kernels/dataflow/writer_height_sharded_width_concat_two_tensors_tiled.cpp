@@ -35,8 +35,7 @@ void kernel_main() {
 
         const uint32_t base_l1_read_addr_0 = get_read_ptr(output_transpose_cb);
         const uint64_t noc_addr_0 = get_noc_addr(base_l1_read_addr_0);
-        noc_async_read_one_packet_set_state(noc_addr_0, width_len_bytes);
-        noc_async_read_one_packet_with_state<true>(base_l1_read_addr_0, l1_write_addr);
+        noc_async_read(noc_addr_0, l1_write_addr, width_len_bytes);
         l1_write_addr += width_len_bytes;
 
         noc_async_read_barrier();

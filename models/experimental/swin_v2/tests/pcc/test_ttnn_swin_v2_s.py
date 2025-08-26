@@ -19,7 +19,7 @@ from models.experimental.swin_v2.tt.tt_swin_transformer import TtSwinTransformer
 from models.experimental.swin_v2.tests.pcc.test_ttnn_swin_transformer_block_v2 import (
     create_custom_preprocessor as create_custom_preprocessor_transformer_block_v2,
 )
-from models.experimental.swin_v2.common import load_torch_model
+from models.experimental.swin_v2.common import load_torch_model, SWIN_V2_L1_SMALL_SIZE
 
 
 def create_custom_preprocessor_patch_merging_v2(device):
@@ -132,7 +132,7 @@ def create_custom_preprocessor(device):
 
 
 @skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": SWIN_V2_L1_SMALL_SIZE}], indirect=True)
 def test_swin_s_transformer(device, reset_seeds, model_location_generator):
     torch_model = SwinTransformer(
         patch_size=[4, 4], embed_dim=96, depths=[2, 2, 18, 2], num_heads=[3, 6, 12, 24], window_size=[8, 8]

@@ -16,21 +16,8 @@ void bind_reduction_argmax_operation(py::module& module) {
     auto doc =
         R"doc(
 
-            Returns the indices of the maximum value of elements in the ``input`` tensor
-            If no ``dim`` is provided, it will return the indices of maximum value of all elements in given ``input``
-            If no ``keepdim`` is provided, it will default to `False`.
-
-            Currently this op only support dimension-specific reduction on last dimension.
-
-            Input tensor support bfloat16, float32, uint32, int32, uint16 data types and ROW_MAJOR layout.
-
-            Output tensor will have UINT32 data type.
-
-            Equivalent pytorch code:
-
-            .. code-block:: python
-
-                return torch.argmax(input_tensor, dim=dim, keepdim=keepdim)
+            Returns the indices of the maximum value of elements in the :attr:`input_tensor`.
+            If no :attr:`dim` is provided, it will return the indices of maximum value of all elements in given :attr:`input_tensor`.
 
             Args:
                 input_tensor (ttnn.Tensor): the input tensor.
@@ -43,7 +30,48 @@ void bind_reduction_argmax_operation(py::module& module) {
                 queue_id (int, optional): command queue id. Defaults to `0`.
 
             Returns:
-                List of ttnn.Tensor: the output tensor.
+                ttnn.Tensor: Output tensor containing the indices of the maximum value.
+
+            Note:
+                The input tensor supports the following data types and layouts:
+
+                .. list-table:: Input Tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - FLOAT32
+                        - ROW_MAJOR
+                    * - BFLOAT16
+                        - ROW_MAJOR
+                    * - UINT32
+                        - ROW_MAJOR
+                    * - INT32
+                        - ROW_MAJOR
+                    * - UINT16
+                        - ROW_MAJOR
+
+                The output tensor will be of the following data type and layout:
+
+                .. list-table:: Output Tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - UINT32
+                        - ROW_MAJOR
+
+            Limitations:
+                Currently this op only supports dimension-specific reduction on the last dimension (i.e. :attr:`dim` = -1).
+
+            Example:
+                input_tensor = ttnn.rand([1, 1, 32, 64], device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+                # Last dim reduction yields shape of [1, 1, 32, 1]
+                output_onedim = ttnn.argmax(input_tensor, dim=-1, keepdim=True)
+
+                # All dim reduction yields shape of []
+                output_alldim = ttnn.argmax(input_tensor)
 
         )doc";
 

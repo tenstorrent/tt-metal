@@ -30,8 +30,8 @@ jobs:
       matrix:
         test-info: [
           {name: "N300 WH B0 not yet ported", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal", civ2-compatible: false, timeout: 30, job-set1: false},
-          {name: "N300 WH B0 Set 1", arch: wormhole_b0, runs-on: ["tt-beta-ubuntu-2204-n300-large-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-set1: true},
-          {name: "N300 WH B0 Set 2", arch: wormhole_b0, runs-on: ["tt-beta-ubuntu-2204-n300-large-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-set1: false},
+          {name: "N300 WH B0 Set 1", arch: wormhole_b0, runs-on: ["tt-ubuntu-2204-n300-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-set1: true},
+          {name: "N300 WH B0 Set 2", arch: wormhole_b0, runs-on: ["tt-ubuntu-2204-n300-stable"], machine-type: "CIv2", civ2-compatible: true, timeout: 120, job-set1: false},
         ]
     name: "${{ matrix.test-info.name }} device perf"
     runs-on: ${{ matrix.test-info.runs-on }}
@@ -162,7 +162,7 @@ jobs:
         with:
           model_name: "ufld_v2"
           commands: |
-            # pytest models/demos/ufld_v2/tests -m models_device_performance_bare_metal
+            pytest models/demos/ufld_v2/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -227,7 +227,8 @@ jobs:
           commands: |
             pytest models/demos/yolov8x/tests/perf -m models_device_performance_bare_metal
             pytest models/demos/yolov8s/tests/perf -m models_device_performance_bare_metal
-            pytest models/demos/yolov8s_world/tests/perf -m models_device_performance_bare_metal
+            # Skip for #27008
+            # pytest models/demos/yolov8s_world/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -254,7 +255,7 @@ jobs:
         with:
           model_name: "yolov6l"
           commands: |
-            pytest models/experimental/yolov6l/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/yolov6l/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
@@ -272,12 +273,67 @@ jobs:
         with:
           model_name: "vanilla_unet"
           commands: |
-            pytest models/experimental/vanilla_unet/tests/perf -m models_device_performance_bare_metal
+            pytest models/demos/vanilla_unet/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: swin_v2 tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "swin_v2"
+          commands: |
+            pytest models/experimental/swin_v2/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: swin_s tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "swin_s"
+          commands: |
+            pytest models/experimental/swin_s/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: yolov5x tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "yolov5x"
+          commands: |
+            pytest models/experimental/yolov5x/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: vovnet tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "VoVNet"
+          commands: |
+            pytest models/experimental/vovnet/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: yolov12x tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "yolov12x"
+          commands: |
+            pytest models/demos/yolov12x/tests/perf -m models_device_performance_bare_metal
+        if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
+        timeout-minutes: ${{ matrix.test-info.timeout }}
+
+      - name: efficientnetb0 tests
+        uses: tenstorrent/tt-metal/.github/actions/device-perf-test@main
+        with:
+          model_name: "efficientnetb0"
+          commands: |
+            pytest models/experimental/efficientnetb0/tests/perf -m models_device_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.civ2-compatible && !matrix.test-info.job-set1 }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
 
       - name: Merge test reports
         id: generate-device-perf-report
+        if: ${{ !cancelled() }}
         timeout-minutes: ${{ matrix.test-info.timeout }}
         env:
           TRACY_NO_INVARIANT_CHECK: 1
@@ -293,7 +349,7 @@ jobs:
         id: check-device-perf-report
         if: ${{ !cancelled() }}
         run: |
-          ls -hal ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
+          test -f ${{ steps.generate-device-perf-report.outputs.device_perf_report_filename }}
 
       - name: Clean test name for artifact
         run: |

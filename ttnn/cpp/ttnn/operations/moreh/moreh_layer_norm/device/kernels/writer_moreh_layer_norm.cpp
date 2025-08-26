@@ -95,12 +95,12 @@ void kernel_main() {
     const auto mean_rstd_width = get_arg_val<uint32_t>(7);
     const auto normalized_dims = get_arg_val<uint32_t>(8);
 
-    constexpr bool output_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool mean_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool rstd_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool mean_has_value = get_compile_time_arg_val(3) == 1;
-    constexpr bool rstd_has_value = get_compile_time_arg_val(4) == 1;
-    constexpr uint32_t block_size = get_compile_time_arg_val(5);
+    constexpr bool mean_has_value = get_compile_time_arg_val(0) == 1;
+    constexpr bool rstd_has_value = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t block_size = get_compile_time_arg_val(2);
+    constexpr auto output_args = TensorAccessorArgs<3>();
+    constexpr auto mean_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
+    constexpr auto rstd_args = TensorAccessorArgs<mean_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t cb_id_output = tt::CBIndex::c_16;
     constexpr uint32_t cb_id_mean = tt::CBIndex::c_17;
@@ -108,24 +108,15 @@ void kernel_main() {
 
     // output
     const uint32_t output_tile_bytes = get_tile_size(cb_id_output);
-    const auto output_data_format = get_dataformat(cb_id_output);
-
-    const InterleavedAddrGenFast<output_is_dram> output_addrg = {
-        .bank_base_address = output_addr, .page_size = output_tile_bytes, .data_format = output_data_format};
+    const auto output_addrg = TensorAccessor(output_args, output_addr, output_tile_bytes);
 
     // mean
     const uint32_t mean_tile_bytes = get_tile_size(cb_id_mean);
-    const auto mean_data_format = get_dataformat(cb_id_mean);
-
-    const InterleavedAddrGenFast<mean_is_dram> mean_addrg = {
-        .bank_base_address = mean_addr, .page_size = mean_tile_bytes, .data_format = mean_data_format};
+    const auto mean_addrg = TensorAccessor(mean_args, mean_addr, mean_tile_bytes);
 
     // rstd
     const uint32_t rstd_tile_bytes = get_tile_size(cb_id_rstd);
-    const auto rstd_data_format = get_dataformat(cb_id_rstd);
-
-    const InterleavedAddrGenFast<rstd_is_dram> rstd_addrg = {
-        .bank_base_address = rstd_addr, .page_size = rstd_tile_bytes, .data_format = rstd_data_format};
+    const auto rstd_addrg = TensorAccessor(rstd_args, rstd_addr, rstd_tile_bytes);
 
     uint32_t offs = 0;
     constexpr uint32_t onetile = 1;

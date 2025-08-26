@@ -21,7 +21,10 @@ void bind_reduction_cumprod_operation(py::module& module) {
         R"doc(
         Returns cumulative product of `input` along dimension `dim`
         For a given `input` of size N, the `output` will also contain N elements and be such that:
-        This function is fundamentally identical to `torch.cumprod()`
+
+        .. math::
+            \mathrm{{output}}_i = \mathrm{{input}}_1 \times \mathrm{{input}}_2 \times \cdots \times \mathrm{{input}}_i
+
 
         Args:
             input (ttnn.Tensor): input tensor
@@ -35,8 +38,12 @@ void bind_reduction_cumprod_operation(py::module& module) {
         Returns:
             ttnn.Tensor: the output tensor.
 
+        Example:
+            input_tensor = ttnn.rand((N, N), device=device)
+            output_tensor = ttnn.cumprod(input_tensor, dim=0)
+
         Note:
-            If both `dtype` and `output` are specified then `output.dtype` must be `dtype`)
+            If both `dtype` and `output` are specified then `output.dtype` must match `dtype`.
 
             Supported dtypes, layout, ranks and `dim` values:
 
@@ -60,12 +67,10 @@ void bind_reduction_cumprod_operation(py::module& module) {
 
         .. code-block:: python
 
-            import torch
             import ttnn
 
             # Create tensor
-            torch_input = torch.rand([2, 3, 4])
-            tensor_input = ttnn.from_torch(torch_input, device=device)
+            tensor_input = ttnn.rand((2,3,4), device=device)
 
             # Apply ttnn.cumprod() on dim=0
             tensor_output = ttnn.cumprod(tensor_input, dim=0)

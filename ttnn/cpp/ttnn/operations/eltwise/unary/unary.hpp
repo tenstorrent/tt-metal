@@ -43,6 +43,16 @@ struct ExecuteUnaryWithFastAndApproximateMode {
 };
 
 template <UnaryOpType unary_op_type>
+struct ExecuteUnaryWithFastAndApproximateModeTrue {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        bool parameter = true,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithVectorAndFastAndApproximateMode {
     static Tensor invoke(
         QueueId queue_id,
@@ -59,6 +69,17 @@ struct ExecuteUnaryWithFloatParameter {
         QueueId queue_id,
         const Tensor& input_tensor,
         float parameter,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+template <UnaryOpType unary_op_type>
+struct ExecuteUnaryWithTwoFloatParameter {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        float parameter_a,
+        float parameter_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
@@ -273,6 +294,15 @@ struct Hardtanh {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+struct Softshrink {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        float lambda = 0.5f,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 struct Deg2Rad {
     static Tensor invoke(
         QueueId queue_id,
@@ -312,6 +342,12 @@ struct Tanh {
         ttnn::operations::unary::ExecuteUnaryWithFastAndApproximateMode<                        \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
 
+#define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(operation_name, operation_type) \
+    constexpr auto operation_name = ttnn::register_operation<                                        \
+        "ttnn::" #operation_name,                                                                    \
+        ttnn::operations::unary::ExecuteUnaryWithFastAndApproximateModeTrue<                         \
+            ttnn::operations::unary::UnaryOpType::operation_type>>();
+
 #define REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type) \
     constexpr auto operation_name = ttnn::register_operation<                                              \
         "ttnn::" #operation_name,                                                                          \
@@ -322,6 +358,12 @@ struct Tanh {
     constexpr auto operation_name = ttnn::register_operation<                         \
         "ttnn::" #operation_name,                                                     \
         ttnn::operations::unary::ExecuteUnaryWithFloatParameter<                      \
+            ttnn::operations::unary::UnaryOpType::operation_type>>();
+
+#define REGISTER_UNARY_OPERATION_WITH_TWO_FLOAT_PARAMETER(operation_name, operation_type) \
+    constexpr auto operation_name = ttnn::register_operation<                             \
+        "ttnn::" #operation_name,                                                         \
+        ttnn::operations::unary::ExecuteUnaryWithTwoFloatParameter<                       \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
 
 #define REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(operation_name, operation_type, data_type) \
@@ -357,10 +399,6 @@ REGISTER_UNARY_OPERATION(isnan, ISNAN);
 REGISTER_UNARY_OPERATION(isneginf, ISNEGINF);
 REGISTER_UNARY_OPERATION(isposinf, ISPOSINF);
 REGISTER_UNARY_OPERATION(lez, LEZ);
-REGISTER_UNARY_OPERATION(log, LOG);
-REGISTER_UNARY_OPERATION(log10, LOG10);
-REGISTER_UNARY_OPERATION(log2, LOG2);
-REGISTER_UNARY_OPERATION(log1p, LOG1P);
 REGISTER_UNARY_OPERATION(logical_not, LOGICAL_NOT_UNARY);
 REGISTER_UNARY_OPERATION(ltz, LTZ);
 REGISTER_UNARY_OPERATION(neg, NEG);
@@ -393,6 +431,12 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erfc, ERFC);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
 
+// Unaries with fast_and_approximate_mode default true
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log, LOG);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log10, LOG10);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log2, LOG2);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log1p, LOG1P);
+
 // Unaries with vector mode and fast and approximate mode
 REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
 
@@ -412,6 +456,9 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ge_unary, UNARY_GE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(le_unary, UNARY_LE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(celu, CELU);
 
+// Unaries with two float parameter
+REGISTER_UNARY_OPERATION_WITH_TWO_FLOAT_PARAMETER(threshold, THRESHOLD);
+
 // Unaries with integer parameter
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);
 
@@ -426,6 +473,7 @@ constexpr auto mish = ttnn::register_operation<"ttnn::mish", ttnn::operations::u
 constexpr auto tanhshrink = ttnn::register_operation<"ttnn::tanhshrink", ttnn::operations::unary::Tanhshrink>();
 constexpr auto hardshrink = ttnn::register_operation<"ttnn::hardshrink", ttnn::operations::unary::Hardshrink>();
 constexpr auto hardtanh = ttnn::register_operation<"ttnn::hardtanh", ttnn::operations::unary::Hardtanh>();
+constexpr auto softshrink = ttnn::register_operation<"ttnn::softshrink", ttnn::operations::unary::Softshrink>();
 constexpr auto deg2rad = ttnn::register_operation<"ttnn::deg2rad", ttnn::operations::unary::Deg2Rad>();
 constexpr auto rad2deg = ttnn::register_operation<"ttnn::rad2deg", ttnn::operations::unary::Rad2Deg>();
 constexpr auto softplus = ttnn::register_operation<"ttnn::softplus", ttnn::operations::unary::Softplus>();

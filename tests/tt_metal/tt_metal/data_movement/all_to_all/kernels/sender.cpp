@@ -14,6 +14,7 @@ void kernel_main() {
     const uint32_t num_of_transactions = get_compile_time_arg_val(3);
     const uint32_t bytes_per_transaction_per_master = get_compile_time_arg_val(4);
     const uint32_t num_subordinates = get_compile_time_arg_val(5);
+    const uint32_t num_virtual_channels = get_compile_time_arg_val(6);
 
     // Derivative values
     uint32_t master_l1_local_address = mst_l1_base_address;
@@ -22,10 +23,6 @@ void kernel_main() {
     uint32_t subordinate_x_coord;
     uint32_t subordinate_y_coord;
     uint64_t subordinate_l1_noc_address;
-
-    DeviceTimestampedData("Test id", test_id);
-    DeviceTimestampedData("Number of transactions", num_of_transactions);
-    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction_per_master * num_subordinates);
 
     {
         DeviceZoneScopedN("RISCV0");
@@ -41,9 +38,22 @@ void kernel_main() {
                 get_noc_addr(subordinate_x_coord, subordinate_y_coord, subordinate_l1_local_address);
 
             for (uint32_t i = 0; i < num_of_transactions; i++) {
-                noc_async_write(master_l1_local_address, subordinate_l1_noc_address, bytes_per_transaction_per_master);
+                // Cycle through virtual channels 0 to (num_virtual_channels - 1)
+                uint32_t current_virtual_channel = i % num_virtual_channels;
+                noc_async_write(
+                    master_l1_local_address,
+                    subordinate_l1_noc_address,
+                    bytes_per_transaction_per_master,
+                    noc_index,
+                    current_virtual_channel);
             }
         }
         noc_async_write_barrier();
     }
+
+    DeviceTimestampedData("Test id", test_id);
+    DeviceTimestampedData("NoC Index", noc_index);
+    DeviceTimestampedData("Number of transactions", num_of_transactions * num_subordinates);
+    DeviceTimestampedData("Transaction size in bytes", bytes_per_transaction_per_master);
+    DeviceTimestampedData("Number of Virtual Channels", num_virtual_channels);
 }

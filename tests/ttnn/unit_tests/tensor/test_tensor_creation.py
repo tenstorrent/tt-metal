@@ -356,3 +356,130 @@ def test_tensor_creation_with_tensor_spec(tensor_spec, device):
     assert tt_tensor.spec == tensor_spec
     py_tensor_after_round_trip = ttnn.to_torch(tt_tensor)
     assert torch.allclose(py_tensor, py_tensor_after_round_trip)
+
+
+@pytest.mark.parametrize(
+    "dtype,shape,buffer",
+    [
+        # 1D tensors
+        (ttnn.uint8, [1, 3], [1, 2, 3]),
+        (ttnn.uint16, [1, 3], [1000, 2000, 3000]),
+        (ttnn.int32, [1, 3], [-100, -200, -300]),
+        (ttnn.uint32, [1, 3], [1000000, 2000000, 3000000]),
+        (ttnn.float32, [1, 3], [1.5, 2.7, 3.14]),
+        (ttnn.bfloat16, [1, 3], [1.25, 2.75, 3.125]),
+        # 2D tensors
+        (ttnn.uint8, [2, 3], [1, 2, 3, 4, 5, 6]),
+        (ttnn.uint16, [2, 3], [1000, 2000, 3000, 4000, 5000, 6000]),
+        (ttnn.int32, [2, 3], [-100, -200, -300, 400, 500, 600]),
+        (ttnn.uint32, [2, 3], [1000000, 2000000, 3000000, 4000000, 5000000, 6000000]),
+        (ttnn.float32, [2, 3], [1.5, 2.7, 3.14, 4.2, 5.8, 6.9]),
+        (ttnn.bfloat16, [2, 3], [1.25, 2.75, 3.125, 4.375, 5.625, 6.875]),
+        # 3D tensors
+        (ttnn.uint8, [2, 2, 2], [1, 2, 3, 4, 5, 6, 7, 8]),
+        (ttnn.uint16, [2, 2, 2], [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000]),
+        (ttnn.int32, [2, 2, 2], [-100, -200, -300, -400, -500, -600, -700, -800]),
+        (ttnn.uint32, [2, 2, 2], [1000000, 2000000, 3000000, 4000000, 5000000, 6000000, 7000000, 8000000]),
+        (ttnn.float32, [2, 2, 2], [1.5, 2.7, 3.14, 4.2, 5.8, 6.9, 7.1, 8.2]),
+        (ttnn.bfloat16, [2, 2, 2], [1.25, 2.75, 3.125, 4.375, 5.625, 6.875, 7.125, 8.25]),
+        # 4D tensors
+        (ttnn.uint8, [2, 2, 2, 2], [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]),
+        (
+            ttnn.uint16,
+            [2, 2, 2, 2],
+            [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000, 11000, 12000, 13000, 14000, 15000, 16000],
+        ),
+        (
+            ttnn.int32,
+            [2, 2, 2, 2],
+            [-100, -200, -300, -400, -500, -600, -700, -800, -900, -1000, -1100, -1200, -1300, -1400, -1500, -1600],
+        ),
+        (
+            ttnn.uint32,
+            [2, 2, 2, 2],
+            [
+                1000000,
+                2000000,
+                3000000,
+                4000000,
+                5000000,
+                6000000,
+                7000000,
+                8000000,
+                9000000,
+                10000000,
+                11000000,
+                12000000,
+                13000000,
+                14000000,
+                15000000,
+                16000000,
+            ],
+        ),
+        (
+            ttnn.float32,
+            [2, 2, 2, 2],
+            [1.5, 2.7, 3.14, 4.2, 5.8, 6.9, 7.1, 8.2, 9.3, 10.4, 11.5, 12.6, 13.7, 14.8, 15.9, 16.1],
+        ),
+        (
+            ttnn.bfloat16,
+            [2, 2, 2, 2],
+            [
+                1.25,
+                2.75,
+                3.125,
+                4.375,
+                5.625,
+                6.875,
+                7.125,
+                8.25,
+                9.375,
+                10.625,
+                11.875,
+                12.125,
+                13.375,
+                14.625,
+                15.875,
+                16.125,
+            ],
+        ),
+    ],
+)
+def test_tensor_creation_from_buffer(dtype, shape, buffer, device):
+    tt_tensor = ttnn.from_buffer(buffer, shape, dtype=dtype, device=device)
+    assert tt_tensor.shape == shape
+    assert tt_tensor.dtype == dtype
+    assert tt_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
+
+    def flatten_list(data):
+        if isinstance(data, list):
+            return [
+                item for sublist in data for item in (flatten_list(sublist) if isinstance(sublist, list) else [sublist])
+            ]
+        return [data]
+
+    tensor_list = tt_tensor.to_list()
+    flattened = flatten_list(tensor_list)
+
+    if dtype in [ttnn.float32, ttnn.bfloat16]:
+        rounded = [round(v, 5) for v in flattened]
+        assert rounded == buffer
+    else:
+        assert flattened == buffer
+
+
+@pytest.mark.parametrize(
+    "dtype,buffer",
+    [
+        (ttnn.bfloat8_b, [[1, 2, 3], [4, 5, 6]]),
+        (ttnn.bfloat4_b, [[1, 2, 3], [4, 5, 6]]),
+        (ttnn.DataType.INVALID, [[1, 2, 3], [4, 5, 6]]),
+    ],
+)
+def test_tensor_creation_from_buffer_with_unsupported_dtype(dtype, buffer, device):
+    try:
+        tt_tensor = ttnn.from_buffer(buffer, [2, 3], dtype, device, ttnn.TILE_LAYOUT)
+    except Exception as e:
+        assert "Unreachable" in str(e)
+    else:
+        pytest.fail("Expected an exception, but got none")

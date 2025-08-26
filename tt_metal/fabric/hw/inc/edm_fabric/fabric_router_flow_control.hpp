@@ -212,3 +212,14 @@ constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_contr
     return init_sender_channel_from_receiver_credits_flow_controllers_impl<
         SenderChannelFromReceiverCounterBasedCreditsReceiver>::template init<NUM_SENDER_CHANNELS>();
 }
+
+// MUST CHECK !is_eth_txq_busy() before calling
+template <bool CHECK_BUSY>
+FORCE_INLINE void receiver_send_completion_ack(
+    ReceiverChannelResponseCreditSender& receiver_channel_response_credit_sender, uint8_t src_id) {
+    if constexpr (CHECK_BUSY) {
+        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+        };
+    }
+    receiver_channel_response_credit_sender.send_completion_credit(src_id);
+}

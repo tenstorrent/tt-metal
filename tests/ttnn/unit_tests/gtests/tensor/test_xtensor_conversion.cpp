@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/container/vector.hpp>
 #include <gtest/gtest.h>
 #include <xtensor/containers/xarray.hpp>
 #include <xtensor/generators/xbuilder.hpp>

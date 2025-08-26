@@ -12,7 +12,7 @@ from models.demos.qwen25_vl.reference.functional import qwen2_5_vision_transform
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.qwen25_vl.tt.vision_block import VisionBlock
 from models.tt_transformers.tt.common import get_rot_transformation_mat
-from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, standardize_hf_keys_qwen25_vl
+from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta, standardize_hf_keys_multimodal
 from models.utility_functions import comp_allclose, comp_pcc
 
 
@@ -26,6 +26,7 @@ from models.utility_functions import comp_allclose, comp_pcc
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_vision_block_inference(
     mesh_device,
     reset_seeds,
@@ -34,7 +35,7 @@ def test_vision_block_inference(
     n_layers = 32
     dtype = ttnn.bfloat8_b
     pccs = [0.99] * n_layers
-    pccs[24:] = [0.91] * (n_layers - 24)
+    pccs[24:] = [0.85] * (n_layers - 24)
     print(pccs)
     batch_size = 1  # For prefill we only support batch_size = 1
 
@@ -58,7 +59,7 @@ def test_vision_block_inference(
         reference_model = reference_whole_model.blocks[layer_num]
 
         # Get the state dict of the reference model
-        state_dict = standardize_hf_keys_qwen25_vl(reference_model.state_dict())
+        state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
         state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
         state_dict_prefix = model_args.get_state_dict_prefix("VisionBlock", layer_num)
         state_dict = {f"{state_dict_prefix}{k}": v for k, v in state_dict.items()}

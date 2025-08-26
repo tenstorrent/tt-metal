@@ -240,12 +240,7 @@ class CMakeBuild(build_ext):
         subprocess.check_call(["ls", "-hal", "runtime"], cwd=source_dir, env=build_env)
 
         # Copy needed C++ shared libraries and runtime assets into wheel (sfpi, FW etc)
-        lib_patterns = [
-            "_ttnn.so",
-            "_ttnncpp.so",
-            "libtt_metal.so",
-            "libdevice.so",
-        ]
+        lib_patterns = ["_ttnn.so", "_ttnncpp.so", "libtt_metal.so", "libdevice.so", "libtt_stl.so"]
         runtime_patterns = [
             "hw/**/*",
         ]
@@ -294,7 +289,7 @@ class CMakeBuild(build_ext):
             "api/tt-metalium/constants.hpp",
             "api/tt-metalium/dev_msgs.h",
             "api/tt-metalium/fabric_edm_types.hpp",
-            "api/tt-metalium/fabric_edm_packet_header.hpp",
+            "fabric/fabric_edm_packet_header.hpp",
             "api/tt-metalium/edm_fabric_counters.hpp",
             "core_descriptors/*.yaml",
             "fabric/hw/**/*",
@@ -307,7 +302,7 @@ class CMakeBuild(build_ext):
             "include/**/*",
             "kernels/**/*",
             "third_party/tt_llk/**/*",
-            "tools/profiler/*",
+            "tools/profiler/**/*",
             "soc_descriptors/*.yaml",
         ]
         copy_tree_with_patterns(build_dir / get_lib_dir(), self.build_lib + f"/ttnn/build/lib", lib_patterns)

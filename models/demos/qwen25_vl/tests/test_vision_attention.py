@@ -15,7 +15,7 @@ from models.tt_transformers.tt.common import get_rot_transformation_mat
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_rope_style_hf_to_meta,
-    standardize_hf_keys_qwen25_vl,
+    standardize_hf_keys_multimodal,
 )
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
@@ -32,6 +32,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
     ],
     indirect=True,
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 # Model and attention prefill tests should run both with and without paged attention to debug any issues that may occur with default attention
 def test_vision_attention_inference(
     mesh_device,
@@ -56,7 +57,7 @@ def test_vision_attention_inference(
     # reference_model = Qwen2_5_VLVisionAttention(model_args.hf_config.vision_config.hidden_size, model_args.hf_config.vision_config.num_heads)
     # reference_model.load_state_dict(model_args.reference_attention().state_dict())
 
-    state_dict = standardize_hf_keys_qwen25_vl(reference_model.state_dict())
+    state_dict = standardize_hf_keys_multimodal(reference_model.state_dict())
     state_dict = convert_hf_to_meta(state_dict, model_args.head_dim)
     state_dict_prefix = model_args.get_state_dict_prefix("VisionAttention", 0)
     state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}

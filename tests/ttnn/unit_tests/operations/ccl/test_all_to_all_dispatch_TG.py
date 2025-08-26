@@ -47,7 +47,7 @@ def get_max_links(cluster_axis, fabric_config):
     ids=["s2"],
 )
 @pytest.mark.parametrize("num_links", ["MAX_LINKS"])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG], ids=["dram", "l1"])
@@ -138,7 +138,7 @@ def test_all_to_all_dispatch_no_trace(
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", ["MAX_LINKS"])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_all_to_all_dispatch_trace(
     mesh_device,
@@ -221,7 +221,7 @@ def test_all_to_all_dispatch_trace(
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [3])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_decode_perf(
     mesh_device,
@@ -267,6 +267,7 @@ def test_decode_perf(
         output_memory_config=output_memory_config,
         dtype=dtype,
         cluster_axis=cluster_axis,
+        use_optional_output_tensors=True,
     )
 
 
@@ -300,7 +301,7 @@ def test_decode_perf(
 @pytest.mark.parametrize("input_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("output_memory_config", [ttnn.DRAM_MEMORY_CONFIG], ids=["dram"])
 @pytest.mark.parametrize("num_links", [3])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
+@pytest.mark.parametrize("topology", [None])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 def test_prefill_perf(
     mesh_device,
@@ -346,4 +347,5 @@ def test_prefill_perf(
         output_memory_config=output_memory_config,
         dtype=dtype,
         cluster_axis=cluster_axis,
+        use_optional_output_tensors=True,
     )

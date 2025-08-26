@@ -7,10 +7,13 @@ tests:
     comment: |
       This test appears to be broken. The graph is showing numbers that dont make sense.
 
+  2:
+    name: "DRAM Channels"
+
   3:
     name: "DRAM Directed Ideal"
     comment: |
-      This test shows the ideal read and write bandwidth when transfering multiple 8KB packets.
+      This test shows the ideal read and write bandwidth when transferring multiple 8KB packets.
       The read bandwidth is what is expected, however write bandwidth is expected to be 64
       B/cycle rather than 35 B/cycle. There may be some configuration problem with the dram
       controller/phy or this may be the physical limit of the dram.
@@ -134,9 +137,6 @@ tests:
   55:
     name: "Loopback Directed Ideal"
 
-  60:
-    name: "All to All Packet Sizes"
-
   61:
     name: "DRAM Interleaved Page Numbers"
 
@@ -164,9 +164,6 @@ tests:
   69:
     name: "L1 Interleaved Page Write Numbers"
 
-  70:
-    name: "All from All Packet Sizes"
-
   71:
     name: "L1 Interleaved Page Directed Ideal"
 
@@ -182,41 +179,143 @@ tests:
   75:
     name: "L1 Interleaved Page Write Noc Swap"
 
+  80:
+    name: "One Packet Read Sizes"
+
+  81:
+    name: "One Packet Write Sizes"
+
+  82:
+    name: "One Packet Read Directed Ideal"
+
+  83:
+    name: "One Packet Write Directed Ideal"
+
   100:
     name: "Multicast Schemes (Loopback Enabled)"
 
   101:
     name: "Multicast Schemes (Loopback Disabled)"
 
+  102:
+    name: "Multicast Single Scheme"
+
+  140:
+    name: "Core Bidirectional Directed Ideal Same Kernel"
+
+  141:
+    name: "Core Bidirectional Directed Ideal Different Kernels"
+
+  142:
+    name: "Core Bidirectional Same Virtual Channel Same Kernel"
+
+  143:
+    name: "Core Bidirectional Same Virtual Channel Different Kernels"
+
+  144:
+    name: "Core Bidirectional Write Virtual Channel Sweep Same Kernel"
+
+  145:
+    name: "Core Bidirectional Write Virtual Channel Sweep Different Kernels"
+
+  146:
+    name: "Core Bidirectional Packet Sizes Same Kernel"
+
+  147:
+    name: "Core Bidirectional Packet Sizes Different Kernels"
+
+  148:
+    name: "Core Bidirectional Custom"
+
   150:
     name: "One to One Virtual Channels"
 
   151:
-    name: "One from One Virtual Channels"
+    name: "One to One Custom"
 
   152:
-    name: "One to All Unicast Virtual Channels"
+    name: "One from One Virtual Channels"
 
   153:
-    name: "One from All Virtual Channels"
+    name: "One from One Custom"
 
   154:
-    name: "All to All Virtual Channels"
+    name: "One to All Unicast Virtual Channels"
 
   155:
-    name: "All from All Virtual Channels"
+    name: "One to All Unicast Custom"
+
+  156:
+    name: "One from All Virtual Channels"
+
+  157:
+    name: "One from All Custom"
 
   200:
     name: "Deinterleave Single Core"
     comment: |
-      With a single core the graphs shows performance increases as the theshold increases.
-      This is because frequent flushes dont hide the round trip latency.
+      With a single core the graphs shows performance increases as the threshold increases.
+      This is because frequent flushes don't hide the round trip latency.
 
   201:
     name: "Deinterleave Multi Core"
     comment: |
-      With multiple cores the graph shows that a small theshold always provides bad performance.
-      This is because frequent flushes dont hide the round trip latency. At larger thesholds,
+      With multiple cores the graph shows that a small threshold always provides bad performance.
+      This is because frequent flushes don't hide the round trip latency. At larger thresholds,
       the performance starts to fluctuate due to head-of-line blocking and unfairness in the NOC.
-      Performance fluctuates because the flush disturbes the steady state and will randomly create
-      traffic that sometimes has head of line blocking, and sometimes not.
+      Performance fluctuates because the flush disturbs the steady state and will randomly create
+      traffic that sometimes has head of line blocking, and sometimes does not.
+
+  300:
+    name: "All to All Directed Ideal"
+
+  301:
+    name: "All to All Packet Sizes"
+
+  302:
+    name: "All to All 2x2 To 1x1 Directed Ideal"
+
+  303:
+    name: "All to All 4x4 To 1x1 Directed Ideal"
+
+  304:
+    name: "All to All 1x1 To 2x2 Directed Ideal"
+
+  305:
+    name: "All to All 1x1 To 4x4 Directed Ideal"
+
+  306:
+    name: "All to All 2x2 To 2x2 Directed Ideal"
+
+  307:
+    name: "All to All Virtual Channels"
+
+  308:
+    name: "All to All Custom"
+
+  310:
+    name: "All from All Directed Ideal"
+
+  311:
+    name: "All from All Packet Sizes"
+
+  312:
+    name: "All from All 2x2 From 1x1 Directed Ideal"
+
+  313:
+    name: "All from All 4x4 From 1x1 Directed Ideal"
+
+  314:
+    name: "All from All 1x1 From 2x2 Directed Ideal"
+
+  315:
+    name: "All from All 1x1 From 4x4 Directed Ideal"
+
+  316:
+    name: "All from All 2x2 From 2x2 Directed Ideal"
+
+  317:
+    name: "All from All Virtual Channels"
+
+  318:
+    name: "All from All Custom"

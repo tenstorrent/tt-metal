@@ -3,12 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-
-import torch
 import timm
+import torch
+
+VOVNET_L1_SMALL_SIZE = 16384
 
 
-def load_torch_model(reference_model, target_prefix="", model_location_generator=None):
+def load_torch_model(model_location_generator=None):
     if model_location_generator == None or "TT_GH_CI_INFRA" not in os.environ:
         model = timm.create_model("hf_hub:timm/ese_vovnet19b_dw.ra_in1k", pretrained=True).eval()
         return model

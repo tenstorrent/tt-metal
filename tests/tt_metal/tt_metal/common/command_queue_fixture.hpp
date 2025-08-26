@@ -9,6 +9,7 @@
 #include "fabric_types.hpp"
 #include "gtest/gtest.h"
 #include "dispatch_fixture.hpp"
+#include "mesh_dispatch_fixture.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/device.hpp>
@@ -27,7 +28,7 @@ namespace tt::tt_metal {
 // #22835: These Fixtures will be removed once tests are fully migrated, and replaced by UnitMeshCQFixtures
 class CommandQueueFixture : public DispatchFixture {
 protected:
-    tt::tt_metal::IDevice* device_;
+    tt::tt_metal::IDevice* device_{};
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
             GTEST_SKIP();
@@ -68,7 +69,7 @@ class CommandQueueBufferFixture : public CommandQueueFixture {};
 
 class CommandQueueProgramFixture : public CommandQueueFixture {};
 
-class UnitMeshCQFixture : public DispatchFixture {
+class UnitMeshCQFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         if (!this->validate_dispatch_mode()) {
@@ -204,7 +205,7 @@ protected:
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
 };
 
-class UnitMeshCQSingleCardFixture : virtual public DispatchFixture {
+class UnitMeshCQSingleCardFixture : virtual public MeshDispatchFixture {
 protected:
     static void SetUpTestSuite() {}
     static void TearDownTestSuite() {}
@@ -248,14 +249,27 @@ protected:
         } else {
             chip_ids.push_back(mmio_device_id);
         }
-        auto reserved_devices = distributed::MeshDevice::create_unit_meshes(
+        reserved_devices_ = distributed::MeshDevice::create_unit_meshes(
             chip_ids, DEFAULT_L1_SMALL_SIZE, trace_region_size, 1, dispatch_core_config);
-        for (const auto& [id, device] : reserved_devices) {
-            this->devices_.push_back(device);
+
+        if (enable_remote_chip) {
+            const auto tunnels =
+                tt::tt_metal::MetalContext::instance().get_cluster().get_tunnels_from_mmio_device(mmio_device_id);
+            for (const auto& tunnel : tunnels) {
+                for (const auto chip_id : tunnel) {
+                    if (reserved_devices_.find(chip_id) != reserved_devices_.end()) {
+                        devices_.push_back(reserved_devices_.at(chip_id));
+                    }
+                }
+                break;
+            }
+        } else {
+            devices_.push_back(reserved_devices_.at(mmio_device_id));
         }
     }
 
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
+    std::map<int, std::shared_ptr<distributed::MeshDevice>> reserved_devices_;
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };
@@ -274,22 +288,11 @@ protected:
 };
 
 using UnitMeshCQSingleCardBufferFixture = UnitMeshCQSingleCardFixture;
-
-// left in for subdevice testing
-class CommandQueueSingleCardTraceFixture : virtual public CommandQueueSingleCardFixture {
-protected:
-    void SetUp() override {
-        if (!this->validate_dispatch_mode()) {
-            GTEST_SKIP();
-        }
-        this->arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        this->create_devices(90000000);
-    }
-};
+class CommandQueueSingleCardBufferFixture : public CommandQueueSingleCardFixture {};
 
 class CommandQueueSingleCardProgramFixture : virtual public CommandQueueSingleCardFixture {};
 
-class UnitMeshCQMultiDeviceFixture : public DispatchFixture {
+class UnitMeshCQMultiDeviceFixture : public MeshDispatchFixture {
 protected:
     void SetUp() override {
         this->slow_dispatch_ = false;
@@ -327,7 +330,7 @@ protected:
     }
 
     std::vector<std::shared_ptr<distributed::MeshDevice>> devices_;
-    size_t num_devices_;
+    size_t num_devices_{};
     distributed::MeshCoordinate zero_coord_ = distributed::MeshCoordinate::zero_coordinate(2);
     distributed::MeshCoordinateRange device_range_ = distributed::MeshCoordinateRange(zero_coord_, zero_coord_);
 };
@@ -369,10 +372,12 @@ protected:
 
     std::vector<tt::tt_metal::IDevice*> devices_;
     std::map<chip_id_t, tt::tt_metal::IDevice*> reserved_devices_;
-    size_t num_devices_;
+    size_t num_devices_{};
 };
 
 class CommandQueueMultiDeviceProgramFixture : public CommandQueueMultiDeviceFixture {};
+
+class UnitMeshCQMultiDeviceProgramFixture : public UnitMeshCQMultiDeviceFixture {};
 
 class UnitMeshCQMultiDeviceBufferFixture : public UnitMeshCQMultiDeviceFixture {};
 

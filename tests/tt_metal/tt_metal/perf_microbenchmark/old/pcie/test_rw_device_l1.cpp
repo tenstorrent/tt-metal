@@ -63,7 +63,7 @@ int main(int argc, char** argv) {
         log_info(LogTest, "Target core (x,y) = ({},{})", core_x, core_y);
         CoreCoord core = {core_x, core_y};
 
-        // Can accomodate input size up to 920*1024
+        // Can accommodate input size up to 920*1024
         uint32_t target_cb_addr = 107 * 1024;
 
         // Execute Application

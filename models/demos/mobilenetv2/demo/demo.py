@@ -6,12 +6,24 @@ import pytest
 import torch
 from loguru import logger
 from tqdm import tqdm
-from transformers import AutoImageProcessor
 
 import ttnn
-from models.demos.mobilenetv2.runner.performant_runner import MobileNetV2Trace2CQ
+from models.demos.mobilenetv2.common import load_torch_model
+from models.demos.mobilenetv2.demo.demo_utils import get_batch
+from models.demos.mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 from models.demos.mobilenetv2.tests.perf.mobilenetv2_common import MOBILENETV2_BATCH_SIZE, MOBILENETV2_L1_SMALL_SIZE
-from models.demos.ttnn_resnet.tests.demo_utils import get_batch, get_data_loader
+from models.demos.mobilenetv2.tt import ttnn_mobilenetv2
+from models.demos.mobilenetv2.tt.model_preprocessing import (
+    create_mobilenetv2_input_tensors,
+    create_mobilenetv2_model_parameters,
+    get_mesh_mappers,
+)
+from models.demos.ttnn_resnet.tests.demo_utils import get_data_loader
+from models.tt_cnn.tt.pipeline import (
+    PipelineConfig,
+    create_pipeline_from_config,
+    get_memory_config_for_persistent_dram_tensor,
+)
 from models.utility_functions import profiler, run_for_wormhole_b0
 
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
@@ -35,41 +47,87 @@ def run_mobilenetv2_imagenet_demo(
 
     profiler.clear()
     with torch.no_grad():
-        mobilenetv2_trace_2cq = MobileNetV2Trace2CQ()
+        inputs_mesh_mapper, _, output_mesh_composer = get_mesh_mappers(device)
+
+        torch_model = Mobilenetv2()
+        torch_model = load_torch_model(torch_model, model_location_generator)
+        torch_model.eval()
+
+        model_parameters = create_mobilenetv2_model_parameters(torch_model, device=device)
+        ttnn_model = ttnn_mobilenetv2.TtMobileNetV2(model_parameters, device, batchsize=batch_size_per_device)
+
+        _, host_input_tensor = create_mobilenetv2_input_tensors(
+            batch=batch_size, input_height=224, input_width=224, pad_channels=16, mesh_mapper=inputs_mesh_mapper
+        )
+
+        input_dram_mem_config = get_memory_config_for_persistent_dram_tensor(
+            host_input_tensor.shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, device.dram_grid_size()
+        )
+        logger.info(
+            f"Auto-selected persistent DRAM tensor memory config: shape={host_input_tensor.shape}, shard_shape={input_dram_mem_config.shard_spec.shape}, grid={input_dram_mem_config.shard_spec.grid}"
+        )
+
+        input_l1_core_grid = ttnn.CoreGrid(x=8, y=8)
+        assert (
+            host_input_tensor.shape[-2] % input_l1_core_grid.num_cores == 0
+        ), "Expecting even sharding on L1 input tensor"
+        input_l1_mem_config = ttnn.create_sharded_memory_config(
+            shape=(host_input_tensor.shape[2] // input_l1_core_grid.num_cores, host_input_tensor.shape[-1]),
+            core_grid=input_l1_core_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
+        pipe = create_pipeline_from_config(
+            config,
+            ttnn_model,
+            device,
+            dram_input_memory_config=input_dram_mem_config,
+            l1_input_memory_config=input_l1_mem_config,
+        )
 
         profiler.start(f"compile")
-        mobilenetv2_trace_2cq.initialize_mobilenetv2_trace_2cqs_inference(
-            device, batch_size_per_device, act_dtype, weight_dtype, model_location_generator=model_location_generator
-        )
+        pipe.compile(host_input_tensor)
         profiler.end(f"compile")
-        model_version = "microsoft/resnet-50"
-        image_processor = AutoImageProcessor.from_pretrained(model_version)
-        logger.info("ImageNet-1k validation Dataset")
+
         input_loc = str(model_location_generator("ImageNet_data"))
         data_loader = get_data_loader(input_loc, batch_size, iterations, entire_imagenet_dataset)
 
         input_tensors_all = []
         input_labels_all = []
         for iter in tqdm(range(iterations), desc="Preparing images"):
-            inputs, labels = get_batch(data_loader, image_processor)
-            input_tensors_all.append(inputs)
+            inputs, labels = get_batch(data_loader, 224)
+            ttnn_input = torch.permute(inputs, (0, 2, 3, 1))
+            ttnn_input = torch.nn.functional.pad(ttnn_input, (0, 16 - ttnn_input.shape[-1]), value=0)
+            ttnn_input = ttnn.from_torch(
+                ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=inputs_mesh_mapper
+            )
+            ttnn_input = ttnn.reshape(
+                ttnn_input,
+                (1, 1, ttnn_input.shape[0] * ttnn_input.shape[1] * ttnn_input.shape[2], ttnn_input.shape[3]),
+            )
+            input_tensors_all.append(ttnn_input)
             input_labels_all.append(labels)
+
         logger.info("Processed ImageNet-1k validation Dataset")
 
         logger.info("Starting inference")
+        profiler.start(f"run")
+        outputs = pipe.enqueue(input_tensors_all).pop_all()
+        profiler.end(f"run")
+        total_inference_time = profiler.get(f"run")
+
+        logger.info("Running accuracy check...")
         correct = 0
-        total_inference_time = 0
         for iter in range(iterations):
             predictions = []
-            torch_input_tensor = input_tensors_all[iter]
+            output = outputs[iter]
             labels = input_labels_all[iter]
-            profiler.start(f"run")
-            output = mobilenetv2_trace_2cq.run(torch_input_tensor)
-            output = ttnn.to_torch(output, mesh_composer=mobilenetv2_trace_2cq.test_infra.output_mesh_composer)
+            output = ttnn.to_torch(output, mesh_composer=output_mesh_composer)
             prediction = output.argmax(dim=-1)
 
-            profiler.end(f"run")
-            total_inference_time += profiler.get(f"run")
             for i in range(batch_size):
                 predictions.append(imagenet_label_dict[prediction[i].item()])
                 logger.info(
@@ -77,21 +135,22 @@ def run_mobilenetv2_imagenet_demo(
                 )
                 if imagenet_label_dict[labels[i]] == predictions[-1]:
                     correct += 1
-        mobilenetv2_trace_2cq.release_mobilenetv2_trace_2cqs_inference()
+
+        pipe.cleanup()
+
         accuracy = correct / (batch_size * iterations)
-        logger.info(f"=============")
         logger.info(
             f"Accuracy for total batch size: {batch_size* device.get_num_devices()} over {iterations} iterations is: {accuracy}"
         )
         if entire_imagenet_dataset:
-            assert (
-                accuracy < expected_accuracy
-            ), f"Accuracy {accuracy} does not match expected accuracy {expected_accuracy}"
+            assert accuracy >= expected_accuracy, f"Accuracy {accuracy} is below expected accuracy {expected_accuracy}"
 
         first_iter_time = profiler.get(f"compile")
-        inference_time_avg = total_inference_time / (iterations)
+        inference_time_avg = total_inference_time / (iterations * device.get_num_devices())
 
         compile_time = first_iter_time - 2 * inference_time_avg
+        logger.info(f"Compile time: {round(compile_time, 2)} s")
+        logger.info(f"Average inference time: {round(1000.0 * inference_time_avg, 2)} ms")
 
 
 @run_for_wormhole_b0()

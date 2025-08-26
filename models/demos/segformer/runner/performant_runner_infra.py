@@ -3,12 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
-import requests
 import torch
 import torch.nn.functional as F
 from loguru import logger
-from PIL import Image
-from transformers import SegformerImageProcessor
 from ttnn.model_preprocessing import ParameterDict, ParameterList, preprocess_model_parameters
 
 import ttnn
@@ -17,30 +14,34 @@ from models.demos.segformer.reference.segformer_for_semantic_segmentation import
     SegformerForSemanticSegmentationReference,
 )
 from models.demos.segformer.tests.pcc.test_segformer_decode_head import (
-    create_custom_preprocessor as create_custom_preprocessor_decode_head,
+    create_custom_mesh_preprocessor as create_custom_preprocessor_decode_head,
 )
 from models.demos.segformer.tests.pcc.test_segformer_model import (
-    create_custom_preprocessor as create_custom_preprocessor_model,
+    create_custom_mesh_preprocessor as create_custom_preprocessor_model,
 )
+from models.demos.segformer.tt.common import get_mesh_mappers
 from models.demos.segformer.tt.ttnn_segformer_for_semantic_segmentation import TtSegformerForSemanticSegmentation
 from models.utility_functions import divup, is_wormhole_b0
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def create_custom_preprocessor(device):
-    def custom_preprocessor(model, name, ttnn_module_args):
+def create_custom_mesh_preprocessor(mesh_mapper=None):
+    def custom_mesh_preprocessor(model, name, ttnn_module_args, convert_to_ttnn):
+        return custom_preprocessor(model, name, mesh_mapper)
+
+    def custom_preprocessor(model, name, mesh_mapper=None):
         parameters = {}
         if isinstance(model, SegformerForSemanticSegmentationReference):
             parameters["segformer"] = {}
-            segformer_preprocess = create_custom_preprocessor_model(device)
-            parameters["segformer"] = segformer_preprocess(model.segformer, None, None)
+            segformer_preprocess = create_custom_preprocessor_model(mesh_mapper)
+            parameters["segformer"] = segformer_preprocess(model.segformer, None, None, None)
             parameters["decode_head"] = {}
-            deocde_preprocess = create_custom_preprocessor_decode_head(device)
-            parameters["decode_head"] = deocde_preprocess(model.decode_head, None, None)
+            deocde_preprocess = create_custom_preprocessor_decode_head(mesh_mapper)
+            parameters["decode_head"] = deocde_preprocess(model.decode_head, None, None, None)
 
         return parameters
 
-    return custom_preprocessor
+    return custom_mesh_preprocessor
 
 
 def move_to_device(object, device):
@@ -61,13 +62,16 @@ def move_to_device(object, device):
 
 
 def load_segformer_torch_model(device, model_location_generator=None):
+    _, weights_mesh_mapper, _ = get_mesh_mappers(device)
     config = load_config("configs/segformer_semantic_config.json")
     reference_model = SegformerForSemanticSegmentationReference(config)
     reference_model = load_torch_model(
         reference_model, f"", module="semantic_sub", model_location_generator=model_location_generator
     )
     parameters = preprocess_model_parameters(
-        initialize_model=lambda: reference_model, custom_preprocessor=create_custom_preprocessor(device), device=None
+        initialize_model=lambda: reference_model,
+        custom_preprocessor=create_custom_mesh_preprocessor(weights_mesh_mapper),
+        device=None,
     )
     parameters = move_to_device(parameters, device)
 
@@ -83,28 +87,25 @@ def load_segformer_torch_model(device, model_location_generator=None):
 
 
 class SegformerTestInfra:
-    def __init__(
-        self,
-        device,
-        model_location_generator=None,
-    ):
+    def __init__(self, device, model_location_generator=None, device_batch_size=1, channels=3, resolution=(512, 512)):
         super().__init__()
         torch.manual_seed(0)
+        self.device = device
+        self.resolution = resolution
+        self.num_devices = self.device.get_num_devices()
+        self.channels = channels
+        self.batch_size_per_device = device_batch_size
+        self.batch_size = device_batch_size * self.num_devices
+        self.input_mesh_mapper, self.weights_mesh_mapper, self.output_mesh_composer = get_mesh_mappers(self.device)
         self.pcc_passed = False
         self.pcc_message = "Did you forget to call validate()?"
-        self.device = device
         self.model_location_generator = model_location_generator
         self.reference_model, config, self.parameters = load_segformer_torch_model(device, model_location_generator)
         self.ttnn_segformer_model = TtSegformerForSemanticSegmentation(config, self.parameters)
 
-        processor = SegformerImageProcessor.from_pretrained("nvidia/segformer-b0-finetuned-ade-512-512")
-        url = "http://images.cocodataset.org/val2017/000000039769.jpg"
-        image = Image.open(requests.get(url, stream=True).raw)
-        self.inputs = processor(images=image, return_tensors="pt")
-        self.torch_input = self.inputs.pixel_values
-        self.torch_output_tensor = self.reference_model(self.inputs.pixel_values)
-        input_pixels_permuted = torch.permute(self.inputs.pixel_values, (0, 2, 3, 1))
-        self.input_tensor = ttnn.from_torch(input_pixels_permuted, ttnn.bfloat16)
+        self.torch_input = torch.randn((self.batch_size, self.channels, self.resolution[0], self.resolution[1]))
+        self.torch_output_tensor = self.reference_model(self.torch_input)
+        input_pixels_permuted = torch.permute(self.torch_input, (0, 2, 3, 1))
 
     def run(self):
         self.output_tensor = self.ttnn_segformer_model(
@@ -123,9 +124,9 @@ class SegformerTestInfra:
             exit("Unsupported device")
         num_devices = device.get_num_devices()
         # torch tensor
-        torch_input_tensor = self.torch_input if self.torch_input is None else self.torch_input
-
+        torch_input_tensor = self.torch_input if torch_input_tensor is None else torch_input_tensor
         n, c, h, w = torch_input_tensor.shape
+        n = n // self.num_devices
         # sharded mem config for fold input
         num_cores = core_grid.x * core_grid.y
         shard_h = (n * w * h + num_cores - 1) // num_cores
@@ -138,12 +139,13 @@ class SegformerTestInfra:
         )
         torch_input_tensor = torch_input_tensor.permute(0, 2, 3, 1)
         torch_input_tensor = F.pad(torch_input_tensor, (0, 13))
-        # torch_input_tensor = torch_input_tensor.reshape(1, 1, h * w * n, c)
-        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # tt_inputs_host = ttnn.pad(tt_inputs_host, [1, 1, n * h * w, 16], [0, 0, 0, 0], 0)
+        input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
+        tt_inputs_host = ttnn.from_host_shards(
+            [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
+        )
         return tt_inputs_host, input_mem_config
 
-    def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
+    def setup_dram_sharded_input(self, device, torch_input_tensor=None):
         tt_inputs_host, input_mem_config = self.setup_l1_sharded_input(device)
         dram_grid_size = device.dram_grid_size()
         dram_shard_spec = ttnn.ShardSpec(
@@ -159,31 +161,23 @@ class SegformerTestInfra:
         sharded_mem_config_DRAM = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
         )
-
         return tt_inputs_host, sharded_mem_config_DRAM, input_mem_config
 
     def validate(self, output_tensor=None):
         output_tensor = self.output_tensor if output_tensor is None else output_tensor
-        output_tensor = ttnn.to_torch(self.output_tensor.logits)
+        output_tensor = ttnn.to_torch(self.output_tensor.logits, mesh_composer=self.output_mesh_composer)
         output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.reshape((self.torch_output_tensor.logits).shape)
 
-        valid_pcc = 0.98
+        valid_pcc = 0.978
         self.pcc_passed, self.pcc_message = assert_with_pcc(
             self.torch_output_tensor.logits, output_tensor, pcc=valid_pcc
         )
-
         logger.info(f"Segformer, PCC={self.pcc_message}")
 
     def dealloc_output(self):
         ttnn.deallocate(self.output_tensor)
 
 
-def create_test_infra(
-    device,
-    model_location_generator=None,
-):
-    return SegformerTestInfra(
-        device,
-        model_location_generator,
-    )
+def create_test_infra(device, model_location_generator=None, device_batch_size=1):
+    return SegformerTestInfra(device, model_location_generator, device_batch_size)

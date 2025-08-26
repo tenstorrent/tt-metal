@@ -162,9 +162,9 @@ jobs:
   build-docker-image:
     name: "🐳️ Build images"
     needs: check-docker-images
-    if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.manylinux-exists != 'true'
+    if: needs.check-docker-images.outputs.dev-exists != 'true' || needs.check-docker-images.outputs.basic-dev-exists != 'true' || needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true' || needs.check-docker-images.outputs.manylinux-exists != 'true'
     timeout-minutes: 90
-    runs-on: tt-beta-ubuntu-2204-large
+    runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4

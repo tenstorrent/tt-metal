@@ -52,11 +52,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     auto src_buffer = src_tensor.buffer();
     auto output_buffer = output_tensor.buffer();
 
-    const uint32_t input_tensor_is_dram = input_buffer->buffer_type() == BufferType::DRAM;
-    const uint32_t index_tensor_is_dram = index_buffer->buffer_type() == BufferType::DRAM;
-    const uint32_t src_tensor_is_dram = src_buffer->buffer_type() == BufferType::DRAM;
-    const uint32_t output_tensor_is_dram = output_buffer->buffer_type() == BufferType::DRAM;
-
     auto device = input_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
@@ -81,22 +76,6 @@ ScatterProgramFactory::cached_program_t ScatterProgramFactory::create(
     const uint32_t& index_stick_size_bytes = index_stick_size * index_datum_size;
     const uint32_t& source_stick_size_bytes = source_stick_size * source_datum_size;
     const uint32_t& output_stick_size_bytes = output_stick_size * output_datum_size;
-
-    // check if row byte sizes are at least 32 and a power of 2 (for InterleavedAddrGen)
-    const uint32_t is_input_stick_size_bytes_pow2_min_32 = is_pow2_min32(input_stick_size_bytes);
-    const uint32_t is_index_stick_size_bytes_pow2_min_32 = is_pow2_min32(index_stick_size_bytes);
-    const uint32_t is_source_stick_size_bytes_pow2_min_32 = is_pow2_min32(source_stick_size_bytes);
-    const uint32_t is_output_stick_size_bytes_pow2_min_32 = is_pow2_min32(output_stick_size_bytes);
-
-    // for InterleavedAddrGen
-    const uint32_t input_stick_size_bytes_log2 =
-        is_input_stick_size_bytes_pow2_min_32 ? std::log2(input_stick_size_bytes) : 0;
-    const uint32_t index_stick_size_bytes_log2 =
-        is_index_stick_size_bytes_pow2_min_32 ? std::log2(index_stick_size_bytes) : 0;
-    const uint32_t source_stick_size_bytes_log2 =
-        is_source_stick_size_bytes_pow2_min_32 ? std::log2(source_stick_size_bytes) : 0;
-    const uint32_t output_stick_size_bytes_log2 =
-        is_output_stick_size_bytes_pow2_min_32 ? std::log2(output_stick_size_bytes) : 0;
 
     // maximal input/index/source/output chunk size, divisible by 32, calculated as follows:
     // BH available L1 mem size of nearly 1.5 MB...

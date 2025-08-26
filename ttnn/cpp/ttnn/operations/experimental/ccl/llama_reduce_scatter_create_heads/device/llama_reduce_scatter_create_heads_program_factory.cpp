@@ -14,7 +14,6 @@
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
@@ -399,7 +398,8 @@ LlamaReduceScatterCreateHeadsDeviceOperation::LlamaReduceScatterCreateHeads::cre
     std::vector<Tensor> input_tensors = {input_tensor};
     std::vector<Tensor> output_tensors = {q_output_tensor, k_output_tensor, v_output_tensor};
 
-    const auto& op_config = ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, operation_attributes.topology);
+    [[maybe_unused]] const auto& op_config =
+        ttnn::ccl::CCLOpConfig(input_tensors, output_tensors, operation_attributes.topology);
 
     // need to drop unused cores in shard spec
     auto input_grid = input_shard_spec.grid;

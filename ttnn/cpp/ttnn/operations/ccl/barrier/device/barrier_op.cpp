@@ -28,16 +28,6 @@ std::vector<Tensor> Barrier::create_output_tensors(const std::vector<Tensor>& in
     return input_tensors;
 }
 
-tt::tt_metal::operation::MeshWorkloadWithCallbacks Barrier::create_mesh_workload(
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const std::vector<Tensor>& input_tensors,
-    std::vector<Tensor>& output_tensors) const {
-    return ccl::create_mesh_workload_from_programs(
-        tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
-            return create_program_at(coord, input_tensors, output_tensors);
-        });
-}
-
 tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
     const ttnn::MeshCoordinate& mesh_coord,
     const std::vector<Tensor>& input_tensors,
@@ -47,7 +37,7 @@ tt::tt_metal::operation::ProgramWithCallbacks Barrier::create_program_at(
         input_tensor.device() ? input_tensor.device()->get_device(mesh_coord) : input_tensor.device();
     const auto& devices_to_use = input_tensor.device() ? input_tensor.device()->get_devices() : this->devices;
 
-    ccl::SenderRecieverConfig config =
+    ccl::SenderReceiverConfig config =
         ccl::get_device_sender_receiver_config(target_device, devices_to_use, this->topology);
 
     return ccl::barrier::detail::barrier_with_workers(

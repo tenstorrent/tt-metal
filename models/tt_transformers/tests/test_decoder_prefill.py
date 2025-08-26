@@ -10,6 +10,7 @@ from loguru import logger
 import ttnn
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -50,6 +51,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
         128,
     ),
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_decoder_inference(
     max_seq_len,
     paged_attention,
@@ -129,8 +131,10 @@ def test_decoder_inference(
         )
 
     # Initialize TT model
+    tt_ccl = TT_CCL(mesh_device)
     tt_model = TransformerBlock(
         mesh_device=mesh_device,
+        tt_ccl=tt_ccl,
         state_dict=state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
         layer_num=0,
@@ -168,7 +172,9 @@ def test_decoder_inference(
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
         ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
         # Run TT model
-        tt_out = tt_model(decode_input, None, rot_mats, user_id=0, mode="prefill", page_table=page_table_tt)
+        tt_out = tt_model(
+            decode_input, None, rot_mats_global=rot_mats, user_id=0, mode="prefill", page_table=page_table_tt
+        )
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),

@@ -21,11 +21,9 @@ class SegformerTrace2CQ:
         self,
         device,
         model_location_generator,
+        device_batch_size=1,
     ):
-        self.test_infra = create_test_infra(
-            device,
-            model_location_generator,
-        )
+        self.test_infra = create_test_infra(device, model_location_generator, device_batch_size)
         self.device = device
         self.tt_inputs_host, sharded_mem_config_DRAM, self.input_mem_config = self.test_infra.setup_dram_sharded_input(
             device
@@ -72,17 +70,18 @@ class SegformerTrace2CQ:
 
     def execute_segformer_trace_2cqs_inference(self, tt_inputs_host=None):
         ttnn.wait_for_event(1, self.op_event)
-
         ttnn.copy_host_to_device_tensor(tt_inputs_host, self.tt_image_res, 1)
         self.write_event = ttnn.record_event(self.device, 1)
         ttnn.wait_for_event(0, self.write_event)
-        # TODO: Add in place support to ttnn to_memory_config
         self.input_tensor = ttnn.reshard(self.tt_image_res, self.input_mem_config, self.input_tensor)
         self.op_event = ttnn.record_event(self.device, 0)
         ttnn.execute_trace(self.device, self.tid, cq_id=0, blocking=False)
-        outputs = ttnn.from_device(self.test_infra.output_tensor.logits, blocking=True)
-
-        return outputs
+        return self.test_infra.output_tensor.logits
 
     def release_segformer_trace_2cqs_inference(self):
         ttnn.release_trace(self.device, self.tid)
+
+    def run(self, torch_input_tensor=None):
+        tt_inputs_host, _ = self.test_infra.setup_l1_sharded_input(self.device, torch_input_tensor)
+        output = self.execute_segformer_trace_2cqs_inference(tt_inputs_host)
+        return output

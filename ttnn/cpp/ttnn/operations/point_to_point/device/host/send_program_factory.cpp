@@ -6,6 +6,7 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "point_to_point_device_op.hpp"
 
@@ -58,7 +59,7 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     constexpr auto packet_header_cb_id = tt::CBIndex::c_1;
     constexpr auto buffering_factor = 2;  // this is in other fabric kernels
     constexpr auto num_packet_headers_storable = 2;
-    constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * buffering_factor,
@@ -73,14 +74,14 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
             .set_page_size(packet_cb_id, packet_size_bytes);
     tt::tt_metal::CBHandle cb_cb_handle = CreateCircularBuffer(program, all_cores, cb_packet_config);
 
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
     // basic reader kernel set up
+    std::vector<uint32_t> reader_ct_args;
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_ct_args);
     tt::tt_metal::KernelHandle send_unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/point_to_point/device/kernels/dataflow/reader_unary_interleaved_start_id_gen.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig({input_is_dram}));
+        tt::tt_metal::ReaderDataMovementConfig(reader_ct_args));
 
     auto this_device = mesh_device->get_device(send_coord);
     const auto this_fabric_id = get_fabric_node_id_from_physical_chip_id(this_device->id());
@@ -88,10 +89,8 @@ ttnn::device_operation::CachedProgram<PointToPointOp::SendReceive::shared_variab
     const auto [num_hops, dst_is_forward, next_fabric_id] =
         detail::fabric_1d_routing(mesh_device, send_coord, receive_coord, topology);
 
-    const bool output_is_dram = output_tensors.at(0).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM;
-
-    const std::vector<uint32_t> writer_ct_args = {
-        sender_cb_id, packet_header_cb_id, packet_cb_id, output_is_dram, l1_alignment};
+    std::vector<uint32_t> writer_ct_args = {sender_cb_id, packet_header_cb_id, packet_cb_id, l1_alignment};
+    tt::tt_metal::TensorAccessorArgs(output_tensors.at(0).buffer()).append_to(writer_ct_args);
 
     tt::tt_metal::KernelHandle send_unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,

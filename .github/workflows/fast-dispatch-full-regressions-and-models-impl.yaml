@@ -24,7 +24,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, ttt-llama3.2-1B, resnet50, whisper, openpdn_mnist, vit, sentence_bert, yolov7, swin_s, yolov6l, swin_v2, mobilenetv2, segformer, vgg_unet, yolov10x, yolov11, yolov8s, yolov8s_world, yolov8x, yolov9c, vanilla_unet, yolov5x, efficientnetb0, vovnet]
+        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen25_vl-3B, resnet50, whisper, openpdn_mnist, vit, sentence_bert, yolov7, swin_s, yolov6l, swin_v2, mobilenetv2, segformer, vgg_unet, yolov10x, yolov11, yolov8s, yolov8s_world, yolov8x, yolov9c, vanilla_unet, yolov5x, efficientnetb0, vovnet, ufld_v2, yolov12x, gemma3]
         # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
         # ttt-mistral-7B-v0.3 issue #25861: https://github.com/tenstorrent/tt-metal/issues/25861
         include:
@@ -70,12 +70,14 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            ${{ matrix.model == 'stable_diffusion_xl_base' && '-e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home' || '' }}
+            ${{ matrix.model == 'stable_diffusion_xl_base' && '-e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home -e TT_MM_THROTTLE_PERF=5' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
           run_args: |
             if [[ "${{ matrix.model }}" == *"ttt"* ]]; then
               pytest tests/nightly/single_card/tt_transformers -k ${{ matrix.model }}
+            elif [[ "${{ matrix.model }}" == *"qwen25_vl"* ]]; then
+              pytest tests/nightly/single_card/qwen25_vl -k ${{ matrix.model }}
             else
               pytest tests/nightly/single_card/${{ matrix.model }}
             fi
@@ -150,4 +152,46 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           path: generated/test_reports/
+          prefix: "test_reports_"
+  nightly-wh-models-civ2:
+    strategy:
+      # Do not fail-fast because we need to ensure all tests go to completion
+      # so we try not to get hanging machines
+      fail-fast: false
+      matrix:
+        card: [N150, N300]
+        model: [yolov8s, vadv2]
+    name: Nightly CIv2-compatible ${{ matrix.card }} ${{ matrix.model }}
+    runs-on: ${{ format('tt-ubuntu-2204-{0}-stable', matrix.card) }}
+    container:
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: wormhole_b0
+        GTEST_OUTPUT: xml:/work/generated/test_reports/
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
+    steps:
+      - name: ⬇️  Setup Job
+        uses: tenstorrent/tt-metal/.github/actions/setup-job@main
+        timeout-minutes: 10
+        with:
+          build-artifact-name: ${{ inputs.build-artifact-name }}
+          wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
+      - name: Run frequent reg tests scripts
+        timeout-minutes: ${{ matrix.timeout || 30 }}
+        run: |
+          pytest tests/nightly/single_card/${{ matrix.model }}
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
           prefix: "test_reports_"

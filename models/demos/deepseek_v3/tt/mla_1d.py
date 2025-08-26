@@ -23,24 +23,26 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReshardConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
+    dequantize_state_dicts,
     even_int_div,
+    get_mesh_coords,
     get_state_dicts,
     save_and_get_path,
     sub_state_dicts,
 )
 from models.demos.deepseek_v3.utils.run_config import (
-    MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
     ModelPrefillConfig,
     RunDecodeConfig,
     RunPrefillConfig,
     WeightConfig,
 )
+from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.utility_functions import nearest_y
 
 
-class MLA1D(AbstractModule):
+class MLA1D(SharedStateAddOn, AbstractModule):
     """
     Multi-Latent Attention Module for 1D tensor parallelism.
     """
@@ -88,6 +90,8 @@ class MLA1D(AbstractModule):
         q_lora_rank = hf_config.q_lora_rank
         q_head_dim = qk_nope_head_dim + qk_rope_head_dim
 
+        state_dicts = dequantize_state_dicts(state_dicts, hf_config)
+
         def convert_linear_weight(
             hf_name: str | None,
             shape: tuple[int] | None,
@@ -103,7 +107,7 @@ class MLA1D(AbstractModule):
             if ttnn_name is None:
                 ttnn_name = cls.HF_TTNN_MAPPING[hf_name]
             if torch_weights is None:
-                torch_weights = get_state_dicts(state_dicts, f"{hf_name}.weight", shape, torch.float32)
+                torch_weights = get_state_dicts(state_dicts, f"{hf_name}.weight", shape, torch.bfloat16)
                 torch_weights = torch.transpose(torch_weights, -2, -1)
 
             ttnn_weight = ttnn.as_tensor(
@@ -126,8 +130,7 @@ class MLA1D(AbstractModule):
         def convert_norm_weight(hf_name: str) -> dict:
             """Helper to convert normalization weights."""
             ttnn_name = cls.HF_TTNN_MAPPING[hf_name]
-            norm_state_dicts = sub_state_dicts(state_dicts, f"{hf_name}.weight")
-            norm_state_dicts = [{"weight": item[""].to(torch.bfloat16)} for item in norm_state_dicts]
+            norm_state_dicts = sub_state_dicts(state_dicts, f"{hf_name}.")
             return {
                 ttnn_name: RMSNorm.convert_weights(hf_config, norm_state_dicts, output_path / ttnn_name, mesh_device)
             }
@@ -174,7 +177,7 @@ class MLA1D(AbstractModule):
             state_dicts,
             f"{hf_name}.weight",
             shape=shape,
-            dtype=torch.float32,
+            dtype=torch.bfloat16,
         )
 
         # This weight needs to be split
@@ -266,6 +269,8 @@ class MLA1D(AbstractModule):
         max_seq_len = hf_config.max_seq_len
 
         mesh_shape = list(mesh_device.shape)
+
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         wq_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -395,6 +400,7 @@ class MLA1D(AbstractModule):
 
         return {
             "hf_config": hf_config,
+            "input_memory_config": input_memory_config,
             "mesh_shape": mesh_shape,
             "wq_a": wq_a_config,
             "wq_b": wq_b_config,
@@ -445,6 +451,8 @@ class MLA1D(AbstractModule):
 
         mesh_shape = list(mesh_device.shape)
         num_heads_local = even_int_div(num_heads, mesh_shape[1])
+
+        input_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
         wq_a_config = LinearConfig(
             input_tensor_b=FromWeightConfig(mesh_device),
@@ -699,6 +707,7 @@ class MLA1D(AbstractModule):
         return {
             "hf_config": hf_config,
             "mesh_shape": mesh_shape,
+            "input_memory_config": input_memory_config,
             "wq_a": wq_a_config,
             "wq_b": wq_b_config,
             "wkv_a": wkv_a_config,
@@ -883,12 +892,12 @@ class MLA1D(AbstractModule):
 
         # CCL states setup (Must be in order of execution)
         get_rs_params = lambda axis: {
-            "from_remote_multi_device_global_semaphore": ccl.get_semaphore(axis=axis),
-            "to_remote_multi_device_global_semaphore": ccl.get_semaphore(axis=axis),
+            "from_remote_multi_device_global_semaphore": ccl.get_from_sem(axis=axis),
+            "to_remote_multi_device_global_semaphore": ccl.get_to_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
         get_ag_params = lambda axis: {
-            "multi_device_global_semaphore": ccl.get_semaphore(axis=axis),
+            "multi_device_global_semaphore": ccl.get_gather_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
         ccl_states_prefill = {
@@ -913,23 +922,7 @@ class MLA1D(AbstractModule):
             "kvpe_cache": tt_cache,
             **ccl_states_prefill,
             **ccl_states_decode,
-            MESH_DEVICE_STATE_DICT_KEY: mesh_device,
         }
-
-    @classmethod
-    def get_mesh_coores(cls, mesh_shape: list[int], row: int = None, col: int = None) -> set[ttnn.MeshCoordinate]:
-        """
-        Get the devices in the current row.
-        """
-        if row:
-            assert 0 <= row < mesh_shape[0], "Row index out of bounds"
-        if col:
-            assert 0 <= col < mesh_shape[1], "Column index out of bounds"
-
-        row_select = range(mesh_shape[0]) if row is None else [row]
-        col_select = range(mesh_shape[1]) if col is None else [col]
-        device_coords = {(r, c) for r in row_select for c in col_select}
-        return {ttnn.MeshCoordinate(*coord) for coord in device_coords}
 
     @classmethod
     def forward_decode(
@@ -1070,7 +1063,7 @@ class MLA1D(AbstractModule):
             tt_kvpe,
             update_idxs_tensor=position_idxs,
             page_table=page_table,
-            mesh_coords=cls.get_mesh_coores(mesh_shape, row_idx),
+            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
         )
 
         # FlashMLA
@@ -1221,7 +1214,7 @@ class MLA1D(AbstractModule):
             tt_kvpe,
             page_table=page_table,
             batch_idx=local_batch_idx,
-            mesh_coords=cls.get_mesh_coores(mesh_shape, row_idx, col_idx),
+            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
         )
 
         # FlashMLA

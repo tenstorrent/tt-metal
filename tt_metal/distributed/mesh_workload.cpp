@@ -110,11 +110,11 @@ void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
     if (programs_.size() == 1) {
-        // Compile from main thread for homogenous workloads
+        // Compile from main thread for homogeneous workloads
         this->compile_program(programs_.begin()->first, mesh_device);
     } else {
         for (auto& [device_range, _] : programs_) {
-            // Multi-Threaded Compile: Useful for heterogenous MeshWorkloads
+            // Multi-Threaded Compile: Useful for heterogeneous MeshWorkloads
             mesh_device->enqueue_to_thread_pool(
                 [device_range, mesh_device, this]() { this->compile_program(device_range, mesh_device); });
         }
@@ -170,7 +170,7 @@ void MeshWorkloadImpl::load_binaries(MeshCommandQueue& mesh_cq) {
                     mesh_device,
                     kernel_bin_buf_->address());
 
-                mesh_device->mesh_command_queue().enqueue_write_shard_to_sub_grid(
+                mesh_cq.enqueue_write_shard_to_sub_grid(
                     *kernel_bin_buf_view,
                     program.impl().get_program_transfer_info().binary_data.data(),
                     device_range,
@@ -348,10 +348,10 @@ void MeshWorkloadImpl::set_last_used_command_queue_for_testing(MeshCommandQueue*
 
 MeshCommandQueue* MeshWorkloadImpl::get_last_used_command_queue() const { return last_used_command_queue_; }
 
-ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index) {
+ProgramConfig& MeshWorkloadImpl::get_program_config(uint32_t index, bool using_fast_dispatch) {
     ZoneScoped;
     TT_FATAL(
-        programs_.size() and is_finalized(),
+        !using_fast_dispatch or (programs_.size() and is_finalized()),
         "Program Configs can only be queried if a MeshWorkload is populated and finalized.");
     return programs_.begin()->second.impl().get_program_config(index);
 }
@@ -362,9 +362,10 @@ uint32_t MeshWorkloadImpl::get_sem_base_addr(
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
-    return base_addr +
-           get_program_config(MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
-               .sem_offset;
+    return base_addr + get_program_config(
+                           MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type),
+                           mesh_device->using_fast_dispatch())
+                           .sem_offset;
 }
 
 uint32_t MeshWorkloadImpl::get_sem_size(
@@ -389,9 +390,10 @@ uint32_t MeshWorkloadImpl::get_cb_base_addr(
     HalProgrammableCoreType programmable_core_type =
         ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
     uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, mesh_device.get(), programmable_core_type);
-    return base_addr +
-           get_program_config(MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
-               .cb_offset;
+    return base_addr + get_program_config(
+                           MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type),
+                           mesh_device->using_fast_dispatch())
+                           .cb_offset;
 }
 
 uint32_t MeshWorkloadImpl::get_cb_size(

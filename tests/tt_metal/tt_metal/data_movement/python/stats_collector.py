@@ -27,7 +27,15 @@ class StatsCollector:
     def gather_analysis_stats(self):
         # Gather stats from csv and set up analysis
         stats = self.gather_stats_from_csv()
-        cores = [key for key in stats["devices"][0]["cores"].keys() if key != "DEVICE"]
+        cores = [
+            key
+            for key in stats["devices"][0]["cores"].keys()
+            if (
+                "BRISC" in stats["devices"][0]["cores"][key]["riscs"]
+                or "NCRISC" in stats["devices"][0]["cores"][key]["riscs"]
+            )
+            and key != "DEVICE"
+        ]
 
         dm_stats = {}
         for risc in RISCV_PROCESSORS:

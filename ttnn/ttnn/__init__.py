@@ -111,7 +111,7 @@ from ttnn._ttnn.multi_device import (
     create_mesh_composer,
     aggregate_tensor,
     distribute_tensor,
-    get_t3k_physical_device_ids_ring,
+    using_distributed_env,
 )
 
 from ttnn._ttnn.events import (
@@ -127,6 +127,10 @@ from ttnn._ttnn.operations.trace import (
     end_trace_capture,
     execute_trace,
     release_trace,
+)
+
+from ttnn._ttnn.operations.debug import (
+    apply_device_delay,
 )
 
 from ttnn._ttnn.global_circular_buffer import (
@@ -348,7 +352,9 @@ from ttnn.operations.normalization import (
     LayerNormShardedMultiCoreProgramConfig,
     create_group_norm_weight_bias_rm,
     create_group_norm_input_mask,
+    create_group_norm_input_negative_mask,
     determine_expected_group_norm_sharded_config_and_grid_size,
+    dram_group_norm_params_from_torch,
 )
 
 from ttnn.operations.embedding import (
@@ -363,11 +369,7 @@ from ttnn.operations.reduction import (
     ReduceType,
 )
 
-from ttnn.operations.ccl import (
-    Topology,
-    teardown_edm_fabric,
-    initialize_edm_fabric,
-)
+from ttnn.operations.ccl import Topology
 
 from ttnn.operations.conv2d import (
     Conv2dConfig,

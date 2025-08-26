@@ -69,6 +69,7 @@ from models.utility_functions import comp_pcc, skip_for_grayskull
     (1, None),
     ids=["1layer", "all_layers"],
 )
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 def test_model_inference(
     paged_attention,
     page_params,

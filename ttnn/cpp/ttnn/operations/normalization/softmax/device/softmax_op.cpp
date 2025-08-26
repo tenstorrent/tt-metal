@@ -38,23 +38,26 @@ void Softmax::validate(
     TT_FATAL(
         input_tensor.dtype() == DataType::FLOAT32 || input_tensor.dtype() == DataType::BFLOAT16 ||
             input_tensor.dtype() == DataType::BFLOAT8_B,
-        "Error");
+        "Input tensor must be FLOAT32, BFLOAT16, or BFLOAT8_B, got: {}",
+        input_tensor.dtype());
     if (optional_input_tensors.size() == 1) {
         if (optional_input_tensors.at(0).has_value()) {
             auto& mask = optional_input_tensors.at(0).value();
             TT_FATAL(mask.storage_type() == StorageType::DEVICE, "Operands to softmax need to be on device!");
-            TT_FATAL(input_tensor.device() == mask.device(), "Error");
+            TT_FATAL(input_tensor.device() == mask.device(), "Input tensor and mask must be on the same device");
             if (mask.is_sharded()) {  // sharded mask
-                TT_FATAL(mask.layout() == Layout::TILE, "Error");
-                TT_FATAL(mask.padded_shape() == input_tensor.padded_shape(), "Error");
+                TT_FATAL(mask.layout() == Layout::TILE, "Sharded mask must have TILE layout");
+                TT_FATAL(
+                    mask.padded_shape() == input_tensor.padded_shape(),
+                    "Sharded mask shape must match input tensor shape");
             } else {
                 if (mask.layout() == Layout::ROW_MAJOR) {
                     ttnn::Shape expected_shape(
                         {mask.padded_shape()[0], 1, input_tensor.padded_shape()[-1] / TILE_WIDTH, TILE_WIDTH});
-                    TT_FATAL(mask.padded_shape() == expected_shape, "Error");
+                    TT_FATAL(mask.padded_shape() == expected_shape, "Non-sharded mask shape must match expected shape");
                 }
                 for (uint32_t i = 1; i < input_tensor.padded_shape().rank() - 2; i++) {
-                    TT_FATAL(mask.padded_shape()[i] == 1, "Error");
+                    TT_FATAL(mask.padded_shape()[i] == 1, "Non-sharded mask intermediate dimensions must be 1");
                 }
             }
 
@@ -62,8 +65,12 @@ void Softmax::validate(
                 [&](const auto& program_config) {
                     using ProgramConfigType = std::decay_t<decltype(program_config)>;
                     if constexpr (std::is_same_v<ProgramConfigType, SoftmaxDefaultProgramConfig>) {
-                        TT_FATAL(input_tensor.padded_shape()[0] == mask.padded_shape()[0], "Error");
-                        TT_FATAL(!this->is_scale_causal_mask_hw_dims_softmax, "Error");
+                        TT_FATAL(
+                            input_tensor.padded_shape()[0] == mask.padded_shape()[0],
+                            "Input and mask batch sizes must match");
+                        TT_FATAL(
+                            !this->is_scale_causal_mask_hw_dims_softmax,
+                            "Scale causal mask HW dims softmax not supported in default program config");
                     } else if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
                         const auto& shape = input_tensor.padded_shape();
                         uint32_t M = input_tensor.physical_volume() / shape[-1];
@@ -77,7 +84,7 @@ void Softmax::validate(
                         TT_FATAL(
                             program_config.block_w * TILE_WIDTH == shape[3],
                             "shard width must equal to input tensor shape[3]!");
-                        TT_FATAL(this->inplace, "Error");
+                        TT_FATAL(this->inplace, "Operation must be inplace for sharded multi-core program config");
                         if (!this->is_scale_causal_mask_hw_dims_softmax) {
                             // grid
                             auto num_cores_c = program_config.compute_with_storage_grid_size.x;
@@ -94,25 +101,38 @@ void Softmax::validate(
                                 program_config.block_h,
                                 num_cores_r * num_cores_c);
                         } else {
-                            TT_FATAL(this->is_causal_mask, "Error");
-                            TT_FATAL(mask.layout() == Layout::TILE, "Error");
-                            TT_FATAL(mask.is_sharded() == false, "Error");
-                            TT_FATAL(input_tensor.layout() == Layout::TILE, "Error");
-                            TT_FATAL(input_tensor.is_sharded(), "Error");
+                            TT_FATAL(
+                                this->is_causal_mask, "Causal mask is required for scale causal mask HW dims softmax");
+                            TT_FATAL(
+                                mask.layout() == Layout::TILE,
+                                "Mask must have TILE layout for scale causal mask HW dims softmax");
+                            TT_FATAL(
+                                mask.is_sharded() == false,
+                                "Mask must not be sharded for scale causal mask HW dims softmax");
+                            TT_FATAL(
+                                input_tensor.layout() == Layout::TILE,
+                                "Input must have TILE layout for scale causal mask HW dims softmax");
+                            TT_FATAL(
+                                input_tensor.is_sharded(),
+                                "Input must be sharded for scale causal mask HW dims softmax");
                             TT_FATAL(
                                 input_tensor.shard_spec()->orientation == tt::tt_metal::ShardOrientation::ROW_MAJOR,
-                                "Error");
-                            TT_FATAL(this->scale.has_value(), "Error");
+                                "Input must have ROW_MAJOR shard orientation for scale causal mask HW dims softmax");
+                            TT_FATAL(
+                                this->scale.has_value(),
+                                "Scale value is required for scale causal mask HW dims softmax");
                         }
                     }
                 },
                 this->program_config);
         } else {
-            TT_FATAL(not this->scale.has_value(), "Error");
+            TT_FATAL(not this->scale.has_value(), "Scale value must not be set when mask is not present");
         }
     } else {
-        TT_FATAL(not this->scale.has_value(), "Error");
-        TT_FATAL(not this->is_scale_causal_mask_hw_dims_softmax, "Error");
+        TT_FATAL(not this->scale.has_value(), "Scale value must not be set when no input tensors are present");
+        TT_FATAL(
+            not this->is_scale_causal_mask_hw_dims_softmax,
+            "Scale causal mask HW dims softmax not supported without input tensors");
     }
 }
 
@@ -275,11 +295,26 @@ Tensor scale_mask_softmax(
         .target_layout = tt::tt_metal::Layout::TILE};
     std::optional<ttnn::operations::experimental::auto_format::FormatParams> mask_format_params = std::nullopt;
     if (mask.has_value()) {
-        TT_FATAL(input_tensor.padded_shape()[-1] == mask.value().padded_shape()[-1], "Error");
-        TT_FATAL(input_tensor.padded_shape()[0] == mask.value().padded_shape()[0], "Error");
-        TT_FATAL(mask.value().padded_shape()[-2] == 1 or mask.value().padded_shape()[-2] == TILE_HEIGHT, "Error");
+        TT_FATAL(
+            input_tensor.padded_shape()[-1] == mask.value().padded_shape()[-1],
+            "Input and mask inner dimensions must match, got input: {} vs mask: {}",
+            input_tensor.padded_shape()[-1],
+            mask.value().padded_shape()[-1]);
+        TT_FATAL(
+            input_tensor.padded_shape()[0] == mask.value().padded_shape()[0],
+            "Input and mask batch sizes must match, got input: {} vs mask: {}",
+            input_tensor.padded_shape()[0],
+            mask.value().padded_shape()[0]);
+        TT_FATAL(
+            mask.value().padded_shape()[-2] == 1 or mask.value().padded_shape()[-2] == TILE_HEIGHT,
+            "Mask height must be 1 or TILE_HEIGHT (32), got: {}",
+            mask.value().padded_shape()[-2]);
         for (uint32_t i = 1; i < input_tensor.padded_shape().rank() - 2; i++) {
-            TT_FATAL(mask.value().padded_shape()[i] == 1, "Error");
+            TT_FATAL(
+                mask.value().padded_shape()[i] == 1,
+                "Mask intermediate dimension {} must be 1, got: {}",
+                i,
+                mask.value().padded_shape()[i]);
         }
         ttnn::Shape mask_pad_shape =
             ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(mask.value().padded_shape());

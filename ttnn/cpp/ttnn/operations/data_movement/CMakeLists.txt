@@ -41,6 +41,18 @@ target_sources(
             reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
             reshape_view/device/device/rm_reshape_interleaved.cpp
             reshape_view/device/hostdevcommon/common.hpp
+            tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
+            untilize/device/kernels/dataflow/reader_unary_start_id.cpp
+            untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
+            untilize/device/kernels/compute/pack_untilize_variable_num_blocks.cpp
+            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_dims_split_rows_multicore.cpp
+            tilize_with_val_padding/device/kernels/dataflow/reader_unary_pad_multicore_both_dims.cpp
+            untilize/device/kernels/compute/common.cpp
+            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multicore.cpp
+            tilize/device/kernels/compute/tilize_wh.cpp
+            untilize/device/kernels/compute/pack_untilize.cpp
+            untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_wh_multicore.cpp
+            untilize/device/kernels/compute/pack_untilize_wh.cpp
     PRIVATE
         bcast/bcast.cpp
         bcast/bcast_types.cpp
@@ -75,6 +87,9 @@ target_sources(
         indexed_fill/device/indexed_fill_op.cpp
         indexed_fill/device/indexed_fill_op_multi_core_program_factory.cpp
         indexed_fill/indexed_fill.cpp
+        moe_expert_token_remap/moe_expert_token_remap.cpp
+        moe_expert_token_remap/device/moe_expert_token_remap_device_operation.cpp
+        moe_expert_token_remap/device/moe_expert_token_remap_program_factory.cpp
         move/device/move_device_operation.cpp
         move/device/move_program_factory.cpp
         move/move.cpp

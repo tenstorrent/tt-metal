@@ -70,22 +70,23 @@ def galaxy_type():
 def is_galaxy():
     import ttnn
 
-    return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+    return (
+        ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
+        or ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
+    )
 
 
 # TODO: Remove this when TG clusters are deprecated.
 def is_6u():
     import ttnn
 
-    # 6U has 32 PCIe devices
-    return is_galaxy() and ttnn.GetNumPCIeDevices() == SIX_U_NUM_PCIE_DEVICES
+    return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.GALAXY
 
 
 # TODO: Remove this when TG clusters are deprecated.
 def is_tg_cluster():
     import ttnn
 
-    # TG has 4 PCIe devices
     return ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.TG
 
 
@@ -396,10 +397,9 @@ def mesh_device(request, silicon_arch_name, device_params):
         grid_dims = param
         assert len(grid_dims) == 2, "Device mesh grid shape should have exactly two elements."
         num_devices_requested = grid_dims[0] * grid_dims[1]
-        if num_devices_requested > len(device_ids):
+        if not ttnn.using_distributed_env() and num_devices_requested > len(device_ids):
             pytest.skip("Requested more devices than available. Test not applicable for machine")
         mesh_shape = ttnn.MeshShape(*grid_dims)
-        assert num_devices_requested <= len(device_ids), "Requested more devices than available."
     else:
         num_devices_requested = min(param, len(device_ids))
         mesh_shape = ttnn.MeshShape(1, num_devices_requested)
@@ -543,6 +543,39 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     del mesh_device
 
 
+@pytest.fixture(scope="function")
+def p150_mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+    import ttnn
+
+    if ttnn.get_num_devices() not in [1, 2, 4, 8]:
+        pytest.skip()
+
+    request.node.pci_ids = ttnn.get_pcie_device_ids()
+    updated_device_params = get_updated_device_params(device_params)
+    fabric_config = updated_device_params.pop("fabric_config", None)
+    reliability_mode = updated_device_params.pop("reliability_mode", None)
+    set_fabric(fabric_config)
+    if ttnn.get_num_devices() == 8:
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(4, 2),
+            **updated_device_params,
+        )
+    else:
+        mesh_device = ttnn.open_mesh_device(
+            mesh_shape=ttnn.MeshShape(ttnn.get_num_devices(), 1),
+            **updated_device_params,
+        )
+    logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
+    yield mesh_device
+
+    for submesh in mesh_device.get_submeshes():
+        ttnn.close_mesh_device(submesh)
+
+    ttnn.close_mesh_device(mesh_device)
+    reset_fabric(fabric_config)
+    del mesh_device
+
+
 @pytest.fixture()
 def ensure_devices_tg():
     import ttnn
@@ -669,7 +702,7 @@ def pytest_addoption(parser):
         "--grid-size",
         action="store",
         default=None,
-        help="Size of chip grid for the test to run on. Grid size is defined by nubmer of cores in row x number of cores in column, e.g., 8x8",
+        help="Size of chip grid for the test to run on. Grid size is defined by number of cores in row x number of cores in column, e.g., 8x8",
     )
 
 
