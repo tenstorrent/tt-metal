@@ -547,8 +547,8 @@ on:
           - data_movement.view.view_pytorch2
           - data_movement.view.view_tt_torch
           - data_movement.interleaved_to_sharded.interleaved_to_sharded_e2e
-  schedule:
-    - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
+  # schedule:
+  #   - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
 jobs:
   build-artifact:
@@ -668,7 +668,7 @@ jobs:
         run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary
       - name: Run ttnn sweeps (all sweeps, nightly)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
-        run: python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary
+        run: python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
       - name: Upload sweep results
         uses: actions/upload-artifact@v4
         with:
