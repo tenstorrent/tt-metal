@@ -339,10 +339,15 @@ public:
     bool get_supports_receiving_multicasts(uint32_t programmable_core_type_index) const;
 
     uint32_t get_num_risc_processors(HalProgrammableCoreType programmable_core_type) const;
+    // Returns the processor index within a core.  There is a 1-1 mapping between
+    // (processor_class, processor_type) and processor_index.  This is useful
+    // For indexing data structures on devices (only 1-d arrays are needed).
+    // Should only be used internally and not expose this index to the user.
     uint32_t get_processor_index(
         HalProgrammableCoreType programmable_core_type,
         HalProcessorClassType processor_class,
         uint32_t processor_type_idx) const;
+    // Inverse function of get_processor_index.
     std::pair<HalProcessorClassType, uint32_t> get_processor_class_and_type_from_index(
         HalProgrammableCoreType programmable_core_type, uint32_t processor_index) const;
 
