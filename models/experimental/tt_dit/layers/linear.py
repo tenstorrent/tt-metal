@@ -73,20 +73,33 @@ class ColParallelLinear:
     """
 
     def __init__(
-        self, in_features, out_features, bias=True, activation=None, mesh_device=None, mesh_axis=0, init=False
+        self,
+        in_features,
+        out_features,
+        bias=True,
+        activation_fn=None,
+        mesh_device=None,
+        mesh_axis=0,
+        init=False,
     ):
         self.in_features = in_features
         self.out_features = out_features
-        self.activation = activation
+        self.activation_fn = activation_fn
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
         if init:
             self.weight = bf16_tensor(
-                torch.randn(in_features, out_features), device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1
+                torch.randn(in_features, out_features),
+                device=self.mesh_device,
+                mesh_axis=self.mesh_axis,
+                shard_dim=-1,
             )
             if bias:
                 self.bias = bf16_tensor(
-                    torch.randn(1, out_features), device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1
+                    torch.randn(1, out_features),
+                    device=self.mesh_device,
+                    mesh_axis=self.mesh_axis,
+                    shard_dim=-1,
                 )
             else:
                 self.bias = None
@@ -128,9 +141,14 @@ class ColParallelLinear:
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
-        if self.activation is not None:
-            assert self.activation == "gelu"
+        if self.activation_fn == "gelu":
             output = ttnn.gelu(output, fast_and_approximate_mode=False)
+        elif self.activation_fn == "quick_gelu":
+            output = output * ttnn.sigmoid(1.702 * output)  # quick approx gelu
+        elif self.activation_fn is None:
+            pass
+        else:
+            raise ValueError(f"Activation function {self.activation_fn} not supported")
         return output
 
 
@@ -203,6 +221,7 @@ class RowParallelLinear:
         Expects x to be column fractured.
         Return output fractured on columns.
         """
+
         output = ttnn.linear(
             x,
             self.weight,
@@ -212,6 +231,10 @@ class RowParallelLinear:
         )
 
         if tuple(self.mesh_device.shape)[self.mesh_axis] > 1:
+            needs_reshape = len(output.shape) <= 3
+            if needs_reshape:
+                output = ttnn.unsqueeze(output, 0)
+
             output = ttnn.experimental.reduce_scatter_minimal_async(
                 output,
                 persistent_output_buffers=self.ccl_manager.get_rs_ping_pong_buffer(
@@ -225,6 +248,9 @@ class RowParallelLinear:
                 cluster_axis=self.mesh_axis,
                 **self.ccl_manager.get_rs_hyperparams(output.shape),
             )
+
+            if needs_reshape:
+                output = ttnn.squeeze(output, 0)
 
         if self.activation is not None:
             assert self.activation == "gelu"

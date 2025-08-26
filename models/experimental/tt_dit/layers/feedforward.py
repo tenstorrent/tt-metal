@@ -16,7 +16,7 @@ class FeedForward:
         dim: int,
         dim_out=None,
         mult: int = 4,
-        activation_fn: str = "geglu",
+        activation_fn: str = "gelu",
         inner_dim=None,
         bias: bool = True,
         mesh_device=None,
@@ -37,6 +37,7 @@ class FeedForward:
 
     def load_state_dict(self, state_dict, transform=None):
         assert transform is None, "Haven't figured out how to pass two transformations yet"
+
         self.ff1.load_state_dict(substate(state_dict, "ff1"))
         self.ff2.load_state_dict(substate(state_dict, "ff2"))
 
@@ -55,7 +56,7 @@ class ParallelFeedForward:
         dim: int,
         dim_out=None,
         mult: int = 4,
-        activation_fn: str = "geglu",
+        activation_fn: str = "gelu",
         inner_dim=None,
         bias: bool = True,
         mesh_device=None,
@@ -72,9 +73,14 @@ class ParallelFeedForward:
         self.inner_dim = inner_dim
         self.activation_fn = activation_fn
         self.bias = bias
-
         self.ff1 = ColParallelLinear(
-            dim, inner_dim, bias=bias, mesh_device=mesh_device, activation=activation_fn, mesh_axis=mesh_axis, init=init
+            dim,
+            inner_dim,
+            bias=bias,
+            mesh_device=mesh_device,
+            activation_fn=activation_fn,
+            mesh_axis=mesh_axis,
+            init=init,
         )
         self.ff2 = RowParallelLinear(
             inner_dim,
@@ -88,6 +94,7 @@ class ParallelFeedForward:
 
     def load_state_dict(self, state_dict, transform=None):
         assert transform is None, "Haven't figured out how to pass two transformations yet"
+
         self.ff1.load_state_dict(substate(state_dict, "ff1"))
         self.ff2.load_state_dict(substate(state_dict, "ff2"))
 
