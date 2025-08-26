@@ -34,6 +34,19 @@ void print_sysfs_metrics();
  Main
 **************************************************************************************************/
 
+// Note: this is apparently a cached link status and not live!
+static bool is_ethernet_endpoint_up(const tt::Cluster &cluster, tt::umd::chip_id_t chip_id, tt::umd::ethernet_channel_t ethernet_channel) {
+    for (const auto &[core, channel]: cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
+        if (ethernet_channel == channel) {
+            // Found the channel on the chip we are interested in, we now have the core coordinates
+            return cluster.is_ethernet_link_up(chip_id, core);
+        }
+    }
+
+    // Invalid chip ID or channel -> not connected
+    return false;
+}
+
 static void test_print_link_health() {
     const tt::tt_metal::MetalContext &instance = tt::tt_metal::MetalContext::instance();
     const tt::Cluster &cluster = instance.get_cluster();
