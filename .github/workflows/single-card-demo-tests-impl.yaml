@@ -46,7 +46,8 @@ jobs:
                     { name: "mnist", runner-label: "N150", performance: false, cmd: run_mnist_func, owner_id: U06ECNVR0EN}, # Evan Smal
                     { name: "squeezebert", runner-label: "N150", performance: false, cmd: run_squeezebert_func, owner_id: UBHPP2NDP}, # Joseph Chu
                     { name: "roberta", runner-label: "N150", performance: false, cmd: run_roberta_func, owner_id: U06F3ER8X9A}, # Stuti Raizada
-                    { name: "stable_diffusion", runner-label: "N150", performance: false, cmd: run_stable_diffusion_func, owner_id: U045U3DEKM4}, # Mohamed Bahnas
+                    { name: "stable_diffusion", runner-label: "N150", performance: false, cmd: run_stable_diffusion_func, owner_id: U08ADLJ4PLP}, # Aleksandar Stancov
+                    { name: "stable_diffusion", runner-label: "N300", performance: false, cmd: run_stable_diffusion_func, owner_id: U08ADLJ4PLP}, # Aleksandar Stancov
                     { name: "segformer", runner-label: "N150", performance: false, cmd: run_segformer_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas (vguduruTT)
                     { name: "sentence_bert", runner-label: "N150", performance: false, cmd: run_sentencebert_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
                     { name: "yolov11", runner-label: "N150", performance: false, cmd: run_yolov11_func, owner_id: U045U3DEKM4, civ2-compatible: true}, # Mohamed Bahnas
