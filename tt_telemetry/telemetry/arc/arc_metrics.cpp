@@ -30,7 +30,7 @@ const std::vector<std::string> ARCTelemetryAvailableMetric::telemetry_path() con
     return path;
 }
 
-void ARCTelemetryAvailableMetric::update(const tt::Cluster& cluster) {
+void ARCTelemetryAvailableMetric::update(const tt::Cluster& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     bool new_value = reader_->is_valid();
 
     // Update the metric value and timestamp
@@ -167,7 +167,7 @@ const std::vector<std::string> ARCUintMetric::telemetry_path() const {
     return path;
 }
 
-void ARCUintMetric::update(const tt::Cluster& cluster) {
+void ARCUintMetric::update(const tt::Cluster& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     // Don't attempt to read if telemetry reader is invalid
     if (!reader_->is_valid()) {
         return;
@@ -311,7 +311,7 @@ const std::vector<std::string> ARCDoubleMetric::telemetry_path() const {
     return path;
 }
 
-void ARCDoubleMetric::update(const tt::Cluster& cluster) {
+void ARCDoubleMetric::update(const tt::Cluster& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     // Don't attempt to read if telemetry reader is invalid
     if (!reader_->is_valid()) {
         return;
