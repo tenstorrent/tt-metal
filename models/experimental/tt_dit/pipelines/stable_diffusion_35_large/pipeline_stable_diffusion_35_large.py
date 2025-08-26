@@ -361,10 +361,6 @@ class StableDiffusion3Pipeline:
             # If reshaping, vae device is same as encoder device
             self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
 
-        self._latents_gather_semaphore = ttnn.create_global_semaphore(
-            self.vae_device, self.ccl_managers[self.vae_submesh_idx].ccl_cores, 0
-        )
-
     def prepare(
         self,
         *,
@@ -664,12 +660,14 @@ class StableDiffusion3Pipeline:
             with timer.time_section("vae_decoding") if timer else nullcontext():
                 image_decoding_start_time = time.time()
 
-                # All gather replacement
+                # Sync because we don't pass a persistent buffer or a barrier semaphore.
                 ttnn.synchronize_device(self.vae_device)
                 tt_latents = ttnn.experimental.all_gather_async(
                     input_tensor=tt_latents_step_list[self.vae_submesh_idx],
                     dim=1,
-                    multi_device_global_semaphore=self._latents_gather_semaphore,
+                    multi_device_global_semaphore=self.ccl_managers[self.vae_submesh_idx].get_ag_ping_pong_semaphore(
+                        self.dit_parallel_config.sequence_parallel.mesh_axis
+                    ),
                     topology=ttnn.Topology.Linear,
                     mesh_device=self.vae_device,
                     cluster_axis=self.dit_parallel_config.sequence_parallel.mesh_axis,
