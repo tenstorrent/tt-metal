@@ -273,7 +273,13 @@ class FileResultDestination(ResultDestination):
             return "success"
 
         sweep_name = header_info[0]["sweep_name"]
-        export_path = self.export_dir / f"{sweep_name}.json"
+        run_start_time = run_context.get("test_start_time")
+        if run_start_time:
+            timestamp = run_start_time.strftime("%Y%m%d_%H%M%S")
+        else:
+            # Fallback to current time if run_start_time is not available
+            timestamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        export_path = self.export_dir / f"{sweep_name}_{timestamp}.json"
 
         git_hash = run_context.get("git_hash", "unknown")
 
