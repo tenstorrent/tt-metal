@@ -52,9 +52,7 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
-namespace unit_tests::compute::broadcast {
-
-namespace {
+namespace unit_tests::compute::unary_broadcast {
 
 enum BroadcastDim : uint8_t { ROW, COL, SCALAR, NONE, NUM_DIMS };
 
@@ -72,8 +70,6 @@ struct UnaryBroadcastConfig {
     tt::DataFormat out0_t;
     tt::DataFormat out1_t;
 };
-
-}  // namespace
 
 // Assume 1Xn tiles.
 template <class T>
@@ -335,9 +331,9 @@ void run_single_core_unary_broadcast(tt_metal::IDevice* device, const UnaryBroad
 
     ASSERT_TRUE(result);
 }
-}  // namespace unit_tests::compute::broadcast
+}  // namespace unit_tests::compute::unary_broadcast
 
-using namespace unit_tests::compute::broadcast;
+using namespace unit_tests::compute::unary_broadcast;
 
 TEST_F(DeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
     if (this->arch_ == tt::ARCH::GRAYSKULL) {

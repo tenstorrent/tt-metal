@@ -54,8 +54,6 @@ using namespace tt::test_utils::df;
 
 namespace unit_tests::compute::broadcast {
 
-namespace {
-
 enum ApiConvention : uint8_t {
     DEFAULT = 0,
     SHORT_INIT = 1,  // call <op>_bcast_<dim>_init_short instead of init_bcast
@@ -101,8 +99,6 @@ struct BroadcastConfig {
     TileShape tile_shape = TileShape::FULL_TILE;
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 };
-
-}  // namespace
 
 void mask_src_b_for_broadcast(std::vector<bfloat16>& tile, const std::vector<uint32_t>& shape, BroadcastDim dim) {
     int num_rows = shape.at(0);
