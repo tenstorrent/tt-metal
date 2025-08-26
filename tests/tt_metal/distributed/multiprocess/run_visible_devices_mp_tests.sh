@@ -5,7 +5,7 @@
 # Array of device configurations to test
 DEVICE_CONFIGS=("0" "1" "2" "3" "0,1" "0,3" "1,2" "2,3")
 
-echo "[distributed tests] Testing TT_METAL_VISIBLE_DEVICES functionality with distributed_mp_unit_tests"
+echo "[distributed tests] Testing TT_VISIBLE_DEVICES functionality with distributed_mp_unit_tests"
 echo "============================================================================"
 
 # Track overall success
@@ -13,11 +13,11 @@ ALL_PASSED=true
 
 for config in "${DEVICE_CONFIGS[@]}"; do
     echo
-    echo "[distributed tests] Testing with TT_METAL_VISIBLE_DEVICES=\"$config\""
+    echo "[distributed tests] Testing with TT_VISIBLE_DEVICES=\"$config\""
     echo "------------------------------------------------"
 
     # Run with mpirun, setting the environment variable
-    TT_METAL_VISIBLE_DEVICES="$config" mpirun --allow-run-as-root -np 1 ./build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*VisibleDevicesMPTest*"
+    TT_VISIBLE_DEVICES="$config" mpirun --allow-run-as-root -np 1 ./build/test/tt_metal/distributed/multiprocess/distributed_multiprocess_tests --gtest_filter="*VisibleDevicesMPTest*"
 
     if [ $? -eq 0 ]; then
         echo "✓ [distributed tests] Test passed for configuration: $config"
