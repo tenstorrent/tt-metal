@@ -31,13 +31,20 @@ if [[ -z "${BUILD_DIR:-}" ]]; then
     fi
 fi
 
-# Where to look for tests. Accept an argument; otherwise default to BUILD_DIR or BUILD_DIR/bin
-TEST_DIR="${1:-}"
-if [[ -z "${TEST_DIR}" ]]; then
-    if [[ -d "${BUILD_DIR}/bin" ]]; then
-        TEST_DIR="${BUILD_DIR}/bin"
-    else
-        TEST_DIR="${BUILD_DIR}"
+# Where to look for tests. If an argument is provided and is an executable file,
+# run only that test. Otherwise, treat it as a directory to enumerate tests.
+TEST_TARGET="${1:-}"
+TESTS=()
+if [[ -n "${TEST_TARGET}" && -f "${TEST_TARGET}" && -x "${TEST_TARGET}" ]]; then
+    TESTS+=("${TEST_TARGET}")
+else
+    TEST_DIR="${TEST_TARGET}"
+    if [[ -z "${TEST_DIR}" ]]; then
+        if [[ -d "${BUILD_DIR}/bin" ]]; then
+            TEST_DIR="${BUILD_DIR}/bin"
+        else
+            TEST_DIR="${BUILD_DIR}"
+        fi
     fi
 fi
 
@@ -48,10 +55,12 @@ REPORTS_ROOT="${TT_METAL_HOME}/coverage_reports"
 
 mkdir -p "${REPORTS_ROOT}"
 
-TEST_DIR="/home/ubuntu/tt-metal/.build/default/programming_examples/Debug"
-
 echo "INFO: Build directory: ${BUILD_DIR}"
-echo "INFO: Tests directory: ${TEST_DIR}"
+if [[ ${#TESTS[@]} -eq 1 ]]; then
+    echo "INFO: Single test:     ${TESTS[0]}"
+else
+    echo "INFO: Tests directory: ${TEST_DIR}"
+fi
 echo "INFO: Reports root:    ${REPORTS_ROOT}"
 echo "INFO: Using Clang ${CLANG_VERSION}"
 
@@ -70,6 +79,16 @@ EOF
 chmod +x "${WRAPPER_SCRIPT_NAME}"
 popd >/dev/null
 
+# Absolute path to llvm-cov wrapper to avoid relative path issues in geninfo
+WRAPPER_ABS="$(cd "${BUILD_DIR}" && pwd)/${WRAPPER_SCRIPT_NAME}"
+
+# Helper: filter unwanted paths from an .info file
+filter_info_file() {
+    local in_file="$1"; shift
+    local out_file="$1"; shift
+    lcov --remove "${in_file}" '*/.cpmcache/*' '*/_deps/*' '*/tests/*' -o "${out_file}" >/dev/null
+}
+
 # Function: purge all .gcda (fresh coverage for each test)
 purge_gcda() {
     if [[ -d "${BUILD_DIR}" ]]; then
@@ -82,11 +101,18 @@ purge_gcda() {
 echo "INFO: Purging existing .gcda files under ${BUILD_DIR}"
 purge_gcda
 
-# Enumerate tests: executables in TEST_DIR
-mapfile -t TESTS < <(find "${TEST_DIR}" -maxdepth 1 -type f -executable | sort)
 if [[ ${#TESTS[@]} -eq 0 ]]; then
-    echo "ERROR: No executable tests found in ${TEST_DIR}" >&2
-    exit 1
+    # Enumerate tests: executables in TEST_DIR
+    mapfile -t TESTS < <(find "${TEST_DIR}" -maxdepth 1 -type f -executable | sort)
+    # If no executables, try Python tests (*.py)
+    if [[ ${#TESTS[@]} -eq 0 ]]; then
+        mapfile -t PY_TESTS < <(find "${TEST_DIR}" -maxdepth 1 -type f -name '*.py' | sort)
+        if [[ ${#PY_TESTS[@]} -eq 0 ]]; then
+            echo "ERROR: No executable tests or Python test files found in ${TEST_DIR}" >&2
+            exit 1
+        fi
+        TESTS+=("${PY_TESTS[@]}")
+    fi
 fi
 
 echo "INFO: Found ${#TESTS[@]} test(s)"
@@ -101,13 +127,17 @@ for test_path in "${TESTS[@]}"; do
     purge_gcda
 
     # Run the test (non-interactive)
-    "${test_path}" || { echo "ERROR: Test failed: ${test_name}" >&2; exit 1; }
+    if [[ "${test_path}" == *.py ]]; then
+        python -m pytest "${test_path}" || { echo "ERROR: Test failed: ${test_name}" >&2; exit 1; }
+    else
+        "${test_path}" || { echo "ERROR: Test failed: ${test_name}" >&2; exit 1; }
+    fi
 
     # Capture coverage for this test into build dir
     pushd "${BUILD_DIR}" >/dev/null
     per_test_info="${test_name}.info"
     lcov \
-        --gcov-tool "$(pwd)/${WRAPPER_SCRIPT_NAME}" \
+        --gcov-tool "${WRAPPER_ABS}" \
         --capture \
         --directory "." \
         --output-file "${per_test_info}"
@@ -116,7 +146,10 @@ for test_path in "${TESTS[@]}"; do
     # Save HTML per-test report in build dir
     pushd "${BUILD_DIR}" >/dev/null
     per_test_html_dir="coverage_${test_name}"
-    genhtml "${per_test_info}" --output-directory "${per_test_html_dir}" >/dev/null
+    # Exclude unwanted paths before generating HTML
+    per_test_info_filtered="${test_name}.filtered.info"
+    filter_info_file "${per_test_info}" "${per_test_info_filtered}"
+    genhtml "${per_test_info_filtered}" --output-directory "${per_test_html_dir}" >/dev/null
     popd >/dev/null
 
     # Copy per-test report to $TT_METAL_HOME/coverage_reports
@@ -124,73 +157,67 @@ for test_path in "${TESTS[@]}"; do
     rm -rf "${dest_dir}"
     mkdir -p "${dest_dir}"
     cp -r "${BUILD_DIR}/${per_test_html_dir}"/* "${dest_dir}/"
-    cp "${BUILD_DIR}/${per_test_info}" "${dest_dir}/" || true
+    cp "${BUILD_DIR}/${per_test_info_filtered}" "${dest_dir}/" || true
 
-    PER_TEST_INFOS+=("${BUILD_DIR}/${per_test_info}")
+    PER_TEST_INFOS+=("${BUILD_DIR}/${per_test_info_filtered}")
 
     # Delete .gcda files for the test (isolate next run)
     purge_gcda
-    break
 done
 
-# Generate a summary report of all the coverage reports
-echo "\n=== Generating merged summary ==="
+# # Generate a summary report of all the coverage reports
+# echo "\n=== Generating merged summary (with baseline) ==="
 
-# Collect all .info files from $TT_METAL_HOME/coverage_reports (per-test reports)
-mapfile -t INFO_FILES < <(find "${REPORTS_ROOT}" -maxdepth 2 -type f -name '*.info' ! -name 'summary.info' | sort)
-if [[ ${#INFO_FILES[@]} -eq 0 ]]; then
-    echo "ERROR: No .info files found in ${REPORTS_ROOT} to merge" >&2
-    exit 1
-fi
+# # Require BUILD_DIR for baseline so we include all instrumented files
+# if [[ -z "${BUILD_DIR:-}" ]]; then
+#     echo "ERROR: BUILD_DIR must be set to generate a baseline (e.g., export BUILD_DIR=/home/ubuntu/tt-metal/build_Release)" >&2
+#     exit 1
+# fi
 
-# Generate a summary report of all the coverage reports
-echo "\n=== Generating merged summary (with baseline) ==="
+# # Collect all .info files from $TT_METAL_HOME/coverage_reports (per-test reports)
+# mapfile -t INFO_FILES < <(find "${REPORTS_ROOT}" -maxdepth 2 -type f -name '*.info' ! -name 'summary.info' | sort)
+# if [[ ${#INFO_FILES[@]} -eq 0 ]]; then
+#     echo "ERROR: No .info files found in ${REPORTS_ROOT} to merge" >&2
+#     exit 1
+# fi
 
-# Require BUILD_DIR for baseline so we include all instrumented files
-if [[ -z "${BUILD_DIR:-}" ]]; then
-    echo "ERROR: BUILD_DIR must be set to generate a baseline (e.g., export BUILD_DIR=/home/ubuntu/tt-metal/build_Release)" >&2
-    exit 1
-fi
+# # Temporary workspace
+# TMP_SUMMARY_DIR="$(mktemp -d)"
+# summary_info="${TMP_SUMMARY_DIR}/summary.info"
+# rm -f "${summary_info}"
 
-# Collect all .info files from $TT_METAL_HOME/coverage_reports (per-test reports)
-mapfile -t INFO_FILES < <(find "${REPORTS_ROOT}" -maxdepth 2 -type f -name '*.info' ! -name 'summary.info' | sort)
-if [[ ${#INFO_FILES[@]} -eq 0 ]]; then
-    echo "ERROR: No .info files found in ${REPORTS_ROOT} to merge" >&2
-    exit 1
-fi
+# # Create baseline: includes all instrumented files in the build (even if unexecuted)
+# baseline_raw="${TMP_SUMMARY_DIR}/baseline.raw.info"
+# lcov \
+#     --gcov-tool "${WRAPPER_ABS}" \
+#     --capture \
+#     --initial \
+#     --directory "${BUILD_DIR}" \
+#     --output-file "${baseline_raw}"
 
-# Temporary workspace
-TMP_SUMMARY_DIR="$(mktemp -d)"
-summary_info="${TMP_SUMMARY_DIR}/summary.info"
-rm -f "${summary_info}"
+# # Optional: keep only tt_metal files in baseline, and drop .cpmcache
+# baseline_filtered="${TMP_SUMMARY_DIR}/baseline.filtered.info"
+# lcov --extract "${baseline_raw}" "${TT_METAL_HOME}/tt_metal/*" -o "${baseline_filtered}" >/dev/null
+# lcov --remove  "${baseline_filtered}" '*/.cpmcache/*' '*/_deps/*' '*/tests/*' -o "${baseline_filtered}" >/dev/null
 
-# Create baseline: includes all instrumented files in the build (even if unexecuted)
-baseline_raw="${TMP_SUMMARY_DIR}/baseline.raw.info"
-lcov --capture --initial --directory "${BUILD_DIR}" -o "${baseline_raw}"
+# # Merge baseline + all per-test infos
+# tmp_merge="${TMP_SUMMARY_DIR}/merged.tmp.info"
+# cp "${baseline_filtered}" "${tmp_merge}"
+# for info in "${INFO_FILES[@]}"; do
+#     lcov -a "${tmp_merge}" -a "${info}" -o "${tmp_merge}.next" >/dev/null
+#     mv "${tmp_merge}.next" "${tmp_merge}"
+# done
+# mv "${tmp_merge}" "${summary_info}"
 
-# Optional: keep only tt_metal files in baseline, and drop .cpmcache
-baseline_filtered="${TMP_SUMMARY_DIR}/baseline.filtered.info"
-lcov --extract "${baseline_raw}" "${TT_METAL_HOME}/tt_metal/*" -o "${baseline_filtered}" >/dev/null
-lcov --remove  "${baseline_filtered}" '*/.cpmcache/*' -o "${baseline_filtered}" >/dev/null
+# # Generate HTML
+# summary_html_dir="${TMP_SUMMARY_DIR}/coverage_summary"
+# rm -rf "${summary_html_dir}"
+# genhtml "${summary_info}" --output-directory "${summary_html_dir}" >/dev/null
 
-# Merge baseline + all per-test infos
-tmp_merge="${TMP_SUMMARY_DIR}/merged.tmp.info"
-cp "${baseline_filtered}" "${tmp_merge}"
-for info in "${INFO_FILES[@]}"; do
-    lcov -a "${tmp_merge}" -a "${info}" -o "${tmp_merge}.next" >/dev/null
-    mv "${tmp_merge}.next" "${tmp_merge}"
-done
-mv "${tmp_merge}" "${summary_info}"
+# # Copy summary to $TT_METAL_HOME/coverage_reports/summary
+# rm -rf "${REPORTS_ROOT}/summary"
+# mkdir -p "${REPORTS_ROOT}/summary"
+# cp -r "${summary_html_dir}"/* "${REPORTS_ROOT}/summary/"
+# cp "${summary_info}" "${REPORTS_ROOT}/summary/" || true
 
-# Generate HTML
-summary_html_dir="${TMP_SUMMARY_DIR}/coverage_summary"
-rm -rf "${summary_html_dir}"
-genhtml "${summary_info}" --output-directory "${summary_html_dir}" >/dev/null
-
-# Copy summary to $TT_METAL_HOME/coverage_reports/summary
-rm -rf "${REPORTS_ROOT}/summary"
-mkdir -p "${REPORTS_ROOT}/summary"
-cp -r "${summary_html_dir}"/* "${REPORTS_ROOT}/summary/"
-cp "${summary_info}" "${REPORTS_ROOT}/summary/" || true
-
-echo "\n✅ Done. Per-test reports + baseline summary available under: ${REPORTS_ROOT}"
+# echo "\n✅ Done. Per-test reports + baseline summary available under: ${REPORTS_ROOT}"

@@ -9,7 +9,7 @@
         "binaryDir": "${sourceDir}/.build/default",
         "cacheVariables": {
           "TT_METAL_BUILD_TESTS": {"value": "TRUE"},
-          "TTNN_BUILD_TESTS": {"value": "FALSE"},
+          "TTNN_BUILD_TESTS": {"value": "TRUE"},
           "TT_UMD_BUILD_TESTS": {"value": "FALSE"},
           "BUILD_PROGRAMMING_EXAMPLES": {"value": "TRUE"},
           "BUILD_TT_TRAIN": {"value": "FALSE"},
