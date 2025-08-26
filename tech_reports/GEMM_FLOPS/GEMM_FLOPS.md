@@ -92,14 +92,14 @@ MATH_FIDELITY is used for higher precision, and TFLOPS are calculated by dividin
 - HiFi4 -> ~1 TFLOPS
 
 
-### Utilization derivation formula
+### Utilization Derivation Formula
 ```
 Utilization = ideal cycles / actual cycles. tile_width * tile_height) * (cycle_per_tile / num_cores)
 ```
 - Cycle_per_tile is the ideal compute cycle for each tile, which depends on math fidelity (LoFi: 16, HiFi2: 32, HiFi3: 48, HiFi4: 64).
 - For utilization of full grid size, num_cores is the maximum number of cores available for compute. Currently the max for Wormhole is 8x8 with Blackhole supporting up to 13x10.
 
-### Manually tuned Performance
+### Manually Tuned Performance
 Here we show the peak results we can get from manually selected matmul configurations, including packer L1 enablement, math fidelity, input/output sharding, and input/output L1/DRAM selection.
 #### Peak FLOPS
 
