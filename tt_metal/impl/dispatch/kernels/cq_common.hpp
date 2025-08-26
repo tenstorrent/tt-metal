@@ -71,11 +71,13 @@ FORCE_INLINE void cq_noc_async_write_with_state(
         WAYPOINT("CNSD");
     }
 
-    noc_write_with_state<DM_DEDICATED_NOC, cmd_buf, flags, send, CQ_NOC_wait, update_counters>(
+    noc_write_with_state<DM_DEDICATED_NOC, cmd_buf, flags, CQ_NOC_send, CQ_NOC_wait, false>(
         noc, src_addr, dst_addr, size, ndests);
 
     if constexpr (send) {
         DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_FROM_STATE(noc, cmd_buf);
+        noc_write_with_state<DM_DEDICATED_NOC, cmd_buf, CQ_NOC_sndl, send, CQ_NOC_wait, update_counters>(
+            noc, src_addr, dst_addr, size, ndests);
     }
 }
 
@@ -149,10 +151,11 @@ FORCE_INLINE void cq_noc_inline_dw_write_with_state(
         WAYPOINT("NISD");
     }
 
-    noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, flags, wait, send>(noc, dst_addr, val, be);
+    noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, flags, CQ_NOC_wait, CQ_NOC_send>(noc, dst_addr, val, be);
 
     if constexpr (send) {
         DEBUG_SANITIZE_NOC_ADDR_FROM_STATE(noc, NCRISC_WR_REG_CMD_BUF);
+        noc_inline_dw_write_with_state<NCRISC_WR_REG_CMD_BUF, CQ_NOC_INLINE_ndvb, CQ_NOC_wait, send>(noc, dst_addr, val, be);
     }
 #endif
 }
