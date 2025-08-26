@@ -242,6 +242,7 @@ private:
     void DumpNocSanitizeStatus(int noc) const;
     void DumpAssertStatus() const;
     void DumpPauseStatus() const;
+    void DumpEthLinkStatus() const;
     void DumpRingBuffer(bool to_stdout = false) const;
     void DumpRunState(uint32_t state) const;
     void DumpLaunchMessage() const;
@@ -535,6 +536,10 @@ void WatcherDeviceReader::Core::Dump() const {
         if (!rtoptions.watcher_pause_disabled()) {
             DumpPauseStatus();
         }
+
+        if (is_eth_core && !rtoptions.watcher_eth_link_status_disabled()) {
+            DumpEthLinkStatus();
+        }
     }
 
     // Dump state always available
@@ -779,6 +784,27 @@ void WatcherDeviceReader::Core::DumpPauseStatus() const {
             TT_THROW("{}", error_reason);
         }
     }
+}
+
+void WatcherDeviceReader::Core::DumpEthLinkStatus() const {
+    const debug_eth_link_t* eth_link_status = &mbox_data_->watcher.eth_status;
+    if (eth_link_status->link_down == 0) {
+        return;
+    }
+    auto noc0_core = tt::tt_metal::MetalContext::instance()
+                         .get_cluster()
+                         .get_soc_desc(reader_.device_id)
+                         .translate_coord_to(virtual_coord_, CoordSystem::TRANSLATED, CoordSystem::NOC0);
+    string error_msg = fmt::format(
+        "Watcher detected that active eth link on virtual core {} (noc0 core: {}) went down after training.\n",
+        virtual_coord_.str(),
+        noc0_core.str());
+    log_warning(tt::LogMetal, "{}", error_msg);
+    DumpWaypoints();
+    DumpRingBuffer();
+    LogRunningKernels();
+    MetalContext::instance().watcher_server()->set_exception_message(fmt::format("{}: {}", core_str_, error_msg));
+    TT_THROW("{}: {}", core_str_, error_msg);
 }
 
 void WatcherDeviceReader::Core::DumpRingBuffer(bool to_stdout) const {

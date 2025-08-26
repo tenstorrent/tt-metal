@@ -304,6 +304,7 @@ public:
         return this->virtualized_core_types_;
     }
 
+    bool get_supports_eth_fw_mailbox() const;
     uint32_t get_eth_fw_mailbox_val(FWMailboxMsg msg) const;
     uint32_t get_eth_fw_mailbox_arg_addr(uint32_t arg_index) const;
     uint32_t get_eth_fw_mailbox_arg_count() const;
@@ -519,6 +520,10 @@ inline const HalJitBuildConfig& Hal::get_jit_build_config(
 }
 
 uint32_t generate_risc_startup_addr(uint32_t firmware_base);  // used by Tensix initializers to build HalJitBuildConfig
+
+inline bool Hal::get_supports_eth_fw_mailbox() const {
+    return this->get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_FW_MAILBOX) != 0;
+}
 
 inline uint32_t Hal::get_eth_fw_mailbox_val(FWMailboxMsg msg) const {
     const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
