@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 
