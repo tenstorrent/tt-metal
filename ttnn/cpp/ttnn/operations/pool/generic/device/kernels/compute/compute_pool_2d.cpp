@@ -166,7 +166,6 @@ void MAIN {
                 // Perform tilization when TILE_HEIGHT sticks are accumulated
                 if (tilize_stick_counter == TILE_HEIGHT) {
                     // Finalize temp CB and perform tilization to output CB
-                    cb_push_back(tmp_cb_id, in_ntiles_c);
                     PACK((pack_untilize_uninit(tmp_cb_id)));
 
 #if DEBUG_PRINT == 1
@@ -176,8 +175,6 @@ void MAIN {
                     unary_op_init_common(tmp_cb_id, out_cb_id);
 
                     tilize_init(tmp_cb_id, in_ntiles_c, out_cb_id);
-                    cb_wait_front(tmp_cb_id, in_ntiles_c);
-                    cb_reserve_back(out_cb_id, in_ntiles_c);
                     tilize_block(tmp_cb_id, in_ntiles_c, out_cb_id);
 
 #if DEBUG_PRINT == 1
@@ -185,7 +182,6 @@ void MAIN {
                     PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
 #endif
 
-                    cb_pop_front(tmp_cb_id, in_ntiles_c);
                     cb_push_back(out_cb_id, in_ntiles_c);
                     tilize_uninit(tmp_cb_id, out_cb_id);
                     unary_op_init_common(in_cb_id_0, tmp_cb_id);
@@ -195,6 +191,7 @@ void MAIN {
                     // if constexpr (in_nblocks_c > 1) {
                     UNPACK((llk_unpack_tilizeA_B_init<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
                         in_cb_id_0, in_scalar_cb_id_0, tiles_to_reduce, num_faces_in_input_tile, face_r_dim, 1)));
+                    MATH((llk_math_reduce_init<REDUCE_OP, REDUCE_DIM, DST_ACCUM_MODE, MATH_FIDELITY>()));
                     // }
                     tilize_stick_counter = 0;
                     temp_cb_row_offset = 0;

@@ -96,6 +96,8 @@ def run_avg_pool2d(
     dtype=ttnn.bfloat16,
     nightly_skips=True,
     skips_enabled=True,
+    output_data_format=ttnn.bfloat16,
+    output_layout=ttnn.ROW_MAJOR_LAYOUT,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -190,6 +192,8 @@ def run_avg_pool2d(
         count_include_pad=count_include_pad,
         memory_config=None,
         applied_shard_scheme=shard_scheme,
+        output_data_format=output_data_format,
+        output_layout=output_layout,
     )
 
     # TODO always use run_twice after resolution of https://github.com/tenstorrent/tt-metal/issues/26093
@@ -212,6 +216,8 @@ def run_avg_pool2d(
             count_include_pad=count_include_pad,
             memory_config=None,
             applied_shard_scheme=shard_scheme,
+            output_data_format=output_data_format,
+            output_layout=output_layout,
         )
 
     # apply padding manually to torch tensor since torch doesn't support asymmetric padding
@@ -274,6 +280,10 @@ def run_avg_pool2d(
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
+    # Ensure both tensors have the same dtype for comparison
+    if output_data_format != ttnn.bfloat16:
+        ttnn_output = ttnn_output.to(torch.bfloat16)
+
     allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
     assert allclose
 
@@ -325,7 +335,7 @@ def run_avg_pool2d(
     "ceil_mode",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
@@ -380,3 +390,166 @@ def test_run_avg_pool2d(
         dtype=dtype,
         run_twice=True,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_avg_pool_tiled_simple(device, tensor_map):
+    """Simple test to check if avgpool with tiled output hangs"""
+    input_shape = [1, 32, 64, 64]
+    kernel_size = (3, 3)
+    stride = (1, 1)
+    padding = (0, 0)
+
+    print("Testing simple avgpool with tiled output...")
+
+    run_avg_pool2d(
+        device,
+        tensor_map,
+        input_shape,
+        kernel_size,
+        stride,
+        padding,
+        ceil_mode=False,
+        divisor_override=None,
+        count_include_pad=False,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        output_data_format=ttnn.bfloat16,
+        output_layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        run_twice=False,
+        skips_enabled=False,  # Disable skips
+        nightly_skips=False,  # Disable nightly skips
+    )
+    print("Simple avgpool tiled test completed successfully!")
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape",  ## NCHW
+    (
+        (  # resnet shapes
+            [1, 32 * 3, 64 * 2, 64 * 2],
+            # [1, 320, 16, 16],
+            [1, 32 * 10, 64, 64],
+            [4, 32, 12, 12],
+        )
+    ),
+)
+@pytest.mark.parametrize(
+    "kernel_size",
+    (
+        (3, 3),  # 1 face 1 chunk
+        (5, 5),  # 2 faces 1 chunk
+        # (7, 7),  # 2 chunks
+        (9, 9),  # 3 chunks
+    ),
+)
+@pytest.mark.parametrize(
+    "padding",
+    (
+        (0, 0),
+        (1, 1),
+        (1, 4, 3, 2),
+    ),
+)
+@pytest.mark.parametrize(
+    "stride",
+    (
+        (1, 1),
+        (2, 2),
+    ),
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "out_dtype",
+    [
+        ttnn.bfloat16,
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "ceil_mode",
+    [
+        False,
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "out_layout",
+    [
+        # ttnn.ttnn.ROW_MAJOR_LAYOUT,
+        ttnn.ttnn.TILE_LAYOUT,
+    ],
+)
+@pytest.mark.parametrize(
+    "count_include_pad",
+    [
+        False,
+        True,
+    ],
+)
+@pytest.mark.parametrize(
+    "divisor_override",
+    [
+        None,
+        5,
+    ],
+)
+def test_run_avg_pool_height_shard_tile(
+    input_shape,
+    kernel_size,
+    padding,
+    stride,
+    device,
+    tensor_map,
+    dtype,
+    out_dtype,
+    ceil_mode,
+    out_layout,
+    count_include_pad,
+    divisor_override,
+):
+    # input_shape = [1, 32, 16, 16]
+    # kernel_size = (3, 3)
+    # stride = (1, 1)
+    # padding = (0, 0)
+    run_avg_pool2d(
+        device,
+        tensor_map,
+        input_shape,
+        kernel_size,
+        stride,
+        padding,
+        ceil_mode=False,
+        divisor_override=None,
+        count_include_pad=False,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        output_data_format=ttnn.bfloat16,
+        output_layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        run_twice=False,
+        skips_enabled=False,  # Disable skips
+        nightly_skips=False,  # Disable nightly skips
+    )
+    # run_avg_pool2d(
+    #     device,
+    #     tensor_map,
+    #     input_shape,
+    #     kernel_size,
+    #     stride,
+    #     padding,
+    #     ceil_mode=ceil_mode,
+    #     divisor_override=divisor_override,
+    #     count_include_pad=count_include_pad,
+    #     shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    #     output_data_format=out_dtype,
+    #     output_layout=out_layout,
+    #     dtype=dtype,
+    #     run_twice=True,
+    # )

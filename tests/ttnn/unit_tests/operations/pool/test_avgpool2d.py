@@ -112,3 +112,77 @@ def test_avg_pool2d_post_commit(
         dtype=dtype,
         nightly_skips=False,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize(
+    "input_shape,output_data_format,output_layout",
+    [
+        # Test BFLOAT16 with both layouts
+        ([1, 64, 32, 32], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        ([1, 64, 32, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
+        # Test BFLOAT8_B with TILE layout only (ROW_MAJOR should fail validation)
+        # ([1, 64, 32, 32], ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
+    ],
+)
+def test_avg_pool2d_tiled_output(
+    device,
+    tensor_map,
+    input_shape,
+    output_data_format,
+    output_layout,
+):
+    """Test AvgPool2D with tiled output support"""
+    # Simple test parameters
+    kernel_size = (3, 3)
+    stride = (2, 2)
+    padding = (1, 1)
+
+    run_avg_pool2d(
+        device=device,
+        tensor_map=tensor_map,
+        input_shape=input_shape,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        ceil_mode=False,
+        divisor_override=None,
+        count_include_pad=True,
+        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        dtype=ttnn.bfloat16,  # Input dtype
+        nightly_skips=False,
+        output_data_format=output_data_format,
+        output_layout=output_layout,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+def test_avg_pool2d_bfloat8b_row_major_validation(device, tensor_map):
+    """Test that BFLOAT8_B + ROW_MAJOR combination fails with proper validation"""
+    import pytest
+
+    input_shape = [1, 64, 32, 32]
+    kernel_size = (3, 3)
+    stride = (2, 2)
+    padding = (1, 1)
+
+    with pytest.raises(Exception) as exc_info:
+        run_avg_pool2d(
+            device=device,
+            tensor_map=tensor_map,
+            input_shape=input_shape,
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            ceil_mode=False,
+            divisor_override=None,
+            count_include_pad=True,
+            shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            dtype=ttnn.bfloat16,
+            nightly_skips=False,
+            output_data_format=ttnn.bfloat8_b,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+    # Verify error message contains validation text
+    assert "BFLOAT8_B output data format is not supported with ROW_MAJOR layout" in str(exc_info.value)

@@ -313,7 +313,16 @@ Tensor AvgPool2DOp::invoke(
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
     bool in_place_halo,
     bool deallocate_input,
-    bool reallocate_halo_output) {
+    bool reallocate_halo_output,
+    const DataType output_data_format,
+    const Layout output_layout) {
+    TT_FATAL(
+        output_data_format == DataType::BFLOAT16 || output_data_format == DataType::BFLOAT8_B,
+        "Currently only BFLOAT16 and BFLOAT8_B output data formats are supported");
+    TT_FATAL(
+        !(output_data_format == DataType::BFLOAT8_B && output_layout == Layout::ROW_MAJOR),
+        "BFLOAT8_B output data format is not supported with ROW_MAJOR layout");
+
     return pool2d_invoke(
         queue_id,
         input_tensor,
@@ -334,8 +343,8 @@ Tensor AvgPool2DOp::invoke(
         in_place_halo,
         deallocate_input,
         reallocate_halo_output,
-        DataType::BFLOAT16,  // AvgPool always uses BFLOAT16 output
-        Layout::ROW_MAJOR);  // AvgPool maintains ROW_MAJOR for now
+        output_data_format,
+        output_layout);
 }
 
 }  // namespace operations::pool
