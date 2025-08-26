@@ -32,6 +32,12 @@ jobs:
         test-group:
           - name: "test_sharding_on_bh_20_cores_test1"
             cmd:  tests/ttnn/unit_tests/test_bh_20_cores_sharding.py::test_sharding_on_bh_20_cores
+          - name: "panoptic deep lab conv tests"
+            cmd: |
+              tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py::test_conv2d_ch_split_dram_panoptic
+              tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py::test_conv2d_panoptic
+              tests/ttnn/nightly/unit_tests/operations/conv/test_conv2d.py::test_conv_dram_panoptic
+
     name: ${{ matrix.test-group.name }}
     runs-on: >-
       ${{
