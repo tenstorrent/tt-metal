@@ -349,7 +349,7 @@ class TtSppf:
     def __call__(self, x):
         cv1, out_h, out_w = self.cv1(x)
         p = 5 // 2
-        y = [cv1]
+        y = [ttnn.sharded_to_interleaved(cv1)]
         for i in range(3):
             output = ttnn.max_pool2d(
                 input_tensor=(
@@ -720,7 +720,6 @@ class TtDetectionModel:
         conv_7 = ttnn.sharded_to_interleaved(conv_7, ttnn.L1_MEMORY_CONFIG)
         c2f_8, out_h, out_w = self.c2f_8(conv_7)
         ttnn.deallocate(conv_7)
-        c2f_8 = ttnn.sharded_to_interleaved(c2f_8)
         nine, out_h, out_w = self.sppf_9(c2f_8)
         ttnn.deallocate(c2f_8)
         sppf_9 = ttnn.to_layout(nine, ttnn.ROW_MAJOR_LAYOUT)
