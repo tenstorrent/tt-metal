@@ -31,23 +31,23 @@ std::string read_file_to_string(const std::filesystem::path &file_path) {
 
 }  // namespace
 
-MeshGraphDescriptor::MeshGraphDescriptor(const std::string &text_proto, bool allow_unknown_fields, bool allow_unknown_extensions) {
+MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) {
     proto::MeshGraphDescriptor temp_proto;
     google::protobuf::TextFormat::Parser parser;
-    parser.AllowUnknownField(allow_unknown_fields);
-    parser.AllowUnknownExtension(allow_unknown_extensions);
-    bool result = parser.ParseFromString(text_proto, &temp_proto);
-    TT_FATAL(result, "Failed to parse MeshGraphDescriptor textproto");
+
+    // Allowing for back and forward compatibility for fields not currently in the proto file
+    parser.AllowUnknownField(true);
+    parser.AllowUnknownExtension(true);
+
+    TT_FATAL(parser.ParseFromString(text_proto, &temp_proto), "Failed to parse MeshGraphDescriptor textproto");
 
     // TODO: Add validation here
 
     proto_ = std::make_unique<proto::MeshGraphDescriptor>(temp_proto);
 }
 
-MeshGraphDescriptor::MeshGraphDescriptor(
-    const std::filesystem::path& text_proto_file_path, bool allow_unknown_fields, bool allow_unknown_extensions) :
-    MeshGraphDescriptor(
-        read_file_to_string(text_proto_file_path.string()), allow_unknown_fields, allow_unknown_extensions) {}
+MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path) :
+    MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string())) {}
 
 MeshGraphDescriptor::~MeshGraphDescriptor() {
     // TODO Implement this

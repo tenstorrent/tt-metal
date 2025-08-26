@@ -16,8 +16,8 @@ class MeshGraphDescriptor;
 
 class MeshGraphDescriptor {
 public:
-    MeshGraphDescriptor(const std::string &text_proto, bool allow_unknown_fields = true, bool allow_unknown_extensions = false);
-    MeshGraphDescriptor(const std::filesystem::path &text_proto_file_path, bool allow_unknown_fields = true, bool allow_unknown_extensions = false);
+    MeshGraphDescriptor(const std::string& text_proto);
+    MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path);
     ~MeshGraphDescriptor();
 
 private:

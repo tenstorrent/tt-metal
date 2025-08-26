@@ -40,7 +40,7 @@ message NodeRef {
 
 message GraphRef {
   string graph_descriptor = 1;
-  int32 id = 2;
+  int32 graph_id = 2;
 
   oneof sub_ref {
     MeshRef mesh = 3;
@@ -51,12 +51,8 @@ message GraphRef {
 
 message MeshRef {
   string mesh_descriptor = 1;
-  int32 id = 2;
-  optional DeviceRef device = 3;
-}
-
-message DeviceRef {
-  int32 id = 2;
+  int32 mesh_id = 2;
+  optional int32 device_id = 3;
 }
 
 message MeshTopology {
@@ -65,8 +61,9 @@ message MeshTopology {
 
 message TorusTopology {
   enum Type {
-    LINE = 0;
-    RING = 1;
+    INVALID_TYPE = 0;
+    LINE = 1;
+    RING = 2;
   }
   repeated int32 dims = 3;  // required
   repeated Type types = 4;
@@ -86,8 +83,9 @@ enum Policy {
 }
 
 enum Architecture {
-  WORMHOLE_B0 = 0;
-  BLACKHOLE = 1;
+  INVALID_ARCHITECTURE = 0;
+  WORMHOLE_B0 = 1;
+  BLACKHOLE = 2;
 }
 
 message Channels {
