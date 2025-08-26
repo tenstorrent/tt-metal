@@ -56,12 +56,10 @@ void MetalContext::initialize(
     bool minimal) {
 
     if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
-        log_error(
-            tt::LogAlways,
+        TT_THROW(
             "Mock cluster cannot be initialized because there is no device. "
             "Mock clusters are only supported for testing control plane initialization without a device."
             "Please unset the TT_METAL_MOCK_CLUSTER_DESC_PATH environment variable.");
-        return;
     }
 
     // Workaround for galaxy and BH, need to always re-init
