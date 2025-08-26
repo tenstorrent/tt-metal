@@ -594,7 +594,7 @@ void WatcherDeviceReader::Core::DumpL1Status() const {
     std::vector<uint32_t> data;
     data = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         reader_.device_id, virtual_coord_, HAL_MEM_L1_BASE, sizeof(uint32_t));
-    TT_ASSERT(core.type == CoreType::WORKER);
+    TT_ASSERT(programmable_core_type_ == HalProgrammableCoreType::TENSIX);
     uint32_t core_type_idx =
         MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
     auto fw_launch_value =
