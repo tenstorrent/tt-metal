@@ -209,22 +209,23 @@ static void telemetry_thread(std::vector<std::shared_ptr<TelemetrySubscriber>> s
     }
 
     // Create ARC telemetry metrics for MMIO-capable chips
-    // for (const auto& [chip_identifier, reader] : create_arc_telemetry_readers_for_mmio_chips(cluster)) {
-    //     uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::AICLK));
-    //     uint_metrics.push_back(
-    //         std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::AXICLK));
-    //     uint_metrics.push_back(
-    //         std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::ARCCLK));
-    //     uint_metrics.push_back(
-    //         std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::FAN_SPEED));
-    //     uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::TDP));
-    //     uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::TDC));
-    //     uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::VCORE));
-    //     double_metrics.push_back(
-    //         std::make_unique<ARCDoubleMetric>(id++, reader, ARCDoubleMetric::CommonTelemetryTag::ASIC_TEMPERATURE));
-    //     double_metrics.push_back(
-    //         std::make_unique<ARCDoubleMetric>(id++, reader, ARCDoubleMetric::CommonTelemetryTag::BOARD_TEMPERATURE));
-    // }
+    for (const auto& [chip_identifier, reader] : create_arc_telemetry_readers_for_mmio_chips(cluster)) {
+        bool_metrics.push_back(std::make_unique<ARCTelemetryAvailableMetric>(id++, reader));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::AICLK));
+        uint_metrics.push_back(
+            std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::AXICLK));
+        uint_metrics.push_back(
+            std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::ARCCLK));
+        uint_metrics.push_back(
+            std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::FAN_SPEED));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::TDP));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::TDC));
+        uint_metrics.push_back(std::make_unique<ARCUintMetric>(id++, reader, ARCUintMetric::CommonTelemetryTag::VCORE));
+        double_metrics.push_back(
+            std::make_unique<ARCDoubleMetric>(id++, reader, ARCDoubleMetric::CommonTelemetryTag::ASIC_TEMPERATURE));
+        double_metrics.push_back(
+            std::make_unique<ARCDoubleMetric>(id++, reader, ARCDoubleMetric::CommonTelemetryTag::BOARD_TEMPERATURE));
+    }
 
     // Continuously monitor on a loop
     update(bool_metrics, uint_metrics, double_metrics, cluster);

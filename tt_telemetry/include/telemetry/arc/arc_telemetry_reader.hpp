@@ -34,6 +34,9 @@ public:
     // Get the chip architecture
     tt::ARCH get_arch() const;
 
+    // Check if the telemetry reader is valid (not null)
+    bool is_valid() const;
+
 private:
     std::unique_ptr<tt::umd::TTDevice> device_;
     tt::umd::ArcTelemetryReader* telemetry_reader_;
