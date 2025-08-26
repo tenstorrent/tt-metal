@@ -7,12 +7,13 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
+#include "llk_defs.h"
 
 using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void init_remainder(const uint value, const uint recip) {
     // load vConstFloatPrgm0 = value
     _sfpu_load_config32_(0xC, (value >> 16) & 0xFFFF, value & 0xFFFF);
@@ -20,7 +21,7 @@ inline void init_remainder(const uint value, const uint recip) {
     _sfpu_load_config32_(0xD, (recip >> 16) & 0xFFFF, recip & 0xFFFF);
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_remainder(const uint value, const uint recip) {
     // SFPU microcode
     vFloat s = vConstFloatPrgm0;
