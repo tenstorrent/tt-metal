@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from torch import nn
+from models.common.lightweightmodule import LightweightModule
 
 import ttnn
 
@@ -12,7 +12,7 @@ from models.utility_functions import torch_to_tt_tensor_rm
 from models.helper_funcs import Linear as TtLinear
 
 
-class TtDeiTIntermediate(nn.Module):
+class TtDeiTIntermediate(LightweightModule):
     def __init__(self, config: DeiTConfig(), device, state_dict=None, base_address="") -> None:
         super().__init__()
 

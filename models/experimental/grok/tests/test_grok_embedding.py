@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
+from models.common.lightweightmodule import LightweightModule
 import os
 import torch
 from loguru import logger
@@ -21,7 +22,7 @@ from models.utility_functions import (
 )
 
 
-class Emb(torch.nn.Module):
+class Emb(LightweightModule):
     def __init__(self):
         super().__init__()
         self.emb = torch.nn.Embedding(32000, 4096)
