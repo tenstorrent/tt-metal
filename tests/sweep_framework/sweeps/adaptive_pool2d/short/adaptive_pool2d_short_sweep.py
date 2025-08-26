@@ -94,7 +94,7 @@ def run_adaptive_pool2d(in_n, in_c, in_h, in_w, out_h, out_w, pool_type, dtype, 
 
     # Call adaptive pooling operation
     if pool_type == "avg":
-        result = ttnn.adaptive_avg_pool2d(
+        result = ttnn.experimental.adaptive_avg_pool2d(
             input_tensor=input_tensor,
             batch_size=in_n,
             input_h=in_h,
@@ -104,7 +104,7 @@ def run_adaptive_pool2d(in_n, in_c, in_h, in_w, out_h, out_w, pool_type, dtype, 
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
     else:  # max
-        result = ttnn.adaptive_max_pool2d(
+        result = ttnn.experimental.adaptive_max_pool2d(
             input_tensor=input_tensor,
             batch_size=in_n,
             input_h=in_h,
