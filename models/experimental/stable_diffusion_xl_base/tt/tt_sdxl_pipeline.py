@@ -4,7 +4,6 @@
 
 import os
 import torch
-import torch.nn as nn
 from dataclasses import dataclass
 
 from diffusers import StableDiffusionXLPipeline
@@ -12,6 +11,7 @@ from loguru import logger
 from conftest import is_galaxy
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 from models.experimental.stable_diffusion_xl_base.tt.tt_euler_discrete_scheduler import TtEulerDiscreteScheduler
@@ -36,7 +36,7 @@ class TtSDXLPipelineConfig:
     encoders_on_device: bool = True
 
 
-class TtSDXLPipeline(nn.Module):
+class TtSDXLPipeline(LightweightModule):
     # TtSDXLPipeline is a wrapper class for the Stable Diffusion XL pipeline.
     # Class contains encoder, scheduler, unet and vae decoder modules.
     # Additionally, methods for text encoding, image generation, and input preparation are provided.
@@ -620,6 +620,9 @@ class TtSDXLPipeline(nn.Module):
         if self.pipeline_config.vae_on_device and hasattr(self, "tid_vae") and self.tid_vae is not None:
             ttnn.release_trace(self.ttnn_device, self.tid_vae)
             delattr(self, "tid_vae")
+
+    def forward(self, *args, **kwargs):
+        raise NotImplementedError("Use individual methods for text encoding and image generation.")
 
     def __del__(self):
         self.__release_trace()
