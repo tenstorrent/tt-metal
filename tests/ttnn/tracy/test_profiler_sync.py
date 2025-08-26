@@ -7,6 +7,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.utility_functions import pad_by_zero
 
 
 def test_with_ops(device):
@@ -44,3 +45,32 @@ def test_all_devices(
     mesh_device,
 ):
     logger.debug("Testing All Devices")
+
+
+def test_with_sfpu(mesh_device):
+    file_path = "tests/ttnn/tracy/test_with_sfpu_x_tensor.pt"
+    # torch.manual_seed(1234)
+    # shape = [1, 1, 32, 32]
+    # x = torch.randn(shape).bfloat16().float()
+    # torch.save(x, file_path)
+    x = torch.load(file_path)
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(mesh_device)
+
+    layernorm_output = ttnn.layer_norm(
+        xt,
+        epsilon=1e-5,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
+        memory_config=mem,
+    )
+
+    layernorm_output = ttnn.mul(
+        layernorm_output,
+        layernorm_output,
+    )
+
+    layernorm_output = ttnn.add(
+        layernorm_output,
+        layernorm_output,
+    )
