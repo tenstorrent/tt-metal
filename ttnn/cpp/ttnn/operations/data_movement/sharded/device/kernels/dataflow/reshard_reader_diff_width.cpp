@@ -56,13 +56,13 @@ void kernel_main() {
                 const uint32_t stride_data_in_pages = (stride_data_offset >> 16);
                 const uint32_t base_offset_in_pages = (stride_data_offset & mask_short);
                 const uint32_t num_pages_per_stride = (stride_size_num_strides_skip >> 16);
-                const uint32_t stride_size_in_bytes = num_pages_per_stride * unit_size;  // was page_size
+                const uint32_t stride_size_in_bytes = num_pages_per_stride * unit_size;
 
                 uint32_t current_start_x_index = base_start_x_index + r * meta_stride_x;
                 uint32_t current_start_y_index = base_start_y_index + r * meta_stride_y;
                 uint32_t current_offset_in_pages = base_offset_in_pages + r * meta_stride_data;
 
-                uint32_t addr_offset_in_bytes = current_offset_in_pages * unit_size;  // was page_size
+                uint32_t addr_offset_in_bytes = current_offset_in_pages * unit_size;
                 uint32_t core_id_x_index = current_start_x_index;
                 uint32_t core_id_y_index = current_start_y_index;
 

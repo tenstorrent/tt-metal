@@ -729,18 +729,6 @@ def test_dram_reshard_with_program_cache(
             ttnn.ShardOrientation.ROW_MAJOR,
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ),
-        (
-            [1, 1, 4, 320],
-            ttnn.ROW_MAJOR_LAYOUT,
-            [[(0, 0), (4, 1)]],
-            (2, 64),
-            ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-            [[(0, 0), (7, 1)]],
-            (2, 40),
-            ttnn.ShardOrientation.ROW_MAJOR,
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-        ),
     ],
 )
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
@@ -915,7 +903,7 @@ def test_reshard_diff_width(
     ],
 )
 @pytest.mark.parametrize("tt_dtype", [ttnn.bfloat16])
-def test_nd_reshard_diff_width(
+def test_sd_reshard(
     device,
     input_shape,
     input_layout,

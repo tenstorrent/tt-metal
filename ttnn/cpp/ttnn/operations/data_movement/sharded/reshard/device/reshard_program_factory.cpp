@@ -325,93 +325,6 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> post_p
     }
     return ret_map;
 }
-/*
-std::unordered_map<CoreCoord, std::vector<detail::PageStride>> post_process_ret_map(
-    const std::unordered_map<CoreCoord, std::vector<detail::PageStride>>& input_map) {
-    std::unordered_map<CoreCoord, std::vector<detail::PageStride>> ret_map;
-    ret_map.reserve(input_map.size());
-
-    for (const auto& [core, page_strides] : input_map) {
-        if (page_strides.empty()) {
-            ret_map.try_emplace(core, std::vector<detail::PageStride>{});
-            continue;
-        }
-
-        std::vector<detail::PageStride> new_page_strides;
-        new_page_strides.reserve(page_strides.size());
-
-        auto it = page_strides.cbegin();
-        while (it != page_strides.cend()) {
-            const auto& current_stride = *it;
-
-            // Look for a sequence of strides that can be compressed
-            auto next_it = it + 1;
-            if (next_it == page_strides.cend() || current_stride.skip) {
-                // Cannot compress a single stride or a padding stride, so just add it
-                new_page_strides.push_back(current_stride);
-                it = next_it;
-                continue;
-            }
-
-            const auto& next_stride = *next_it;
-
-            // Check if the next stride is identical except for start_data
-            bool is_pattern = !next_stride.skip &&
-                              current_stride.start_core == next_stride.start_core &&
-                              current_stride.stride_size == next_stride.stride_size &&
-                              current_stride.stride.core == next_stride.stride.core &&
-                              current_stride.stride.data == next_stride.stride.data &&
-                              current_stride.num_strides == next_stride.num_strides;
-
-            if (is_pattern) {
-                // This is a potential meta-stride pattern.
-                // The meta-stride is only in the data dimension.
-                Stride meta_stride = {.core = {0, 0}, .data = next_stride.start_data - current_stride.start_data};
-                uint32_t num_meta_strides = 2;
-
-                auto pattern_it = next_it + 1;
-                while (pattern_it != page_strides.cend()) {
-                    const auto& candidate_stride = *pattern_it;
-                    // Check if the next element continues the pattern
-                    if (candidate_stride.skip ||
-                        current_stride.start_core != candidate_stride.start_core ||
-                        current_stride.stride_size != candidate_stride.stride_size ||
-                        current_stride.stride.core != candidate_stride.stride.core ||
-                        current_stride.stride.data != candidate_stride.stride.data ||
-                        current_stride.num_strides != candidate_stride.num_strides) {
-                        break; // Pattern broken
-                    }
-
-                    // Check if the start_data follows the meta_stride
-                    if (candidate_stride.start_data != (current_stride.start_data + (num_meta_strides *
-meta_stride.data))) { break; // Data stride is not constant
-                    }
-
-                    num_meta_strides++;
-                    pattern_it++;
-                }
-
-                // Create a new compressed PageStride
-                PageStride compressed_stride = current_stride;
-                compressed_stride.meta_stride = meta_stride;
-                compressed_stride.num_meta_strides = num_meta_strides;
-                new_page_strides.push_back(compressed_stride);
-
-                // Advance iterator past all the strides that were just compressed
-                it = pattern_it;
-
-            } else {
-                // Not a pattern, just copy the current stride and advance
-                new_page_strides.push_back(current_stride);
-                it++;
-            }
-        }
-        ret_map.try_emplace(core, std::move(new_page_strides));
-    }
-
-    return ret_map;
-}
-*/
 
 std::unordered_map<CoreCoord, std::vector<detail::PageStride>> get_core_page_ranges(
     Buffer* input_buffer, Buffer* output_buffer) {
@@ -591,7 +504,7 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
     auto processed_ret_map = post_process_ret_map(ret_map);
     return processed_ret_map;
 }
-// new
+
 std::vector<uint32_t> get_runtime_args_for_given_ranges_diff_width(
     const std::vector<uint32_t>& physical_core_coords,
     const std::vector<detail::CompressedStrideBlock>& compressed_stride_vector,
@@ -601,7 +514,7 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges_diff_width(
     const uint32_t ending_range) {
     std::vector<uint32_t> runtime_args = physical_core_coords;
     runtime_args.push_back(input_addr);
-    runtime_args.push_back(0);  // Placeholder for num_output_pages
+    runtime_args.push_back(0);
     runtime_args.push_back(ending_range - starting_range);
     runtime_args.push_back(output_page_offset);
     uint32_t num_output_pages_for_this_call = 0;
