@@ -621,12 +621,12 @@ jobs:
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],
               tt-smi-cmd: "tt-smi-metal -r 0"
             },
-            {
-              name: "Wormhole N300 Sweeps",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              tt-smi-cmd: "tt-smi-metal -r 0"
-            }
+            # {
+            #   name: "Wormhole N300 Sweeps",
+            #   arch: wormhole_b0,
+            #   runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+            #   tt-smi-cmd: "tt-smi-metal -r 0"
+            # }
           ]
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
