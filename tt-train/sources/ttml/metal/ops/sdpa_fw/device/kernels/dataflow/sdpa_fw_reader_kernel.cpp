@@ -18,17 +18,6 @@ inline uint32_t get_group_idx(uint32_t q_tile_idx, uint32_t q_tiles_per_head, ui
     return head_idx / heads_per_group;
 }
 
-/*
-cb_reserve_back(cb_query, q_tiles_per_head);
-        uint32_t query_l1_write_addr = get_write_ptr(cb_query);
-        for (uint32_t col = 0; col < Wt; ++col) {
-            noc_async_read_tile(q_idx + col, query_address_generator, query_l1_write_addr);
-            query_l1_write_addr += tile_bytes;
-        }
-        noc_async_read_barrier();
-        cb_push_back(cb_query, Wt);
-*/
-
 void read_head(
     const uint32_t start_idx,
     const uint32_t num_of_tiles,
@@ -70,34 +59,17 @@ void kernel_main() {
     constexpr uint32_t cb_prev_max = tt::CBIndex::c_8;  // used to store previous max value
     constexpr uint32_t cb_cur_max = tt::CBIndex::c_9;   // used to store current max value
 
-    // [Debug]: we should split reader data be heads
-    // split K by groups
-    // match heads and groups
-
-    /*
-    std::vector<uint32_t> reader_compile_args = {
-        qWt,               // num tile in inner dim in query(d/TILE_W)
-        kWt,               // num tile in inner dim in key and value (d/TILE_W)
-        Ht_,               // num tile in seq len dim (S/TILE_H)
-        block_size,        // block size (dst_reg_count)
-        q_tiles_per_head,  // number of tiles per head in query
-        k_tiles_per_head,  // number of tiles per group in key and value
-        heads_per_group,   // number of heads per group
-        scaler,            // sqrt(Et) - sdpa scale factor
-        minus_one,         // used to transform mask from 1/0 to 0/-1
-        custom_inf         // used to transform mask from 0/-1 to 0/-1e9F
-    };
-    */
     constexpr uint32_t qWt = get_compile_time_arg_val(0);  // (vDt / TILE_W)
     constexpr uint32_t kWt = get_compile_time_arg_val(1);  // (kDt / TILE_W)
     constexpr uint32_t Ht = get_compile_time_arg_val(2);   // (S / TILE_H)
     constexpr uint32_t block_size = get_compile_time_arg_val(3);
     constexpr uint32_t q_tiles_per_head = get_compile_time_arg_val(4);  // num of tiles per head in query
-    constexpr uint32_t k_tiles_per_head = get_compile_time_arg_val(5);  // num of tiles per group in key and value
-    constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);   // num of heads per group
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(7);       // sdpa scaler factor
-    constexpr uint32_t minus_one_bits = get_compile_time_arg_val(8);    // used to transform mask from 1/0 to 0/-1
-    constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(9);   // used to transform mask from 0/-1 to 0/-1e9F
+    constexpr uint32_t q_heads = get_compile_time_arg_val(5);           // num of heads in query
+    constexpr uint32_t k_tiles_per_head = get_compile_time_arg_val(6);  // num of tiles per group in key and value
+    constexpr uint32_t heads_per_group = get_compile_time_arg_val(7);   // num of heads per group
+    constexpr uint32_t scaler_bits = get_compile_time_arg_val(8);       // sdpa scaler factor
+    constexpr uint32_t minus_one_bits = get_compile_time_arg_val(9);    // used to transform mask from 1/0 to 0/-1
+    constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(10);  // used to transform mask from 0/-1 to 0/-1e9F
 
     constexpr uint32_t onetile = 1U;
 
@@ -127,31 +99,48 @@ void kernel_main() {
     const float minus_one = uint32_to_float(minus_one_bits);
     const float custom_inf = uint32_to_float(custom_inf_bits);
 
-    DPRINT << "SDPA FW: num_rows_to_process=" << num_rows_to_process << ", start_row=" << start_row << ", Wt=" << Wt
+    const uint32_t tiles_per_head = q_tiles_per_head;
+    const uint32_t Wt = qWt;  // assuming qWt == kWt
+
+    DPRINT << "SDPA FW: num_rows_to_process=" << num_rows_to_process << ", start_row=" << start_row << ", qWt=" << qWt
+           << ", kWt=" << kWt << ", q_tiles_per_head=" << q_tiles_per_head << ", k_tiles_per_head=" << k_tiles_per_head
            << ", Ht=" << Ht << ", scaler=" << scaler << ", minus_one=" << minus_one << ", custom_inf=" << custom_inf
            << ENDL();
 
     // while we process one q_chunk (row of Q), we stream all K and V chunks (rows of K and V)
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-        uint32_t q_idx = (start_row + i) * qWt;
+        // uint32_t q_idx = (start_row + i) * qWt;
         uint32_t q_row_idx = (start_row + i) * qWt;
-
-        // TODO[improve]: change offset calculation to support reading rows from different batches
-        // uint32_t key_page_offset = ((start_row + i) / Ht) * Wt * Ht;
 
         // calculate offset to read relevant batch of K and V
         uint32_t key_batch_offset = ((start_row + i) / Ht) * kWt * Ht;
 
-        for (uint32_t q_tile_idx = 0; q_tile_idx < qWt; q_tile_idx += q_tiles_per_head) {
-            read_head(q_tile_idx, q_tiles_per_head, cb_query, query_address_generator, tile_bytes);
+        // for (uint32_t q_tile_idx = 0; q_tile_idx < qWt; q_tile_idx += tiles_per_head) {
+        //     read_head(q_row_idx + q_tile_idx, tiles_per_head, cb_query, query_address_generator, tile_bytes);
 
-            uint32_t kv_group_idx = get_group_idx(q_tile_idx, q_tiles_per_head, heads_per_group);
-            uint32_t key_start_idx = key_batch_offset;
-            for (uint32_t h = 0; h < Ht; ++h) {
-            }
-        }
+        //     uint32_t kv_group_idx = get_group_idx(q_tile_idx, tiles_per_head, heads_per_group);
+        //     DPRINT << "KV group index: " << kv_group_idx << ENDL();
+        //     // jump to start of relevant head of K and V
+        //     uint32_t kv_offset = key_batch_offset + kv_group_idx;
+        //     uint32_t attn_mask_idx = (start_row + i) * Ht;
+        //     for (uint32_t h = 0; h < Ht; ++h) {
+        //         uint32_t kv_start_idx = kv_offset + h * kWt;  // jump to the next row
+        //         read_head(kv_start_idx, tiles_per_head, cb_key, key_address_generator, tile_bytes);
 
-        cb_reserve_back(cb_query, q_tiles_per_head);
+        //         // read one tile of attn_mask for current row of K and V
+        //         // row of K define the column in (QK^T) matrix, so it define the column of attn_mask
+        //         cb_reserve_back(cb_attn_mask, onetile);
+        //         uint32_t attn_mask_l1_writer_addr = get_write_ptr(cb_attn_mask);
+        //         noc_async_read_tile(attn_mask_idx + h, mask_address_generator, attn_mask_l1_writer_addr);
+        //         noc_async_read_barrier();
+        //         cb_push_back(cb_attn_mask, onetile);
+
+        //         read_head(kv_start_idx, tiles_per_head, cb_value, value_address_generator, tile_bytes);
+        //     }
+        // }
+        uint32_t q_idx = (start_row + i) * Wt;
+
+        cb_reserve_back(cb_query, Wt);
         uint32_t query_l1_write_addr = get_write_ptr(cb_query);
         for (uint32_t col = 0; col < Wt; ++col) {
             noc_async_read_tile(q_idx + col, query_address_generator, query_l1_write_addr);
@@ -159,6 +148,9 @@ void kernel_main() {
         }
         noc_async_read_barrier();
         cb_push_back(cb_query, Wt);
+
+        // TODO[improve]: change offset calculation to support reading rows from different batches
+        uint32_t key_page_offset = ((start_row + i) / Ht) * Wt * Ht;
 
         // I need one tile of attn_mask for one row of K and V.
         // row index of Q define the row index of (QK^T) matrix, so I need to read the same row of attn_mask

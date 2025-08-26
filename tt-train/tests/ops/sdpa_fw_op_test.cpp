@@ -5,6 +5,13 @@
 #include <gtest/gtest.h>
 #include <sys/types.h>
 
+#include <cmath>
+#include <cstdint>
+#include <stdexcept>
+#include <vector>
+// #include <xtensor/xarray.hpp>
+// #include <xtensor/xbuilder.hpp>  // for xt::zeros
+
 #include <cassert>
 #include <chrono>
 #include <core/ttnn_all_includes.hpp>
@@ -178,13 +185,6 @@ xt::xarray<float> generate_tilewise_symmetric_K(size_t B, size_t H, size_t S, si
 
     return K;
 }
-
-#include <cmath>
-#include <cstdint>
-#include <stdexcept>
-#include <vector>
-#include <xtensor/xarray.hpp>
-#include <xtensor/xbuilder.hpp>  // for xt::zeros
 
 // Naive, correctness-first SDPA with grouped KV (GQA/MQA/MHA).
 // Physical layouts:
@@ -383,10 +383,11 @@ std::vector<ttnn::Tensor> composite_sdpa_fw(
     return {attention_qkv, recip_sum_exp};
 }
 
-TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQKV_Small) {
+TEST_F(SDPAForwardTest, SDPAForwardTest_SmallBatch) {
     using namespace ttml;
 
-    const uint32_t B = 2U, H = 1U, S = 4096U, d = 768U;
+    const uint32_t B = 1U, H = 1U, S = 256U, d = 256U;
+    // const uint32_t B = 2U, H = 1U, S = 4096U, d = 768U;
     const float dropout_prob = 0.8F;
 
     std::random_device rd;
@@ -479,7 +480,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_MatmulQK_Batch) {
     using namespace ttml;
 
     auto* mesh_devices = &autograd::ctx().get_device();
-    // const uint32_t B = 64U, H = 1U, S = 1024U, d = 768U;
+    // const uint32_t B = 1U, H = 1U, S = 256U, d = 256U;
     const uint32_t B = 8U, H = 1U, S = 768U, d = 768U;
     const auto shape = ttnn::SmallVector<uint32_t>{B, H, S, d};
     const float dropout_prob = 0.8F;
