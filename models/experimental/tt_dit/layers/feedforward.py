@@ -32,7 +32,7 @@ class FeedForward:
         self.activation_fn = activation_fn
         self.bias = bias
 
-        self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation=activation_fn, init=init)
+        self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation_fn=activation_fn, init=init)
         self.ff2 = Linear(inner_dim, dim_out, bias=bias, mesh_device=mesh_device, init=init)
 
     def to_cached_state_dict(self, path_prefix):
