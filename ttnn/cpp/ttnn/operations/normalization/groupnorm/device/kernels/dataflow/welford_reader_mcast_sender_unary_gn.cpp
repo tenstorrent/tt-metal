@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "welford_combine.h"
 
 void kernel_main() {
     // clang-format off
@@ -354,12 +355,30 @@ void kernel_main() {
 
                         cb_wait_front(cb_ex_partial, 2);
 
+                        auto mean_ptr = get_read_ptr(cb_ex_partial);
+                        auto var_ptr = mean_ptr + single_tile_size_bytes;
+                        // Read mean and variance arrays from cb_ex_partial, then combine using Welford
+                        // Assume mean_ptr and var_ptr are uint32_t L1 addresses; cast to float* for access
+                        float* means = reinterpret_cast<float*>(mean_ptr);
+                        float* vars = reinterpret_cast<float*>(var_ptr);
+                        WelfordStats result = combine_welford(32, means, vars, 1);
+                        float mean = result.mean;
+                        float var = result.variance;
+
+                        // Write this to cb_ex_global
+                        auto result_ptr = get_write_ptr(cb_ex_global);
+                        float* result_fptr = reinterpret_cast<float*>(result_ptr);
+                        result_fptr[0] = mean;
+                        result_fptr[1] = var;
+
+                        cb_pop_front(cb_ex_partial, 2);
+
                         if constexpr (num_mcast_cores > 1) {
                             // Wait until all other cores have signaled that their partial data is ready
                             noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
                             noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
 
-                            // TODO: Read partial data from all other cores into this core's cb_ex_partial
+                            // TODO: Read partial data from all other cores into this core's cb_ex_global
 
                             // Signal to receiver that their partial data has been received
                             noc_semaphore_set_multicast(
@@ -383,14 +402,25 @@ void kernel_main() {
                             }
                         }
 
-                        // TODO: Combine all partial data into a single global data (mean and variance)
-                        // Write this to cb_ex_global
+                        auto mean_ptr_global = get_read_ptr(cb_ex_global);
+                        auto var_ptr_global = mean_ptr_global + single_tile_size_bytes;
+                        // Read mean and variance arrays from cb_ex_global, then combine using Welford
+                        // Assume mean_ptr and var_ptr are uint32_t L1 addresses; cast to float* for access
+                        float* means_global = reinterpret_cast<float*>(mean_ptr_global);
+                        float* vars_global = reinterpret_cast<float*>(var_ptr_global);
+                        WelfordStats result_global = combine_welford(num_mcast_cores, means_global, vars_global, 1);
+                        float mean_global = result_global.mean;
+                        float var_global = result_global.variance;
 
-                        cb_pop_front(cb_ex_partial, 2);
+                        // Write this to cb_ex_global
+                        auto result_ptr_global = get_write_ptr(cb_ex_global);
+                        float* result_fptr_global = reinterpret_cast<float*>(result_ptr_global);
+                        result_fptr_global[0] = mean_global;
+                        result_fptr_global[1] = var_global;
 
                         if constexpr (num_mcast_cores > 1) {
                             // mcast to other cores
-                            uint32_t l1_read_addr_ex = get_read_ptr(cb_ex_global); // TODO: Fix this
+                            uint32_t l1_read_addr_ex = get_write_ptr(cb_ex_global);
                             noc_async_write_multicast(
                                 l1_read_addr_ex,
                                 multicast_data_noc | l1_read_addr_ex,
@@ -485,4 +515,5 @@ void kernel_main() {
         cb_pop_front(cb_repack_out, per_core_N);
     }
 #endif
+    DPRINT << "Kernel finished" << ENDL();
 }
