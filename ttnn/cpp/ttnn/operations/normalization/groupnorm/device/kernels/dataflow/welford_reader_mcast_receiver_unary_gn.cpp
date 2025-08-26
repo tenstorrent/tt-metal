@@ -312,5 +312,5 @@ void kernel_main() {
         cb_pop_front(cb_repack_out, per_core_N);
     }
 #endif
-    DPRINT << "Kernel finished" << ENDL();
+    DPRINT << "Receiver Kernel finished" << ENDL();
 }
