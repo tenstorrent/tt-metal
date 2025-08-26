@@ -214,8 +214,8 @@ def run_falcon_demo_kv(
     hugging_face_reference_model.eval()
     state_dict = hugging_face_reference_model.state_dict()
 
-    logger.info("Loading weights finished!")
     profiler.end("loading_weights")
+    logger.info("Loading weights finished!")
 
     ttnn.synchronize_device(mesh_device)
 
@@ -354,8 +354,8 @@ def run_falcon_demo_kv(
         tt_cache_path,
         use_global_cos_sin_cache,
     )
-    logger.info("Moved weights (all layers) to device!")
     profiler.end("moving_to_device")
+    logger.info("Moved weights (all layers) to device!")
 
     profiler.start("initializing_KV_cache")
     kv_cache = tt_FalconCausalLM.initialize_kv_cache()  # Initialized kv cache for all layers
@@ -367,6 +367,8 @@ def run_falcon_demo_kv(
     post_processor = partial(post_process)
     output_ids = torch.zeros(num_users, 1, dtype=torch.int64)
     logger.info("Running inference prefill stage...")
+    profiler.start("inference_prefill_decode")
+    profiler.start("inference_prefill")
     time_prefill_inference = 0
     if prefill_on_host:
         pytorch_FalconCausalLM = PytorchFalconCausalLM(hugging_face_reference_model, num_layers)
@@ -435,6 +437,7 @@ def run_falcon_demo_kv(
             if i >= N_warmup:
                 time_prefill_inference += time.time() - time_prefill_inference_start
 
+    profiler.end("inference_prefill")
     logger.info("Finished inference prefill stage!")
     num_users_generated_prefill = num_users if not perf_mode else (N - N_warmup)
     prefill_time_to_token_per_user = time_prefill_inference / num_users_generated_prefill
@@ -457,6 +460,7 @@ def run_falcon_demo_kv(
     kv_cache_len = num_input_tokens  # This will increment by one after each decode
     prompt_is_done = [False for _ in range(num_users)]
 
+    profiler.start("inference_decode")
     time_decode_inference = 0
     if not perf_mode:
         N = max_seq_len - num_input_tokens
@@ -521,6 +525,8 @@ def run_falcon_demo_kv(
             print_output_prompts(generated_ids, tokenizer)
             kv_cache_len += 1
 
+    profiler.end("inference_decode")
+    profiler.end("inference_prefill_decode")
     logger.info("Finished inference decode stage!")
     num_tokens_generated_decode = batch_size * (output_token_index - N_warmup + 1)
     decode_time_to_token_per_user = time_decode_inference / (output_token_index - N_warmup + 1)
