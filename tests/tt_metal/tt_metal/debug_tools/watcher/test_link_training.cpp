@@ -30,8 +30,14 @@ using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
 
-static void RunTest(WatcherFixture* fixture, IDevice* device) {
+static void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     CoreCoord logical_core, virtual_core;
     if (device->get_active_ethernet_cores(true).empty()) {
@@ -50,12 +56,12 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
     log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
 
     auto eth_link_kernel = CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/watcher_eth_link_check.cpp",
         logical_core,
         EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 
     auto x = MetalContext::instance().watcher_server()->exception_message();
     // read out link status from L1
@@ -72,7 +78,7 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
     }
 }
 
-TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
+TEST_F(MeshWatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     // Eth link retraining only supported on WH for now, this test is also dispatch-agnostic so just pick one.
     if (this->slow_dispatch_ || this->arch_ != tt::ARCH::WORMHOLE_B0 || this->devices_.size() == 1) {
         log_info(LogTest, "Test only runs on fast dispatch + multi-chip WH, skipping...");
@@ -80,7 +86,8 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     }
 
     // Just try forcing an eth retrain on Device 0
-    IDevice* device = this->devices_[0];
+    auto mesh_device = this->devices_[0];
+    auto device = mesh_device->get_devices()[0];
     vector<uint32_t> reset_val = {0x1};
     uint32_t retrain_force_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::RETRAIN_FORCE);
@@ -112,7 +119,7 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     }
 
     // Close devices/context to trigger watcher check on teardown.
-    DebugToolsFixture::TearDown();  // NOLINT(bugprone-parent-virtual-call) Call parent teardown so we don't disable
+    DebugToolsMeshFixture::TearDown();  // NOLINT(bugprone-parent-virtual-call) Call parent teardown so we don't disable
                                     // watcher
     MetalContext::instance().teardown();
     EXPECT_TRUE(FileContainsAllStrings(this->log_file_name, expected_strings));
