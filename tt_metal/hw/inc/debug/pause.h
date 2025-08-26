@@ -13,11 +13,11 @@
 void watcher_pause() {
     // Write the pause flag for this core into the memory mailbox for host to read.
     debug_pause_msg_t tt_l1_ptr* pause_msg = GET_MAILBOX_ADDRESS_DEV(watcher.pause_status);
-    pause_msg->flags[debug_get_which_riscv()] = 1;
+    pause_msg->flags[PROCESSOR_INDEX] = 1;
 
     // Wait for the pause flag to be cleared.
     WAYPOINT("PASW");
-    while (pause_msg->flags[debug_get_which_riscv()]) {
+    while (pause_msg->flags[PROCESSOR_INDEX]) {
         invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
         internal_::risc_context_switch();
