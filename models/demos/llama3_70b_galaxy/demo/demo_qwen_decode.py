@@ -345,7 +345,7 @@ def run_qwen_demo(
 
     # Get cos/sin matrices for the current position of each user
     rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
-    tt_decode_input = tt_embd(tt_out_tok)
+    breakpoint()
     tt_out = tt_model(
         tt_decode_input,
         current_pos_tensor,

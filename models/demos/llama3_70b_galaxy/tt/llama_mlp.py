@@ -170,8 +170,6 @@ class TtLlamaMLP(LightweightModule):
                 w1_out, cluster_axis=1, num_links=1, memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
             )
 
-            # breakpoint()
-
             ttnn.deallocate(w1_out)
 
             w3_out = ttnn.linear(
