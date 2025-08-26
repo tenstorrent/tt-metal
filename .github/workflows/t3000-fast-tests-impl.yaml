@@ -12,6 +12,10 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      runner-label:
+        required: true
+        type: string
+        default: tt-ubuntu-2204-N300-llmbox-stable
 
 jobs:
   t3000-unit-tests:
@@ -22,10 +26,9 @@ jobs:
           { name: "t3k fabric tests", arch: wormhole_b0, cmd: run_t3000_ttfabric_tests, timeout: 15, owner_id: UJ45FEC7M}, # Allan Liu
         ]
     name: ${{ matrix.test-group.name }}
-    runs-on:
-      - tt-ubuntu-2204-N300-llmbox-stable
+    runs-on: ${{ inputs.runner-label }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image }}
       env:
         TT_METAL_HOME: /work
         PYTHONPATH: /work

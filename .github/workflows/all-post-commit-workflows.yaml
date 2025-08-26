@@ -77,14 +77,14 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: '["tt-ubuntu-2204-n150-stable"]' },
+          { arch: wormhole_b0, runner-label: '["tt-ubuntu-2204-n300-stable"]' },
         ]
     uses: ./.github/workflows/build-and-unit-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image:  harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Fast Dispatch Unit Tests
@@ -95,14 +95,14 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n150-stable },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n300-stable },
         ]
     uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Fabric Unit Tests
   fabric-unit-tests:
@@ -112,13 +112,13 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n300-stable },
         ]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # TTNN FD Unit tests
@@ -129,14 +129,14 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n150-stable },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n300-stable },
         ]
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
@@ -148,14 +148,14 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n150-stable },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n300-stable },
         ]
     uses: ./.github/workflows/models-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # FD C++ Unit Tests
   cpp-unit-tests:
@@ -165,14 +165,14 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n150-stable },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n300-stable },
         ]
     uses: ./.github/workflows/cpp-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   tt-train-cpp-unit-tests:
@@ -182,14 +182,14 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n150-stable },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n300-stable },
         ]
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
@@ -199,14 +199,14 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n150-stable },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n300-stable },
         ]
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
@@ -216,15 +216,15 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-          { arch: wormhole_b0, runner-label: N300 },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n150-stable },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n300-stable },
         ]
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
-      docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
+      docker-image: harbor.ci.tenstorrent.net/${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   t3000-fast-tests:
@@ -233,7 +233,8 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      docker-image: harbor.ci.tenstorrent.net/${{ needs.build-artifact.outputs.dev-docker-image }}
+      runner-label: tt-ubuntu-2204-N300-llmbox-stable
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   tg-demo-apc-tests:
@@ -244,7 +245,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: in-service-dedicated-apc },
+          { arch: wormhole_b0, runner-label: ["in-service-dedicated-apc", "in-service", "cloud-virtual-machine"] },
         ]
     uses: ./.github/workflows/tg-demo-all-post-commit-impl.yaml
     with:
@@ -269,7 +270,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: tt-ubuntu-2204-n150-stable },
         ]
     with:
       arch: ${{ matrix.test-group.arch }}

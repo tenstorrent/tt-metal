@@ -34,14 +34,9 @@ jobs:
           {name: fabric unit tests, cmd: ./tests/scripts/run_cpp_fabric_tests.sh },
         ]
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
-    runs-on: >-
-      ${{
-        ((inputs.runner-label == 'N150' || inputs.runner-label == 'N300') && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label))
-        || github.event.pull_request.head.repo.fork == true && format('tt-ubuntu-2204-{0}-stable', inputs.runner-label)
-        || fromJSON(format('["{0}", "in-service", "cloud-virtual-machine"]', inputs.runner-label))
-      }}
+    runs-on: ${{ inputs.runner-label }}
     container:
-      image: ${{ inputs.docker-image || 'docker-image-unresolved' }}
+      image: ${{ inputs.docker-image }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
