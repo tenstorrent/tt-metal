@@ -289,7 +289,11 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         this->topology,
         this->barrier_semaphore.has_value(),
         this->using_persistent_buffers,
-        this->sub_device_id,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->cluster_axis,
         this->chunks_per_sync,
         this->num_workers_per_link,
