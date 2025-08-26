@@ -304,6 +304,25 @@ class TtLlamaAttention(LightweightModule):
                 sharded_program_config=self.norm_program_cfg,
                 sharded_output_config=self.reshape_output_k_mem_cfg,
             )
+
+            # self.pre_alloc_k_padding = ttnn.from_torch(
+            #     torch.zeros([1, 24, 1, 128]),
+            #     dtype=ttnn.bfloat16,
+            #     layout=ttnn.ROW_MAJOR_LAYOUT,
+            #     device=self.mesh_device,
+            #     memory_config=ttnn.create_sharded_memory_config(
+            #         shape=(3, 128),
+            #         core_grid=ttnn.CoreRangeSet(
+            #             [
+            #                 ttnn.CoreRange(ttnn.CoreCoord(3, 2), ttnn.CoreCoord(3, 2)),
+            #                 ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(3, 4)),
+            #                 ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
+            #             ]
+            #         ),
+            #         strategy=ttnn.ShardStrategy.HEIGHT,
+            #     ),
+            #     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            # )
         else:
             self.qk_norm = False
 
@@ -414,9 +433,15 @@ class TtLlamaAttention(LightweightModule):
             use_optimal_ccl_for_llama=True,
         )
 
+        breakpoint()
+
         if self.qk_norm:
             rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
             rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
+
+            # # Insert padding concat for k
+            # k_heads_pre_rot_1BKD = ttnn.concat([k_heads_pre_rot_1BKD, self.pre_alloc_k_padding], dim=1)
+            # breakpoint()
 
             # Reshape and prepare tensors for QK norm
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(
@@ -426,8 +451,12 @@ class TtLlamaAttention(LightweightModule):
                 k_heads_pre_rot_1BKD, memory_config=self.reshape_intermediate_k_mem_cfg
             )
 
-            q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 1, 64, 128])
-            k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 1, 64, 128])
+            q_heads_pre_rot_1BQD = ttnn.reshape(
+                q_heads_pre_rot_1BQD, [1, 1, 64, 128]
+            )  # [1, 8, 8, 128] => [1, 1, 64, 128]
+            k_heads_pre_rot_1BKD = ttnn.reshape(
+                k_heads_pre_rot_1BKD, [1, 1, 64, 128]
+            )  # [1, 8, 1 (8), 128]] => [1, 1, 64, 128]
 
             q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
@@ -447,17 +476,23 @@ class TtLlamaAttention(LightweightModule):
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
 
             q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
-            k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 8, 8, 128])
+            k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 8, 8, 128])  # ==> [1, 8, 1 (8), 128]
+
+            # [1, 8 + (24), 1, 128]
 
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
+
+        breakpoint()
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
         # Q, K Rotary Embeddings
         q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
-        )
+        )  # [1, 8, 8, 128], [1, 8, 8, 128]
+
+        breakpoint()
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)

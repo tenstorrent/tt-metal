@@ -227,6 +227,8 @@ def test_qwen3_tg_qk_norm(
 
     # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> [1, 1, 64, 32 x 4]
 
+    breakpoint()
+
     rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
     rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
 
