@@ -74,6 +74,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#ring-buffer">Ring Buffer</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#stack-usage-measurement">Stack Usage Measurement</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#debug-delays">Debug Delays</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#eth-link">Eth Link</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="tracy_profiler.html">Tracy Profiler</a></li>
@@ -158,6 +159,7 @@ the log file is stored as well as a message each time the watcher checks the dev
 <span class="n">export</span> <span class="n">TT_METAL_WATCHER_DISABLE_NOC_SANITIZE</span><span class="o">=</span><span class="mi">1</span>
 <span class="n">export</span> <span class="n">TT_METAL_WATCHER_DISABLE_WAYPOINT</span><span class="o">=</span><span class="mi">1</span>
 <span class="n">export</span> <span class="n">TT_METAL_WATCHER_DISABLE_STACK_USAGE</span><span class="o">=</span><span class="mi">1</span>
+<span class="n">export</span> <span class="n">TT_METAL_WATCHER_DISABLE_ETH_LINK_STATUS</span><span class="o">=</span><span class="mi">1</span>
 
 <span class="c1"># This feature is opt-in, set the env var to enable it</span>
 <span class="n">export</span> <span class="n">TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION</span><span class="o">=</span><span class="mi">1</span>
@@ -360,6 +362,29 @@ set for the delays to be applied.</p>
 transactions on BRISC core at location 0,0:</p>
 <div class="highlight-default notranslate">
 <div class="highlight"><pre><span></span><span class="n">TT_METAL_WATCHER</span><span class="o">=</span><span class="mi">1</span> <span class="n">TT_METAL_WATCHER_DEBUG_DELAY</span><span class="o">=</span><span class="mi">10</span> <span class="n">TT_METAL_READ_DEBUG_DELAY_CORES</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span> <span class="n">TT_METAL_WRITE_DEBUG_DELAY_CORES</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span> <span class="n">TT_METAL_READ_DEBUG_DELAY_RISCVS</span><span class="o">=</span><span class="n">BR</span> <span class="n">TT_METAL_WRITE_DEBUG_DELAY_RISCVS</span><span class="o">=</span><span class="n">BR</span> <span class="o">./</span><span class="n">build</span><span class="o">/</span><span class="n">test</span><span class="o">/</span><span class="n">tt_metal</span><span class="o">/</span><span class="n">test_eltwise_binary</span>
+</pre></div>
+</div>
+</section>
+<section id="eth-link">
+<h2>Eth Link<a class="headerlink" href="#eth-link" title="Permalink to this heading"></a>
+</h2>
+<p>Before issuing an ethernet transaction, Watcher can check that the link is up.</p>
+<div class="highlight-c++ notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"debug/eth_link_status.h"</span><span class="c1">  // Required in all kernels checking eth link status</span>
+
+<span class="n">FORCE_INLINE</span><span class="w"> </span><span class="kt">void</span><span class="w"> </span><span class="n">eth_send_packet</span><span class="p">(</span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">q_num</span><span class="p">,</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">src_word_addr</span><span class="p">,</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dest_word_addr</span><span class="p">,</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_words</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">WATCHER_CHECK_ETH_LINK_STATUS</span><span class="p">();</span>
+<span class="w">    </span><span class="k">while</span><span class="w"> </span><span class="p">(</span><span class="n">eth_txq_is_busy</span><span class="p">(</span><span class="n">q_num</span><span class="p">));</span>
+<span class="w">    </span><span class="n">eth_txq_reg_write</span><span class="p">(</span><span class="n">q_num</span><span class="p">,</span><span class="w"> </span><span class="n">ETH_TXQ_TRANSFER_START_ADDR</span><span class="p">,</span><span class="w"> </span><span class="n">src_word_addr</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">4</span><span class="p">);</span>
+<span class="w">    </span><span class="n">eth_txq_reg_write</span><span class="p">(</span><span class="n">q_num</span><span class="p">,</span><span class="w"> </span><span class="n">ETH_TXQ_DEST_ADDR</span><span class="p">,</span><span class="w"> </span><span class="n">dest_word_addr</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">4</span><span class="p">);</span>
+<span class="w">    </span><span class="n">eth_txq_reg_write</span><span class="p">(</span><span class="n">q_num</span><span class="p">,</span><span class="w"> </span><span class="n">ETH_TXQ_TRANSFER_SIZE_BYTES</span><span class="p">,</span><span class="w"> </span><span class="n">num_words</span><span class="w"> </span><span class="o">&lt;&lt;</span><span class="w"> </span><span class="mi">4</span><span class="p">);</span>
+<span class="w">    </span><span class="n">eth_txq_reg_write</span><span class="p">(</span><span class="n">q_num</span><span class="p">,</span><span class="w"> </span><span class="n">ETH_TXQ_CMD</span><span class="p">,</span><span class="w"> </span><span class="n">ETH_TXQ_CMD_START_DATA</span><span class="p">);</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>If the link is down, the kernel will hang and a message with the logical, virtual and noc0 coordinates of the ethernet core attempting the transaction will be printed:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">Device</span> <span class="mi">0</span> <span class="n">acteth</span> <span class="n">core</span><span class="p">(</span><span class="n">x</span><span class="o">=</span> <span class="mi">0</span><span class="p">,</span><span class="n">y</span><span class="o">=</span> <span class="mi">4</span><span class="p">)</span> <span class="n">virtual</span><span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">24</span><span class="p">,</span><span class="n">y</span><span class="o">=</span><span class="mi">25</span><span class="p">):</span> <span class="n">Watcher</span> <span class="n">detected</span> <span class="n">that</span> <span class="n">active</span> <span class="n">eth</span> <span class="n">link</span> <span class="n">on</span> <span class="n">virtual</span> <span class="n">core</span> <span class="p">(</span><span class="n">x</span><span class="o">=</span><span class="mi">24</span><span class="p">,</span><span class="n">y</span><span class="o">=</span><span class="mi">25</span><span class="p">)</span> <span class="p">(</span><span class="n">noc0</span> <span class="n">core</span><span class="p">:</span> <span class="n">CoreCoord</span><span class="p">:</span> <span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">ETH</span><span class="p">,</span> <span class="n">NOC0</span><span class="p">))</span> <span class="n">went</span> <span class="n">down</span> <span class="n">after</span> <span class="n">training</span><span class="o">.</span>
 </pre></div>
 </div>
 </section>
