@@ -291,7 +291,8 @@ void calculate_sum_exp_x() {
             copy_tile(cb_input, /* tile_idx */ block_idx, /* register_idx */ working_register);
 
             sub_binary_tile_init();
-            sub_binary_tile(working_register, max_value_register);  // subtract max value from each tile
+            sub_binary_tile(
+                working_register, max_value_register, working_register);  // subtract max value from each tile
 
             exp_tile_init<false>();
             exp_tile</* approx */ false>(working_register);  // calculate exp for each tile in tile register
