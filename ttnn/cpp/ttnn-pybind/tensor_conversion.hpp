@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,10 +14,8 @@ namespace tt {
 
 namespace tt_metal {
 
-namespace py = pybind11;
-
 Tensor convert_python_tensor_to_tt_tensor(
-    const py::handle& py_tensor,
+    const pybind11::handle& py_tensor,
     std::optional<DataType> optional_data_type,
     std::optional<Layout> optional_layout,
     const std::optional<Tile>& optional_tile,
