@@ -781,40 +781,6 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     return pass;
 }
 
-bool test_EnqueueWrap_on_EnqueueWriteBuffer(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
-    EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
-
-    /*
-    This just ensures we don't hang on the subsequent EnqueueWriteBuffer
-    */
-    size_t buf_size = config.num_pages * config.page_size;
-    auto buffer = Buffer::create(device, buf_size, config.page_size, config.buftype);
-
-    vector<uint32_t> src(buf_size / sizeof(uint32_t), 0);
-
-    for (uint32_t i = 0; i < src.size(); i++) {
-        src.at(i) = i;
-    }
-    EnqueueWriteBuffer(cq, *buffer, src, false);
-    Finish(cq);
-
-    return true;
-}
-
-bool test_EnqueueWrap_on_Finish(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
-    bool pass = true;
-    EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
-
-    return pass;
-}
-
-bool test_EnqueueWrap_on_EnqueueProgram(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
-    bool pass = true;
-    EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
-
-    return pass;
-}
-
 // Verify RT args for a core at a given address by comparing to expected values.
 bool verify_rt_args(
     bool unique,
