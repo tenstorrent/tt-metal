@@ -1,0 +1,209 @@
+## Submesh allocator design and call-stack notes
+
+### Goals and constraints
+- **Reuse the existing allocator** to manage memory for submeshes.
+- **Non-overlapping submeshes** can reuse the same address offsets independently.
+- **Overlapping submeshes** must share allocation state on the devices they overlap.
+- **Lock-step across devices**: allocations for a submesh return the same offset on every device in that submesh.
+- **No changes to low-level allocator/buffer internals**; compose a thin layer on top.
+
+### High-level idea
+- Keep allocators fundamentally per-device. Introduce a thin coordination layer, `SubmeshAllocator`, that orchestrates the existing per-device allocators to provide a lock-step allocation across the devices in a submesh.
+- Overlap semantics “just work” because overlapping submeshes reference the same underlying device allocators on the overlapping devices. Non-overlapping submeshes operate on disjoint device allocators and can reuse offsets freely.
+
+### Where to implement
+- Implement in the distributed layer next to `tt_metal/distributed::MeshDevice` and `tt_metal/distributed::MeshBuffer`.
+- Do not modify `tt_metal/impl/allocator` or `tt_metal/impl/buffers/Buffer`.
+- Integration points:
+  - `MeshDevice` exposes/owns submesh-scoped allocators: `mesh_device->submesh_allocator(desc)`.
+  - `tensor_impl::allocate_device_buffer(mesh_device, spec)` consults `SubmeshAllocator` to reserve a common offset and then calls `MeshBuffer::create(..., address)` to instantiate buffers at that address.
+  - `MeshBuffer::create(..., address)` already delegates to per-device `Buffer::create(device, address, ...)`, so allocator internals remain untouched.
+
+### Core objects (sketch)
+- `SubmeshDescriptor`
+  - `std::vector<DeviceId> device_ids` composing the submesh (ordered for determinism).
+  - Optional policy: alignment/page size.
+- `SubmeshAllocator`
+  - Holds `SubmeshDescriptor` and references to each device’s existing `Allocator`.
+  - Provides lock-step `allocate(size, alignment, tag)` and `free(handle)`.
+- `SubmeshAllocation`
+  - Logical handle with a single `offset` (identical on all devices in the submesh) plus size/alignment/tag.
+
+### Public API sketch
+```cpp
+// Factory
+SubmeshAllocator create_submesh_allocator(const SubmeshDescriptor& submesh);
+
+// Lock-step ops
+SubmeshAllocation allocate(size_t size, size_t alignment, AllocationTag tag);
+void free(const SubmeshAllocation& handle);
+
+// Optional utilities
+bool try_reserve(size_t size, size_t alignment);
+AllocatorStats stats() const;
+```
+
+### Internal behavior
+- **Per-device state sharing**
+  - Each device keeps using its existing `Allocator`.
+  - If two submeshes overlap on device `d`, they reference the exact same `Allocator(d)`; therefore they share state automatically. If they don’t overlap, they touch different allocators and can reuse offsets.
+
+- **Lock-step offset selection**
+  - Policy: identical `offset` across all devices in the submesh.
+  - Two-phase protocol:
+    1) Find-candidate: choose a candidate offset (e.g., from the first device), probe exact availability on the others, or intersect free-lists by aligned scans.
+    2) Atomic reservation: reserve on all devices; on any failure, roll back and try the next candidate.
+
+- **Free**
+  - Forward deallocation to each device allocator with the same `offset/size`.
+
+- **Concurrency**
+  - Light mutex per `SubmeshAllocator` for ordering; per-device allocators already have internal mutex protection.
+  - Two-phase commit prevents partial reservations.
+
+### Execution semantics and scheduler expectations
+- **Allocator semantics**: determined solely by per-device allocator state and the coordinator’s lock-step reservation. Non-overlapping submeshes may allocate concurrently (different devices); overlapping submeshes serialize on shared allocators when they touch the same device(s).
+- **Command queue execution** (separate from allocation):
+  - Submeshes that are non-overlapping may execute simultaneously.
+  - Submeshes that overlap must execute sequentially or be scheduled to avoid hazards if they share device resources.
+  - Submeshes should only consume/produce tensors on their own submesh.
+
+### Example: A, B, C
+- Submesh A = {0, 1, 4, 5}
+- Submesh B = {2, 3, 6, 7}
+- Submesh C = {0, 1, 2, 3}
+
+Behavior:
+- A and B do not overlap; they can allocate different tensors at the same offsets on their respective devices.
+- C overlaps each of A and B; C must select offsets free across {0,1,2,3}. The coordinator ensures the chosen offset is simultaneously free on all of C’s devices, naturally respecting A’s/B’s in-use regions where they overlap.
+
+### Fragmentation/policy knobs
+- Fit strategy: first-fit (default), best-fit, next-fit pluggable.
+- Alignment: default to device page size; override per-request.
+- Optional tagging/subpools to segregate lifetimes (activations vs. parameters) to reduce fragmentation.
+- Large-object fast path: allocate from top of heap.
+
+### Lifetime and scope
+- `SubmeshAllocator` can be lifecycle-managed per program (deterministic reuse, easy teardown) or persistent per submesh (better reuse, stricter free discipline).
+- Deallocation driven by runtime when tensors become dead or at program completion.
+
+### Failure handling and telemetry
+- Return OOM if no common offset exists.
+- `stats()` aggregates per-device allocator stats and common-offset success/fail counters.
+- Trace hooks for allocation timelines per device and per submesh.
+
+## Call stack: creating a device tensor and writing data
+
+This section documents the actual stack from Python → C++ for “create a tensor on device”, and whether allocator calls are sequential.
+
+### Stack outline
+- Python helper → `tt::tt_metal::create_device_tensor` → `allocate_tensor_on_device` → `tensor_impl::allocate_device_buffer` → `distributed::MeshBuffer::create` → `Buffer::create` → `Buffer::allocate_impl` → `Allocator::allocate_buffer`.
+- After allocation, host→device data writes are enqueued (`enqueue_write_*`) on the `MeshCommandQueue`.
+
+### Key code touchpoints (citations)
+
+```550:568:ttnn/core/tensor/tensor.cpp
+Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
+    ZoneScoped;
+    GraphTracker::instance().track_function_start(
+        "tt::tt_metal::create_device_tensor",
+        tensor_spec.logical_shape(),
+        tensor_spec.tensor_layout().get_data_type(),
+        tensor_spec.tensor_layout().get_layout(),
+        device,
+        tensor_spec.tensor_layout().get_memory_config());
+
+    Tensor output;
+    distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
+    output = allocate_tensor_on_device(tensor_spec, mesh_device);
+    output = tt::tt_metal::set_tensor_id(output);
+
+    GraphTracker::instance().track_function_end(output);
+
+    return output;
+}
+```
+
+```720:727:ttnn/core/tensor/tensor.cpp
+Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
+    auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(device->shape().mesh_size());
+    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
+        coords.push_back(coord);
+    }
+```
+
+```95:112:ttnn/core/tensor/tensor_impl.cpp
+std::shared_ptr<distributed::MeshBuffer> allocate_device_buffer(
+    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec) {
+    const auto& memory_config = tensor_spec.tensor_layout().get_memory_config();
+    ...
+    return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
+}
+```
+
+```76:83:tt_metal/distributed/mesh_buffer.cpp
+std::shared_ptr<MeshBuffer> MeshBuffer::create(
+    const MeshBufferConfig& mesh_buffer_config,
+    const DeviceLocalBufferConfig& device_local_config,
+    MeshDevice* mesh_device,
+    std::optional<DeviceAddr> address) {
+    validate_mesh_buffer_config(mesh_buffer_config, *mesh_device);
+```
+
+```96:105:tt_metal/distributed/mesh_buffer.cpp
+        std::shared_ptr<Buffer> backing_buffer = Buffer::create(
+            mesh_device,
+            device_local_size,
+            device_local_config.page_size,
+            device_local_config.buffer_type,
+            device_local_config.sharding_args,
+            device_local_config.bottom_up,
+            device_local_config.sub_device_id);
+```
+
+```392:398:tt_metal/impl/buffers/buffer.cpp
+        address_ = allocator_->allocate_buffer(this);
+        // Assertion here because buffer class returns a u32 when address is queried
+        // Requires updating all use cases of buffer address to accept a u64 to remove
+        TT_ASSERT(address_ <= std::numeric_limits<uint32_t>::max());
+```
+
+```106:118:tt_metal/impl/allocator/allocator.cpp
+DeviceAddr Allocator::allocate_buffer(Buffer* buffer) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    DeviceAddr address = 0;
+    auto size = buffer->aligned_size();
+    auto page_size = buffer->aligned_page_size();
+    auto buffer_type = buffer->buffer_type();
+    auto bottom_up = buffer->bottom_up();
+    auto num_cores = buffer->num_cores();
+    this->verify_safe_allocation();
+```
+
+```588:596:ttnn/core/tensor/tensor_impl.cpp
+    mesh_device->mesh_command_queue(*cq_id).enqueue_write_mesh_buffer(
+        mesh_buffer, data_to_write.data(), /*blocking=*/false);
+```
+
+### Are allocator calls sequential?
+- Yes. Each `create_test_tensor` triggers exactly one allocator call via `Allocator::allocate_buffer`.
+- The call is synchronous and serialized by the allocator’s internal `mutex_`. Back-to-back creations in one thread execute in source order.
+- Writes are enqueued only after allocation and are non-blocking with respect to the CPU thread; ordering and overlap are governed by the chosen `QueueId` and the device command queue.
+
+## End-to-end flow with SubmeshAllocator in place
+1) `tensor_impl::allocate_device_buffer(mesh_device, spec)` asks `SubmeshAllocator` for a common offset for the submesh implied by `mesh_device` or an explicit `SubmeshDescriptor`.
+2) On success, call `MeshBuffer::create(..., address=common_offset)`:
+   - The backing buffer is created with the provided address, and `MeshBuffer` instantiates per-device `Buffer` views at that address. No allocations are performed underneath.
+3) Subsequent host→device writes are enqueued as they are today.
+
+## Rationale for the distributed-layer placement
+- It is the first layer that has global knowledge of device groups and can enforce lock-step reservations across them.
+- It composes cleanly with existing `Allocator` and `Buffer` implementations, requiring no invasive changes.
+- Overlap and non-overlap semantics emerge naturally from which per-device allocators are referenced.
+
+## Open questions / follow-ups
+- Scheduling policy interaction: when overlapping submeshes contend frequently, should the runtime serialize at a higher level to reduce allocator probe contention?
+- Planning phase: provide `try_reserve` APIs to validate memory plans ahead of time for complex pipelines.
+- Telemetry: standardized counters for “common-offset scan steps”, “rollback count”, and “contention time”.
