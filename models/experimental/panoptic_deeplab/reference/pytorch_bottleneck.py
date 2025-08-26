@@ -60,24 +60,29 @@ class BottleneckBlock(nn.Module):
 
         # Process shortcut if needed
         if self.has_shortcut:
+            print(f"[BOTTLENECK] Processing shortcut connection...")
             identity = self.shortcut(identity)
             identity = self.shortcut.norm(identity)
 
         # Main path: Conv1 + BatchNorm + ReLU
+        print(f"[BOTTLENECK] Processing conv1 (1x1 reduction)...")
         out = self.conv1(x)
         out = self.conv1.norm(out)
         out = F.relu(out)
 
         # Conv2 + BatchNorm + ReLU
+        print(f"[BOTTLENECK] Processing conv2 (3x3 spatial)...")
         out = self.conv2(out)
         out = self.conv2.norm(out)
         out = F.relu(out)
 
         # Conv3 + BatchNorm (no ReLU yet)
+        print(f"[BOTTLENECK] Processing conv3 (1x1 expansion)...")
         out = self.conv3(out)
         out = self.conv3.norm(out)
 
         # Residual connection + ReLU
+        print(f"[BOTTLENECK] Adding residual connection and applying final ReLU...")
         if self.has_shortcut or identity.shape == out.shape:
             out = out + identity
         out = F.relu(out)

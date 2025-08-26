@@ -39,28 +39,41 @@ class TtResNet(nn.Module):
         for i in range(3):
             block_state = {k.replace(f"res2.{i}.", ""): v for k, v in state_dict.items() if k.startswith(f"res2.{i}.")}
             has_shortcut = i == 0  # First block has shortcut
-            self.res2.append(TtBottleneck(device, block_state, dtype, has_shortcut))
+            stride = 1  # res2 uses stride=1 for all blocks
+            dilation = 1  # res2 uses dilation=1 for all blocks
+            shortcut_stride = 1  # res2 shortcut uses stride=1
+            self.res2.append(TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride))
 
         # Initialize res3 (4 blocks, first has shortcut with stride=2)
         self.res3 = nn.ModuleList()
         for i in range(4):
             block_state = {k.replace(f"res3.{i}.", ""): v for k, v in state_dict.items() if k.startswith(f"res3.{i}.")}
             has_shortcut = i == 0  # First block has shortcut
-            self.res3.append(TtBottleneck(device, block_state, dtype, has_shortcut))
+            stride = 2 if i == 0 else 1  # First block uses stride=2, others use stride=1
+            dilation = 1  # res3 uses dilation=1 for all blocks
+            shortcut_stride = 2 if i == 0 else 1  # First block shortcut uses stride=2
+            self.res3.append(TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride))
 
         # Initialize res4 (6 blocks, first has shortcut with stride=2)
         self.res4 = nn.ModuleList()
         for i in range(6):
             block_state = {k.replace(f"res4.{i}.", ""): v for k, v in state_dict.items() if k.startswith(f"res4.{i}.")}
             has_shortcut = i == 0  # First block has shortcut
-            self.res4.append(TtBottleneck(device, block_state, dtype, has_shortcut))
+            stride = 2 if i == 0 else 1  # First block uses stride=2, others use stride=1
+            dilation = 1  # res4 uses dilation=1 for all blocks
+            shortcut_stride = 2 if i == 0 else 1  # First block shortcut uses stride=2
+            self.res4.append(TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride))
 
         # Initialize res5 (3 blocks, first has shortcut, uses dilated convolutions)
         self.res5 = nn.ModuleList()
+        dilations = [2, 4, 8]  # Different dilation for each res5 block
         for i in range(3):
             block_state = {k.replace(f"res5.{i}.", ""): v for k, v in state_dict.items() if k.startswith(f"res5.{i}.")}
             has_shortcut = i == 0  # First block has shortcut
-            self.res5.append(TtBottleneck(device, block_state, dtype, has_shortcut))
+            stride = 1  # res5 uses stride=1 for all blocks
+            dilation = dilations[i]  # Each block uses different dilation
+            shortcut_stride = 1  # res5 shortcut uses stride=1
+            self.res5.append(TtBottleneck(device, block_state, dtype, has_shortcut, stride, dilation, shortcut_stride))
 
     def forward(self, x: ttnn.Tensor) -> dict[str, ttnn.Tensor]:
         """
@@ -83,21 +96,25 @@ class TtResNet(nn.Module):
         for block in self.res2:
             x = block(x)
         res2_out = x
+        res2_out = ttnn.to_memory_config(res2_out, ttnn.DRAM_MEMORY_CONFIG)
 
         # res3
         for block in self.res3:
             x = block(x)
         res3_out = x
+        res3_out = ttnn.to_memory_config(res3_out, ttnn.DRAM_MEMORY_CONFIG)
 
         # res4
         for block in self.res4:
             x = block(x)
         res4_out = x
+        res4_out = ttnn.to_memory_config(res4_out, ttnn.DRAM_MEMORY_CONFIG)
 
         # res5
         for block in self.res5:
             x = block(x)
         res5_out = x
+        res5_out = ttnn.to_memory_config(res5_out, ttnn.DRAM_MEMORY_CONFIG)
 
         return {
             "res2": res2_out,
