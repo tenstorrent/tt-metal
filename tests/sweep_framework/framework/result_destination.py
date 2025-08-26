@@ -432,30 +432,6 @@ class FileResultDestination(ResultDestination):
             record_dict = _flatten_serialized(record_dict)
             validated_records.append(record_dict)
 
-        # Append to existing file or create new one
-        if export_path.exists():
-            try:
-                with open(export_path, "r") as file:
-                    old_data = json.load(file)
-                if isinstance(old_data, list):
-                    validated_records = old_data + validated_records
-                else:
-                    logger.warning(
-                        f"Existing export file {export_path} is not a JSON list. Overwriting with validated records."
-                    )
-            except json.JSONDecodeError:
-                # Corrupt or non-JSON file: back it up and proceed with fresh records
-                try:
-                    backup_path = export_path.with_suffix(export_path.suffix + ".bak")
-                    export_path.rename(backup_path)
-                    logger.warning(
-                        f"Existing export file {export_path} contained invalid JSON. Backed up to {backup_path}."
-                    )
-                except Exception:
-                    logger.warning(
-                        f"Existing export file {export_path} contained invalid JSON and could not be backed up. Overwriting."
-                    )
-
         # Atomic write to avoid truncated/invalid JSON on interruptions
         tmp_path = export_path.with_suffix(export_path.suffix + ".tmp")
         with open(tmp_path, "w") as file:
