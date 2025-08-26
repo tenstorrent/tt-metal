@@ -67,7 +67,10 @@ ttnn::Tensor ExecuteUntilize::invoke(
                 fp32_dest_acc_en,
                 sub_core_grids,
                 enough_space_width,
-                enough_space_height},
+                enough_space_height,
+                ttnn::operations::data_movement::get_pf_type(
+                    memory_config.has_value() ? memory_config.value().is_sharded() : input_tensor.is_sharded(),
+                    input_tensor)},
             {input_tensor},
             {},
             {},
