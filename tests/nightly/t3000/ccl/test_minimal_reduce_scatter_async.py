@@ -248,6 +248,8 @@ def run_reduce_scatter_impl(
         (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
         (8, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
         (8, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 1, 256, 128], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (8, [1, 1, 256, 128], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, False),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -261,6 +263,8 @@ def run_reduce_scatter_impl(
         "composite_rs_test_one",
         "composite_rs_test_two",
         "composite_rs_test_three",
+        "forge_test_tiled",
+        "forge_test_row_major",
     ],
 )
 @pytest.mark.parametrize(
