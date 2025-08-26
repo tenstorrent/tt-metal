@@ -9,12 +9,19 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_wormhole_b0
+from models.utility_functions import is_blackhole
+
+
+def skip_welford_blackhole(use_welford):
+    return pytest.mark.skipif(
+        use_welford and is_blackhole(), reason="Welford's algorithm is not supported on Blackhole"
+    )
 
 
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("use_welford", [True, False])
+@skip_welford_blackhole("'use_welford'")
 def test_layer_norm(device, h, w, use_welford):
     torch.manual_seed(0)
 
@@ -34,6 +41,7 @@ def test_layer_norm(device, h, w, use_welford):
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("use_welford", [True, False])
+@skip_welford_blackhole("'use_welford'")
 def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     torch.manual_seed(0)
 
@@ -61,6 +69,7 @@ def test_layer_norm_with_weight_and_bias(device, h, w, use_welford):
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("use_welford", [True, False])
+@skip_welford_blackhole("'use_welford'")
 def test_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford):
     torch.manual_seed(0)
 
@@ -135,6 +144,7 @@ def test_layer_norm_with_tile_layout(device, h, w):
 @pytest.mark.parametrize("h", [1024, 2080])
 @pytest.mark.parametrize("w", [3200, 4128])
 @pytest.mark.parametrize("use_welford", [True, False])
+@skip_welford_blackhole("'use_welford'")
 def test_large_layer_norm(device, h, w, use_welford):
     if h == 2080:
         pytest.skip("Bug, see https://github.com/tenstorrent/tt-metal/issues/27126")
@@ -157,6 +167,7 @@ def test_large_layer_norm(device, h, w, use_welford):
 @pytest.mark.parametrize("h", [2048])
 @pytest.mark.parametrize("w", [4096])
 @pytest.mark.parametrize("use_welford", [True, False])
+@skip_welford_blackhole("'use_welford'")
 def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
     torch.manual_seed(0)
 
@@ -184,6 +195,7 @@ def test_large_layer_norm_with_weight_and_bias(device, h, w, use_welford):
 @pytest.mark.parametrize("h", [2048])
 @pytest.mark.parametrize("w", [4096])
 @pytest.mark.parametrize("use_welford", [True, False])
+@skip_welford_blackhole("'use_welford'")
 def test_large_layer_norm_with_weight(device, h, w, use_welford):
     torch.manual_seed(0)
 
@@ -207,6 +219,7 @@ def test_large_layer_norm_with_weight(device, h, w, use_welford):
 @pytest.mark.parametrize("h", [2048])
 @pytest.mark.parametrize("w", [4096])
 @pytest.mark.parametrize("use_welford", [True, False])
+@skip_welford_blackhole("'use_welford'")
 def test_large_layer_norm_with_bias(device, h, w, use_welford):
     torch.manual_seed(0)
 
@@ -230,6 +243,7 @@ def test_large_layer_norm_with_bias(device, h, w, use_welford):
 @pytest.mark.parametrize("h", [32, 1024])
 @pytest.mark.parametrize("w", [2880, 4096])
 @pytest.mark.parametrize("use_welford", [True, False])
+@skip_welford_blackhole("'use_welford'")
 def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford):
     if not use_welford:
         pytest.skip("Low PCC, see https://github.com/tenstorrent/tt-metal/issues/27291")
