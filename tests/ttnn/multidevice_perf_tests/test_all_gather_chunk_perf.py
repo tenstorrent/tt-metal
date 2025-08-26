@@ -36,11 +36,15 @@ def test_all_gather_chunk_perf(
 
     num_devices = 8
     output_shapes = [[1, 1, 352, 5120], [1, 1, 1024, 5120], [1, 1, 8192, 10240], [1, 1, 8192, 16384]]
-    chunks_per_sync_list = ["MAX", 160, 80, 40, 20, 10, 5, 2, 1]
+    chunks_per_sync_list = ["MAX", 160, 80, 40, 20, 10]
     for i, ag_output_shape in enumerate(output_shapes):
         elements = total_elems(ag_output_shape)
         total_bytes = elements * 2
+        total_bytes_moved = total_bytes * (7 / 8)
         data_size_bytes_gb = total_bytes / (10**9)
+        data_size_bytes_mb = total_bytes / (10**6)
+        data_moved_bytes_mb = total_bytes_moved / (10**6)
+
         logger.info(f"Total elements: {elements}, Data size: {data_size_bytes_gb:.3f} GB")
 
         # Track best bandwidth for this shape
@@ -82,11 +86,12 @@ def test_all_gather_chunk_perf(
                 {
                     "Output Shape": str(ag_output_shape),
                     "Chunks Per Sync": final_chunks_per_sync,
-                    "Data Size in GB": data_size_bytes_gb,
+                    "Data Size in MB": data_size_bytes_mb,
+                    "Data Moved in MB": data_moved_bytes_mb,
                     "Measured Average (us)": measured_avg / 1000.0,
                     "Measured Max (us)": measured_max / 1000.0,
                     "Standard deviation (us)": measured_std / 1000.0,
-                    "Bandwidth (GB/s)": total_bytes / measured_avg,
+                    "Bandwidth (GB/s)": total_bytes_moved / measured_avg,
                 }
             )
 

@@ -706,7 +706,7 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape):
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_linear"],
+    ids=["fabric_ring"],
 )
 @pytest.mark.parametrize(
     "chunks_per_sync",
@@ -757,4 +757,5 @@ def test_all_gather_chunks_per_sync(
         use_persistent_buffers=False,
         chunks_per_sync=chunks_per_sync,
         skip_check=True,
+        num_workers_per_link=2,
     )
