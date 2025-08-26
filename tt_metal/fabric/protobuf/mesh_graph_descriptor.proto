@@ -1,30 +1,30 @@
-syntax = "proto2";
+syntax = "proto3";
 
-package tt.tt_fabric.mesh_graph_descriptor_proto;
+package tt.tt_fabric.proto;
 
 message MeshGraphDescriptor {
     repeated MeshDescriptor mesh_descriptors = 1;
     repeated GraphDescriptor graph_descriptors = 2;
-    required NodeRef top_level_instance = 3;
+    NodeRef top_level_instance = 3;
 }
 
 message MeshDescriptor {
-  required string name = 1;
-  required Architecture arch = 2;
-  required TorusTopology device_topology = 3;
-  required Channels channels = 4;
-  required MeshTopology host_topology = 5;
+  string name = 1;
+  Architecture arch = 2;
+  TorusTopology device_topology = 3;
+  Channels channels = 4;
+  MeshTopology host_topology = 5;
   message ExpressConnection {
-    required int32 src = 1;
-    required int32 dst = 2;
+    int32 src = 1;
+    int32 dst = 2;
   }
   repeated ExpressConnection express_connections = 7;
 }
 
 
 message GraphDescriptor {
-  required string name = 1;
-  required string type = 2;
+  string name = 1;
+  string type = 2;
   repeated NodeRef instances = 3;
   optional Channels channels = 4;
   optional GraphTopology graph_topology = 5;
@@ -39,24 +39,24 @@ message NodeRef {
 }
 
 message GraphRef {
-  required string graph_descriptor = 1;
-  required int32 id = 2;
+  string graph_descriptor = 1;
+  int32 id = 2;
 
   oneof sub_ref {
     MeshRef mesh = 3;
     GraphRef graph = 4;
   }
- 
+
 }
 
 message MeshRef {
-  required string mesh_descriptor = 1;
-  required int32 id = 2;
+  string mesh_descriptor = 1;
+  int32 id = 2;
   optional DeviceRef device = 3;
 }
 
 message DeviceRef {
-  required int32 id = 2;
+  int32 id = 2;
 }
 
 message MeshTopology {
@@ -91,12 +91,12 @@ enum Architecture {
 }
 
 message Channels {
-  required int32 count = 1;
+  int32 count = 1;
   optional Policy policy = 2;
 }
 
 message Connection {
   repeated NodeRef nodes = 1;
-  required Channels channels = 2;
+  Channels channels = 2;
   optional bool directional = 3;
 }

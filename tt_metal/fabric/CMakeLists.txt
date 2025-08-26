@@ -63,7 +63,7 @@ endforeach()
 target_sources(fabric PRIVATE ${GENERATED_FBS_HEADERS})
 
 # Include helper functions and generate headers from protobuf schemas
-find_package(Protobuf QUIET REQUIRED)
+find_package(Protobuf REQUIRED)
 include(protobuf)
 set(PROTO_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto)
 
@@ -76,19 +76,10 @@ endforeach()
 
 # Add the generated protobuf files to your target
 target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
-target_link_libraries(fabric PUBLIC protobuf::libprotobuf)
 
-target_include_directories(
-    fabric
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
+target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_include_directories(
-    fabric
-    PUBLIC
-        ${CMAKE_CURRENT_BINARY_DIR}
-)
+target_include_directories(fabric PUBLIC ${CMAKE_CURRENT_BINARY_DIR})
 
 target_link_libraries(
     fabric
@@ -102,6 +93,7 @@ target_link_libraries(
         Metalium::Metal::Impl
         TT::Metalium::HostDevCommon
         FlatBuffers::FlatBuffers
+        protobuf::libprotobuf
 )
 
 target_precompile_headers(fabric REUSE_FROM TT::CommonPCH)
