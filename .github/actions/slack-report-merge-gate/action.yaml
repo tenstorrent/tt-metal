@@ -15,7 +15,7 @@ runs:
       with:
         payload: |
           {
-            "text": "just so you know `${{ github.event.sender.login }}` broke ${{ github.workflow }} with https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }} at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "text": "<@${{ inputs.owner }}> ${{ github.workflow }} is failing after: https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }}. failing run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
             "owner": "${{ inputs.owner }}"
           }
       env:
