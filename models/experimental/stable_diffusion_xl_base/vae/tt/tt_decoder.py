@@ -16,11 +16,10 @@ from loguru import logger
 
 
 class TtDecoder(nn.Module):
-    def __init__(self, device, state_dict, model_config, batch_size=1):
+    def __init__(self, device, state_dict, model_config):
         super().__init__()
 
         self.device = device
-        self.batch_size = batch_size
 
         self.norm_groups = 32
         self.norm_eps = 1e-5
@@ -59,10 +58,10 @@ class TtDecoder(nn.Module):
         self.norm_core_grid = ttnn.CoreGrid(y=core_y, x=core_x)
 
         self.gamma_t, self.beta_t = prepare_gn_beta_gamma(
-            device, norm_out_weights, norm_out_bias, self.norm_core_grid.y
+            device, norm_out_weights, norm_out_bias, self.norm_core_grid.x
         )
         self.input_mask = prepare_gn_mask(
-            self.device, norm_out_weights.shape[0], self.norm_groups, self.norm_core_grid.y
+            self.device, norm_out_weights.shape[0], self.norm_groups, self.norm_core_grid.x
         )
 
         self.compute_in_config = model_config.get_conv_compute_config(module_path="decoder.conv_in")
