@@ -37,6 +37,7 @@ enum class SoftmaxOperationType : uint8_t {
 namespace softmax {
 struct operation_attributes_t {
     const SoftmaxOperationType softmax_type;
+    const int8_t dim;
     const std::optional<float> scale;
     const bool inplace;
     const tt::tt_metal::MemoryConfig output_mem_config;
@@ -49,7 +50,6 @@ struct operation_attributes_t {
 
 struct tensor_args_t {
     const Tensor& input_tensor;
-    const Tensor& output_tensor;
     const std::optional<const Tensor>& mask;
 };
 
