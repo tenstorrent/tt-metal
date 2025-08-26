@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -417,7 +418,7 @@ class TtLlamaAttention(LightweightModule):
             use_optimal_ccl_for_llama=True,
         )
 
-        breakpoint()
+        # breakpoint()
 
         if self.qk_norm:
             rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
@@ -508,7 +509,9 @@ class TtLlamaAttention(LightweightModule):
 
             breakpoint()
 
-        breakpoint()
+            # Deallocate scaling tensors
+            ttnn.deallocate(scaling_tensor_q)
+            ttnn.deallocate(scaling_tensor_k)
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
