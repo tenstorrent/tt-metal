@@ -208,7 +208,7 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/compute_pool_2d.cpp",
             core_group_1,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = MathFidelity::HiFi4,
+                .math_fidelity = MathFidelity::HiFi2,
                 .fp32_dest_acc_en = false,  // Use bfloat16
                 .math_approx_mode = false,
                 .compile_args = compute_compile_time_args_1,

@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -29,8 +30,12 @@ void kernel_main() {
 
     for (uint32_t stick_id = start_stick_id; stick_id < end_stick_id; stick_id++) {
         {
+            {
+                DeviceZoneScopedN("Waiting for output stick");
+
+                cb_wait_front(cb_id_out0, ntiles_c);
+            }
             // Wait for ntiles_c pages in output CB (one full stick)
-            cb_wait_front(cb_id_out0, ntiles_c);
 
             // Get base read address for this stick's data
             uint64_t base_l1_read_addr = get_read_ptr(cb_id_out0);
@@ -41,9 +46,12 @@ void kernel_main() {
 
             // Write the complete stick (ntiles_c * TILE_WIDTH elements)
             // The data is already laid out correctly in the CB pages
-            noc_async_write(base_l1_read_addr, dst_noc_addr, output_stick_size);
+            {
+                DeviceZoneScopedN("Write + barrier");
+                noc_async_write(base_l1_read_addr, dst_noc_addr, output_stick_size);
 
-            noc_async_write_barrier();
+                // noc_async_write_barrier();
+            }
 
             // Pop the ntiles_c pages we just consumed
             cb_pop_front(cb_id_out0, ntiles_c);

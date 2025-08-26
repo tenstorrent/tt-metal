@@ -240,6 +240,9 @@ def run_avg_pool2d(
     )(torch_input_padded)
 
     # adjust the TTNN output to match the expected shape
+
+    print(ttnn_output.memory_config().shard_spec.shape)
+
     ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.reshape(
         torch_output.shape[0], torch_output.shape[2], torch_output.shape[3], torch_output.shape[1]

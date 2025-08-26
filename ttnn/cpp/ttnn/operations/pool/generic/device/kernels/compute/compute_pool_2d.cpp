@@ -7,7 +7,9 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tilize.h"
 
-#define DEBUG_PRINT 0
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
+
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -83,11 +85,45 @@ void MAIN {
         cb_wait_front(in_scalar_cb_id_0, 1);
     }
 
+#if DEBUG_PRINT == 1
+    DPRINT << "======================================" << ENDL();
+    DPRINT << "===     Pool2D Kernel Parameters  ===" << ENDL();
+    DPRINT << "======================================" << ENDL();
+    DPRINT << "Compile-time args:" << ENDL();
+    DPRINT << "  in_ntiles_c: " << in_ntiles_c << ENDL();
+    DPRINT << "  window_size_hw: " << window_size_hw << ENDL();
+    DPRINT << "  split_reader: " << (uint32_t)split_reader << ENDL();
+    DPRINT << "  nsticks_per_core_by_nblocks: " << nsticks_per_core_by_nblocks << ENDL();
+    DPRINT << "  in_c: " << in_c << ENDL();
+    DPRINT << "  in_nblocks_c: " << in_nblocks_c << ENDL();
+    DPRINT << "  max_sticks_for_reduction: " << max_sticks_for_reduction << ENDL();
+    DPRINT << "" << ENDL();
+    DPRINT << "Derived values:" << ENDL();
+    DPRINT << "  face_r_dim: " << face_r_dim << ENDL();
+    DPRINT << "  num_faces_in_input_tile: " << num_faces_in_input_tile << ENDL();
+    DPRINT << "  max_tiles_per_iter: " << max_tiles_per_iter << ENDL();
+    DPRINT << "  is_avg_pool: " << (uint32_t)is_avg_pool << ENDL();
+    DPRINT << "  is_large_kernel: " << (uint32_t)is_large_kernel << ENDL();
+    DPRINT << "" << ENDL();
+    DPRINT << "unpack_tilizeA_B_block template args:" << ENDL();
+    DPRINT << "  neginf_srca_maxpool: " << (uint32_t)neginf_srca_maxpool << ENDL();
+    DPRINT << "  zero_srca_avgpool: " << (uint32_t)zero_srca_avgpool << ENDL();
+    DPRINT << "  tilizeA: 1, tilizeB: 0" << ENDL();
+    DPRINT << "" << ENDL();
+    DPRINT << "unpack_tilizeA_B_block runtime args:" << ENDL();
+    DPRINT << "  tiles_to_reduce: " << max_tiles_per_iter << ENDL();
+    DPRINT << "  tile_idx_b: 0" << ENDL();
+    DPRINT << "  num_faces_in_input_tile: " << num_faces_in_input_tile << ENDL();
+    DPRINT << "  face_r_dim: " << face_r_dim << ENDL();
+    DPRINT << "======================================" << ENDL();
+#endif
+
     for (uint32_t n = 0; n < nsticks_per_core_by_nblocks; ++n) {
         const bool reader0 = !(split_reader && (n & 0x1));
         const uint32_t curr_scalar_cb_id = (!reader0 && !one_scalar_per_core) ? in_scalar_cb_id_1 : in_scalar_cb_id_0;
         const uint32_t curr_in_cb_id = !reader0 ? in_cb_id_1 : in_cb_id_0;
         if constexpr (!one_scalar_per_core) {
+            DeviceZoneScopedN("Wait for scalar cb");
             cb_wait_front(curr_scalar_cb_id, 1);
         }
         if constexpr (num_of_output_pages_to_reserve > 0) {
@@ -111,26 +147,41 @@ void MAIN {
             }
             tile_regs_acquire();
             for (uint32_t chunk = 0; chunk < interm_reduction_chunks; chunk++) {
-                cb_wait_front(curr_in_cb_id, 1);
-                unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                    curr_in_cb_id,
-                    curr_scalar_cb_id,
-                    tiles_to_reduce,
-                    0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-                    num_faces_in_input_tile,
-                    face_r_dim);
-                for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
-                    reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
+                {
+                    DeviceZoneScopedN("Wait for in cb");
+                    cb_wait_front(curr_in_cb_id, 1);
+                }
+                {
+                    DeviceZoneScopedN("Unpack tilize");
+                    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                        curr_in_cb_id,
+                        curr_scalar_cb_id,
+                        tiles_to_reduce,
+                        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+                        num_faces_in_input_tile,
+                        face_r_dim);
+                    ckernel::tensix_sync();
+                }
+                {
+                    DeviceZoneScopedN("Reduce");
+                    for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
+                        reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
+                    }
+                    ckernel::tensix_sync();
                 }
                 cb_pop_front(curr_in_cb_id, 1);
             }
             tile_regs_commit();
             tile_regs_wait();
-            if (last_c_block) {
-                pack_untilize_dest<partial_iter_output_tiles>(
-                    out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-            } else {
-                pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+            {
+                DeviceZoneScopedN("Pack untilize");
+                if (last_c_block) {
+                    pack_untilize_dest<partial_iter_output_tiles>(
+                        out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                } else {
+                    pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                }
+                ckernel::tensix_sync();
             }
             cb_push_back(out_cb_id, num_faces_to_reserve);
             tile_regs_release();

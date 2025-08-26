@@ -7,6 +7,7 @@
 #include "dataflow_api.h"
 #include "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/height_sharded_reader_common.hpp"
 #include "debug/dprint.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 #define ALWI inline __attribute__((always_inline))
 
@@ -81,8 +82,8 @@ void kernel_main() {
 
     zero_out_tiles<input_cb_index>();
 
-    DPRINT << "Is grid tiled :" << (uint32_t)is_grid_tiled << "\n";
-    DPRINT << "Num of pages :" << num_pages << "\n";
+    int32_t h0_last = -1, w0_last = -1;
+    uint32_t coordinate_skip_count = 0;  // Debug counter for coordinate caching
 
     if constexpr (is_grid_tiled) {
         // TILE layout processing: each page is a tile, each core processes one tile
@@ -91,15 +92,17 @@ void kernel_main() {
             uint32_t l1_write_grid_addr = get_write_ptr(grid_cb_index);
             uint64_t grid_noc_addr = s0.get_noc_addr(page);
 
-            noc_async_read(grid_noc_addr, l1_write_grid_addr, grid_page_nbytes);
-            noc_async_read_barrier();
+            {
+                DeviceZoneScopedN("Read grid tile");
+                noc_async_read(grid_noc_addr, l1_write_grid_addr, grid_page_nbytes);
+                noc_async_read_barrier();
+            }
 
             // Process all 32 rows within this tile (each tile contains 32 output positions)
             volatile tt_l1_ptr uint16_t* tile_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_grid_addr);
 
             for (uint32_t tile_row = 0; tile_row < TILE_HEIGHT; ++tile_row) {
                 // Calculate pointer to start of this row within the tile using face-aware indexing
-                DPRINT << "Tile row: " << (uint32_t)tile_row << "\n";
                 volatile tt_l1_ptr uint16_t* grid_ptr;
 
                 if (tile_row < FACE_HEIGHT) {
@@ -128,8 +131,6 @@ void kernel_main() {
                 h0 = static_cast<int32_t>(h0_raw);
                 w0 = static_cast<int32_t>(w0_raw);
 
-                DPRINT << "height_0: " << h0 << "; width_0: " << w0 << "\n";
-
                 h1 = h0 + 1;
                 w1 = w0 + 1;
 #else
@@ -139,12 +140,8 @@ void kernel_main() {
                 float h_coord_rel = bfloat16_to_float(h_coord_raw);
                 float w_coord_rel = bfloat16_to_float(w_coord_raw);
 
-                DPRINT << "h_coord_rel: " << h_coord_rel << " w_coord_rel: " << w_coord_rel << "\n";
-
                 float h_coord_image = h_coord_rel * height_scale + height_offset;
                 float w_coord_image = w_coord_rel * width_scale + width_offset;
-
-                DPRINT << "h_coord_image: " << h_coord_image << " w_coord_image: " << w_coord_image << "\n";
 
                 h0 = static_cast<int32_t>(floor(h_coord_image));
                 h1 = h0 + 1;
@@ -159,36 +156,55 @@ void kernel_main() {
                 bool w1_valid = (w1 >= 0) && (w1 < static_cast<int32_t>(input_width));
 
                 // Reserve input CB for 4 corner sticks
-                cb_reserve_back(input_cb_index, 1);
+                {
+                    DeviceZoneScopedN("Waiting for cb to be available");
+                    cb_reserve_back(input_cb_index, 1);
+                }
                 // DPRINT << "Reserving Input CB\n";
                 uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
-                // Read input data for bilinear interpolation corners
-                if (h0_valid && w0_valid) {
-                    uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
-                    uint64_t dram_read_addr = s1.get_noc_addr(north_west_stick_index);
-                    noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-                }
-                l1_write_input_addr += input_stick_nbytes;
+                // Check if coordinates are same as last iteration (coordinate caching)
+                bool coordinates_same = (h0 == h0_last && w0 == w0_last);
 
-                if (h0_valid && w1_valid) {
-                    uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
-                    uint64_t dram_read_addr = s1.get_noc_addr(north_east_stick_index);
-                    noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-                }
-                l1_write_input_addr += input_stick_nbytes;
+                {
+                    DeviceZoneScopedN("Random access part");
+                    if (coordinates_same) {
+                        coordinate_skip_count++;
+                        // Skip reading input data - reuse last CB data
+                        // Input CB already contains the correct data from previous iteration
+                    } else {
+                        // Read input data for bilinear interpolation corners
+                        if (h0_valid && w0_valid) {
+                            uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
+                            uint64_t dram_read_addr = s1.get_noc_addr(north_west_stick_index);
+                            noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+                        }
+                        l1_write_input_addr += input_stick_nbytes;
 
-                if (h1_valid && w0_valid) {
-                    uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
-                    uint64_t dram_read_addr = s1.get_noc_addr(south_west_stick_index);
-                    noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-                }
-                l1_write_input_addr += input_stick_nbytes;
+                        if (h0_valid && w1_valid) {
+                            uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
+                            uint64_t dram_read_addr = s1.get_noc_addr(north_east_stick_index);
+                            noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+                        }
+                        l1_write_input_addr += input_stick_nbytes;
 
-                if (h1_valid && w1_valid) {
-                    uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
-                    uint64_t dram_read_addr = s1.get_noc_addr(south_east_stick_index);
-                    noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+                        if (h1_valid && w0_valid) {
+                            uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
+                            uint64_t dram_read_addr = s1.get_noc_addr(south_west_stick_index);
+                            noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+                        }
+                        l1_write_input_addr += input_stick_nbytes;
+
+                        if (h1_valid && w1_valid) {
+                            uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
+                            uint64_t dram_read_addr = s1.get_noc_addr(south_east_stick_index);
+                            noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+                        }
+
+                        // Update coordinate cache for next iteration
+                        h0_last = h0;
+                        w0_last = w0;
+                    }
                 }
 
                 // Calculate or extract bilinear interpolation weights
@@ -198,12 +214,6 @@ void kernel_main() {
                 weight_ne_bf = grid_ptr[3];
                 weight_sw_bf = grid_ptr[4];
                 weight_se_bf = grid_ptr[5];
-
-                DPRINT << "Weights (float): " << bfloat16_to_float(weight_nw_bf) << ", "
-                       << bfloat16_to_float(weight_ne_bf) << ", " << bfloat16_to_float(weight_sw_bf) << ", "
-                       << bfloat16_to_float(weight_se_bf) << "\n";
-                // DPRINT << "Weights: " << weight_nw_bf << ", " << weight_ne_bf << ", " << weight_sw_bf << ", " <<
-                // weight_se_bf << "\n";
 #else
                 // Calculate weights from coordinates
                 float h0_f = static_cast<float>(h0);
@@ -226,14 +236,19 @@ void kernel_main() {
 #endif
 
                 // Send weights to scalar CB
-                cb_reserve_back(scalar_cb_index, 1);
+                {
+                    DeviceZoneScopedN("Waiting for scalar CB");
+                    cb_reserve_back(scalar_cb_index, 1);
+                }
                 // DPRINT << "Reserving Scalar CB\n";
                 fill_four_val(get_write_ptr(scalar_cb_index), weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
                 cb_push_back(scalar_cb_index, 1);
                 // DPRINT << "Scalar CB pushed back\n";
 
                 // Wait for input reads to complete and push input CB
-                noc_async_read_barrier();
+                if (!coordinates_same) {
+                    noc_async_read_barrier();
+                }
                 cb_push_back(input_cb_index, 1);
                 // DPRINT << "Input CB pushed back\n";
             }  // End tile_row loop
@@ -287,33 +302,46 @@ void kernel_main() {
             cb_reserve_back(input_cb_index, 1);
             uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
-            uint64_t dram_read_addr = 0;
+            // Check if coordinates are same as last iteration (coordinate caching)
+            bool coordinates_same = (h0 == h0_last && w0 == w0_last);
 
-            if (h0_valid && w0_valid) {
-                uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
-                dram_read_addr = s1.get_noc_addr(north_west_stick_index);
-                noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-            }
-            l1_write_input_addr += input_stick_nbytes;
+            if (coordinates_same) {
+                coordinate_skip_count++;
+                // Skip reading input data - reuse last CB data
+                // Input CB already contains the correct data from previous iteration
+            } else {
+                uint64_t dram_read_addr = 0;
 
-            if (h0_valid && w1_valid) {
-                uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
-                dram_read_addr = s1.get_noc_addr(north_east_stick_index);
-                noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-            }
-            l1_write_input_addr += input_stick_nbytes;
+                if (h0_valid && w0_valid) {
+                    uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
+                    dram_read_addr = s1.get_noc_addr(north_west_stick_index);
+                    noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+                }
+                l1_write_input_addr += input_stick_nbytes;
 
-            if (h1_valid && w0_valid) {
-                uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
-                dram_read_addr = s1.get_noc_addr(south_west_stick_index);
-                noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-            }
-            l1_write_input_addr += input_stick_nbytes;
+                if (h0_valid && w1_valid) {
+                    uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
+                    dram_read_addr = s1.get_noc_addr(north_east_stick_index);
+                    noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+                }
+                l1_write_input_addr += input_stick_nbytes;
 
-            if (h1_valid && w1_valid) {
-                uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
-                dram_read_addr = s1.get_noc_addr(south_east_stick_index);
-                noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+                if (h1_valid && w0_valid) {
+                    uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
+                    dram_read_addr = s1.get_noc_addr(south_west_stick_index);
+                    noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+                }
+                l1_write_input_addr += input_stick_nbytes;
+
+                if (h1_valid && w1_valid) {
+                    uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
+                    dram_read_addr = s1.get_noc_addr(south_east_stick_index);
+                    noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+                }
+
+                // Update coordinate cache for next iteration
+                h0_last = h0;
+                w0_last = w0;
             }
 
 #ifdef USE_PRECOMPUTED_GRID
@@ -346,8 +374,13 @@ void kernel_main() {
             fill_four_val(get_write_ptr(scalar_cb_index), weight_nw_bf, weight_ne_bf, weight_sw_bf, weight_se_bf);
             cb_push_back(scalar_cb_index, 1);
 
-            noc_async_read_barrier();
+            if (!coordinates_same) {
+                noc_async_read_barrier();
+            }
             cb_push_back(input_cb_index, 1);
         }  // End ROW_MAJOR i loop
     }  // End ROW_MAJOR case
+
+    // Debug output for coordinate caching performance
+    DPRINT << "Coordinate skips: " << coordinate_skip_count << "\n";
 }

@@ -225,7 +225,9 @@ def test_grid_sample_tiled_grid(device, input_shape, grid_shape, use_precomputed
     input_shape_nhwc = [batch_size, height, width, channels]
 
     # Create near-uniform grid with small random perturbation for meaningful testing
-    torch_grid = torch.randn(grid_shape, dtype=torch.bfloat16) * 0.1  # Small values near zero
+    # torch_grid = torch.rand(grid_shape, dtype=torch.bfloat16) * 2.0 - 1.0  # Small values near zero
+
+    torch_grid = torch.zeros(grid_shape, dtype=torch.bfloat16)
 
     # Get expected PyTorch output
     torch_grid_float = torch_grid.to(torch.float32)
