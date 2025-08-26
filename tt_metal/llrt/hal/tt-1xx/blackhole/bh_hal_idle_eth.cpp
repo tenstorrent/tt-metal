@@ -7,15 +7,11 @@
 
 #include "tt_align.hpp"
 #include "dev_msgs.h"
-#include <algorithm>
-#include <cstddef>
 #include <cstdint>
-#include <vector>
 
 #include "assert.hpp"
 #include "blackhole/bh_hal.hpp"
 #include "blackhole/bh_hal_eth_asserts.hpp"
-#include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
@@ -25,6 +21,9 @@
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::blackhole {
+
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
+#include "core_config.h"
 
 HalCoreInfoType create_idle_eth_mem_map() {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);

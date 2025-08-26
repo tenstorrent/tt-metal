@@ -5,11 +5,7 @@
 #define COMPILE_FOR_ERISC
 
 #include "dev_msgs.h"
-#include <cstddef>
-#include <cstdint>
-#include <vector>
 
-#include "core_config.h"
 #include "eth_l1_address_map.h"
 #include "llrt_common/mailbox.hpp"
 #include "hal_types.hpp"
@@ -22,6 +18,9 @@
     ((uint64_t)&(((mailboxes_t*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::wormhole {
+
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
+#include "core_config.h"
 
 HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     std::vector<DeviceAddr> mem_map_bases;
