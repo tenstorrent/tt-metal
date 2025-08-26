@@ -71,7 +71,7 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            mpirun --hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo -x TT_METAL_HOME=$(pwd) ./build/test/tt_metal/tt_fabric/test_physical_discovery
+            mpirun --hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery
             TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml
             TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
             TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml

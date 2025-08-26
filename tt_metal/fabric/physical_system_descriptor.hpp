@@ -13,7 +13,6 @@
 #include <vector>
 
 #include <umd/device/types/cluster_descriptor_types.h>
-#include "tt_metal/hostdevcommon/api/hostdevcommon/fabric_common.h"
 
 namespace tt::tt_metal {
 
@@ -36,8 +35,8 @@ struct ASICDescriptor {
 
 // Specify an ethernet connection between two ASICs
 struct EthConnection {
-    tt_fabric::chan_id_t src_chan;
-    tt_fabric::chan_id_t dst_chan;
+    uint8_t src_chan;
+    uint8_t dst_chan;
     bool is_local = false;
 
     bool operator==(const EthConnection& other) const {
