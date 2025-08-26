@@ -288,7 +288,7 @@ int main(int argc, char** argv) {
                     std::cout << "(" << core.x << "," << core.y << ") ";
                 }
                 std::cout << std::endl;
-
+                throw std::runtime_error("========== DRAM detection - is this even being called ==========");
                 TT_ASSERT(dram_cores.size() > dram_channel_g);
                 noc_addr_x = dram_cores[dram_channel_g].x;
                 noc_addr_y = dram_cores[dram_channel_g].y;
