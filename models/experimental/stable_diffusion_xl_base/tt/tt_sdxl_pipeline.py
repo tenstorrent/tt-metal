@@ -24,7 +24,7 @@ from models.experimental.stable_diffusion_xl_base.tests.test_common import (
     retrieve_timesteps,
     run_tt_image_gen,
 )
-from models.utility_functions import profiler
+from models.common.utility_functions import profiler
 
 
 @dataclass
