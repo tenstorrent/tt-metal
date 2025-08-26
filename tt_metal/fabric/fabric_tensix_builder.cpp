@@ -196,16 +196,12 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
 
     switch (topology) {
         case tt::tt_fabric::Topology::Linear:
+        case tt::tt_fabric::Topology::Ring:
             num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_1d_linear;
             break;
         case tt::tt_fabric::Topology::Mesh:
-            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_mesh;
-            break;
-        case tt::tt_fabric::Topology::Ring:
-            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_1d_ring;
-            break;
         case tt::tt_fabric::Topology::Torus:
-            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_torus;
+            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_mesh;
             break;
         default: TT_THROW("unknown fabric topology: {}", topology); break;
     }
@@ -488,32 +484,18 @@ std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt
     std::vector<uint32_t> fabric_stream_ids_check_by_local;
     switch (topology) {
         case tt::tt_fabric::Topology::Linear:
+        case tt::tt_fabric::Topology::Ring:
             fabric_stream_ids_check_by_local = {
                 worker_stream_id,                                                             // default 17
                 tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};  // 18
             break;
-        case tt::tt_fabric::Topology::Ring:
-            fabric_stream_ids_check_by_local = {
-                worker_stream_id,                                                            // default 17
-                tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,  // 18
-                tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id   // 19
-            };
-            break;
         case tt::tt_fabric::Topology::Mesh:
+        case tt::tt_fabric::Topology::Torus:
             fabric_stream_ids_check_by_local = {
                 tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,  // 18
                 tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id,  // 19
                 tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id,  // 20
                 tt::tt_fabric::StreamRegAssignments::sender_channel_4_free_slots_stream_id   // 21
-            };
-            break;
-        case tt::tt_fabric::Topology::Torus:
-            fabric_stream_ids_check_by_local = {
-                tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,   // 18
-                tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id,   // 19
-                tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id,   // 20
-                tt::tt_fabric::StreamRegAssignments::sender_channel_4_free_slots_stream_id,   // 21
-                tt::tt_fabric::StreamRegAssignments::vc1_sender_channel_free_slots_stream_id  // 22
             };
             break;
         default: TT_THROW("Unknown fabric topology: {}", static_cast<int>(topology)); break;
