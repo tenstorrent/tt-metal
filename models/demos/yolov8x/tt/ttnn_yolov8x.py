@@ -163,7 +163,7 @@ class TtConv:
             memory_config=None,
             return_weights_and_bias=True,
             return_output_dim=True,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.bfloat8_b,
         )
 
         if self.is_detect_cv2:
