@@ -119,6 +119,7 @@ target_sources(
             ${kernels}
             perf_microbenchmark/common/kernel_utils.hpp
             perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/tt_fabric/common/utils.hpp
 )
 
 install(
