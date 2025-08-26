@@ -105,7 +105,7 @@ namespace {
 //     apply_inverse_tagged(elements_chunk_begin_ptr, subchunk_size, index_hint_chunk_begin_ptr);
 // }
 
-template <typename elements_number_type, DataType dt>
+template <typename elements_number_type>
 FORCE_INLINE void isin_subchunks(
     const uint32_t& elements_l1_read_addr,
     const uint32_t& test_elements_l1_read_addr,
@@ -152,7 +152,9 @@ FORCE_INLINE void isin_subchunks(
 FORCE_INLINE void prefill_output(const uint32_t& output_l1_write_addr, const uint32_t& output_subchunk_size) {
     volatile tt_l1_ptr output_number_type* output_chunk_begin_ptr =
         reinterpret_cast<volatile tt_l1_ptr output_number_type*>(output_l1_write_addr);
-    std::memset(output_chunk_begin_ptr, 0x0, output_subchunk_size);
+    for (uint32_t i = 0; i < output_subchunk_size; ++i) {
+        output_chunk_begin_ptr[i] = 0x0;
+    }
 }
 
 }  // namespace
@@ -165,36 +167,36 @@ void kernel_main() {
 
     constexpr auto elements_dataformat = get_dataformat(ctas.elements_cb);
     using elements_number_type = std_type_t<elements_dataformat>;
-    using test_elements_number_type = std_type_t<get_dataformat(ctas.test_elements_cb)>;
-    ASSERT(std::is_same_v<elements_number_type, test_elements_number_type>);
 
-    constexpr auto elements_addr_gtor = TensorAccessor{ctas.elements_args, elements_buffer_address, ctas.elements_size};
-    constexpr auto test_elements_addr_gtor =
-        TensorAccessor{ctas.test_elements_args, test_elements_buffer_address, ctas.test_elements_size};
+    const auto elements_addr_gtor =
+        TensorAccessor{ctas.elements_accessor_args, elements_buffer_address, ctas.elements_size};
+    const auto test_elements_addr_gtor =
+        TensorAccessor{ctas.test_elements_accessor_args, test_elements_buffer_address, ctas.test_elements_size};
 
     constexpr uint32_t elements_start_subchunk_id = 0;
     constexpr uint32_t test_elements_start_subchunk_id = 0;
 
     for (uint32_t elements_subchunk_id = elements_start_subchunk_id, elements_offset = 0;
          elements_offset < ctas.elements_size;
-         ++elements_subchunk_id, elements_offset += ctas.single_fetch_subbchunk_size) {
+         ++elements_subchunk_id, elements_offset += ctas.single_fetch_subchunk_size) {
         const uint32_t elements_subchunk_size =
             std::min(ctas.elements_size - elements_offset, ctas.single_fetch_subchunk_size);
         load_to_cb<elements_number_type, decltype(elements_addr_gtor)>(
             ctas.elements_cb, elements_addr_gtor, elements_subchunk_id, elements_subchunk_size);
         cb_wait_front(ctas.elements_cb, ONE_PAGE);
         cb_reserve_back(ctas.output_cb, ONE_PAGE);
-        const uint32_t elements_l1_read_addr = get_read_ptr(cb.elements_cb);
-        const uint32_t output_l1_write_addr = get_write_ptr(cb.output_cb);
+        const uint32_t elements_l1_read_addr = get_read_ptr(ctas.elements_cb);
+        const uint32_t output_l1_write_addr = get_write_ptr(ctas.output_cb);
         prefill_output(output_l1_write_addr, elements_subchunk_size);
 
         for (uint32_t test_elements_subchunk_id = test_elements_start_subchunk_id, test_elements_offset = 0;
              test_elements_offset < ctas.test_elements_size;
-             ++test_elements_subchunk_id, test_elements_offset += ctss.single_fetch_subchunk_size) {
+             ++test_elements_subchunk_id, test_elements_offset += ctas.single_fetch_subchunk_size) {
+            DPRINT << test_elements_subchunk_id << ENDL();
             const uint32_t test_elements_subchunk_size =
                 std::min(ctas.test_elements_size - test_elements_offset, ctas.single_fetch_subchunk_size);
-            load_to_cb<test_elements_number_type, decltype(test_elements_addr_gtor)>(
-                ctas.test_elements_cb, test_elements_addr_gtor, offset_bytes, subchunk_size);
+            load_to_cb<elements_number_type, decltype(test_elements_addr_gtor)>(
+                ctas.test_elements_cb, test_elements_addr_gtor, test_elements_offset, test_elements_subchunk_size);
             cb_wait_front(ctas.test_elements_cb, ONE_PAGE);
             const uint32_t test_elements_l1_read_addr = get_read_ptr(ctas.test_elements_cb);
 
