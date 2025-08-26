@@ -287,7 +287,6 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Send a Test Message
-        needs: [workflow-status]
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@ebanerjee/slack-pinging-MG
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
