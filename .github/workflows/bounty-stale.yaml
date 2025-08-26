@@ -1,0 +1,12 @@
+name: Stale Bounty Workflow
+
+on:
+  schedule:
+    - cron: '30 1 * * *'  # every day at 1:30 UTC
+
+permissions:
+  issues: write
+
+jobs:
+  call-central-workflow:
+    uses: tenstorrent/tt-github-actions/.github/workflows/bounty-stale.yml@main
