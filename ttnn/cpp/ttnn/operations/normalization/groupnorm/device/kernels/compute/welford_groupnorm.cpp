@@ -344,7 +344,7 @@ void MAIN {
                             transpose_wh_init_short(cb_x);
                             transpose_wh_tile(cb_x, index, 0);
                             // welford(0, 1, 2, curr_xy_coord, curr_xy_limit, 0);
-                            // curr_xy_coord += 32; // Test hangs when this is run
+                            // curr_xy_coord += 0x1000; // Test hangs when this is run
                         }
                         tile_regs_commit();
                         cb_pop_front(read_from_ping ? cb_ex_ping : cb_ex_pong, 2);
