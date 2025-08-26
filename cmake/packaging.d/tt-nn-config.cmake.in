@@ -4,10 +4,7 @@ include(CMakeFindDependencyMacro)
 
 # Find all required dependencies
 find_dependency(TT-Metalium REQUIRED)
-# xtensor is header-only; ensure its target exists when consuming TT-NN
-if(NOT TARGET xtensor)
-    find_dependency(xtensor QUIET)
-endif()
+find_dependency(xtensor REQUIRED)
 
 # Set package as found
 set(TT-NN_FOUND TRUE)
