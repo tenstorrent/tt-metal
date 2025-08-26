@@ -74,7 +74,7 @@ def test_all_gather_chunk_perf(
                 get_max_chunks_per_sync(num_devices, ag_output_shape) if chunks_per_sync == "MAX" else chunks_per_sync
             )
             logger.info(
-                f"Measured performance for data size {data_size_bytes_gb:.3f} GB, chunks per sync {final_chunks_per_sync}: {measured_avg/1000:.3f} us at {total_bytes/measured_avg:.6f} GB/s"
+                f"Measured performance for shape {ag_output_shape} with data size {data_size_bytes_gb:.3f} GB, chunks per sync {final_chunks_per_sync}: {measured_avg/1000:.3f} us at {total_bytes/measured_avg:.6f} GB/s"
             )
 
             # Append row for CSV output
