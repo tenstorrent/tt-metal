@@ -3,25 +3,27 @@
 
 ## Introduction
 
-Machine learning computation, especially neural networks, relies heavily on linear algebra operations. One of these crucial and particularly computationally intensive operations is matrix multiplication. General Matrix Multiplication (GEMM), despite being extremely optimized in software, is still extremely time and compute intensive, and having fast matrix multiplication is key to efficient and fast inference of modern neural networks. Many core operations, such as fully connected layers, convolutions, and attention mechanisms in transformers, can be reduced to and represented as one or many GEMMs.
+Machine learning workloads, especially neural networks, rely heavily on linear algebra operations. One of the most critical and compute-intensive is **General Matrix Multiplication (GEMM)**. Although GEMM is highly optimized in software libraries, it still dominates runtime and energy consumption in deep learning inference and training. Achieving high GEMM performance is key to efficient inference of modern neural networks. 
 
+Many neural network operations can be reduced to one or more GEMMs:
 
-| Machine Learning Component      | How GEMM/matmul is used                               |
-|---------------------------------|------------------------------------------------------|
-| Dense Layer (MLP)               | Input × Weight matrix                                |
-| Convolution       | Input patches × Filter matrix                        |
-| RNN/GRU/LSTM Cell               | Input/State vector × Weight matrix                   |
-| Attention (Transformers)        | Q, K, V projections; Attention scores computation    |
-| Output Projection               | Hidden activations × Output weight matrix            |
+| ML Component            | How GEMM is Used                                       |
+|--------------------------|--------------------------------------------------------|
+| Dense Layer (MLP)        | Input × Weight Matrix                                  |
+| Convolution              | Input Patches × Filter Matrix    |
+| RNN / GRU / LSTM Cell    | Input/State Vector × Weight Matrix                     |
+| Attention (Transformers) | Q, K, V Projections; Attention Score Computation        |
+| Output Projection        | Hidden Activations × Output Weight Matrix              |
 
+---
 
-If tensors used for the calculations are small and already in registers, the cost to operate on that data is negligible. If the data is in cache, performance is dictated by how quickly the data can be funnelled through caches to the compute units. In their worst case scenarios, the data needed is in device memory, host memory, or stored on a disk.
+If the tensors are small and already reside in registers, the cost of operating on that data is negligible. When the data is in cache, performance is limited by how quickly data can be delivered from cache to the compute units. In the worst case, when the data needed is in device memory, host memory, or even disk, memory transfer dominates and compute units remain under-utilized. 
 
 Thankfully, matrix multiplication requires more compute operations (2N^3) than memory operations (3n^2). As such, for a given device, there will always be points at which a device is limited by the underlying compute units, not the underlying memory system. We call this point the roofline.
 However, this inversion point depends on the size and crossover point of each cache level/memory technology and the datatype in use. The amount of 8-bit elements that can be moved per unit time is nearly an order of magnitude more than 64-bit elements.
 
 Therefore, the peak achieved flops changes based on the datatype, the size of the data, and the layout of the data.
-
+These factors form the basis of the GEMM FLOPS analysis presented in this report.
 
 ## Test it yourself!
 
@@ -77,10 +79,10 @@ Python scripts for reproducing the plots are included in this directory.
 
 ## Design of Experiments
 The parameters of interest are 3 fold:
-1. Dimensions: The sizes of the matrices along each axis, denoted as m , n and k . (m, k) represents the size of the input tensor, while (k, n) is the size of the activation tensor.
+1. **Dimensions**: The sizes of the matrices along each axis, denoted as m , n and k . (m, k) represents the size of the input tensor, while (k, n) is the size of the activation tensor.
 Larger tensors require more computation since the number of operations needed to perform matrix multiplication increases as O(m*k*n).
-2. Computation Fidelity: Referred to as LoFi, HiFi2, HiFi3 and HiFi4. Internally, the matrix engine can adjust the number of bits being processed, which affects both the precision of the results and the computation speed.
-3. Input/Output Datatype: Larger datatypes require more memory for storage. As a result, more precise datatypes can become bottlenecked if stored in DRAM.
+2. **Computation Fidelity**: Referred to as LoFi, HiFi2, HiFi3 and HiFi4. Internally, the matrix engine can adjust the number of bits being processed, which affects both the precision of the results and the computation speed.
+3. **Input/Output Datatype**: Larger datatypes require more memory for storage. As a result, more precise datatypes can become bottlenecked if stored in DRAM.
 
 For more details please refer to the tech reports [Matrix Engine](../matrix_engine/matrix_engine.md) and [Data Formats](../data_formats/data_formats.md)
 
@@ -117,10 +119,18 @@ Here we show the peak results we can get from manually selected matmul configura
 #### Peak FLOPS
 
 Depending on the fidelity, datatype, and matrix shape chosen, different peak teraflop values can be achieved.
-Below is the results generated from running the benchmark script, showcasing the performance of matrix multiplication (matmul) operations using matrices of sizes ranging from 512x512x512/640,832,832 to 16384x16384x16384/20480,26624,26624 . The results include evaluations across various data formats, paired with different levels of math fidelity (bfloat16-HiFi2, bfloat16-HiFi4,  bfloat8_b-HiFi2, bfloat8_b-LoFi, and bfloat4_b-LoFi).
+
+Below are the results generated from running the benchmark script, showcasing the performance of matrix multiplication (matmul) operations using matrices of sizes ranging from 512x512x512 / 640,832,832 to 16384x16384x16384 / 20480,26624,26624 . The results include evaluations across various data formats, paired with different levels of math fidelity (bfloat16-HiFi2, bfloat16-HiFi4,  bfloat8_b-HiFi2, bfloat8_b-LoFi, and bfloat4_b-LoFi).
+ 
 We also show the results with and without trace (see [AdvancedPerformanceOptimizationsForModels](../AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for details of trace). With trace, we can minimize the overhead of host which can reflect the actual device performance better.
+
+
 Finally, we present the results in terms of device time, device throughput in TFLOPS, device utilization compared to the user-specified grid size and device utilization compared to the full grid size (8x8 in Wormhole/13x10 in Blackhole).
-As seen below, while Wormhole cards can perform matrix multiplications at around 180TFlops, Blackhole cards have even more impressive throughput at 560TFlop. Lower fidelity computations with less precise datatypes computations complete faster than "full fidelity" Float16 computations. HiFi2/BFloat8 is roughly **1.5x to 1.8x faster** than HiFi4/Float16, with LoFi/Float4 coming in at **2x to 3.5x** faster without tracing.
+
+
+As seen below, while Wormhole cards can perform matrix multiplications at around 180TFlops, Blackhole cards have even more impressive throughput at 560TFlops. Lower fidelity computations with less precise datatypes computations complete faster than "full fidelity" Float16 computations. HiFi2/BFloat8 is roughly **1.5x to 1.8x faster** than HiFi4/Float16, with LoFi/Float4 coming in at **2x to 3.5x** faster without tracing.
+
+
 #### Performance scatter plot across all matrix sizes and configurations
 
 ![](images/flops_vs_matrix_elements_comparison.png)
