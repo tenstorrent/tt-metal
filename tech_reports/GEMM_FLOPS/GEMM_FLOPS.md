@@ -84,7 +84,7 @@ The WH matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
 If the input matrices fed into the engine are "shorter" than 8x16, for example 1x16, the engine will still perform 8x16 x 16x16 = 8x16, but the effective throughput will be 1/8.
 Thus, for 1x16 x 16x16 matrices, the effective throughput is 0.5 TFLOPS per matrix engine.
 MATH_FIDELITY is used for higher precision, and TFLOPS are calculated by dividing by the MATH_FIDELITY value.
-MATH_FIDELITY is used for higher precision, and TFLOPS are calculated by dividing by the MATH_FIDELITY value.
+
 - LoFi ->  ~4 TFLOPS
 - HiFi2 -> ~2 TFLOPS
 - HiFi3 -> ~1.33 TFLOPS
