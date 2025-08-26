@@ -12,6 +12,7 @@ from models.demos.yolov8s_world.tt.ttnn_yolov8s_world_utils import (
     ttnn_custom_normalize,
     ttnn_decode_bboxes,
 )
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 class TtConv:
@@ -39,6 +40,7 @@ class TtConv:
         reshard_if_not_optimal=True,
         batch_size=1,
         conv_math_fidelity=None,
+        core_count=None,
     ):
         self.device = device
         self.parameters = parameters
@@ -60,6 +62,7 @@ class TtConv:
         self.reshard_if_not_optimal = reshard_if_not_optimal
         self.batch_size = batch_size
         self.reshape_tensor = reshape_tensor
+        self.core_count = core_count
 
         self.conv_config = self._initialize_conv_config()
         self.compute_config = self._initialize_compute_config(conv_math_fidelity)
@@ -102,6 +105,11 @@ class TtConv:
 
         if self.bfloat8:
             conv_config.weights_dtype = ttnn.bfloat8_b
+
+        if self.core_count is not None:
+            shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
+            conv_config.core_grid = shard_grid
+            conv_config.override_sharding_config = True
 
         return conv_config
 
@@ -164,6 +172,7 @@ class TtBottleneck:
         deallocate_activation=False,
         output_layout=ttnn.TILE_LAYOUT,
         tilize=False,
+        core_count=None,
     ):
         self.device = device
         self.tilize = tilize
@@ -174,6 +183,7 @@ class TtBottleneck:
             input_params,
             deallocate_activation=deallocate_activation,
             output_layout=output_layout,
+            core_count=core_count,
         )
         self.cv2 = TtConv(
             device,
@@ -181,6 +191,7 @@ class TtBottleneck:
             input_params,
             act_block_h=act_block_h,
             deallocate_activation=deallocate_activation,
+            core_count=core_count,
         )
 
     def __call__(self, x):
@@ -225,6 +236,7 @@ class TtC2f:
             device,
             self.parameters["cv1_a"],
             input_params=self.input_params[0],
+            block_shard=self.block_shard,
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
         )
@@ -232,6 +244,7 @@ class TtC2f:
             device,
             self.parameters["cv1_b"],
             input_params=self.input_params[0],
+            block_shard=self.block_shard,
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
         )
@@ -257,6 +270,7 @@ class TtC2f:
                     act_block_h=self.act_block_h,
                     deallocate_activation=self.deallocate_activation,
                     tilize=self.tilize,
+                    core_count=64 if block_shard else None,
                 )
             )
 
@@ -317,11 +331,7 @@ class TtSPPF:
         y = [cv1]
         for i in range(3):
             output = ttnn.max_pool2d(
-                input_tensor=(
-                    ttnn.to_layout(ttnn.sharded_to_interleaved(y[-1]), layout=ttnn.ROW_MAJOR_LAYOUT)
-                    if y[-1].is_sharded()
-                    else y[-1]
-                ),
+                input_tensor=y[-1],
                 batch_size=self.batch_size,
                 input_h=out_h,
                 input_w=out_w,
@@ -330,8 +340,6 @@ class TtSPPF:
                 stride=[1, 1],
                 padding=[p, p],
                 dilation=[1, 1],
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                applied_shard_scheme=None if y[-1].is_sharded() else ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             )
             y.append(output)
 
@@ -414,19 +422,17 @@ class TtMaxSigmoidAttnBlock:
         guide = ttnn.reshape(guide, (bs, -1, self.nh, self.hc))
         x = ttnn.permute(x, (0, 3, 1, 2))  # nhwc->nchw
         embed = self.ec(x) if self.ec is not None else x
-        embed = ttnn.reshape(embed, (bs, self.nh, self.hc, h, w))
+        embed = ttnn.reshape(embed, (bs, self.nh, self.hc, embed.shape[-1]))
 
         ## Replacement for torch.einsum('bmchw,bnmc->bmhwn', embed, guide)
-        batch, m, channel, height, width = embed.shape
+        batch, m, channel, height, width = bs, self.nh, self.hc, h, w
         _, n, _, _ = guide.shape
-        embed = ttnn.permute(embed, (0, 1, 3, 4, 2))
-        embed = ttnn.reshape(embed, (batch, m, -1, channel))
+        embed = ttnn.permute(embed, (0, 1, 3, 2))
         guide = ttnn.permute(guide, (0, 2, 3, 1))
         aw = ttnn.matmul(embed, guide, memory_config=ttnn.L1_MEMORY_CONFIG)
         ttnn.deallocate(embed)
         ttnn.deallocate(guide)
         aw = ttnn.reshape(aw, (batch, m, height, width, n))
-
         aw = ttnn.max(aw, dim=-1, keepdim=True)
         aw = ttnn.permute(aw, (0, 1, 2, 4, 3))  # To increase the performance of squeeze operation
         aw = ttnn.squeeze(aw, -2)  # If the above permute is removed use ttnn.squeeze(aw, -1)
@@ -467,6 +473,7 @@ class TtC2fAttn:
         gc=512,
         g=1,
         e=0.5,
+        block_shard=False,
     ):
         """Initializes C2f module with attention mechanism for enhanced feature extraction and processing."""
         super().__init__()
@@ -495,6 +502,7 @@ class TtC2fAttn:
             input_params=input_params[1],
             deallocate_activation=self.deallocate_activation,
             conv_math_fidelity=ttnn.MathFidelity.HiFi2,
+            block_shard=block_shard,
         )
         self.m = [
             TtBottleneck(
@@ -762,11 +770,13 @@ class TtWorldDetect:
                     self.device,
                     self.parameters["cv2"][i][0],
                     input_params=input_params["cv2_params"][i]["input_params"][0],
+                    core_count=64 if i == 2 else None,
                 ),
                 TtConv(
                     self.device,
                     self.parameters["cv2"][i][1],
                     input_params=input_params["cv2_params"][i]["input_params"][1],
+                    core_count=64 if i == 2 else None,
                 ),
                 TtConv(
                     self.device,
@@ -774,6 +784,7 @@ class TtWorldDetect:
                     input_params=input_params["cv2_params"][i]["input_params"][2],
                     is_act_false=True,
                     conv_alone=True,
+                    core_count=64 if i == 2 else None,
                 ),
             ]
             for i in range(self.nl)
@@ -786,11 +797,13 @@ class TtWorldDetect:
                     self.device,
                     self.parameters["cv3"][i][0],
                     input_params=input_params["cv3_params"][i]["input_params"][0],
+                    core_count=64 if i == 2 else None,
                 ),
                 TtConv(
                     self.device,
                     self.parameters["cv3"][i][1],
                     input_params=input_params["cv3_params"][i]["input_params"][1],
+                    core_count=64 if i == 2 else None,
                 ),
                 TtConv(
                     self.device,
@@ -798,6 +811,7 @@ class TtWorldDetect:
                     input_params=input_params["cv3_params"][i]["input_params"][2],
                     is_act_false=True,
                     conv_alone=True,
+                    core_count=64 if i == 2 else None,
                 ),
             ]
             for i, x in enumerate(ch)
@@ -961,7 +975,12 @@ class TtWorldModel:
         )
         self.conv_7 = TtConv(device, parameters["model"][7], input_params=[3, 2, 1, 512, 256], block_shard=True)
         self.c2f_8 = TtC2f(
-            device, parameters["model"][8], n=1, shortcut=True, input_params=c2f_configs["model.8"]["input_params"]
+            device,
+            parameters["model"][8],
+            n=1,
+            shortcut=True,
+            input_params=c2f_configs["model.8"]["input_params"],
+            block_shard=True,
         )
         self.sppf_9 = TtSPPF(device, parameters["model"][9], input_params=sppf_configs["input_params"], batch_size=1)
 
@@ -1024,6 +1043,7 @@ class TtWorldModel:
             n=1,
             ec=256,
             nh=8,
+            block_shard=True,
         )
         self.world_detect_23 = TtWorldDetect(
             device,
