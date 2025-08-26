@@ -63,16 +63,27 @@ uint32_t find_closest_largest_divisor_with_num_padding(uint32_t num, uint32_t st
     return divisor;
 }
 
-uint32_t find_closest_largest_divisor_with_num_padding_and_mult(uint32_t num, uint32_t start_divisor, uint32_t mult) {
-    uint32_t divisor = start_divisor;
-    uint32_t big_divisor = divisor * mult;
-    uint32_t padded_num = round_up(num, big_divisor);
-    while ((padded_num - num) >= (int)(padded_num / big_divisor) and divisor > 1) {
-        divisor = divisor - 1;
-        big_divisor = divisor * mult;
-        padded_num = round_up(num, big_divisor);
+uint32_t find_closest_largest_divisor_with_num_padding_and_mult(
+    uint32_t out_nhw_ntiles, uint32_t max_num_cores, uint32_t act_block_h_override_ntiles) {
+    uint32_t best_divisor = 1;
+    uint32_t best_cores = 0;
+
+    for (uint32_t sub_block_size = act_block_h_override_ntiles; sub_block_size >= 1; sub_block_size--) {
+        uint32_t potential_cores = std::min(max_num_cores, (out_nhw_ntiles + sub_block_size - 1) / sub_block_size);
+
+        uint32_t work_per_core = div_up(out_nhw_ntiles, potential_cores);
+        uint32_t padded_work_per_core = round_up(work_per_core, sub_block_size);
+
+        if (padded_work_per_core % sub_block_size != 0) {
+            continue;
+        }
+
+        if (potential_cores > best_cores) {
+            best_cores = potential_cores;
+            best_divisor = potential_cores;
+        }
     }
-    return divisor;
+    return best_divisor;
 }
 
 uint32_t get_input_channels_alignment(
