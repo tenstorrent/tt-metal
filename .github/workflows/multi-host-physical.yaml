@@ -6,12 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       t3k_multihost:
-        description: 'Run multi-host-t3k job'
+        description: 'Run T3K multi-host job'
         required: false
         default: true
         type: boolean
       galaxy_multihost:
-        description: 'Run multi-host-galaxy job'
+        description: 'Run Galaxy multi-host job'
         required: false
         default: true
         type: boolean
