@@ -203,7 +203,12 @@ def get_hostname():
 
 
 def get_username():
-    return os.environ["USER"]
+    """Get the username - GitHub Actions actor for CI, local USER for development"""
+    # In GitHub Actions, use the actor who triggered the workflow
+    if os.getenv("GITHUB_ACTOR"):
+        return os.environ["GITHUB_ACTOR"]
+    # Fall back to local USER environment variable for development
+    return os.environ.get("USER", "unknown")
 
 
 def git_hash():
