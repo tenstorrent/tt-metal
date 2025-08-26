@@ -65,22 +65,11 @@ public:
             for (chip_id_t id = 0; id < num_devices_; id++) {
                 chip_ids.push_back(id);
             }
-
-            // Create unit meshes for each chip
-            auto unit_meshes = tt::tt_metal::distributed::MeshDevice::create_unit_meshes(
-                chip_ids, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1);
-
-            // Get mesh graph from control plane to map coordinates to chip_ids
-            const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
-            const auto mesh_id = control_plane.get_user_physical_mesh_ids().front();
-            auto mesh_graph = control_plane.get_mesh_graph();
-
+            mesh_device_ = MeshDevice::create(MeshDeviceConfig(MeshShape{2, 4}));
             // Create mapping from mesh coordinates to mesh devices
-            for (const auto& [chip_id, unit_mesh_device] : unit_meshes) {
-                auto coord = mesh_graph.chip_to_coordinate(mesh_id, chip_id);
-                coord_to_mesh_device_[coord] = unit_mesh_device;
+            for (tt::tt_fabric::MeshCoordinate coord : tt::tt_fabric::MeshCoordinateRange(mesh_device_->shape())) {
+                coord_to_mesh_device_[coord] = mesh_device_->create_submesh(tt::tt_fabric::MeshShape{1, 1}, coord);
             }
-
         } else {
             TT_THROW("This suite can only be run on T3000 Wormhole devices");
         }
@@ -115,6 +104,7 @@ public:
 
 private:
     bool device_open;
+    std::shared_ptr<MeshDevice> mesh_device_;
 };
 
 namespace tt {
