@@ -96,6 +96,7 @@ target_sources(
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
+            fabric/fabric_edm_packet_header.hpp
             ${FABRIC_HW_INC}
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
