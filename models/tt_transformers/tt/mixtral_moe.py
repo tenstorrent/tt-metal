@@ -108,7 +108,6 @@ class TtMoeLayer(LightweightModule):
             core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=ttnn.bfloat16,
         )
-
         # get weights for top-2 experts -- masking out everything except the 8 experts (needed because top-k works with a min input of size 64)
         gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
 

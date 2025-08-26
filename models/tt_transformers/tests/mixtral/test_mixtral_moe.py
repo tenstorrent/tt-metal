@@ -5,6 +5,7 @@ from loguru import logger
 import ttnn
 from models.demos.t3000.mixtral8x7b.reference.model import FeedForward
 from models.demos.t3000.mixtral8x7b.reference.moe import MoeLayer
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.mixtral_mlp import TtMixtralMLP
 from models.tt_transformers.tt.mixtral_moe import TtMoeLayer
 from models.tt_transformers.tt.model_config import ModelArgs
@@ -52,7 +53,6 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
         moe_args=model_args,
     )
     reference_model.load_state_dict(convert2ref(partial_state_dict_ref))
-
     tt_ccl = TT_CCL(t3k_mesh_device)
     tt_model = TtMoeLayer(
         mesh_device=t3k_mesh_device,
@@ -119,6 +119,7 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
             .squeeze(0)
             .view(seqlen, batch, -1)
         )
+        breakpoint()
         # Reference Model Output
         logger.info(f"Starting Reeference MOE {mode}")
         ref_output = reference_model(pt_decode_input)

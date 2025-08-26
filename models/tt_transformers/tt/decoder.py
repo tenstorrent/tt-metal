@@ -79,7 +79,7 @@ class TransformerBlock(LightweightModule):
                 args=args,
                 layer_num=layer_num,
                 dtype=dtype,
-                tt_ccl=self.tt_ccl
+                tt_ccl=self.tt_ccl,
             )
         else:
             self.feed_forward = MLP(
