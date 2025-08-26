@@ -378,6 +378,7 @@ private:
     void get_metal_desc_from_tt_desc();
     void generate_virtual_to_umd_coord_mapping();
     void generate_virtual_to_profiler_flat_id_mapping();
+    void cache_hardware_info();
 
     // Reserves ethernet cores in cluster for tunneling
     void initialize_ethernet_cores_router_mode();
@@ -445,6 +446,8 @@ private:
     std::unordered_map<chip_id_t, std::unordered_map<CoreCoord, EthRouterMode>> device_eth_routing_info_;
 
     std::unordered_map<chip_id_t, std::unordered_map<chip_id_t, std::vector<CoreCoord>>> ethernet_sockets_;
+
+    std::vector<int> aiclks_;
 
     uint32_t routing_info_addr_ = 0;
 

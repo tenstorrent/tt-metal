@@ -208,6 +208,15 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions, const tt_metal::Hal& hal) : rt
     this->set_tunnels_from_mmio_device();
 
     this->assert_risc_reset();
+
+    this->cache_hardware_info();
+}
+
+void Cluster::cache_hardware_info() {
+    this->aiclks_.reserve(this->all_chip_ids().size());
+    for (const auto& chip_id : this->all_chip_ids()) {
+        this->aiclks_.push_back(this->driver_->get_chip(chip_id)->get_clock());
+    }
 }
 
 void Cluster::detect_arch_and_target() {
@@ -586,7 +595,7 @@ std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(chip_id_t 
     return worker_logical_to_virtual_y;
 }
 
-int Cluster::get_device_aiclk(const chip_id_t& chip_id) const { return this->driver_->get_chip(chip_id)->get_clock(); }
+int Cluster::get_device_aiclk(const chip_id_t& chip_id) const { return this->aiclks_.at(chip_id); }
 
 void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
