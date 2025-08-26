@@ -110,7 +110,7 @@ void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevic
             tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
 
         for (const auto& core : device->get_active_ethernet_cores(true)) {
-            SetRuntimeArgs(program, erisc_kid, core, args);
+            SetRuntimeArgs(program_, erisc_kid, core, args);
         }
     }
     if (has_idle_eth_cores) {
@@ -136,9 +136,9 @@ void RunTest(MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevic
         }
 
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            SetRuntimeArgs(program, ierisc_kid0, core, args);
+            SetRuntimeArgs(program_, ierisc_kid0, core, args);
             if (device->arch() == ARCH::BLACKHOLE) {
-                SetRuntimeArgs(program, ierisc_kid1, core, args);
+                SetRuntimeArgs(program_, ierisc_kid1, core, args);
             }
         }
     }
