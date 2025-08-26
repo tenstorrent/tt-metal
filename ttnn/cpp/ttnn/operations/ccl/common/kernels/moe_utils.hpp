@@ -244,12 +244,7 @@ inline void fabric_send_chip_unicast_noc_unicast(
 
     // Populate packet header with routing information
     fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)packet_header,
-        static_cast<eth_chan_directions>(fabric_connections[route].direction),
-        SrcChipId,
-        dest_chip_id,
-        dest_mesh_id,
-        MeshCols);
+        (LowLatencyMeshPacketHeader*)packet_header, SrcChipId, dest_chip_id, dest_mesh_id, MeshCols);
 
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
         fabric_connections[route], packet_header, payload_l1_address, noc_payload_write_address, size_bytes, alignment);
@@ -310,12 +305,7 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
 
     // Populate packet header with routing information
     fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)packet_header,
-        static_cast<eth_chan_directions>(fabric_connections[route].direction),
-        SrcChipId,
-        dest_chip_id,
-        dest_mesh_id,
-        MeshCols);
+        (LowLatencyMeshPacketHeader*)packet_header, SrcChipId, dest_chip_id, dest_mesh_id, MeshCols);
 
     return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         fabric_connections[route],
@@ -347,12 +337,7 @@ inline void fabric_send_chip_unicast_noc_unicast_semaphore_only(
 
     // Populate packet header with routing information
     fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)packet_header,
-        static_cast<eth_chan_directions>(fabric_connections[route].direction),
-        SrcChipId,
-        dest_chip_id,
-        dest_mesh_id,
-        MeshCols);
+        (LowLatencyMeshPacketHeader*)packet_header, SrcChipId, dest_chip_id, dest_mesh_id, MeshCols);
 
     // Send only the packet header (for semaphore increment)
     fabric_connections[route].wait_for_empty_write_slot();

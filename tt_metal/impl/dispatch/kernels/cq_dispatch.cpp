@@ -1362,7 +1362,6 @@ void kernel_main() {
             fabric_mux_y,
             worker_credits_stream_id,
             fabric_mux_channel_base_address,
-            fabric_mux_flow_control_address,
             fabric_mux_connection_handshake_address,
             fabric_mux_connection_info_address,
             fabric_mux_buffer_index_address,
