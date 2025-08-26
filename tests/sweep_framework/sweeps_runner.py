@@ -219,9 +219,14 @@ def git_hash():
 
 
 def get_git_author():
-    """Get the git author name"""
+    """Get the git author name from the latest commit"""
     try:
-        return subprocess.check_output(["git", "config", "user.name"]).decode("ascii").strip()
+        # Get the author of the latest commit on the current branch
+        return (
+            subprocess.check_output(["git", "log", "-1", "--pretty=format:%an"], stderr=subprocess.DEVNULL)
+            .decode("ascii")
+            .strip()
+        )
     except Exception as e:
         return "Unknown"
 
