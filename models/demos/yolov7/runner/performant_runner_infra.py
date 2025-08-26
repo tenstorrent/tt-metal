@@ -44,12 +44,7 @@ class YOLOv7PerformanceRunnerInfra:
         self.outputs_mesh_composer = outputs_mesh_composer
 
         self.torch_model = load_torch_model(self.model_location_generator)
-        batch_size_per_device = 1
-        self.torch_input_tensor = (
-            torch.randn((batch_size_per_device, 3, 640, 640), dtype=torch.float32)
-            if self.torch_input_tensor is None
-            else self.torch_input_tensor
-        )
+        self.torch_input_tensor = torch.randn((self.batch_size * self.num_devices, 3, 640, 640), dtype=torch.float32)
         self.parameters = custom_preprocessor(model=self.torch_model, mesh_mapper=self.weights_mesh_mapper)
         nx_ny = [80, 40, 20]
         grid_tensors = []
@@ -85,17 +80,7 @@ class YOLOv7PerformanceRunnerInfra:
 
         assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
 
-        # For multi-device scenarios, we need to create exactly num_devices shards
-        # Each shard should contain the same input data
-        if self.num_devices > 1:
-            # Create num_devices shards, each with the same input data
-            input_tensor = [torch_input_tensor[0].unsqueeze(0) for _ in range(self.num_devices)]
-        else:
-            # Single device case
-            input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
-        tt_inputs_host = ttnn.from_host_shards(
-            [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
-        )
+        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper)
         return tt_inputs_host, input_mem_config
 
     def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
@@ -132,10 +117,6 @@ class YOLOv7PerformanceRunnerInfra:
 
         torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
         output_tensor = ttnn.to_torch(output_tensor, mesh_composer=self.outputs_mesh_composer)
-
-        if self.num_devices > 1 and output_tensor.shape[0] > 1:
-            output_tensor = output_tensor[0:1]
-
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=0.99)
 
         logger.info(
