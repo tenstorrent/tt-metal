@@ -3177,6 +3177,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_welford(
         1,
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
+        1,
+        (std::uint32_t)is_dram(gamma),
+        (std::uint32_t)is_dram(beta),
+        (std::uint32_t)is_dram(input_mask),
         (std::uint32_t)gamma_beta_num_cols_tile_per_core,
         (std::uint32_t)per_core_Mt_group_1,
         (std::uint32_t)per_core_Nt,
@@ -3198,6 +3202,10 @@ operation::ProgramWithCallbacks groupnorm_multi_core_welford(
         1,
         (std::uint32_t)gamma.has_value(),
         (std::uint32_t)beta.has_value(),
+        1,
+        (std::uint32_t)is_dram(gamma),
+        (std::uint32_t)is_dram(beta),
+        (std::uint32_t)is_dram(input_mask),
         (std::uint32_t)gamma_beta_num_cols_tile_per_core,
         (std::uint32_t)per_core_Mt_group_2,
         (std::uint32_t)per_core_Nt,
@@ -3218,33 +3226,22 @@ operation::ProgramWithCallbacks groupnorm_multi_core_welford(
 
     if (gamma.has_value() and gamma.value().layout() == Layout::ROW_MAJOR) {
         auto gamma_stick_size = gamma.value().padded_shape()[3] * gamma.value().element_size();
+        bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
+        writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
+        writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         writer_mcast_sender_compile_time_args_group_1.push_back(gamma_stick_size);
         writer_mcast_sender_compile_time_args_group_2.push_back(gamma_stick_size);
     } else if (beta.has_value() and beta.value().layout() == Layout::ROW_MAJOR) {
         auto beta_stick_size = beta.value().padded_shape()[3] * beta.value().element_size();
+        bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
+        writer_mcast_sender_compile_time_args_group_1.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
+        writer_mcast_sender_compile_time_args_group_2.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
         writer_mcast_sender_compile_time_args_group_1.push_back(beta_stick_size);
         writer_mcast_sender_compile_time_args_group_2.push_back(beta_stick_size);
     } else {
         writer_mcast_sender_compile_time_args_group_1.push_back(0);
         writer_mcast_sender_compile_time_args_group_2.push_back(0);
     }
-
-    // Append TensorAccessorArgs for writer kernels
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
-        .append_to(writer_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
-        .append_to(writer_mcast_sender_compile_time_args_group_1);
-    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
-        .append_to(writer_mcast_sender_compile_time_args_group_1);
-
-    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_mcast_sender_compile_time_args_group_2);
-    tt::tt_metal::TensorAccessorArgs(gamma.has_value() ? gamma.value().buffer() : nullptr)
-        .append_to(writer_mcast_sender_compile_time_args_group_2);
-    tt::tt_metal::TensorAccessorArgs(beta.has_value() ? beta.value().buffer() : nullptr)
-        .append_to(writer_mcast_sender_compile_time_args_group_2);
-    tt::tt_metal::TensorAccessorArgs(input_mask.has_value() ? input_mask.value().buffer() : nullptr)
-        .append_to(writer_mcast_sender_compile_time_args_group_2);
 
     // writer kernel
     bool use_row_major_kernel = true;
