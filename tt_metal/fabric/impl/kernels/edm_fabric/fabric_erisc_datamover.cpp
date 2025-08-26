@@ -2392,6 +2392,7 @@ void kernel_main() {
         edm_to_local_chip_noc,
         edm_to_downstream_noc>
         receiver_channel_0_trid_tracker;
+    receiver_channel_0_trid_tracker.init();
     WriteTransactionIdTracker<
         RECEIVER_NUM_BUFFERS_ARRAY[NUM_RECEIVER_CHANNELS - 1],
         NUM_TRANSACTION_IDS,
@@ -2399,6 +2400,7 @@ void kernel_main() {
         edm_to_local_chip_noc,
         edm_to_downstream_noc>
         receiver_channel_1_trid_tracker;
+    receiver_channel_1_trid_tracker.init();
 
 #ifdef ARCH_BLACKHOLE
     // A Blackhole hardware bug requires all noc inline writes to be non-posted so we hardcode to false here
