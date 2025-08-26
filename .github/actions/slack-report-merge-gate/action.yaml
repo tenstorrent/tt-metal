@@ -13,7 +13,7 @@ runs:
     - name: Format Slack User Mentions
       id: format_mentions
       run: |
-        MENTIONS=$(echo "<@${{ inputs.owner }}>" | sed 's/,/ > <@/g')
+        MENTIONS=$(echo "<@${{ inputs.owner }}>" | sed 's/,/> <@/g')
         echo "mentions=$MENTIONS" >> $GITHUB_OUTPUT
       shell: bash
     - name: Report Github Pipeline Status Slack Action
