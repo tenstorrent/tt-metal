@@ -27,8 +27,7 @@ std::array<ttnn::Tensor, 2> ExecuteAllToAllDispatch::invoke(
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-    const std::optional<GlobalSemaphore>& global_semaphore) {
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
     auto mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
