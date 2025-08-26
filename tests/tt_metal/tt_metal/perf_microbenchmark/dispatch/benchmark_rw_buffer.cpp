@@ -56,7 +56,7 @@ using namespace tt::tt_metal::distributed;
 static constexpr auto KB = 1024;
 static constexpr auto MB = 1024 * KB;
 
-// This is the maximum transfer size we can test for on L1 for sharded cases, note the bandwidth improvement after
+// This is the maximum transfer size we can test for on L1 for sharded cases, note the bandwidth improvement gained by
 // increasing this transfer size is minimal (see spreadsheet above)
 static constexpr int64_t TRANSFER_SIZE = 32 * MB;
 
@@ -83,24 +83,29 @@ static constexpr std::array<TensorMemoryLayout, 3> SHARD_ORIENTATIONS = {
  * but to test for sharding, we must "makeup" the tensor's shape.
  *
  * A buffer is consisted of pages (this is the page size we are varying on),
- * a page is assumed acrossed the system to be 32x32 element shaped (or multiple of this),
+ * a page is assumed acrossed the system to be built with 32x32 element tiles,
  * where a single element is any support datatype (e.g. float32, uint16, etc.).
+ * This means a page is at least 32x32 elements large.
  *
  * In this context, novel page size like 32B would be unconstructable with sharding
  * (this means a single unit of data is smaller than a byte).
  *
- * TODO: Finish this.
+ * A reasonable place to start for page size would be a page of a single tile of elements of the smallest datatype.
+ * In this benchmark, we start with uint16, which would result in a 32x32x2B=2kb page size.
+ * We test 4kb page size in addition to 2kb page size,
+ * as this is farily commonly used and would be constructed using a tile of float32 values.
  *
+ * Note that page size's impact on bandwidth exihibits diminishing returns at about 1kb as per the spreadsheet above.
  *
- * A stream of data that is TRANSFER_SIZE (32MB) bytes long could be transporting:
- *
+ * Given we've come up with the datatype,
+ * we can define the shape of the tensor that is being transferred easily from TRANSFER_SIZE,
+ * which would be:
  *  - a tall matrix of 2048x4096 of float32
  *  - a wide matrix of 4096x4096 of uint16
  *
- * We also need to be aware
  */
 
-// Default page shape
+// Page shape
 static constexpr std::uint32_t PAGE_SIDE = 32;
 static constexpr std::array<std::uint32_t, 2> PAGE_SHAPE = {PAGE_SIDE, PAGE_SIDE};
 
@@ -108,11 +113,13 @@ static constexpr std::array<std::uint32_t, 2> PAGE_SHAPE = {PAGE_SIDE, PAGE_SIDE
 static constexpr std::array<std::uint32_t, 2> ELEMENT_SHAPE_4K = {2048, 4096};
 static_assert(sizeof(float) * ELEMENT_SHAPE_4K[0] * ELEMENT_SHAPE_4K[1] == TRANSFER_SIZE);
 static_assert(sizeof(float) * PAGE_SIDE * PAGE_SIDE == 4096);
+static_assert(ELEMENT_SHAPE_4K[0] % PAGE_SIDE == 0 && ELEMENT_SHAPE_4K[1] % PAGE_SIDE == 0);
 
 // uint16 of 4096x4096 is 32MB (transfer size)
 static constexpr std::array<std::uint32_t, 2> ELEMENT_SHAPE_2K = {4096, 4096};
 static_assert(sizeof(std::uint16_t) * ELEMENT_SHAPE_2K[0] * ELEMENT_SHAPE_2K[1] == TRANSFER_SIZE);
 static_assert(sizeof(std::uint16_t) * PAGE_SIDE * PAGE_SIDE == 2048);
+static_assert(ELEMENT_SHAPE_2K[0] % PAGE_SIDE == 0 && ELEMENT_SHAPE_2K[1] % PAGE_SIDE == 0);
 
 /**
  * Compute the element side after sharding across num_cores.
@@ -245,6 +252,9 @@ int main(int argc, char** argv) {
     } else {
         log_info(LogTest, "Device 1 is not available");
     }
+
+    log_info(LogTest, "Available device IDs: {}", available_device_ids);
+    log_info(LogTest, "Testing on device IDs: {}", device_ids);
 
     auto devices = MeshDevice::create_unit_meshes(device_ids);
 
