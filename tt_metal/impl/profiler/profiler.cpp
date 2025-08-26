@@ -46,11 +46,6 @@ namespace tt {
 
 namespace tt_metal {
 
-static std::string PROFILER_ZONE_SRC_LOCATIONS_LOG =
-    MetalContext::instance().rtoptions().get_profiler_logs_dir() + PROFILER_ZONE_SRC_LOCATIONS_LOG_FN;
-static std::string NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG =
-    MetalContext::instance().rtoptions().get_profiler_logs_dir() + NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG_FN;
-
 static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
     return static_cast<kernel_profiler::PacketTypes>((timer_id >> 16) & 0x7);
 }
@@ -108,14 +103,19 @@ std::unordered_map<uint16_t, ZoneDetails> generateZoneSourceLocationsHashes() {
     std::unordered_map<uint16_t, ZoneDetails> hash_to_zone_src_locations;
     std::unordered_set<std::string> zone_src_locations;
 
+    static const std::string PROFILER_ZONE_SRC_LOCATIONS_LOG =
+        MetalContext::instance().rtoptions().get_profiler_logs_dir() + PROFILER_ZONE_SRC_LOCATIONS_LOG_FN;
+    static const std::string NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG =
+        MetalContext::instance().rtoptions().get_profiler_logs_dir() + NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG_FN;
+
     // Load existing zones from previous runs
     populateZoneSrcLocations(
         PROFILER_ZONE_SRC_LOCATIONS_LOG, "", false, hash_to_zone_src_locations, zone_src_locations);
 
     // Load new zones from the current run
     populateZoneSrcLocations(
-        tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG,
-        tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG,
+        NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG,
+        PROFILER_ZONE_SRC_LOCATIONS_LOG,
         true,
         hash_to_zone_src_locations,
         zone_src_locations);
