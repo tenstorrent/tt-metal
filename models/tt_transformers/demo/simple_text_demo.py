@@ -35,7 +35,7 @@ class TokenAccuracy:
         logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)
         self.reference_tokens = reference_data["reference_tokens"]
-        split_point = self.reference_tokens.shape[-1] // 2 + 1
+        split_point = self.reference_tokens.shape[-1] // 2
         self.input_prompt = self.reference_tokens[0, :split_point]
         self.gt_tokens = self.reference_tokens[0, split_point:]
         self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
