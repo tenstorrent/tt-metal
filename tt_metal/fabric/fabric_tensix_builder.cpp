@@ -351,7 +351,8 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     size_t risc_id,
     uint32_t noc_x,
     uint32_t noc_y,
-    std::shared_ptr<tt::tt_fabric::FabricMuxConfig> fabric_mux_config) :
+    std::shared_ptr<tt::tt_fabric::FabricMuxConfig> fabric_mux_config,
+    eth_chan_directions direction) :
     my_core_logical_(my_core_logical),
     local_fabric_node_id_(local_fabric_node_id),
     remote_fabric_node_id_(remote_fabric_node_id),
@@ -360,7 +361,9 @@ FabricTensixDatamoverBuilder::FabricTensixDatamoverBuilder(
     risc_id_(risc_id),
     noc_x_(noc_x),
     noc_y_(noc_y),
-    fabric_mux_config_(fabric_mux_config) {
+    fabric_mux_config_(fabric_mux_config),
+    direction_(direction) {
+    channel_connection_liveness_check_disable_array_.fill(false);
     TT_FATAL(fabric_mux_config_ != nullptr, "FabricMuxConfig cannot be null");
 }
 
@@ -369,7 +372,8 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
     tt::tt_metal::Program& program,
     tt::tt_fabric::FabricNodeId local_fabric_node_id,
     tt::tt_fabric::FabricNodeId remote_fabric_node_id,
-    uint32_t ethernet_channel_id) {
+    uint32_t ethernet_channel_id,
+    eth_chan_directions direction) {
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& fabric_context = control_plane.get_fabric_context();
 
@@ -399,7 +403,8 @@ FabricTensixDatamoverBuilder FabricTensixDatamoverBuilder::build(
         risc_id,
         noc_x,
         noc_y,
-        fabric_mux_config);
+        fabric_mux_config,
+        direction);
 }
 
 void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program) {
@@ -415,7 +420,7 @@ void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::IDevice* dev
         "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
         my_core_logical_,
         tt::tt_metal::DataMovementConfig{
-            .processor = processor, .noc = noc, .compile_args = get_compile_time_args(), .defines = {}});
+            .processor = processor, .noc = noc, .compile_args = get_compile_time_args(device), .defines = {}});
 
     // Set runtime arguments
     tt::tt_metal::SetRuntimeArgs(program, mux_kernel, my_core_logical_, get_runtime_args(program));
@@ -424,6 +429,9 @@ void FabricTensixDatamoverBuilder::create_and_compile(tt::tt_metal::IDevice* dev
 tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_connection_to_fabric_channel(
     uint32_t channel_id) const {
     auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+
+    // skip the channel liveness check if it is used for upstream connection (persistent)
+    channel_connection_liveness_check_disable_array_[channel_id] = true;
 
     return tt::tt_fabric::SenderWorkerAdapterSpec{
         noc_x_,                                                                  // edm_noc_x
@@ -440,9 +448,76 @@ tt::tt_fabric::SenderWorkerAdapterSpec FabricTensixDatamoverBuilder::build_conne
     };
 }
 
-std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args() const {
-    // Get compile time args from the underlying mux config
-    return fabric_mux_config_->get_fabric_mux_compile_time_args();
+std::vector<uint32_t> FabricTensixDatamoverBuilder::get_compile_time_args(tt::tt_metal::IDevice* device) const {
+    // Get base compile time args without stream IDs from the underlying mux config
+    auto ct_args = fabric_mux_config_->get_fabric_mux_compile_time_main_args();
+
+    // Get topology-specific fabric router stream IDs based on topology
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto topology = fabric_context.get_fabric_topology();
+    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
+
+    const auto worker_channel = is_2d_fabric ? direction_ : 0;
+    const auto& tensix_config = fabric_context.get_tensix_config();
+    const auto worker_stream_id =
+        tensix_config.get_channel_credits_stream_id(device->id(), ethernet_channel_id_, worker_channel);
+
+    std::vector<uint32_t> fabric_stream_ids_ack_to_upstream;
+    std::vector<uint32_t> fabric_stream_ids_check_by_local;
+    switch (topology) {
+        case tt::tt_fabric::Topology::Linear:
+            fabric_stream_ids_check_by_local = {
+                worker_stream_id,                                                             // default 17
+                tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id};  // 18
+            break;
+        case tt::tt_fabric::Topology::Ring:
+            fabric_stream_ids_check_by_local = {
+                worker_stream_id,                                                            // default 17
+                tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,  // 18
+                tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id   // 19
+            };
+            break;
+        case tt::tt_fabric::Topology::Mesh:
+            fabric_stream_ids_check_by_local = {
+                tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,  // 18
+                tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id,  // 19
+                tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id,  // 20
+                tt::tt_fabric::StreamRegAssignments::sender_channel_4_free_slots_stream_id   // 21
+            };
+            break;
+        case tt::tt_fabric::Topology::Torus:
+            fabric_stream_ids_check_by_local = {
+                tt::tt_fabric::StreamRegAssignments::sender_channel_1_free_slots_stream_id,   // 18
+                tt::tt_fabric::StreamRegAssignments::sender_channel_2_free_slots_stream_id,   // 19
+                tt::tt_fabric::StreamRegAssignments::sender_channel_3_free_slots_stream_id,   // 20
+                tt::tt_fabric::StreamRegAssignments::sender_channel_4_free_slots_stream_id,   // 21
+                tt::tt_fabric::StreamRegAssignments::vc1_sender_channel_free_slots_stream_id  // 22
+            };
+            break;
+        default: TT_THROW("Unknown fabric topology: {}", static_cast<int>(topology)); break;
+    }
+
+    // override the worker channel stream id
+    fabric_stream_ids_check_by_local[worker_channel] = worker_stream_id;
+
+    uint8_t num_full_size_channels =
+        fabric_mux_config_->get_num_channels(tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL);
+    TT_FATAL(
+        num_full_size_channels == fabric_stream_ids_check_by_local.size(),
+        "the number of fabric stream ids used must equal to the number of mux channels");
+    // Add fabric router stream IDs for full size channels
+    ct_args.insert(ct_args.end(), fabric_stream_ids_check_by_local.begin(), fabric_stream_ids_check_by_local.end());
+
+    // Add persistent channels flags - all channels are persistent except the worker channel.
+    std::vector<uint32_t> is_persistent_channels(num_full_size_channels, 0);
+    for (uint8_t i = 0; i < num_full_size_channels; i++) {
+        if (channel_connection_liveness_check_disable_array_[i]) {
+            is_persistent_channels[i] = 1;
+        }
+    }
+    ct_args.insert(ct_args.end(), is_persistent_channels.begin(), is_persistent_channels.end());
+
+    return ct_args;
 }
 
 std::vector<uint32_t> FabricTensixDatamoverBuilder::get_runtime_args(tt::tt_metal::Program& program) const {

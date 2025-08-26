@@ -1022,7 +1022,7 @@ uint32_t estimate_halo_output_elems(
     std::array<uint32_t, 2> kernel_size,
     std::array<uint32_t, 2> dilation,
     std::array<uint32_t, 4> padding) {
-    uint32_t shard_height = halo_input_shard_shape[0] / input_width;
+    float shard_height = (float)halo_input_shard_shape[0] / (float)input_width;
     uint32_t shard_batches = shard_height / input_height;
     // Halo adds the overlap region of the input tensor that is needed for the convolution.
     //  As width is the faster changing dimension, we typically have the entire width in every shard.
@@ -1069,59 +1069,6 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         slice_rounding_value = tt::constants::TILE_HEIGHT;
     }
 
-    const uint32_t min_output_slice_rounded_size =
-        tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
-    const uint32_t output_slice_rem =
-        tt::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
-
-    const uint32_t max_output_slice_size =
-        slice_rounding_value * (min_output_slice_rounded_size + ((output_slice_rem > 0) ? 1 : 0));
-
-    const uint32_t min_output_slice_size = slice_rounding_value * min_output_slice_rounded_size;
-
-    uint32_t min_output_slice_height, min_output_slice_width;
-    uint32_t max_output_slice_height, max_output_slice_width;
-
-    uint32_t min_input_slice_height, min_input_slice_width;
-    uint32_t max_input_slice_height, max_input_slice_width;
-
-    if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
-        max_output_slice_height = max_output_slice_size;
-        max_output_slice_width = params.output_width;
-        max_input_slice_height =
-            (max_output_slice_size * params.stride[0] + params.dilation[0] * (params.kernel_size[0] - 1) + 1);
-        max_input_slice_width = params.input_width;
-
-        min_output_slice_height = min_output_slice_size;
-        min_output_slice_width = params.output_width;
-        min_input_slice_height =
-            (min_output_slice_size * params.stride[0] + params.dilation[0] * (params.kernel_size[0] - 1) + 1);
-        min_input_slice_width = params.input_width;
-    } else {
-        max_output_slice_height = params.output_height;
-        max_output_slice_width = max_output_slice_size;
-        max_input_slice_height = params.input_height;
-        max_input_slice_width =
-            (max_output_slice_size * params.stride[1] + params.dilation[1] * (params.kernel_size[1] - 1) + 1);
-
-        min_output_slice_height = params.output_height;
-        min_output_slice_width = min_output_slice_size;
-        min_input_slice_height = params.input_height;
-        min_input_slice_width =
-            (min_output_slice_size * params.stride[1] + params.dilation[1] * (params.kernel_size[1] - 1) + 1);
-    }
-
-    log_trace(
-        LogOp,
-        "Min Input = {}x{}, Output = {}x{}, \n Max Input = {}x{}, Output = {}x{}",
-        min_input_slice_height,
-        min_input_slice_width,
-        min_output_slice_height,
-        min_output_slice_width,
-        max_input_slice_height,
-        max_input_slice_width,
-        max_output_slice_height,
-        max_output_slice_width);
     auto compute_l1_usage_for_slice = [&](uint32_t input_slice_height,
                                           uint32_t input_slice_width,
                                           uint32_t output_slice_height,
@@ -1150,12 +1097,12 @@ uint32_t calculate_conv_dram_slice_L1_usage(
                 input_slice_width,
                 params.compute_grid,
                 conv_config.output_layout,
-                DataType::BFLOAT16,  // Input datatype is always BFLOAT16 in Conv2D DRAM
+                params.input_datatype,
                 params.output_datatype,
                 std::nullopt,
                 params.kernel_size,
                 params.dilation,
-                params.padding_n4,
+                {0, 0, 0, 0},
                 params.groups,
                 params.enable_bias,
                 params.compute_kernel_config);
@@ -1201,7 +1148,7 @@ uint32_t calculate_conv_dram_slice_L1_usage(
             params.weights_shape,
             params.kernel_size,
             conv_config,
-            DataType::BFLOAT16,  // Input datatype is always BFLOAT16 in Conv2D DRAM
+            params.input_datatype,
             params.output_datatype,
             params.enable_bias,
             false);
@@ -1229,39 +1176,129 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         return std::make_tuple(l1_usage, input_size, approx_max_halo_bytes);
     };
 
-    // Min slice size may have a larger L1 usage due to a lower core count.
-    // Calculate L1 usage for both sizes and choose the larger one.
-    auto [min_size_l1_usage, min_size_input_size, min_size_approx_max_halo_size] = compute_l1_usage_for_slice(
-        min_input_slice_height, min_input_slice_width, min_output_slice_height, min_output_slice_width);
+    const uint32_t min_output_slice_size =
+        tt::div_up(output_sliced_dim, slice_rounding_value) / dram_slice_config.num_slices;
+    const uint32_t output_slice_rem =
+        tt::div_up(output_sliced_dim, slice_rounding_value) % dram_slice_config.num_slices;
 
-    auto [max_size_l1_usage, max_size_input_size, max_size_approx_max_halo_size] = compute_l1_usage_for_slice(
-        max_input_slice_height, max_input_slice_width, max_output_slice_height, max_output_slice_width);
+    uint32_t max_memory_consumed = 0;
+    uint32_t slice_index = 0;
+    uint32_t output_slice_dim_start = 0;
 
-    const float output_size_margin = 1.0f;
+    uint32_t additional_padded_width = 0;
 
-    if (conv_config.in_place) {
-        if (params.stride[0] > params.kernel_size[0] || params.stride[1] > params.kernel_size[1]) {
-            log_warning(
-                tt::LogOp,
-                "conv_config has in-place halo enabled, but it may be disabled as the halo output is smaller than the "
-                "input. This may lead to OOM errors with auto-slicing. If so, please disable in-place halo in the "
-                "Conv2dConfig.");
+    while ((output_slice_dim_start < output_sliced_dim) && (slice_index < dram_slice_config.num_slices)) {
+        const uint32_t output_slice_size =
+            slice_rounding_value * (min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0));
+        const uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
+        const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
+
+        uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
+        uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;
+        int pad_top, pad_bottom, pad_left, pad_right;
+        if (dram_slice_config.slice_type == Conv2dSliceConfig::SliceType::HEIGHT) {
+            output_slice_height_start = output_slice_dim_start;
+            output_slice_height_end = output_slice_dim_end;
+            output_slice_width_start = 0;
+            output_slice_width_end = params.output_width;
+            input_slice_height_start = (output_slice_height_start * params.stride[0]) - params.padding_n4[0];
+            input_slice_height_end = ((output_slice_height_end - 1) * params.stride[0]) - params.padding_n4[0] +
+                                     ((params.kernel_size[0] - 1) * (params.dilation[0] - 1)) + params.kernel_size[0];
+            input_slice_width_start = 0;
+            input_slice_width_end = params.input_width;
+            pad_top = std::max<int>(0, -input_slice_height_start);
+            pad_bottom = std::max<int>(0, input_slice_height_end - params.input_height);
+            pad_left = params.padding_n4[2];
+            pad_right = params.padding_n4[3];
+
+            input_slice_height_start = std::max<int>(0, input_slice_height_start);
+            input_slice_height_end = std::min<int>(params.input_height, input_slice_height_end);
+            if (input_slice_height_start >= input_slice_height_end) {
+                continue;
+            }
+        } else {
+            output_slice_height_start = 0;
+            output_slice_height_end = params.output_height;
+            output_slice_width_start = output_slice_dim_start;
+            output_slice_width_end = output_slice_dim_end;
+
+            input_slice_height_start = 0;
+            input_slice_height_end = params.input_height;
+            input_slice_width_start = (output_slice_width_start * params.stride[1]) - params.padding_n4[2];
+            input_slice_width_end = ((output_slice_width_end - 1) * params.stride[1]) - params.padding_n4[2] +
+                                    ((params.kernel_size[1] - 1) * (params.dilation[1] - 1)) + params.kernel_size[1];
+
+            pad_top = params.padding_n4[0];
+            pad_bottom = params.padding_n4[1];
+            pad_left = std::max<int>(0, -input_slice_width_start);
+            pad_right = std::max<int>(0, input_slice_width_end - params.input_width);
+
+            input_slice_width_start = std::max<int>(0, input_slice_width_start);
+            input_slice_width_end = std::min<int>(params.input_width, input_slice_width_end);
+            if (input_slice_width_start >= input_slice_width_end) {
+                continue;
+            }
         }
-        return output_size_margin * std::max(
-                                        max_size_approx_max_halo_size + max_size_l1_usage.tensor_allocation_size +
-                                            max_size_l1_usage.CB_allocation_size,
-                                        min_size_approx_max_halo_size + min_size_l1_usage.tensor_allocation_size +
-                                            min_size_l1_usage.CB_allocation_size);
-    }
-    return output_size_margin * std::max(
-                                    {min_size_approx_max_halo_size + min_size_l1_usage.tensor_allocation_size +
-                                         min_size_l1_usage.CB_allocation_size,
-                                     min_size_input_size + min_size_approx_max_halo_size,
-                                     max_size_approx_max_halo_size + max_size_l1_usage.tensor_allocation_size +
-                                         max_size_l1_usage.CB_allocation_size,
-                                     max_size_input_size + max_size_approx_max_halo_size});
-}
+        uint32_t input_slice_width = (input_slice_width_end - input_slice_width_start) + pad_left + pad_right;
+        uint32_t input_slice_height = (input_slice_height_end - input_slice_height_start) + pad_top + pad_bottom;
+        uint32_t output_slice_width = output_slice_width_end - output_slice_width_start;
+        uint32_t output_slice_height = output_slice_height_end - output_slice_height_start;
+        if (output_slice_width % slice_rounding_value != 0) {
+            additional_padded_width = slice_rounding_value - (output_slice_width % slice_rounding_value);
+            log_trace(
+                LogOp,
+                "Conv2d DRAM Slicing: Slice {}: Additional padding of {} added to the right side.",
+                slice_index,
+                additional_padded_width);
+            pad_right += additional_padded_width * params.stride[1];
+            output_slice_width += additional_padded_width;
+        }
 
+        log_trace(
+            LogOp,
+            "Conv2d DRAM AutoSlicing: Slice {}: Output Slice Start: ({}, {}), End: ({}, {})",
+            slice_index,
+            output_slice_height_start,
+            output_slice_width_start,
+            output_slice_height_end,
+            output_slice_width_end);
+        log_trace(
+            LogOp,
+            "Conv2d DRAM AutoSlicing: Slice {}: Input Slice Start: ({}, {}), End: ({}, {})",
+            slice_index,
+            input_slice_height_start,
+            input_slice_width_start,
+            input_slice_height_end,
+            input_slice_width_end);
+
+        auto [this_slice_l1_usage, this_slice_input_size, this_slice_approx_max_halo_size] =
+            compute_l1_usage_for_slice(input_slice_height, input_slice_width, output_slice_height, output_slice_width);
+
+        output_slice_dim_start += output_slice_size;
+        slice_index++;
+        if (conv_config.in_place) {
+            if (params.stride[0] > params.kernel_size[0] || params.stride[1] > params.kernel_size[1]) {
+                log_warning(
+                    tt::LogOp,
+                    "conv_config has in-place halo enabled, but it may be disabled as the halo output is smaller than "
+                    "the "
+                    "input. This may lead to OOM errors with auto-slicing. If so, please disable in-place halo in the "
+                    "Conv2dConfig.");
+            }
+            max_memory_consumed = std::max(
+                max_memory_consumed,
+                this_slice_approx_max_halo_size + this_slice_l1_usage.tensor_allocation_size +
+                    this_slice_l1_usage.CB_allocation_size);
+        } else {
+            max_memory_consumed = std::max(
+                {max_memory_consumed,
+                 this_slice_approx_max_halo_size + this_slice_l1_usage.tensor_allocation_size +
+                     this_slice_l1_usage.CB_allocation_size,
+                 this_slice_input_size + this_slice_approx_max_halo_size});
+        }
+    }
+    return max_memory_consumed;
+}
 conv_op_l1_usage conv2d::calculate_L1_usage(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const OptimizedConvBlockConfig& block_config,
