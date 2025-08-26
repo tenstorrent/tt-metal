@@ -35,8 +35,8 @@ def test_all_gather_chunk_perf(
     base_command = file + "::test_all_gather_chunks_per_sync"
 
     num_devices = 8
-    output_shapes = [[1, 1, 1024, 5120]]
-    chunks_per_sync_list = ["MAX", 160]
+    output_shapes = [[1, 1, 352, 5120], [1, 1, 1024, 5120], [1, 1, 8192, 10240], [1, 1, 8192, 16384]]
+    chunks_per_sync_list = ["MAX", 160, 80, 40, 20, 10, 5, 2, 1]
     for i, ag_output_shape in enumerate(output_shapes):
         elements = total_elems(ag_output_shape)
         total_bytes = elements * 2

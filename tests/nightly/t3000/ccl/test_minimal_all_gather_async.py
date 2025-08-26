@@ -675,9 +675,12 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape):
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
     [
+        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 8192, 10240], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 8192, 16384], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
-    ids=["ag_output_shape0"],
+    ids=["ag_output_shape0", "ag_output_shape1", "ag_output_shape2", "ag_output_shape3"],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
