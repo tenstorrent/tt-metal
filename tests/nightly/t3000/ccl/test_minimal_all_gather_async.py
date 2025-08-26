@@ -724,7 +724,7 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape, num_links):
 @pytest.mark.parametrize(
     "num_workers_per_link",
     [8, 4, 2, 1],
-    ids=["8-workers", "4-workers", "2-workers", "1-worker"],
+    ids=["8-workers", "4-workers", "2-workers", "1-workers"],
 )
 def test_all_gather_chunks_per_sync(
     t3k_mesh_device,

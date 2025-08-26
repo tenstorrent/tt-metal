@@ -41,17 +41,17 @@ def test_all_gather_chunk_perf(
     chunks_per_sync_list = ["MAX", 160, 80, 40, 20, 10]
     num_workers_per_link_list = [8, 4, 2, 1]
     topology_list = ["ring"]
-    for i, ag_output_shape in enumerate(output_shapes):
-        elements = total_elems(ag_output_shape)
-        total_bytes = elements * 2
-        total_bytes_moved = total_bytes * (7 / 8)
-        data_size_bytes_gb = total_bytes / (10**9)
-        data_size_bytes_mb = total_bytes / (10**6)
-        data_moved_bytes_mb = total_bytes_moved / (10**6)
+    for topology in topology_list:
+        for i, ag_output_shape in enumerate(output_shapes):
+            elements = total_elems(ag_output_shape)
+            total_bytes = elements * 2
+            total_bytes_moved = total_bytes * (7 / 8)
+            data_size_bytes_gb = total_bytes / (10**9)
+            data_size_bytes_mb = total_bytes / (10**6)
+            data_moved_bytes_mb = total_bytes_moved / (10**6)
 
-        logger.info(f"Total elements: {elements}, Data size: {data_size_bytes_gb:.3f} GB")
+            logger.info(f"Total elements: {elements}, Data size: {data_size_bytes_gb:.3f} GB")
 
-        for topology in topology_list:
             # Track best bandwidth for this shape
             best_bandwidth_gbps = -float("inf")
             best_chunks_per_sync = None
