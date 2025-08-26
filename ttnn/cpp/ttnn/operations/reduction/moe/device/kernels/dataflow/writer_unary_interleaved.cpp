@@ -9,12 +9,11 @@ void kernel_main() {
     uint32_t dst_addr0 = get_arg_val<uint32_t>(0);
 
     constexpr uint32_t out_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t Ht = get_compile_time_arg_val(1);
-    constexpr uint32_t K = get_compile_time_arg_val(2);
-    constexpr uint32_t packed_identity_scalar = get_compile_time_arg_val(3);
+    constexpr bool out_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);
+    constexpr uint32_t K = get_compile_time_arg_val(3);
+    constexpr uint32_t packed_identity_scalar = get_compile_time_arg_val(4);
     constexpr uint32_t Kt = K % 32 == 0 ? K / 32 : K / 32 + 1;
-
-    constexpr auto out_args = TensorAccessorArgs<4>();
 
     // can amortize the noc reads by doing them side by side for the two tensors
     constexpr uint32_t onetile = 1;
@@ -25,7 +24,8 @@ void kernel_main() {
     constexpr uint32_t scale_cb_index = tt::CBIndex::c_3;
     generate_reduce_scaler(scale_cb_index, packed_identity_scalar);
 
-    const auto interleaved_accessor0 = TensorAccessor(out_args, dst_addr0, tile_bytes);
+    const InterleavedAddrGenFast<out_is_dram> interleaved_accessor0 = {
+        .bank_base_address = dst_addr0, .page_size = tile_bytes, .data_format = data_format};
 
     uint32_t tile_id = 0;
     cb_wait_front(out_cb_index, Ht * Kt);
