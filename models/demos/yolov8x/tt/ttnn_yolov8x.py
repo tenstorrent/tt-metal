@@ -459,7 +459,10 @@ class TtDetect:
             cv3_params = input_params["cv3_params"][i]["input_params"]
             self.detect_cv2_modules.append(
                 TtDetectCv2(
-                    device, parameters, f"{path}.cv2.{i}", input_params=cv2_params, block_shard=True if i > 0 else False
+                    device,
+                    parameters,
+                    f"{path}.cv2.{i}",
+                    input_params=cv2_params,
                 )
             )
             self.detect_cv3_modules.append(
@@ -468,7 +471,6 @@ class TtDetect:
                     parameters,
                     f"{path}.cv3.{i}",
                     input_params=cv3_params,
-                    block_shard=True if i > 0 else False,
                     block_shard_all_convs=True if i > 1 else False,
                 )
             )
