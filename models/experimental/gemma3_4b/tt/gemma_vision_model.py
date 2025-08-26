@@ -43,6 +43,8 @@ class TtSiglipGemmaVisionModel(LightweightModule):
         self.n_global_layers = configuration.vision_n_global_layers
         self.return_intermediate = return_intermediate
 
+        self.prepare_residual_tensor_prefill = configuration.prepare_residual_tensor_prefill
+
         self.embeddings = TtSiglipVisionEmbeddings(
             mesh_device=mesh_device,
             state_dict=state_dict,
@@ -67,8 +69,6 @@ class TtSiglipGemmaVisionModel(LightweightModule):
             layers=self.layers,
             block_key="layers",
         )
-
-        self.prepare_residual_tensor_prefill = configuration.prepare_residual_tensor_prefill
 
         self.ln_post = TtLayerNorm(
             device=mesh_device,

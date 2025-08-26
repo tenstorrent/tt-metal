@@ -16,7 +16,7 @@ using namespace test_utils;
 
 namespace unit_tests::dm::all_to_all {
 
-constexpr uint32_t START_ID = 60;
+constexpr uint32_t START_ID = 300;
 
 // Test Config (i.e. test parameters)
 struct AllToAllConfig {
@@ -229,7 +229,7 @@ void directed_ideal_test(
     // Test config
     unit_tests::dm::all_to_all::AllToAllConfig test_config = {
 
-        .test_id = unit_tests::dm::all_to_all::START_ID + test_case_id,
+        .test_id = test_case_id,
 
         .mst_logical_start_coord = mst_start_coord,
         .sub_logical_start_coord = sub_start_coord,
@@ -279,7 +279,7 @@ void packet_sizes_test(
             // Test config
             unit_tests::dm::all_to_all::AllToAllConfig test_config = {
 
-                .test_id = unit_tests::dm::all_to_all::START_ID + test_case_id,
+                .test_id = test_case_id,
 
                 .mst_logical_start_coord = mst_start_coord,
                 .sub_logical_start_coord = sub_start_coord,

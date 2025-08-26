@@ -377,6 +377,10 @@ void JitBuildState::compile_one(
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
 
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
+        cmd += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
+    }
+
     if (settings) {
         // Append user args
         if (process_defines_at_compile_) {
@@ -440,7 +444,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     string lflags = this->lflags_;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
-        lflags += "-save-temps -fdump-tree-all -fdump-rtl-all ";
+        lflags += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
     }
 
     // Append user args
