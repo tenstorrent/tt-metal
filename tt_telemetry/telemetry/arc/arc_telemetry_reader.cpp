@@ -81,6 +81,9 @@ std::map<ChipIdentifier, std::shared_ptr<ARCTelemetryReader>> create_arc_telemet
             std::unique_ptr<tt::umd::TTDevice> tt_device = tt::umd::TTDevice::create(pci_device_number);
 
             if (tt_device) {
+                // Initialize the device
+                tt_device->init_tt_device();
+
                 // Create ARCTelemetryReader with the TTDevice
                 auto arc_reader = std::make_shared<ARCTelemetryReader>(chip_identifier, std::move(tt_device));
                 arc_readers[chip_identifier] = arc_reader;
