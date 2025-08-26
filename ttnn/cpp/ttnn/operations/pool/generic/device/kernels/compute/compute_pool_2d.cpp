@@ -23,8 +23,6 @@
 #define FACE_WIDTH 16
 #define FACE_HEIGHT 16
 
-#include "tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel.h"
-
 namespace NAMESPACE {
 
 void MAIN {
