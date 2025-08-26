@@ -403,7 +403,7 @@ void RunTestIEth(WatcherFixture* fixture, IDevice* device, watcher_features_t fe
 // Run tests for host-side sanitization (uses functions that are from watcher_server.hpp).
 void CheckHostSanitization(IDevice* device) {
     // Try reading from a core that doesn't exist
-    constexpr CoreCoord core = {16, 16};
+    constexpr CoreCoord core = {99, 99};
     uint64_t addr = 0;
     uint32_t sz_bytes = 4;
     try {
