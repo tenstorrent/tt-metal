@@ -352,8 +352,8 @@ void MAIN {
                             uint32_t index_mask = w + index_subblock_w_offset;
                             transpose_wh_init_short(cb_x);
                             transpose_wh_tile(cb_x, index, 0);
-                            // welford(0, 1, 2, curr_xy_coord, curr_xy_limit, 0);
-                            // curr_xy_coord += 32; // Test hangs when this is run
+                            welford(0, 1, 2, curr_xy_coord, curr_xy_limit, 0);
+                            curr_xy_coord += 32;  // Test hangs when this is run
                         }
                         tile_regs_commit();
                         cb_pop_front(read_from_ping ? cb_ex_ping : cb_ex_pong, 2);
@@ -367,12 +367,7 @@ void MAIN {
                     }
                     index_h_offset += block_w;
                 }
-#ifdef TILIZE_IN
-                cb_pop_front(cb_in, out_block_hw_actual);
-#else
-                cb_pop_front(cb_in0, out_block_hw_normal);
-#endif
-                cb_push_back(cb_x, out_block_hw_normal);
+                cb_pop_front(cb_x, out_block_hw_normal);
                 DPRINT << "welford done: out_block_index: " << out_block_index << ENDL();
             }
 
