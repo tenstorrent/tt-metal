@@ -251,7 +251,6 @@ class T5DenseGatedActDense:
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            breakpoint()
         hidden_states = ttnn.squeeze(hidden_states, 0)
         return hidden_states
 
@@ -295,7 +294,6 @@ class T5EncoderLayer:
         hidden_states_ff = self.ff(
             hidden_states_residual1, ccl_manager=self.ccl_manager, parallel_config=self.parallel_config
         )
-        breakpoint()
         return hidden_states_ff + hidden_states_residual1
 
 
