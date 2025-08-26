@@ -93,26 +93,26 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     // create_cb(program, INDEX_HINT_TENSOR_DTYPE, IsInCB::INDEX_HINT, worker_cores_range, index_hint_stick_size_bytes);
     create_cb(program, OUTPUT_TENSOR_DATA_TYPE, IsInCB::OUTPUT, worker_cores_range, output_stick_size_bytes);
 
-    std::vector<uint32_t> compile_time_args{
-        is_elements_dram,
-        is_test_elements_dram,
-        // is_index_hint_dram,
-        is_output_dram,
-        elements_tensor_buffer_address,
-        test_elements_tensor_buffer_address,
-        // index_hint_tensor_buffer_address,
-        output_tensor_buffer_address,
-        static_cast<uint32_t>(IsInCB::ELEMENTS),
-        static_cast<uint32_t>(IsInCB::TEST_ELEMENTS),
-        // static_cast<uint32_t>(IsInCB::INDEX_HINT),
-        static_cast<uint32_t>(IsInCB::OUTPUT),
-        single_fetch_chunk_size,
-        elements_stick_size_bytes,
-        test_elements_stick_size_bytes,
-        // index_hint_stick_size_bytes,
-        output_stick_size_bytes,
-        static_cast<uint32_t>(invert),
-    };
+    std::vector<uint32_t> compile_time_args{// is_elements_dram,
+                                            // is_test_elements_dram,
+                                            // is_index_hint_dram,
+                                            // is_output_dram,
+                                            elements_tensor_buffer_address,
+                                            test_elements_tensor_buffer_address,
+                                            // index_hint_tensor_buffer_address,
+                                            output_tensor_buffer_address,
+                                            static_cast<uint32_t>(IsInCB::ELEMENTS),
+                                            static_cast<uint32_t>(IsInCB::TEST_ELEMENTS),
+                                            // static_cast<uint32_t>(IsInCB::INDEX_HINT),
+                                            static_cast<uint32_t>(IsInCB::OUTPUT),
+                                            single_fetch_chunk_size,
+                                            elements_stick_size_bytes,
+                                            test_elements_stick_size_bytes,
+                                            // index_hint_stick_size_bytes,
+                                            output_stick_size_bytes,
+                                            // static_cast<uint32_t>(assume_unique),
+                                            static_cast<uint32_t>(invert),
+                                            1};
     TensorAccessorArgs(*elements_buffer).append_to(compile_time_args);
     TensorAccessorArgs(*test_elements_buffer).append_to(compile_time_args);
     // TensorAccessorArgs(*index_hint_buffer).append_to(compile_time_args);
