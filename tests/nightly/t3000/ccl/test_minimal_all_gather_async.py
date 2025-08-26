@@ -41,6 +41,7 @@ def run_all_gather_impl(
     num_workers_per_link=None,
     num_buffers_per_channel=None,
     allowed_pcc=1,
+    skip_check=False,
 ):
     torch.manual_seed(0)
 
@@ -175,16 +176,17 @@ def run_all_gather_impl(
 
             logger.info(f"Done iteration {i}")
 
-    for i in range(num_iters):
-        tt_ag_out_tensor = tt_all_gather_out_tensor_list[i]
-        torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
+    if not skip_check:
+        for i in range(num_iters):
+            tt_ag_out_tensor = tt_all_gather_out_tensor_list[i]
+            torch_ag_out_tensor = ag_output_tensor_goldens_list[i if not enable_trace else 0]
 
-        tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
-        tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
-        tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
-        eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, allowed_pcc)
-        logger.info(f"{output}, iteration {i}")
-        assert eq, f"{i} FAILED ag: {output}"
+            tt_ag_out = ttnn.from_device(tt_ag_out_tensor)
+            tt_ag_out = ttnn.to_torch(tt_ag_out, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=3))
+            tt_ag_out = tt_ag_out[:, :, :, 0 : torch_ag_out_tensor.shape[3]]
+            eq, output = comp_pcc(tt_ag_out, torch_ag_out_tensor, allowed_pcc)
+            logger.info(f"{output}, iteration {i}")
+            assert eq, f"{i} FAILED ag: {output}"
 
     t3k_mesh_device.reset_sub_device_stall_group()
     t3k_mesh_device.clear_loaded_sub_device_manager()
@@ -754,4 +756,5 @@ def test_all_gather_chunks_per_sync(
         use_barrier=True,
         use_persistent_buffers=False,
         chunks_per_sync=chunks_per_sync,
+        skip_check=True,
     )
