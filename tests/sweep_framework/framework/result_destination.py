@@ -366,9 +366,6 @@ class FileResultDestination(ResultDestination):
                     # fallback to string representation for unsupported types
                     coerced_value = str(v)
 
-                if i == 0:
-                    logger.info(f"k: {k}, v:  {coerced_value}")
-
                 # Map value into appropriate OpParam field
                 if isinstance(coerced_value, (int, float)):
                     op_param_list.append(OpParam(param_name=k, param_value_numeric=float(coerced_value)))
