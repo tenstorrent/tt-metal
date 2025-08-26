@@ -16,6 +16,10 @@ on:
         required: false
         type: string
         default: "in-service"
+      topology:
+        required: false
+        type: string
+        default: "config-t3000"
 
 jobs:
   profiler-tests:
@@ -23,6 +27,8 @@ jobs:
       fail-fast: false
     name: "profiler tests"
     runs-on:
+      - arch-wormhole_b0
+      - ${{ inputs.topology }}
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image }}
