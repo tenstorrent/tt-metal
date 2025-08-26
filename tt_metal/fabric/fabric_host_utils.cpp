@@ -12,7 +12,7 @@
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <tt-metalium/metal_soc_descriptor.h>
 #include "impl/context/metal_context.hpp"
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "erisc_datamover_builder.hpp"
 #include <set>
 #include <vector>
 #include <algorithm>

@@ -9,7 +9,7 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include <tt_metal/fabric/erisc_datamover_builder.hpp>
 
 namespace tt::tt_fabric {
 

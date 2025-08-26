@@ -8,11 +8,10 @@
 #include <cmath>
 
 #include "ccl_host_datastructures.hpp"
-#include <tt-metalium/erisc_datamover_builder.hpp>
-#include <tt-metalium/fabric.hpp>
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
+#include <tt-metalium/fabric.hpp>
 #include "tt-metalium/hal.hpp"
 #include "ttnn/types.hpp"
 
