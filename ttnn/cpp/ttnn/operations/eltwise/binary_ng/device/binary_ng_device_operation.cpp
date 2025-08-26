@@ -179,15 +179,15 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const auto& output_tensor = tensor_args.output_tensor;
 
     // Validate storage type for input tensors
-    TT_FATAL(
+    TT_ASSERT(
         input_tensor_a.storage_type() == StorageType::DEVICE,
-        "Input tensor A must have DEVICE storage type, got {}",
+        "Input tensor A must be on device, got storage type: {}",
         input_tensor_a.storage_type());
 
     if (input_tensor_b.has_value()) {
-        TT_FATAL(
+        TT_ASSERT(
             input_tensor_b->storage_type() == StorageType::DEVICE,
-            "Input tensor B must have DEVICE storage type, got {}",
+            "Input tensor B must be on device, got storage type: {}",
             input_tensor_b->storage_type());
     }
 
