@@ -104,7 +104,6 @@ class RMSNorm(LightweightModule):
                     if is_mesh_device
                     else None
                 ),
-                enable_multihost_format=True,
             )
 
         self.sharded_output_config = sharded_output_config
