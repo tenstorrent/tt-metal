@@ -141,7 +141,7 @@ while [[ "$found" == "false" ]]; do
   while [ $attempt -le $max_retries ]; do
     echo "Attempt $attempt on $(git rev-parse HEAD)"
     echo "Run: $test"
-    if timeout -k 10s "$timeout_duration_iteration" bash -lc "$test"; then
+    if timeout -k 10s "$timeout_duration_iteration" $test; then
       timeout_rc=0
       break
     else
