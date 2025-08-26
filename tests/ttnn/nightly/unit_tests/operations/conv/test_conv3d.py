@@ -217,3 +217,36 @@ def test_conv3d_mochi_shapes(
     pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
     logger.info(f"{pcc_message}")
     assert pcc_passed, pcc_message
+
+
+@pytest.mark.parametrize("B", [1])
+@pytest.mark.parametrize("C_in", [3])
+@pytest.mark.parametrize("C_out", [1280])
+@pytest.mark.parametrize("T", [2])
+@pytest.mark.parametrize("H", [14])
+@pytest.mark.parametrize("W", [14])
+@pytest.mark.parametrize("kernel_size", [(2, 14, 14)], ids=["kernel_21414"])
+@pytest.mark.parametrize("stride", [(2, 14, 14)], ids=["stride_21414"])
+@pytest.mark.parametrize("padding", [(0, 0, 0)], ids=["padding_000"])
+@pytest.mark.parametrize("padding_mode", ["zeros"])
+def test_conv3d_qwen_style_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
+    input_shape = (B, C_in, T, H, W)
+    out_channels = C_out
+    kernel_size = kernel_size
+    stride = stride
+    padding = padding
+    padding_mode = padding_mode
+    grid_size = device.compute_with_storage_grid_size()
+    run_conv3d_test(
+        device,
+        input_shape,
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        padding_mode,
+        grid_size=grid_size,
+        C_out_block=32,
+        use_bias=False,
+        in_channel_alignment=16,
+    )

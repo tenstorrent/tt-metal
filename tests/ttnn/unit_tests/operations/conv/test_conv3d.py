@@ -94,7 +94,9 @@ def create_conv3d_config(
     )
 
 
-def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, padding_mode, device):
+def setup_conv3d_test(
+    input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, in_channel_alignment=ALIGNMENT
+):
     """Common setup for Conv3D tests, preparing inputs and ground truth."""
     torch.manual_seed(42)
 
@@ -121,7 +123,7 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
     gt_output = conv3d_module(input_tensor)
 
     # Prepare input for TTNN
-    tt_input = prepare_input_tensor(input_tensor, C, device)
+    tt_input = prepare_input_tensor(input_tensor, C, device, alignment=in_channel_alignment)
 
     kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -134,25 +136,53 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
     return tt_input, conv3d_module, gt_output, kernel_config, (N, D_out, H_out, W_out)
 
 
-def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=(1, 1)):
+def run_conv3d_test(
+    device,
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    padding,
+    padding_mode,
+    grid_size=(1, 1),
+    C_in_block=0,
+    C_out_block=0,
+    T_out_block=1,
+    W_out_block=1,
+    H_out_block=1,
+    use_bias=True,
+    in_channel_alignment=ALIGNMENT,
+):
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
-        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device
+        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, in_channel_alignment
     )
     N, D_out, H_out, W_out = output_dims
     C = input_shape[1]
 
     # Prepare weights and bias for TTNN
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
+    tt_weight, tt_bias = prepare_weights(
+        conv3d_module, C, out_channels, device, C_in_block=C_in_block, alignment=in_channel_alignment
+    )
 
     # Create config and run TTNN conv3d
     config = create_conv3d_config(
-        out_channels, kernel_size, stride, padding, padding_mode, compute_with_storage_grid_size=grid_size
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        padding_mode,
+        C_out_block=C_out_block,
+        C_in_block=C_in_block,
+        T_out_block=T_out_block,
+        W_out_block=W_out_block,
+        H_out_block=H_out_block,
+        compute_with_storage_grid_size=grid_size,
     )
 
     tt_output = ttnn.experimental.conv3d(
         input_tensor=tt_input,
         weight_tensor=tt_weight,
-        bias_tensor=tt_bias,
+        bias_tensor=tt_bias if use_bias else None,
         config=config,
         compute_kernel_config=kernel_config,
     )
