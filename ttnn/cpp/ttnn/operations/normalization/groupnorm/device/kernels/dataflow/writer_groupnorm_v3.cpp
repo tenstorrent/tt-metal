@@ -7,6 +7,12 @@
 #include "debug/dprint_tile.h"
 
 void kernel_main() {
+    // CB indices
+    // ----------
+    constexpr uint32_t dst_cb_idx = tt::CBIndex::c_1;
+    constexpr uint32_t sum_scaler_cb_idx = tt::CBIndex::c_6;
+    constexpr uint32_t mean_scaler_cb_idx = tt::CBIndex::c_7;
+
     // Runtime args
     // ------------
     const uint32_t dst_base_addr = get_arg_val<uint32_t>(0);
@@ -14,24 +20,22 @@ void kernel_main() {
 
     // Compile time args
     // -----------------
-    constexpr uint32_t dst_cb_idx = get_compile_time_arg_val(0);
-    constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(1);
-    constexpr uint32_t tiles_per_page = get_compile_time_arg_val(2);
-    constexpr uint32_t dst_page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t pages_per_group = get_compile_time_arg_val(4);
-    constexpr uint32_t pages_per_batch = get_compile_time_arg_val(5);
-    constexpr uint32_t num_batches = get_compile_time_arg_val(6);
-    constexpr uint32_t scaler_cb_idx = get_compile_time_arg_val(7);
+    constexpr bool dst_is_dram = (bool)get_compile_time_arg_val(0);
+    constexpr uint32_t tiles_per_page = get_compile_time_arg_val(1);
+    constexpr uint32_t dst_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t pages_per_group = get_compile_time_arg_val(3);
+    constexpr uint32_t pages_per_batch = get_compile_time_arg_val(4);
+    constexpr uint32_t num_batches = get_compile_time_arg_val(5);
 
     //-------------------------------------------------------------------------
     // Write scaler to scaler cb
-    cb_reserve_back(scaler_cb_idx, 1);
-    const uint32_t scaler_cb_addr = get_write_ptr(scaler_cb_idx);
+    cb_reserve_back(sum_scaler_cb_idx, 1);
+    const uint32_t scaler_cb_addr = get_write_ptr(sum_scaler_cb_idx);
     const uint64_t scaler_noc_addr = get_noc_addr(scaler_cb_addr);
 
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scaler_cb_addr);
+    auto sum_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scaler_cb_addr);
     for (int j = 0; j < 128; ++j) {
-        ptr[j] = 0x3f803f80;  // 1.0f packed twice
+        sum_ptr[j] = 0x3f803f80;  // 1.0f packed twice
     }
 
     noc_async_read_one_packet_set_state(scaler_noc_addr, 512);
@@ -40,9 +44,28 @@ void kernel_main() {
     noc_async_read_one_packet_with_state(scaler_noc_addr, scaler_cb_addr + (3 << 9));
     noc_async_read_barrier();
 
-    cb_push_back(scaler_cb_idx, 1);
+    cb_push_back(sum_scaler_cb_idx, 1);
+
+    // Write mean to mean scaler cb
+    cb_reserve_back(mean_scaler_cb_idx, 1);
+    const uint32_t mean_scaler_cb_addr = get_write_ptr(mean_scaler_cb_idx);
+    const uint64_t mean_scaler_noc_addr = get_noc_addr(mean_scaler_cb_addr);
+
+    auto mean_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mean_scaler_cb_addr);
+    for (int j = 0; j < 128; ++j) {
+        mean_ptr[j] = 0x35cd35cd;  // 1.0f packed twice
+    }
+
+    noc_async_read_one_packet_set_state(mean_scaler_noc_addr, 512);
+    noc_async_read_one_packet_with_state(mean_scaler_noc_addr, mean_scaler_cb_addr + (1 << 9));
+    noc_async_read_one_packet_with_state(mean_scaler_noc_addr, mean_scaler_cb_addr + (2 << 9));
+    noc_async_read_one_packet_with_state(mean_scaler_noc_addr, mean_scaler_cb_addr + (3 << 9));
+    noc_async_read_barrier();
+
+    cb_push_back(mean_scaler_cb_idx, 1);
 
     //-------------------------------------------------------------------------
+    // Write output to DRAM
     const auto s_dst = get_interleaved_addr_gen<dst_is_dram, dst_page_size>(dst_base_addr);
     for (uint32_t batch = 0; batch < num_batches; ++batch) {
         const uint32_t batch_offset = batch * pages_per_batch;

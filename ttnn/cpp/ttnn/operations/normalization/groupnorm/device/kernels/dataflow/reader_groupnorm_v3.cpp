@@ -7,6 +7,10 @@
 #include "debug/dprint_tile.h"
 
 void kernel_main() {
+    // CB indices
+    // ----------
+    constexpr uint32_t src_cb_idx = tt::CBIndex::c_0;
+
     // Runtime args
     // ------------
     const uint32_t src_base_addr = get_arg_val<uint32_t>(0);
@@ -14,13 +18,12 @@ void kernel_main() {
 
     // Compile time args
     // -----------------
-    constexpr uint32_t src_cb_idx = get_compile_time_arg_val(0);
-    constexpr bool src_is_dram = (bool)get_compile_time_arg_val(1);
-    constexpr uint32_t tiles_per_page = get_compile_time_arg_val(2);
-    constexpr uint32_t src_page_size = get_compile_time_arg_val(3);
-    constexpr uint32_t pages_per_group = get_compile_time_arg_val(4);
-    constexpr uint32_t pages_per_batch = get_compile_time_arg_val(5);
-    constexpr uint32_t num_batches = get_compile_time_arg_val(6);
+    constexpr bool src_is_dram = (bool)get_compile_time_arg_val(0);
+    constexpr uint32_t tiles_per_page = get_compile_time_arg_val(1);
+    constexpr uint32_t src_page_size = get_compile_time_arg_val(2);
+    constexpr uint32_t pages_per_group = get_compile_time_arg_val(3);
+    constexpr uint32_t pages_per_batch = get_compile_time_arg_val(4);
+    constexpr uint32_t num_batches = get_compile_time_arg_val(5);
 
     // Read this 3 times for mean, var, and output
     constexpr uint32_t num_reads = 3;

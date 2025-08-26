@@ -50,6 +50,7 @@ operation::ProgramWithCallbacks groupnorm_v3(
     CoreRangeSet cores_used = CoreRangeSet(cores_used_coords);
 
     // Create circular buffers
+    // Input CB
     const uint32_t src_cb_index = tt::CBIndex::c_0;
     const uint32_t src_page_size = chunk_size * tt::datum_size(in_data_format);
     const uint32_t src_tile_size = tt::tt_metal::detail::TileSize(in_data_format);
@@ -59,6 +60,7 @@ operation::ProgramWithCallbacks groupnorm_v3(
                                    .set_page_size(src_cb_index, src_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, cores_used, src_cb_config);
 
+    // Output CB
     const uint32_t dst_cb_index = tt::CBIndex::c_1;
     const uint32_t dst_page_size = chunk_size * tt::datum_size(out_data_format);
     const uint32_t dst_tile_size = tt::tt_metal::detail::TileSize(out_data_format);
@@ -68,19 +70,51 @@ operation::ProgramWithCallbacks groupnorm_v3(
                                    .set_page_size(dst_cb_index, dst_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, cores_used, dst_cb_config);
 
-    const uint32_t mean_cb_index = tt::CBIndex::c_2;
+    // Sum CB
+    const uint32_t sum_cb_index = tt::CBIndex::c_2;
+    const uint32_t sum_cb_size = tt::tt_metal::detail::TileSize(in_data_format);
+    const auto sum_cb_config = tt::tt_metal::CircularBufferConfig(sum_cb_size, {{sum_cb_index, in_data_format}})
+                                   .set_page_size(sum_cb_index, sum_cb_size);
+    tt::tt_metal::CreateCircularBuffer(program, cores_used, sum_cb_config);
+
+    // Mean CB
+    const uint32_t mean_cb_index = tt::CBIndex::c_3;
     const uint32_t mean_cb_size = tt::tt_metal::detail::TileSize(in_data_format);
     const auto mean_cb_config = tt::tt_metal::CircularBufferConfig(mean_cb_size, {{mean_cb_index, in_data_format}})
                                     .set_page_size(mean_cb_index, mean_cb_size);
     tt::tt_metal::CreateCircularBuffer(program, cores_used, mean_cb_config);
 
-    // Create scaler cb
-    const uint32_t scaler_cb_index = tt::CBIndex::c_3;
-    const uint32_t scaler_cb_size = tt::tt_metal::detail::TileSize(in_data_format);
-    const auto scaler_cb_config =
-        tt::tt_metal::CircularBufferConfig(scaler_cb_size, {{scaler_cb_index, in_data_format}})
-            .set_page_size(scaler_cb_index, scaler_cb_size);
-    tt::tt_metal::CreateCircularBuffer(program, cores_used, scaler_cb_config);
+    // sum of (x - E[x])^2 CB
+    const uint32_t varsum_cb_index = tt::CBIndex::c_4;
+    const uint32_t varsum_cb_size = tt::tt_metal::detail::TileSize(in_data_format);
+    const auto varsum_cb_config =
+        tt::tt_metal::CircularBufferConfig(varsum_cb_size, {{varsum_cb_index, in_data_format}})
+            .set_page_size(varsum_cb_index, varsum_cb_size);
+    tt::tt_metal::CreateCircularBuffer(program, cores_used, varsum_cb_config);
+
+    // Variance CB
+    const uint32_t variance_cb_index = tt::CBIndex::c_5;
+    const uint32_t variance_cb_size = tt::tt_metal::detail::TileSize(in_data_format);
+    const auto variance_cb_config =
+        tt::tt_metal::CircularBufferConfig(variance_cb_size, {{variance_cb_index, in_data_format}})
+            .set_page_size(variance_cb_index, variance_cb_size);
+    tt::tt_metal::CreateCircularBuffer(program, cores_used, variance_cb_config);
+
+    // Sum scaler CB
+    const uint32_t sum_scaler_cb_index = tt::CBIndex::c_6;
+    const uint32_t sum_scaler_cb_size = tt::tt_metal::detail::TileSize(in_data_format);
+    const auto sum_scaler_cb_config =
+        tt::tt_metal::CircularBufferConfig(sum_scaler_cb_size, {{sum_scaler_cb_index, in_data_format}})
+            .set_page_size(sum_scaler_cb_index, sum_scaler_cb_size);
+    tt::tt_metal::CreateCircularBuffer(program, cores_used, sum_scaler_cb_config);
+
+    // Mean scaler CB
+    const uint32_t mean_scaler_cb_index = tt::CBIndex::c_7;
+    const uint32_t mean_scaler_cb_size = tt::tt_metal::detail::TileSize(in_data_format);
+    const auto mean_scaler_cb_config =
+        tt::tt_metal::CircularBufferConfig(mean_scaler_cb_size, {{mean_scaler_cb_index, in_data_format}})
+            .set_page_size(mean_scaler_cb_index, mean_scaler_cb_size);
+    tt::tt_metal::CreateCircularBuffer(program, cores_used, mean_scaler_cb_config);
 
     const auto N = a.logical_shape()[0];
     const auto C = a.logical_shape()[1];
@@ -105,7 +139,6 @@ operation::ProgramWithCallbacks groupnorm_v3(
             .noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(device->arch()),
             .compile_args =
                 {
-                    src_cb_index,
                     src_is_dram,
                     src_tiles_per_page,
                     src_page_size,
@@ -132,14 +165,10 @@ operation::ProgramWithCallbacks groupnorm_v3(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args =
-                {src_cb_index,
-                 src_tiles_per_page,
+                {src_tiles_per_page,
                  pages_per_group,
                  N,  // num_batches
-                 mean_cb_index,
-                 dst_cb_index,
-                 dst_tiles_per_page,
-                 scaler_cb_index},
+                 dst_tiles_per_page},
             .defines = {}});
 
     auto writer_kernel = CreateKernel(
@@ -151,14 +180,12 @@ operation::ProgramWithCallbacks groupnorm_v3(
             .noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch()),
             .compile_args =
                 {
-                    dst_cb_index,
                     dst_is_dram,
                     dst_tiles_per_page,
                     dst_page_size,
                     pages_per_group,
                     pages_per_batch,
                     N,  // num_batches
-                    scaler_cb_index,
                 },
             .defines = {}});
 
