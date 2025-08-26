@@ -23,7 +23,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "test_common.hpp"
-#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/impl/profiler/profiler_paths.hpp"
