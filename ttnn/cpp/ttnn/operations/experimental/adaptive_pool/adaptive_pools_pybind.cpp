@@ -20,7 +20,7 @@ namespace py = pybind11;
 void bind_adaptive_avg_pool2d_operation(py::module& module) {
     bind_registered_operation(
         module,
-        ttnn::experimental_adaptive_avg_pool2d,
+        ttnn::adaptive_avg_pool2d,
         R"doc(
         Applies experimental adaptive average pooling to the input tensor. Unlike regular pooling, adaptive pooling
         automatically calculates the kernel size and stride to produce the desired output size.
@@ -54,7 +54,7 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
             >>> input_perm = torch.permute(input, (0, 2, 3, 1)) # this op expects a [N, H, W, C] format
             >>> input_reshape = input_perm.reshape(input_shape) # this op expects [1, 1, NHW, C]
             >>> tt_input = ttnn.from_torch(input_reshape, device=device)
-            >>> tt_output = ttnn.experimental_adaptive_avg_pool2d(
+            >>> tt_output = ttnn.adaptive_avg_pool2d(
                             input_tensor=tt_input,
                             batch_size=in_N,
                             input_h=in_H,
@@ -67,7 +67,7 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
                         )
         )doc",
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::experimental_adaptive_avg_pool2d)& self,
+            [](const decltype(ttnn::adaptive_avg_pool2d)& self,
                const ttnn::Tensor& input_tensor,
                uint32_t batch_size,
                uint32_t input_h,
@@ -106,7 +106,7 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
 void bind_adaptive_max_pool2d_operation(py::module& module) {
     bind_registered_operation(
         module,
-        ttnn::experimental_adaptive_max_pool2d,
+        ttnn::adaptive_max_pool2d,
         R"doc(
         Applies experimental adaptive max pooling to the input tensor. Unlike regular pooling, adaptive pooling
         automatically calculates the kernel size and stride to produce the desired output size.
@@ -140,7 +140,7 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
             >>> input_perm = torch.permute(input, (0, 2, 3, 1)) # this op expects a [N, H, W, C] format
             >>> input_reshape = input_perm.reshape(input_shape) # this op expects [1, 1, NHW, C]
             >>> tt_input = ttnn.from_torch(input_reshape, device=device)
-            >>> tt_output = ttnn.experimental_adaptive_max_pool2d(
+            >>> tt_output = ttnn.adaptive_max_pool2d(
                             input_tensor=tt_input,
                             batch_size=in_N,
                             input_h=in_H,
@@ -153,7 +153,7 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
                         )
         )doc",
         ttnn::pybind_overload_t{
-            [](const decltype(ttnn::experimental_adaptive_max_pool2d)& self,
+            [](const decltype(ttnn::adaptive_max_pool2d)& self,
                const ttnn::Tensor& input_tensor,
                uint32_t batch_size,
                uint32_t input_h,

@@ -709,7 +709,7 @@ def run_adaptive_max_pool(
         ttnn_input = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
 
     # run ttnn adaptive_max_pool2d
-    ttnn_output = ttnn.adaptive_max_pool2d(
+    ttnn_output = ttnn.max_pool2d(
         input_tensor=ttnn_input,
         batch_size=in_n,
         input_h=in_h,
