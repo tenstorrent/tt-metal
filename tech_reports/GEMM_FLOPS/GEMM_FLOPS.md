@@ -56,7 +56,7 @@ TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmar
 
 ### N300 Card Instructions
 
-Alternatively, to test on an N300 card, use the following commands. 
+Alternatively, to test on an N300 card, use the following commands.
 
 **For manually selected matmul configurations:**
 ```bash
@@ -77,7 +77,7 @@ Python scripts for reproducing the plots are included in this directory.
 
 ## Design of Experiments
 The parameters of interest are 3 fold:
-1. Dimensions: The sizes of the matrices along each axis, denoted as m , n and k . (m, k) represents the size of the input tensor, while (k, n) is the size of the activation tensor. 
+1. Dimensions: The sizes of the matrices along each axis, denoted as m , n and k . (m, k) represents the size of the input tensor, while (k, n) is the size of the activation tensor.
 Larger tensors require more computation since the number of operations needed to perform matrix multiplication increases as O(m*k*n).
 2. Computation Fidelity: Referred to as LoFi, HiFi2, HiFi3 and HiFi4. Internally, the matrix engine can adjust the number of bits being processed, which affects both the precision of the results and the computation speed.
 3. Input/Output Datatype: Larger datatypes require more memory for storage. As a result, more precise datatypes can become bottlenecked if stored in DRAM.
