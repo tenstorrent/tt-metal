@@ -143,6 +143,9 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto eth_links = cluster.get_ethernet_cores_grouped_by_connected_chips(chip_id);
     bool is_ubb = cluster.get_board_type(chip_id) == BoardType::UBB;
+
+    auto mmio_chip_ids = cluster.mmio_chip_ids();
+
     std::vector<chip_id_t> adjacent_chips;
 
     for (const auto& [connected_chip_id, eth_ports] : eth_links) {
@@ -150,7 +153,21 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
         if (is_ubb && cluster.is_external_cable(chip_id, eth_ports[0])) {
             continue;
         }
-        if (eth_ports.size() >= num_ports_per_side) {
+        if (eth_ports.size() > 0) {
+            // Special case for TG not to include MMIO devices in adjacency map because they are control chips
+            if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::TG && mmio_chip_ids.contains(connected_chip_id)) {
+                continue;
+            }
+
+            if (eth_ports.size() < num_ports_per_side) {
+                log_warning(
+                    tt::LogFabric,
+                    "Ethernet between chip {} and chip {} have {} expected ethernet ports, but only {} present",
+                    chip_id,
+                    connected_chip_id,
+                    num_ports_per_side,
+                    eth_ports.size());
+            }
             adjacent_chips.push_back(connected_chip_id);
         }
     }
@@ -2314,7 +2331,7 @@ void ControlPlane::populate_fabric_connection_info(
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& fabric_context = this->get_fabric_context();
     const auto topology = fabric_context.get_fabric_topology();
-    const bool is_2d_fabric = topology == Topology::Mesh;
+    const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
     const auto sender_channel = is_2d_fabric ? router_direction : 0;
 
     // Always populate fabric router config for normal workers

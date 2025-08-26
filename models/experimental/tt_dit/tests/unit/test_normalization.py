@@ -9,7 +9,7 @@ import ttnn
 
 from ...utils.tensor import bf16_tensor
 from ...utils.check import assert_quality
-from ...layers.normalization import RMSNorm, LayerNorm, DistributedLayerNorm
+from ...layers.normalization import RMSNorm, LayerNorm, DistributedLayerNorm, GroupNorm
 from ...parallel.manager import CCLManager
 
 
@@ -222,3 +222,68 @@ def test_distributed_layernorm(
     )
     for i in range(tt_output.shape[0]):
         assert_quality(torch_output.squeeze(), tt_output[i].squeeze(), pcc=0.999_300)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize("group_count", [32])
+@pytest.mark.parametrize(
+    "mesh_axis",
+    [1, None],
+)
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (1, 512, 128, 128),
+        (1, 512, 256, 256),
+        (1, 512, 512, 512),
+        (1, 256, 512, 512),
+        (1, 256, 1024, 1024),
+    ],
+)
+def test_group_norm(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    input_shape: tuple[int, int, int, int],
+    group_count: int,
+    mesh_axis: int,
+) -> None:
+    torch_dtype = torch.bfloat16
+    ttnn_dtype = ttnn.bfloat16
+    torch.manual_seed(0)
+
+    torch_model = torch.nn.GroupNorm(num_groups=group_count, num_channels=input_shape[1])
+    torch.nn.init.normal_(torch_model.weight)
+    torch.nn.init.normal_(torch_model.bias)
+    torch_model.eval()
+
+    torch_input_tensor = torch.randn(input_shape, dtype=torch_dtype)
+
+    tt_model = GroupNorm.from_torch(
+        torch_ref=torch_model,
+        mesh_device=mesh_device,
+        mesh_axis=mesh_axis,
+        core_grid=ttnn.CoreGrid(x=8, y=8),
+    )
+
+    with torch.no_grad():
+        torch_output = torch_model(torch_input_tensor)
+
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor.permute(0, 2, 3, 1),
+        dtype=ttnn_dtype,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1) if mesh_axis is not None else None,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    tt_output = tt_model(tt_input_tensor)
+
+    tt_torch = ttnn.to_torch(
+        tt_output if mesh_axis is not None else ttnn.get_device_tensors(tt_output)[0],
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1) if mesh_axis is not None else None,
+    )
+
+    tt_torch = tt_torch.permute(0, 3, 1, 2)
+
+    assert_quality(torch_output, tt_torch, pcc=0.999_300)

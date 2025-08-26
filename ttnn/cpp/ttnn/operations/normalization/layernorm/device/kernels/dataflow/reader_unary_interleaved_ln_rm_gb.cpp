@@ -25,31 +25,26 @@ void kernel_main() {
     const uint32_t src0_tile_bytes = get_tile_size(cb_id_in0);
     const DataFormat src0_data_format = get_dataformat(cb_id_in0);
 
-    constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
-    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool gamma_is_dram = get_compile_time_arg_val(2) == 1;
-    constexpr bool beta_is_dram = get_compile_time_arg_val(3) == 1;
-    constexpr uint32_t blk = get_compile_time_arg_val(4);  // needed for correctness of softmax/LN kernels
+    constexpr uint32_t blk = get_compile_time_arg_val(0);  // needed for correctness of softmax/LN kernels
+    constexpr auto src0_args = TensorAccessorArgs<1>();
+    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+    constexpr auto gamma_args = TensorAccessorArgs<src1_args.next_compile_time_args_offset()>();
+    constexpr auto beta_args = TensorAccessorArgs<gamma_args.next_compile_time_args_offset()>();
+    constexpr uint32_t stick_size = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
-    const InterleavedAddrGenFast<src0_is_dram> src_a = {
-        .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
-
-    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(5) == 1;
-    constexpr uint32_t size = get_compile_time_arg_val(6);
+    const auto src_a = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
 
 #ifdef FUSE_GAMMA
-    const auto addrg = get_interleaved_addr_gen<gamma_is_dram, stick_size_is_pow2>(gamma_addr, size);
     const uint32_t gamma_tile_bytes = get_tile_size(cb_id_gamma);
+    const auto addrg = TensorAccessor(gamma_args, gamma_addr, stick_size);
 #endif
 #ifdef FUSE_BETA
-    const auto addrb = get_interleaved_addr_gen<beta_is_dram, stick_size_is_pow2>(beta_addr, size);
     const uint32_t beta_tile_bytes = get_tile_size(cb_id_beta);
+    const auto addrb = TensorAccessor(beta_args, beta_addr, stick_size);
 #endif
 #ifdef FUSE_PRE_ADD
     const uint32_t src1_tile_bytes = get_tile_size(cb_id_in1);
-    const DataFormat src1_data_format = get_dataformat(cb_id_in1);
-    const InterleavedAddrGenFast<src1_is_dram> src_b = {
-        .bank_base_address = b_addr, .page_size = src1_tile_bytes, .data_format = src1_data_format};
+    const auto src_b = TensorAccessor(src1_args, b_addr, src1_tile_bytes);
 #endif
 
     // Generate constant tiles for layernorm compute

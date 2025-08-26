@@ -172,8 +172,6 @@ def test_integration(mesh_device, mesh_shape):
         num_links=num_links,
         cluster_axis=axis,
         memory_config=output_memory_config,
-        global_semaphore=global_semaphore1,
-        init_semaphore=init_semaphore1,
         subdevice_id=worker_sub_device_id,
     )
     ttnn.synchronize_device(mesh_device)
@@ -193,9 +191,7 @@ def test_integration(mesh_device, mesh_shape):
         tt_metadata_tensor,
         num_links=num_links,
         memory_config=output_memory_config,
-        global_semaphore=global_semaphore2,
         axis=axis,
-        init_semaphore=init_semaphore2,
         subdevice_id=worker_sub_device_id,
     )
 

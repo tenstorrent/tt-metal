@@ -19,6 +19,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
@@ -40,7 +41,14 @@ constexpr size_t cb_page_size = 16;
 constexpr size_t n_cbs = 32;
 constexpr size_t data_buffer_size = cb_n_pages * cb_n_pages;
 
-std::vector<std::shared_ptr<Buffer>> create_output_buffers(Program& program, IDevice* device) {
+std::vector<std::shared_ptr<Buffer>> create_output_buffers(
+    distributed::MeshWorkload& workload, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    auto& program = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
+
     std::vector<std::shared_ptr<Buffer>> output_buffers;
     output_buffers.reserve(n_cbs);
     for (size_t i = 0; i < n_cbs; i++) {
@@ -75,57 +83,65 @@ std::vector<uint32_t> generate_rt_args(
     return rt_args;
 }
 
-TEST_F(DeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
-    Program program;
-    IDevice* device = devices_.at(0);
+TEST_F(MeshDeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
+    for (const auto& mesh_device : this->devices_) {
+        auto& cq = mesh_device->mesh_command_queue();
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        distributed::MeshWorkload workload;
+        Program program;
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
+        auto device = mesh_device->get_devices()[0];
 
-    auto const master_semaphore = CreateSemaphore(program, worker_core, 0, CoreType::WORKER);
-    auto const subordinate_semaphore = CreateSemaphore(program, worker_core, 0, CoreType::WORKER);
+        const auto master_semaphore = CreateSemaphore(program_, worker_core, 0, CoreType::WORKER);
+        const auto subordinate_semaphore = CreateSemaphore(program_, worker_core, 0, CoreType::WORKER);
 
-    std::vector<CBHandle> cbs;
-    cbs.reserve(n_cbs);
-    for (size_t i = 0; i < n_cbs; i++) {
-        CircularBufferConfig cb_config =
-            CircularBufferConfig(cb_n_pages * cb_page_size, {{i, tt::DataFormat::Float16_b}})
-                .set_page_size(i, cb_page_size);
-        cbs.push_back(CreateCircularBuffer(program, worker_core, cb_config));
-    }
+        std::vector<CBHandle> cbs;
+        cbs.reserve(n_cbs);
+        for (size_t i = 0; i < n_cbs; i++) {
+            CircularBufferConfig cb_config =
+                CircularBufferConfig(cb_n_pages * cb_page_size, {{i, tt::DataFormat::Float16_b}})
+                    .set_page_size(i, cb_page_size);
+            cbs.push_back(CreateCircularBuffer(program_, worker_core, cb_config));
+        }
 
-    auto const& master_data_buffers = create_output_buffers(program, device);
-    auto const& subordinate_data_buffers = create_output_buffers(program, device);
+        const auto& master_data_buffers = create_output_buffers(workload, mesh_device);
+        const auto& subordinate_data_buffers = create_output_buffers(workload, mesh_device);
 
-    std::vector<uint32_t> const& kernel_ct_args{n_cbs, cb_n_pages};
+        const std::vector<uint32_t>& kernel_ct_args{n_cbs, cb_n_pages};
 
-    auto const master_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_non_blocking_master_test_kernel.cpp",
-        worker_core,
-        tt::tt_metal::ReaderDataMovementConfig{kernel_ct_args});
-    auto const subordinate_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_non_blocking_subordinate_test_kernel.cpp",
-        worker_core,
-        tt::tt_metal::WriterDataMovementConfig{kernel_ct_args});
+        const auto master_kernel_id = tt::tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_non_blocking_master_test_kernel.cpp",
+            worker_core,
+            tt::tt_metal::ReaderDataMovementConfig{kernel_ct_args});
+        const auto subordinate_kernel_id = tt::tt_metal::CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/misc/circular_buffer/cb_non_blocking_subordinate_test_kernel.cpp",
+            worker_core,
+            tt::tt_metal::WriterDataMovementConfig{kernel_ct_args});
 
-    auto const& master_rt_args = generate_rt_args(master_semaphore, subordinate_semaphore, master_data_buffers);
-    auto const& subordinate_rt_args = generate_rt_args(master_semaphore, subordinate_semaphore, subordinate_data_buffers);
+        const auto& master_rt_args = generate_rt_args(master_semaphore, subordinate_semaphore, master_data_buffers);
+        const auto& subordinate_rt_args =
+            generate_rt_args(master_semaphore, subordinate_semaphore, subordinate_data_buffers);
 
-    tt::tt_metal::SetRuntimeArgs(program, master_kernel_id, worker_core, master_rt_args);
-    tt::tt_metal::SetRuntimeArgs(program, subordinate_kernel_id, worker_core, subordinate_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program_, master_kernel_id, worker_core, master_rt_args);
+        tt::tt_metal::SetRuntimeArgs(program_, subordinate_kernel_id, worker_core, subordinate_rt_args);
 
-    tt::tt_metal::detail::CompileProgram(device, program);
-    tt::tt_metal::detail::LaunchProgram(device, program, true);
+        distributed::EnqueueMeshWorkload(cq, workload, false);
 
-    std::vector<uint32_t> out_buf(data_buffer_size);
-    for (size_t i = 0; i < n_cbs; i++) {
-        tt::tt_metal::detail::ReadFromBuffer(master_data_buffers[i], out_buf);
+        std::vector<uint32_t> out_buf(data_buffer_size);
+        for (size_t i = 0; i < n_cbs; i++) {
+            tt::tt_metal::detail::ReadFromBuffer(master_data_buffers[i], out_buf);
 
-        uint8_t const* raw_data = reinterpret_cast<uint8_t*>(out_buf.data());
-        for (size_t pages_pushed = 0; pages_pushed < cb_n_pages; pages_pushed++) {
-            for (size_t requested_pages_free = 0; requested_pages_free < cb_n_pages; requested_pages_free++) {
-                ASSERT_EQ(
-                    static_cast<bool>(raw_data[pages_pushed * cb_n_pages + requested_pages_free]),
-                    requested_pages_free <= (cb_n_pages - pages_pushed));
+            const uint8_t* raw_data = reinterpret_cast<uint8_t*>(out_buf.data());
+            for (size_t pages_pushed = 0; pages_pushed < cb_n_pages; pages_pushed++) {
+                for (size_t requested_pages_free = 0; requested_pages_free < cb_n_pages; requested_pages_free++) {
+                    ASSERT_EQ(
+                        static_cast<bool>(raw_data[pages_pushed * cb_n_pages + requested_pages_free]),
+                        requested_pages_free <= (cb_n_pages - pages_pushed));
+                }
             }
         }
     }

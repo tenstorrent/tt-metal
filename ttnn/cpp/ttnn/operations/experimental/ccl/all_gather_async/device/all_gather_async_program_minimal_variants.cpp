@@ -179,8 +179,19 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     uint32_t page_size = input_tensor.buffer()->page_size();
     auto [num_targets_forward, num_targets_backward] =
         ccl::get_forward_backward_line_mcast_distance(ring_size, ring_index, topology, false);
-    auto [forward_args, backward_args] =
+    auto [unicast_forward_args, unicast_backward_args] =
         ccl::get_forward_backward_line_unicast_configuration(topology, sender_device, forward_device, backward_device);
+    auto [barrier_mcast_forward_args, barrier_mcast_backward_args] = ccl::get_forward_backward_line_mcast_configuration(
+        topology,
+        sender_device,
+        forward_device,
+        backward_device,
+        topology == ccl::Topology::Linear ? num_targets_forward : ring_size - 1,
+        topology == ccl::Topology::Linear ? num_targets_backward : ring_size - 1);
+
+    auto [ring_barrier_mcast_forward_args, ring_barrier_mcast_backward_args] =
+        ccl::get_forward_backward_line_mcast_configuration(
+            topology, sender_device, forward_device, backward_device, ring_size - 1, ring_size - 1);
     TT_FATAL(
         !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
 
@@ -470,10 +481,18 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                     sender_writer_compile_args);
                 if (dir) {
                     sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(), backward_args.begin(), backward_args.end());
+                        sender_writer_compile_args.end(), unicast_backward_args.begin(), unicast_backward_args.end());
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(),
+                        barrier_mcast_backward_args.begin(),
+                        barrier_mcast_backward_args.end());
                 } else {
                     sender_writer_compile_args.insert(
-                        sender_writer_compile_args.end(), forward_args.begin(), forward_args.end());
+                        sender_writer_compile_args.end(), unicast_forward_args.begin(), unicast_forward_args.end());
+                    sender_writer_compile_args.insert(
+                        sender_writer_compile_args.end(),
+                        barrier_mcast_forward_args.begin(),
+                        barrier_mcast_forward_args.end());
                 }
                 if (output_is_sharded) {
                     shard_builder::extend_sharding_compile_time_args(output_tensor, sender_writer_compile_args);
@@ -598,6 +617,8 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore& semaphore,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    bool using_persistent_buffers,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     bool use_optimal_ccl_for_llama = false) {
     tt::tt_metal::Program program{};
@@ -704,6 +725,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
         op_config.get_page_size(),        // tensor0_page_size
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
+        ring_size,                        // ring_size
+        barrier_semaphore.has_value() &&  // use_barrier_sem
+            !using_persistent_buffers,
     };
     writer_kernel_config.compile_args.insert(
         writer_kernel_config.compile_args.end(), forward_args.begin(), forward_args.end());
@@ -736,8 +760,10 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     auto output_cores_this_device = std::vector<CoreCoord>(
         output_cores_vec.begin() + start_core_index_for_device, output_cores_vec.begin() + end_core_index_for_device);
     log_trace(tt::LogOp, "output_cores_this_device: {}", output_cores_this_device);
+    CoreCoord barrier_core;
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
+        barrier_core = mesh_device->worker_core_from_logical_core(core);
 
         // construct input and output core x and y
         uint32_t base_pages_per_worker = input_tensor_num_pages / num_links;
@@ -815,6 +841,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
             drain_sync_core.x,                    // out_ready_sem_noc0_x
             drain_sync_core.y,                    // out_ready_sem_noc0_y
             out_ready_sem_wait_value,             // out_ready_sem_wait_value
+            barrier_semaphore.has_value()         // barrier_sem
+                ? barrier_semaphore.value().address()
+                : 0,
+            barrier_core.x,  // barrier_sem_noc0_x
+            barrier_core.y   // barrier_sem_noc0_y
         };
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
@@ -856,6 +887,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
             const auto& output = output_tensors[0];
 
             auto semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore.at(0);
+            auto barrier_semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->barrier_semaphore;
 
             log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
 
@@ -870,6 +902,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
                 worker_writer_sender_runtime_args[1] = semaphore.address();
+                if (barrier_semaphore.has_value()) {
+                    worker_writer_sender_runtime_args[11] = barrier_semaphore.value().address();
+                }
             }
         };
 

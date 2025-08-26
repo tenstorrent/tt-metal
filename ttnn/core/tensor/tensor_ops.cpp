@@ -30,7 +30,10 @@
 namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to_device(
-    const Tensor& input_tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) {
+    const Tensor& input_tensor,
+    distributed::MeshDevice* mesh_device,
+    ttsl::optional_reference<const MemoryConfig> mem_config,
+    QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
     if (input_tensor.storage_type() == StorageType::DEVICE) {

@@ -54,6 +54,8 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
+#include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 using std::vector;
 using namespace tt;
@@ -107,9 +109,9 @@ void get_max_page_size_and_num_pages(
     num_pages = total_size / page_size;
 }
 
-std::tuple<std::vector<tt_metal::Program>, tt_metal::experimental::GlobalCircularBuffer>
-create_programs(
-    tt_metal::IDevice* device,
+std::tuple<std::vector<tt_metal::distributed::MeshWorkload>, tt_metal::experimental::GlobalCircularBuffer>
+create_mesh_workloads(
+    tt_metal::distributed::MeshDevice* device,
     const CoreRangeSet& dram_reader_core,
     const CoreRangeSet& l1_receiver_cores,
     const std::vector<std::pair<CoreCoord, CoreRangeSet>>& sender_receiver_core_mapping,
@@ -122,7 +124,7 @@ create_programs(
     uint32_t num_receivers,
     uint32_t num_mixed_df_layers,
     uint32_t cb_padding,
-    const std::shared_ptr<tt::tt_metal::Buffer>& input_buffer,
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& input_buffer,
     bool use_sub_devices) {
     log_info(tt::LogTest, "created program");
     std::vector<tt_metal::Program> programs;
@@ -331,7 +333,15 @@ create_programs(
         tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, l1_receiver_core_coords[i], receiver_rt_args);
     }
 
-    return {std::move(programs), std::move(global_cb)};
+    std::vector<tt_metal::distributed::MeshWorkload> mesh_workloads;
+    for (auto& program : programs) {
+        auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
+        tt_metal::distributed::AddProgramToMeshWorkload(
+            mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
+        mesh_workloads.push_back(std::move(mesh_workload));
+    }
+
+    return {std::move(mesh_workloads), std::move(global_cb)};
 }
 
 float to_float(bfloat16 bfloat16_num) { return bfloat16_num.to_float(); }
@@ -374,7 +384,8 @@ bool validation_bfp8_b(
     uint32_t cb_num_blocks,
     uint32_t kt,
     uint32_t nt,
-    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer) {
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& out_buffer,
+    tt_metal::distributed::MeshDevice* device) {
     bool pass = true;
     std::vector<float> golden_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0);  // Initialize with zeros
     std::vector<float> result_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0);
@@ -382,7 +393,7 @@ bool validation_bfp8_b(
 
     std::vector<float> result_untilized;
     std::vector<uint32_t> result;
-    tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
+    tt_metal::distributed::ReadShard(device->mesh_command_queue(), result, out_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
     auto result_bfp8 = unpack_bfp8_tiles_into_float_vec(result, true, false);
     result_untilized = untilize_swizzled(result_bfp8, kt * 32 / num_blocks * cb_num_blocks, nt * 32);
 
@@ -416,14 +427,15 @@ bool validation_fp16(
     uint32_t cb_num_blocks,
     uint32_t kt,
     uint32_t nt,
-    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer) {
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& out_buffer,
+    tt_metal::distributed::MeshDevice* device) {
     bool pass = true;
     std::vector<float> golden_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0);  // Initialize with zeros
     std::vector<float> result_vec(kt * nt * 32 * 32 / num_blocks * cb_num_blocks, 0);
     auto num_datums_per_cb = kt * nt * 32 * 32 / num_blocks * cb_num_blocks;
 
     std::vector<uint32_t> result;
-    tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
+    tt_metal::distributed::ReadShard(device->mesh_command_queue(), result, out_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
     auto result_flat_layout = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
     auto result_untilized = untilize_swizzled(result_flat_layout, kt * 32 / num_blocks * cb_num_blocks, nt * 32);
@@ -459,13 +471,14 @@ bool validation_mixed_df(
     uint32_t cb_num_blocks,
     uint32_t kt,
     uint32_t nt,
-    const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer,
+    const std::shared_ptr<tt_metal::distributed::MeshBuffer>& out_buffer,
     uint32_t num_mixed_df_layers,
-    uint32_t num_receivers) {
+    uint32_t num_receivers,
+    tt_metal::distributed::MeshDevice* device) {
     bool pass = true;
 
     std::vector<uint32_t> result;
-    tt::tt_metal::detail::ReadFromBuffer(out_buffer, result);
+    tt_metal::distributed::ReadShard(device->mesh_command_queue(), result, out_buffer, tt_metal::distributed::MeshCoordinate(0, 0), true);
 
     auto result_bfp16 = unpack_uint32_vec_into_bfloat16_vec(result);
     auto result_untilized_fp16 = convert_layout_tile_nfaces_to_tile_swizzled(tt::stl::make_const_span(result_bfp16));
@@ -573,8 +586,8 @@ bool validation_mixed_df(
     return pass;
 }
 
-std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
-    tt_metal::IDevice* device,
+std::shared_ptr<tt_metal::distributed::MeshBuffer> create_and_transfer_data_sharded_cb(
+    tt_metal::distributed::MeshDevice* device,
     const vector<uint32_t>& input_vec,
     uint32_t ht,
     uint32_t wt,
@@ -600,26 +613,26 @@ std::shared_ptr<tt::tt_metal::Buffer> create_and_transfer_data_sharded_cb(
         {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
         {ht, wt});
 
+    BufferShardingArgs sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::WIDTH_SHARDED);
     log_info(tt::LogTest, "cores: {}", cores);
     log_info(tt::LogTest, "size_bytes: {}", size_bytes);
     log_info(tt::LogTest, "page_size_bytes: {}", page_size_bytes);
 
-    auto config = tt::tt_metal::ShardedBufferConfig{
-        .device = device,
-        .size = size_bytes,
+    auto device_local_config = tt_metal::distributed::DeviceLocalBufferConfig{
         .page_size = page_size_bytes,
         .buffer_type = buffer_type,
-        .buffer_layout = TensorMemoryLayout::WIDTH_SHARDED,
-        .shard_parameters = shard_spec};
+        .sharding_args = sharding_args};
 
-    std::shared_ptr<Buffer> input_buffer;
+    tt_metal::distributed::ReplicatedBufferConfig global_buf{.size = size_bytes};
+
+    std::shared_ptr<tt_metal::distributed::MeshBuffer> input_buffer;
     if (address.has_value()) {
-        input_buffer = CreateBuffer(config, address.value());
+        input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device, address.value());
     } else {
-        input_buffer = CreateBuffer(config);
+        input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device);
     }
-    tt::tt_metal::detail::WriteToBuffer(input_buffer, input_vec);
-    tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
+    tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, input_vec, false);
+    tt_metal::distributed::Finish(device->mesh_command_queue());
 
     log_info(tt::LogTest, "created sharded tensor");
 
@@ -729,7 +742,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        auto device = tt_metal::distributed::MeshDevice::create_unit_mesh(device_id);
 
         [[maybe_unused]] CoreCoord dram_bank_coord = CoreCoord{0, 0};
         CoreCoord dram_reader_core_coord = CoreCoord{0, 0};
@@ -755,8 +768,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Setup
         ////////////////////////////////////////////////////////////////////////////
-        std::vector<std::shared_ptr<tt::tt_metal::Buffer>> input_buffers(num_mixed_df_layers);
-        std::shared_ptr<tt::tt_metal::Buffer> output_buffer;
+        std::vector<std::shared_ptr<tt_metal::distributed::MeshBuffer>> input_buffers(num_mixed_df_layers);
+        std::shared_ptr<tt_metal::distributed::MeshBuffer> output_buffer;
         auto input_shape = SHAPE{1, 1, k, n};
         tt::deprecated::Tensor<bfloat16> tensor_fp16 = tt::deprecated::initialize_tensor<bfloat16>(
             input_shape,
@@ -777,7 +790,7 @@ int main(int argc, char** argv) {
                     std::vector<uint32_t> packed_input_vec_tile_layout =
                         pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(
-                        device,
+                        device.get(),
                         packed_input_vec_tile_layout,
                         kt,
                         nt,
@@ -791,7 +804,7 @@ int main(int argc, char** argv) {
                     vector<uint32_t> packed_input_vec_tile_layout =
                         pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(
-                        device,
+                        device.get(),
                         packed_input_vec_tile_layout,
                         kt,
                         nt,
@@ -809,7 +822,7 @@ int main(int argc, char** argv) {
                     vector<uint32_t> packed_input_vec_tile_layout =
                         pack_bfloat16_vec_into_uint32_vec(input_vec_tile_layout);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(
-                        device,
+                        device.get(),
                         packed_input_vec_tile_layout,
                         kt,
                         nt,
@@ -822,7 +835,7 @@ int main(int argc, char** argv) {
                     std::vector<uint32_t> packed_input_vec_tile_layout =
                         pack_fp32_vec_as_bfp8_tiles(input_vec_tilized, true, false);
                     input_buffers[i] = create_and_transfer_data_sharded_cb(
-                        device,
+                        device.get(),
                         packed_input_vec_tile_layout,
                         kt,
                         nt,
@@ -841,8 +854,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
-        auto [programs, global_cb] = create_programs(
-            device,
+        auto [mesh_workloads, global_cb] = create_mesh_workloads(
+            device.get(),
             dram_reader_core,
             l1_receiver_core,
             sender_receiver_core_mapping,
@@ -861,7 +874,7 @@ int main(int argc, char** argv) {
             // output
             vector<uint32_t> outputs = create_constant_vector_of_bfp8(output_size, 0, true);
             output_buffer = create_and_transfer_data_sharded_cb(
-                device,
+                device.get(),
                 outputs,
                 kt / num_blocks * cb_num_blocks,
                 nt,
@@ -875,7 +888,7 @@ int main(int argc, char** argv) {
             // output
             vector<uint32_t> outputs = create_constant_vector_of_bfloat16(output_size, 0);
             output_buffer = create_and_transfer_data_sharded_cb(
-                device,
+                device.get(),
                 outputs,
                 kt / num_blocks * cb_num_blocks,
                 nt,
@@ -889,28 +902,24 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
         ////////////////////////////////////////////////////////////////////////////
-        for (auto& program : programs) {
-            tt_metal::detail::CompileProgram(device, program);
-        }
-
         log_info(LogTest, "Num tests {}", num_tests);
         for (uint32_t i = 0; i < num_tests; ++i) {
             if (use_sub_devices) {
                 // Enqueue the sender program
-                EnqueueProgram(device->command_queue(), programs[0], false);
+                tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workloads[0], false);
                 device->set_sub_device_stall_group(receiver_sub_device_ids);
-                for (uint32_t j = 1; j < programs.size(); ++j) {
-                    EnqueueProgram(device->command_queue(), programs[j], false);
+                for (uint32_t j = 1; j < mesh_workloads.size(); ++j) {
+                    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workloads[j], false);
                 }
                 device->reset_sub_device_stall_group();
             } else {
-                for (auto& program : programs) {
-                    EnqueueProgram(device->command_queue(), program, false);
+                for (auto& mesh_workload : mesh_workloads) {
+                    tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
                 }
             }
-            Finish(device->command_queue());
-            for ([[maybe_unused]] auto& program : programs) {
-                tt_metal::detail::ReadDeviceProfilerResults(device);
+            tt_metal::distributed::Finish(device->mesh_command_queue());
+            for ([[maybe_unused]] auto& mesh_workload : mesh_workloads) {
+                tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
             }
         }
 
@@ -919,9 +928,9 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         if (num_mixed_df_layers == 1) {
             if (tile_format == tt::DataFormat::Bfp8_b) {
-                pass = validation_bfp8_b(tensor_fp8, tile_format, num_blocks, cb_num_blocks, kt, nt, output_buffer);
+                pass = validation_bfp8_b(tensor_fp8, tile_format, num_blocks, cb_num_blocks, kt, nt, output_buffer, device.get());
             } else {
-                pass = validation_fp16(tensor_fp16, tile_format, num_blocks, cb_num_blocks, kt, nt, output_buffer);
+                pass = validation_fp16(tensor_fp16, tile_format, num_blocks, cb_num_blocks, kt, nt, output_buffer, device.get());
             }
         } else {
             pass = validation_mixed_df(
@@ -934,10 +943,11 @@ int main(int argc, char** argv) {
                 nt,
                 output_buffer,
                 num_mixed_df_layers,
-                num_receivers);
+                num_receivers,
+                device.get());
         }
 
-        pass &= tt_metal::CloseDevice(device);
+        pass &= device->close();
     } catch (const std::exception& e) {
         pass = false;
         log_error(LogTest, "{}", e.what());
