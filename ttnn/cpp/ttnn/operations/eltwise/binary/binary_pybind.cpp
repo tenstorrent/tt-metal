@@ -51,6 +51,17 @@ std::string get_python_call_stack() {
     return stack_stream.str();
 }
 
+// Helper function to convert scalar to string - overloaded for different types
+std::string scalar_to_string(float scalar) { return std::to_string(scalar); }
+
+std::string scalar_to_string(const std::variant<int32_t, float>& scalar) {
+    if (std::holds_alternative<int32_t>(scalar)) {
+        return std::to_string(std::get<int32_t>(scalar));
+    } else {
+        return std::to_string(std::get<float>(scalar));
+    }
+}
+
 // Function to write operation info to file and return stack_id
 uint32_t write_operation_info_to_file(const std::string& callstack, const std::string& args_info) {
     // Get next operation ID
@@ -256,6 +267,16 @@ void bind_binary_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
+                std::string callstack = get_python_call_stack();
+
+                std::stringstream args_stream;
+                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
+                            << " data_type = " << input_tensor_a.dtype() << " layout = " << input_tensor_a.layout()
+                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
+                args_stream << "scalar = " << scalar_to_string(scalar) << std::endl;
+
+                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
+
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -293,6 +314,18 @@ void bind_binary_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
+                std::string callstack = get_python_call_stack();
+
+                std::stringstream args_stream;
+                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
+                            << " data_type = " << input_tensor_a.dtype()
+                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
+                args_stream << "input_tensor_b : shape = " << input_tensor_b.logical_shape()
+                            << " data_type = " << input_tensor_b.dtype()
+                            << " memory_config = " << input_tensor_b.memory_config() << std::endl;
+
+                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
+
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -399,6 +432,18 @@ void bind_binary_gcd_lcm_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
+                std::string callstack = get_python_call_stack();
+
+                std::stringstream args_stream;
+                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
+                            << " data_type = " << input_tensor_a.dtype()
+                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
+                args_stream << "input_tensor_b : shape = " << input_tensor_b.logical_shape()
+                            << " data_type = " << input_tensor_b.dtype()
+                            << " memory_config = " << input_tensor_b.memory_config() << std::endl;
+
+                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
+
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -493,6 +538,16 @@ void bind_binary_unary_max_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
+                std::string callstack = get_python_call_stack();
+
+                std::stringstream args_stream;
+                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
+                            << " data_type = " << input_tensor_a.dtype() << " layout = " << input_tensor_a.layout()
+                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
+                args_stream << "scalar = " << scalar_to_string(scalar) << std::endl;
+
+                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
+
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -530,6 +585,18 @@ void bind_binary_unary_max_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
+                std::string callstack = get_python_call_stack();
+
+                std::stringstream args_stream;
+                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
+                            << " data_type = " << input_tensor_a.dtype()
+                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
+                args_stream << "input_tensor_b : shape = " << input_tensor_b.logical_shape()
+                            << " data_type = " << input_tensor_b.dtype()
+                            << " memory_config = " << input_tensor_b.memory_config() << std::endl;
+
+                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
+
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -631,6 +698,16 @@ void bind_binary_unary_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
+                std::string callstack = get_python_call_stack();
+
+                std::stringstream args_stream;
+                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
+                            << " data_type = " << input_tensor_a.dtype() << " layout = " << input_tensor_a.layout()
+                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
+                args_stream << "scalar = " << scalar_to_string(scalar) << std::endl;
+
+                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
+
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -668,6 +745,18 @@ void bind_binary_unary_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
+                std::string callstack = get_python_call_stack();
+
+                std::stringstream args_stream;
+                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
+                            << " data_type = " << input_tensor_a.dtype()
+                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
+                args_stream << "input_tensor_b : shape = " << input_tensor_b.logical_shape()
+                            << " data_type = " << input_tensor_b.dtype()
+                            << " memory_config = " << input_tensor_b.memory_config() << std::endl;
+
+                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
+
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -2058,149 +2147,13 @@ void bind_power(py::module& module, const binary_operation_t& operation, const s
 void py_module(py::module& module) {
     export_enum<BinaryOpType>(module, "BinaryOpType");
 
-    // Custom binding for ttnn.add with call stack printing
-    auto doc =
-        R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`
-
-        .. math::
-            \mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i
-
-        Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
-
-        Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            dtype (ttnn.DataType, optional): data type for the output tensor. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Supports broadcasting.
-
-        Note:
-            Supported dtypes, layouts, and ranks:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - BFLOAT16, BFLOAT8_B, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535])
-                 - TILE
-                 - 2, 3, 4
-
-        Example:
-            >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> tensor2 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-            >>> output = ttnn.add(tensor1, tensor2/scalar)
-        )doc";
-
-    bind_registered_operation(
+    detail::bind_binary_operation(
         module,
         ttnn::add,
-        doc,
-        // tensor and scalar
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::add)& self,
-               const ttnn::Tensor& input_tensor_a,
-               const float scalar,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               QueueId queue_id) -> ttnn::Tensor {
-                std::string callstack = get_python_call_stack();
-
-                std::stringstream args_stream;
-                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
-                            << " data_type = " << input_tensor_a.dtype() << " layout = " << input_tensor_a.layout()
-                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
-                args_stream << "scalar = " << scalar << std::endl;
-
-                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
-
-                return self(
-                    queue_id,
-                    input_tensor_a,
-                    scalar,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    stack_id);
-            },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("use_legacy") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId},
-
-        // tensor and tensor
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::add)& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::UnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               QueueId queue_id) -> ttnn::Tensor {
-                std::string callstack = get_python_call_stack();
-
-                std::stringstream args_stream;
-                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
-                            << " data_type = " << input_tensor_a.dtype()
-                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
-                args_stream << "input_tensor_b : shape = " << input_tensor_b.logical_shape()
-                            << " data_type = " << input_tensor_b.dtype()
-                            << " memory_config = " << input_tensor_b.memory_config() << std::endl;
-
-                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
-
-                return self(
-                    queue_id,
-                    input_tensor_a,
-                    input_tensor_b,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    stack_id);
-            },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("dtype") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("use_legacy") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+        R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
+        R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
 
     detail::bind_binary_inplace_operation(
         module,
