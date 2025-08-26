@@ -57,7 +57,7 @@ constexpr ccl_routing_utils::line_multicast_route_info_t barrier_multicast_route
     ccl_routing_utils::get_line_multicast_route_info_from_args<24 + ccl_routing_utils::num_line_unicast_args>();
 
 inline constexpr uint32_t sharded_args_start_idx =
-    24 + ccl_routing_utils::num_line_unicast_args + +ccl_routing_utils::num_line_multicast_args;
+    24 + ccl_routing_utils::num_line_unicast_args + ccl_routing_utils::num_line_multicast_args;
 
 void kernel_main() {
     ///////////////////////////////////////////////////
