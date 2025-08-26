@@ -4,7 +4,12 @@ add_library(TTNN::Ops::Experimental::AdaptivePool ALIAS ttnn_op_experimental_ada
 target_precompile_headers(ttnn_op_experimental_adaptive_pool REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_adaptive_pool)
 
-target_sources(ttnn_op_experimental_adaptive_pool PRIVATE adaptive_pools.cpp)
+target_sources(
+    ttnn_op_experimental_adaptive_pool
+    PRIVATE
+        adaptive_pools.cpp
+        adaptive_pool_utils.cpp
+)
 
 target_include_directories(ttnn_op_experimental_adaptive_pool PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(
