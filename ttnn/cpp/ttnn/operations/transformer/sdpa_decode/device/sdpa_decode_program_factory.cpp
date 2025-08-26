@@ -741,7 +741,16 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         q_chunk_size_bytes,
         is_cur_pos_tensor_sharded,
         is_page_table_sharded,
+        full_tile.get_tile_size(q_df),
     };
+    tt_metal::TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(attn_mask ? attn_mask->buffer() : nullptr).append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(cur_pos_tensor ? cur_pos_tensor->buffer() : nullptr)
+        .append_to(reader_compile_time_args_common);
+    tt_metal::TensorAccessorArgs(page_table_tensor ? page_table_tensor->buffer() : nullptr)
+        .append_to(reader_compile_time_args_common);
 
     if (use_attention_sink) {
         tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
@@ -776,6 +785,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         max_dynamic_chunk_size,
         q_heads_parallel_factor,
     };
+    tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args_common);
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,
