@@ -11,9 +11,8 @@
 
 #include "ttnn/operations/pool/generic/device/pool_op.hpp"
 
-namespace ttnn {
-namespace operations::experimental::adaptive_pool {
-
+namespace ttnn::operations::experimental {
+namespace adaptive_pool {
 struct AdaptiveAvgPool2DOp {
     static Tensor invoke(
         QueueId queue_id,
@@ -42,13 +41,13 @@ struct AdaptiveMaxPool2DOp {
         bool in_place_halo = false);
 };
 
-}  // namespace operations::experimental::adaptive_pool
+}  // namespace adaptive_pool
 
-constexpr auto experimental_adaptive_avg_pool2d = ttnn::register_operation<
-    "ttnn::experimental::adaptive_avg_pool2d",
-    operations::experimental::adaptive_pool::AdaptiveAvgPool2DOp>();
-constexpr auto experimental_adaptive_max_pool2d = ttnn::register_operation<
-    "ttnn::experimental::adaptive_max_pool2d",
-    operations::experimental::adaptive_pool::AdaptiveMaxPool2DOp>();
+}  // namespace ttnn::operations::experimental
+namespace ttnn {
+constexpr auto adaptive_avg_pool2d = ttnn::
+    register_operation<"ttnn::adaptive_avg_pool2d", operations::experimental::adaptive_pool::AdaptiveAvgPool2DOp>();
+constexpr auto adaptive_max_pool2d = ttnn::
+    register_operation<"ttnn::adaptive_max_pool2d", operations::experimental::adaptive_pool::AdaptiveMaxPool2DOp>();
 
 }  // namespace ttnn
