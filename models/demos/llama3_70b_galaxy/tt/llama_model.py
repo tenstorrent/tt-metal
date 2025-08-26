@@ -258,7 +258,7 @@ class TtTransformer(LightweightModule):
         page_table=None,
         chunk_page_table=None,
     ):
-        # tt_tokens = self.embd(tokens)
+        tt_tokens = self.embd(tokens)
         tt_tokens = tokens
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
         return tt_tokens, user_id, page_table, chunk_page_table
@@ -348,7 +348,7 @@ class TtTransformer(LightweightModule):
         """
         # print("tokens", tokens.shape, tokens.memory_config)
         tt_rot_mats = self.rope_setup.get_rm_rot_mats(rope_idxs)
-        # tt_tokens = self.embd(tokens)
+        tt_tokens = self.embd(tokens)
         tt_tokens = tokens
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
@@ -445,8 +445,7 @@ class TtTransformer(LightweightModule):
         It returns ttnn device tensors.
         """
         rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
-        # x_embd = self.embd(x)
-        x_embd = x
+        x_embd = self.embd(x)
         tt_logits = self.forward(
             x_embd,
             current_pos,
