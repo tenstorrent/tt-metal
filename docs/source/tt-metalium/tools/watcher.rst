@@ -46,6 +46,7 @@ Watcher features can be disabled individually using the following environment va
    export TT_METAL_WATCHER_DISABLE_NOC_SANITIZE=1
    export TT_METAL_WATCHER_DISABLE_WAYPOINT=1
    export TT_METAL_WATCHER_DISABLE_STACK_USAGE=1
+   export TT_METAL_WATCHER_DISABLE_ETH_LINK_STATUS=1
 
    # This feature is opt-in, set the env var to enable it
    export TT_METAL_WATCHER_ENABLE_NOC_SANITIZE_LINKED_TRANSACTION=1
@@ -250,3 +251,26 @@ transactions on BRISC core at location 0,0:
 .. code-block::
 
     TT_METAL_WATCHER=1 TT_METAL_WATCHER_DEBUG_DELAY=10 TT_METAL_READ_DEBUG_DELAY_CORES=0,0 TT_METAL_WRITE_DEBUG_DELAY_CORES=0,0 TT_METAL_READ_DEBUG_DELAY_RISCVS=BR TT_METAL_WRITE_DEBUG_DELAY_RISCVS=BR ./build/test/tt_metal/test_eltwise_binary
+
+Eth Link
+--------
+Before issuing an ethernet transaction, Watcher can check that the link is up.
+
+.. code-block:: c++
+
+    #include "debug/eth_link_status.h"  // Required in all kernels checking eth link status
+
+    FORCE_INLINE void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
+        WATCHER_CHECK_ETH_LINK_STATUS();
+        while (eth_txq_is_busy(q_num));
+        eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_word_addr << 4);
+        eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, dest_word_addr << 4);
+        eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_SIZE_BYTES, num_words << 4);
+        eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_DATA);
+    }
+
+If the link is down, the kernel will hang and a message with the logical, virtual and noc0 coordinates of the ethernet core attempting the transaction will be printed:
+
+.. code-block::
+
+    Device 0 acteth core(x= 0,y= 4) virtual(x=24,y=25): Watcher detected that active eth link on virtual core (x=24,y=25) (noc0 core: CoreCoord: (3, 1, ETH, NOC0)) went down after training.
