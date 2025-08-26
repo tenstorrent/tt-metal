@@ -32,7 +32,7 @@ jobs:
             model-type: "CNN",
             arch: wormhole_b0,
             save-perf-data: false,
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
+            cmd: 'TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7" ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type cnn_model_perf_tg_device --dispatch-mode ""'
           },  # Pavle Josipovic
           {
             name: "Galaxy Llama 70B model perf tests", #see GH issue #26295
