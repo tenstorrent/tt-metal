@@ -336,7 +336,7 @@ def test_all_gather_async(
     ],
 )
 @pytest.mark.parametrize(
-    "enable_trace,num_iters",
+    "enable_trace, num_iters",
     [
         (True, 10),
         (False, 1),
