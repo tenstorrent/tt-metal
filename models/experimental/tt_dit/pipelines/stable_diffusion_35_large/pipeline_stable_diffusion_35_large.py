@@ -151,7 +151,7 @@ class StableDiffusion3Pipeline:
 
         self.encoder_parallel_config = encoder_parallel_config
         self.encoder_device = encoder_device
-        
+
         vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
         self.vae_parallel_config = vae_parallel_config
         self.vae_device = vae_device
