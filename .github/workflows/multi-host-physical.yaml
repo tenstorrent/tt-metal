@@ -4,6 +4,17 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      t3k_multihost:
+        description: 'Run multi-host-t3k job'
+        required: false
+        default: true
+        type: boolean
+      galaxy_multihost:
+        description: 'Run multi-host-galaxy job'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   build-artifact:
@@ -15,6 +26,7 @@ jobs:
       version: 22.04
       build-wheel: true
   multi-host-t3k:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.t3k_multihost }}
     runs-on:
       # A physical, multi-host WH T3K that's in service
       - multi-host-t3000
@@ -64,6 +76,7 @@ jobs:
             TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
             TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml
   multi-host-galaxy:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.galaxy_multihost }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-galaxy
