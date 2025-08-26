@@ -9,6 +9,40 @@
 #include <tt-metalium/assert.hpp>
 
 /**************************************************************************************************
+| ARCTelemetryAvailableMetric Class
+**************************************************************************************************/
+
+ARCTelemetryAvailableMetric::ARCTelemetryAvailableMetric(
+    size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader) :
+    BoolMetric(chip_id, MetricUnit::UNITLESS),
+    reader_(reader) {
+    TT_ASSERT(reader_ != nullptr, "ARCTelemetryReader cannot be null");
+    value_ = false;
+}
+
+const std::vector<std::string> ARCTelemetryAvailableMetric::telemetry_path() const {
+    // Start with the chip identifier path
+    std::vector<std::string> path = reader_->id.telemetry_path();
+
+    // Add the metric name
+    path.push_back("ARCTelemetryAvailable");
+
+    return path;
+}
+
+void ARCTelemetryAvailableMetric::update(const tt::Cluster& cluster) {
+    bool new_value = reader_->is_valid();
+
+    // Update the metric value and timestamp
+    bool old_value = value_;
+    changed_since_transmission_ = new_value != old_value;
+    value_ = new_value;
+    timestamp_ =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch())
+            .count();
+}
+
+/**************************************************************************************************
 | ARCUintMetric Class
 **************************************************************************************************/
 
@@ -134,6 +168,11 @@ const std::vector<std::string> ARCUintMetric::telemetry_path() const {
 }
 
 void ARCUintMetric::update(const tt::Cluster& cluster) {
+    // Don't attempt to read if telemetry reader is invalid
+    if (!reader_->is_valid()) {
+        return;
+    }
+
     uint64_t new_value = 0;
 
     // Read the appropriate telemetry value based on architecture
@@ -273,6 +312,11 @@ const std::vector<std::string> ARCDoubleMetric::telemetry_path() const {
 }
 
 void ARCDoubleMetric::update(const tt::Cluster& cluster) {
+    // Don't attempt to read if telemetry reader is invalid
+    if (!reader_->is_valid()) {
+        return;
+    }
+
     // Read the appropriate telemetry value based on architecture
     uint32_t raw_value = 0;
     tt::ARCH arch = reader_->get_arch();

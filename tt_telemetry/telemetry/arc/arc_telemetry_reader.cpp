@@ -3,6 +3,7 @@
 #include <tt-metalium/assert.hpp>
 #include <telemetry/ethernet/ethernet_endpoint.hpp>
 #include <tt-metalium/cluster.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <memory>
 #include <vector>
 #include <map>
@@ -16,7 +17,8 @@ ARCTelemetryReader::ARCTelemetryReader(ChipIdentifier chip_id, std::unique_ptr<t
     TT_FATAL(device_ != nullptr, "TTDevice cannot be null for chip {}", id);
 
     telemetry_reader_ = device_->get_arc_telemetry_reader();
-    TT_FATAL(telemetry_reader_ != nullptr, "ARC telemetry reader not available for chip {}", id);
+    // Note: telemetry_reader_ may be null if ARC telemetry is not available
+    // Use is_valid() to check before reading
 }
 
 uint32_t ARCTelemetryReader::read_value(tt::umd::wormhole::TelemetryTag tag) const {
@@ -24,6 +26,12 @@ uint32_t ARCTelemetryReader::read_value(tt::umd::wormhole::TelemetryTag tag) con
         device_->get_arch() == tt::ARCH::WORMHOLE_B0,
         "Attempting to read Wormhole telemetry tag on non-Wormhole chip {}",
         id);
+    
+    if (!is_valid()) {
+        log_error(tt::LogAlways, "Cannot read telemetry value: ARC telemetry reader is not available for chip {}", id);
+        return 0;
+    }
+    
     return telemetry_reader_->read_entry(tag);
 }
 
@@ -32,10 +40,20 @@ uint32_t ARCTelemetryReader::read_value(tt::umd::blackhole::TelemetryTag tag) co
         device_->get_arch() == tt::ARCH::BLACKHOLE,
         "Attempting to read Blackhole telemetry tag on non-Blackhole chip {}",
         id);
+    
+    if (!is_valid()) {
+        log_error(tt::LogAlways, "Cannot read telemetry value: ARC telemetry reader is not available for chip {}", id);
+        return 0;
+    }
+    
     return telemetry_reader_->read_entry(tag);
 }
 
 tt::ARCH ARCTelemetryReader::get_arch() const { return device_->get_arch(); }
+
+bool ARCTelemetryReader::is_valid() const {
+    return telemetry_reader_ != nullptr;
+}
 
 /**************************************************************************************************
  Utility Functions

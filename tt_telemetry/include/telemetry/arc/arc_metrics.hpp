@@ -15,6 +15,18 @@
 #include <third_party/umd/device/api/umd/device/types/wormhole_telemetry.h>
 #include <third_party/umd/device/api/umd/device/types/blackhole_telemetry.h>
 
+class ARCTelemetryAvailableMetric : public BoolMetric {
+public:
+    // Constructor
+    ARCTelemetryAvailableMetric(size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader);
+
+    const std::vector<std::string> telemetry_path() const override;
+    void update(const tt::Cluster& cluster) override;
+
+private:
+    std::shared_ptr<ARCTelemetryReader> reader_;
+};
+
 class ARCUintMetric : public UIntMetric {
 public:
     // Common integral metrics that exist on both architectures
