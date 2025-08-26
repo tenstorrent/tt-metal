@@ -46,60 +46,6 @@ def golden_global_avg_pool2d(input_tensor: ttnn.Tensor):
 
 
 ttnn.attach_golden_function(ttnn.global_avg_pool2d, golden_global_avg_pool2d)
-
-
-def golden_adaptive_avg_pool2d(
-    input_tensor: ttnn.Tensor,
-    batch_size: int,
-    input_h: int,
-    input_w: int,
-    channels: int,
-    output_size: Tuple[int, int],
-    **_,
-):
-    import torch
-
-    input_tensor = input_tensor.reshape(batch_size, input_h, input_w, -1).permute(
-        0, 3, 1, 2
-    )  # 1, 1, NHW, C -> N, C, H, W
-
-    output_tensor = torch.nn.functional.adaptive_avg_pool2d(input_tensor, output_size)
-
-    N, C, H, W = output_tensor.shape
-    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
-
-    return output_tensor
-
-
-ttnn.attach_golden_function(ttnn.adaptive_avg_pool2d, golden_adaptive_avg_pool2d)
-
-
-def golden_adaptive_max_pool2d(
-    input_tensor: ttnn.Tensor,
-    batch_size: int,
-    input_h: int,
-    input_w: int,
-    channels: int,
-    output_size: Tuple[int, int],
-    **_,
-):
-    import torch
-
-    input_tensor = input_tensor.reshape(batch_size, input_h, input_w, -1).permute(
-        0, 3, 1, 2
-    )  # 1, 1, NHW, C -> N, C, H, W
-
-    output_tensor = torch.nn.functional.adaptive_max_pool2d(input_tensor, output_size)
-
-    N, C, H, W = output_tensor.shape
-    output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
-
-    return output_tensor
-
-
-ttnn.attach_golden_function(ttnn.adaptive_max_pool2d, golden_adaptive_max_pool2d)
-
-
 def prepare_grid_sample_grid(*args, **kwargs):
     """
     Precomputes grid sample data for optimized kernel execution.
