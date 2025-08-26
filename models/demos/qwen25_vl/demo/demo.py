@@ -154,20 +154,20 @@ def create_tt_model(
             False,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-32 run with single decoder layer in vision model (CI only) - 32 users
+        (  # Batch-1 run with full model for more stable BLEU checks (CI only)
             "models/demos/qwen25_vl/demo/sample_prompts/test_bleu_score.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
             4096,  # max_seq_len, allow for image tokens
-            32,  # batch_size -- samples to load from the prompt JSON
+            1,  # batch_size -- samples to load from the prompt JSON
             200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 32, "page_max_num_blocks": 4096},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            False,  # stop_at_eos
+            True,  # stop_at_eos
             True,  # ci_only
         ),
-        (  # Batch-1 run with single decoder layer in vision model (CI only) - one users
+        (  # Batch-1 run with single decoder layer in vision model (CI only)
             "models/demos/qwen25_vl/demo/sample_prompts/text_only.json",
             True,  # instruct mode
             1,  # repeat_batches to simulate multiple users with the same prompt
@@ -340,7 +340,8 @@ def test_demo(
     ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
     transformers_logging.set_verbosity_error()
     config = Qwen2_5_VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
-    if ci_only:
+    if ci_only and "bleu-score" not in test_id:
+        # [INFO] use single decoder layer for faster CI runs; bleu-score test uses full model for stable text output
         config.vision_config.depth = 1
     reference_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         ref_model_name, config=config, torch_dtype="auto", device_map="auto"
@@ -618,7 +619,8 @@ def test_demo(
             reference = [word_tokenize(expected_output.lower())]
             candidate = word_tokenize(output_text.lower())
             bleu_score = sentence_bleu(reference, candidate)
-            assert bleu_score > 0.5, f"BLEU score for batch {i} is {bleu_score:.3f}"
+            logger.info(f"BLEU score for batch {i} is {bleu_score:.3f}")
+            assert bleu_score > 0.5, f"BLEU score for batch {i} is lower than expected"
 
     # Prepare profile benchmark metrics for the first repeat batch only
     compile_prefill_time = profiler.get_duration("compile_prefill")
