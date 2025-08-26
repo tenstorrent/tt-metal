@@ -396,6 +396,20 @@ void JitBuildState::compile_one(
             defines += fmt::format("-DKERNEL_COMPILE_TIME_ARGS={} ", fmt::join(values, ","));
         });
 
+        settings->process_named_compile_time_args(
+            [&defines](const std::unordered_map<std::string, uint32_t> named_args) {
+                if (named_args.empty()) {
+                    return;
+                }
+                std::ostringstream ss;
+                ss << "-DKERNEL_COMPILE_TIME_ARG_MAP=\"";
+                for (const auto& [name, value] : named_args) {
+                    ss << "X(\\\"" << name << "\\\"," << value << ") ";
+                }
+                ss << "\"";
+                defines += ss.str() + " ";
+            });
+
         cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
     } else {
         cmd += fmt::format("-{} ", this->default_compile_opt_level_);

@@ -7,8 +7,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <map>
+#include <unordered_map>
 #include <numeric>
 #include <string>
+
 #include <variant>
 #include <vector>
 
@@ -69,5 +71,40 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
         detail::ReadFromDeviceL1(device, core, write_addr, sizeof(uint32_t), compile_time_args_actual);
 
         ASSERT_EQ(compile_time_args_actual, compile_time_args_expected);
+    }
+}
+
+TEST_F(DeviceFixture, TensixTestNamedCompileTimeArgs) {
+    for (IDevice* device : this->devices_) {
+        CoreCoord core = {0, 0};
+        Program program;
+
+        const uint32_t write_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+
+        const std::map<std::string, std::string> defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}};
+
+        const std::vector<uint32_t> compile_time_args = {1024, 1, 64, 8};
+        const std::unordered_map<std::string, uint32_t> named_compile_args = {
+            {"num_tiles", 64}, {"enable_debug", 1}, {"stride_value", 8}, {"buffer_size", 1024}};
+
+        CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/named_compile_time_args_kernel.cpp",
+            core,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .compile_args = compile_time_args,
+                .defines = defines,
+                .named_compile_args = named_compile_args});
+        this->RunProgram(device, program);
+
+        std::vector<uint32_t> results;
+        detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
+
+        ASSERT_EQ(results[0], compile_time_args[0]) << "'buffer_size' should match indexed 1024";
+        ASSERT_EQ(results[1], compile_time_args[2]) << "'num_tiles' should match indexed 64";
+        ASSERT_EQ(results[2], compile_time_args[1]) << "'enable_debug' should match indexed 1";
+        ASSERT_EQ(results[3], compile_time_args[3]) << "'stride_value' should match indexed 8";
     }
 }

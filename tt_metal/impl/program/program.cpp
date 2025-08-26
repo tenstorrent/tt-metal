@@ -299,12 +299,14 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
                     return ReaderDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
+                        {},
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
                 [&](const WriterConfigDescriptor&) -> std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> {
                     return WriterDataMovementConfig{
                         std::move(compile_args),
                         std::move(defines),
+                        {},
                         kernel_descriptor.opt_level.value_or(KernelBuildOptLevel::O2)};
                 },
                 [&](const DataMovementConfigDescriptor& dm_descriptor)
