@@ -47,7 +47,7 @@ def vae_all_gather(ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int 
     # NOTE: We can't use ping-pong persistent buffers because we run out of memory.
     # Single-buffered persistent buffers is a potential correctness issue, so we can't do that.
     # Using barrier_semaphore is a good solution, but right now it causes hangs when VAE integrated into pipeline.
-    # Until barrier_semahpore hang is fixed, sync devices before and after all-gather.
+    # Until barrier_semahpore hang is fixed, sync devices before all-gather.
     ttnn.synchronize_device(x.device())
     x_g = ttnn.experimental.all_gather_async(
         input_tensor=x,
@@ -58,11 +58,11 @@ def vae_all_gather(ccl_manager, x: ttnn.Tensor, cluster_axis: int = 1, dim: int 
         topology=ttnn.Topology.Linear,
         cluster_axis=cluster_axis,
         num_links=ccl_manager.num_links,
-        # num_workers_per_link=4,
-        # chunks_per_sync=80,
-        # num_buffers_per_channel=4,
+        num_workers_per_link=4,
+        chunks_per_sync=80,
+        num_buffers_per_channel=4,
     )
-    ttnn.synchronize_device(x.device())
+    # ttnn.synchronize_device(x.device())
     # reshape back to original expected shape
     if h != 1:
         x_g = x_g.reshape(b, h, w, -1)
