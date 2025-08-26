@@ -49,24 +49,42 @@ class TtResnetBlock2D(nn.Module):
         core_x, core_y, self.norm_blocks_1 = get_DRAM_GN_config(module_path, 1)
         self.is_sharded_gn1 = self.norm_blocks_1 == -1
         self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=core_x)
-
-        self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
-            device, self.norm_weights_1, self.norm_bias_1, self.norm_core_grid_1.x
-        )
-        self.input_mask_1 = prepare_gn_mask(
-            self.device, self.norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.x
-        )
+        if self.is_sharded_gn1:
+            self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
+                device, self.norm_weights_1, self.norm_bias_1, self.norm_core_grid_1.x
+            )
+            self.input_mask_1 = prepare_gn_mask(
+                self.device, self.norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.x
+            )
+        else:
+            [self.gamma_t_1, self.beta_t_1], self.input_mask_1 = ttnn.dram_group_norm_params_from_torch(
+                [self.norm_weights_1, self.norm_bias_1],
+                self.norm_weights_1.shape[0],
+                self.norm_groups,
+                device,
+                core_grid=self.norm_core_grid_1,
+                return_mask=True,
+            )
 
         core_x, core_y, self.norm_blocks_2 = get_DRAM_GN_config(module_path, 2)
         self.is_sharded_gn2 = self.norm_blocks_2 == -1
         self.norm_core_grid_2 = ttnn.CoreGrid(y=core_y, x=core_x)
-
-        self.gamma_t_2, self.beta_t_2 = prepare_gn_beta_gamma(
-            device, self.norm_weights_2, self.norm_bias_2, self.norm_core_grid_2.x
-        )
-        self.input_mask_2 = prepare_gn_mask(
-            self.device, self.norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.x
-        )
+        if self.is_sharded_gn2:
+            self.gamma_t_2, self.beta_t_2 = prepare_gn_beta_gamma(
+                device, self.norm_weights_2, self.norm_bias_2, self.norm_core_grid_2.x
+            )
+            self.input_mask_2 = prepare_gn_mask(
+                self.device, self.norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.x
+            )
+        else:
+            [self.gamma_t_2, self.beta_t_2], self.input_mask_2 = ttnn.dram_group_norm_params_from_torch(
+                [self.norm_weights_2, self.norm_bias_2],
+                self.norm_weights_2.shape[0],
+                self.norm_groups,
+                device,
+                core_grid=self.norm_core_grid_2,
+                return_mask=True,
+            )
 
         self.compute1_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv1")
         (
