@@ -89,6 +89,8 @@ def run_max_pool(
         if ceil_mode:
             if kernel_size == (3, 3) or kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
+        if dilation != (1, 1) and stride != (1, 1):
+            pytest.skip("Skip for dilation with stride != (1, 1), also skips ceil mode for dilation!")
 
     if pad_t > kernel_h / 2 or pad_b > kernel_h / 2 or pad_l > kernel_w / 2 or pad_r > kernel_w / 2:
         pytest.skip("padding is too large for the kernel size")
@@ -274,7 +276,10 @@ def run_max_pool(
 )
 @pytest.mark.parametrize(
     "dilation",
-    ((1, 1),),
+    (
+        (1, 1),
+        (2, 2),
+    ),
 )
 @pytest.mark.parametrize(
     "dtype",
@@ -341,8 +346,8 @@ def test_run_max_pool_height_shard(
 @pytest.mark.parametrize(
     "dilation",
     (
-        (1, 1),  # default - no dilation
-        (2, 2),  # symmetric dilation for width shard
+        (1, 1),
+        (3, 1),
     ),
 )
 @pytest.mark.parametrize(
@@ -416,8 +421,8 @@ def test_run_max_pool_width_shard(
 @pytest.mark.parametrize(
     "dilation",
     (
-        (1, 1),  # default - no dilation
-        (1, 3),  # asymmetric dilation for block shard
+        (1, 1),
+        (4, 3),
     ),
 )
 @pytest.mark.parametrize(

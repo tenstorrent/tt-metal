@@ -313,7 +313,8 @@ struct PacketHeaderBase {
                 edm_to_local_chip_noc);
             this->command_fields.unicast_scatter_write.noc_address[i] = noc_addr;
             if (i < NOC_SCATTER_WRITE_MAX_CHUNKS - 1) {
-                this->command_fields.unicast_scatter_write.chunk_size[i] = noc_unicast_scatter_command_header.chunk_size[i];
+                this->command_fields.unicast_scatter_write.chunk_size[i] =
+                    noc_unicast_scatter_command_header.chunk_size[i];
             }
         }
         this->payload_size_bytes = payload_size_bytes;

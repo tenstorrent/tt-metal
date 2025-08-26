@@ -8,8 +8,8 @@ METALIUM_GUIDE.md @davorchap
 # CI/CD
 .github/ @tenstorrent/metalium-developers-infra
 .github/workflows/ttnn-run-sweeps.yaml @stevendae
-.github/workflows/tg-deepseek-tests.yaml @yieldthought @avoraTT @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
-.github/workflows/tg-deepseek-tests-impl.yaml @yieldthought @avoraTT @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
+.github/workflows/tg-deepseek-tests.yaml @yieldthought @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
+.github/workflows/tg-deepseek-tests-impl.yaml @yieldthought @kpaigwar @barci2 @pprajapatiTT @tenstorrent/metalium-developers-infra
 .github/workflows/vllm-nightly-tests.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra
 .github/workflows/vllm-nightly-tests-impl.yaml @ppetrovicTT @skhorasganiTT @rdraskicTT @tenstorrent/metalium-developers-infra
 
@@ -223,7 +223,7 @@ models/common @yieldthought @mtairum @uaydonat
 models/common/utility_functions.py @yieldthought @mtairum @uaydonat
 models/datasets/llm_dataset_utils.py @skhorasganiTT @uaydonat
 models/demos @uaydonat @yieldthought @cglagovichTT
-models/demos/deepseek_v3 @uaydonat @yieldthought @avoraTT @kpaigwar @barci2 @pprajapatiTT
+models/demos/deepseek_v3 @uaydonat @yieldthought @kpaigwar @barci2 @pprajapatiTT
 models/**/bert*/ @TT-BrianLiu @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/*/convnet_mnist/ @sjameelTT @uaydonat
@@ -236,7 +236,7 @@ models/*/vgg/ @bbradelTT @uaydonat @mbahnasTT
 models/demos/wormhole @uaydonat @yieldthought @cglagovichTT
 models/demos/t3000 @uaydonat @yieldthought @cglagovichTT
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT
-models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @avoraTT @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT
+models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT
 models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @uaydonat
 models/demos/qwen25_vl @gwangTT @yieldthought @uaydonat
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat

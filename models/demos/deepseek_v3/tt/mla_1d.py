@@ -24,6 +24,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReshardConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
+    dequantize_state_dicts,
     even_int_div,
     get_mesh_coords,
     get_state_dicts,
@@ -88,6 +89,8 @@ class MLA1D(SharedStateAddOn, AbstractModule):
         v_head_dim = hf_config.v_head_dim
         q_lora_rank = hf_config.q_lora_rank
         q_head_dim = qk_nope_head_dim + qk_rope_head_dim
+
+        state_dicts = dequantize_state_dicts(state_dicts, hf_config)
 
         def convert_linear_weight(
             hf_name: str | None,

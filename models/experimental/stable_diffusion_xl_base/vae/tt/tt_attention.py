@@ -62,8 +62,8 @@ class TtAttention(nn.Module):
 
         norm_weights = state_dict[f"{module_path}.group_norm.weight"]
         norm_bias = state_dict[f"{module_path}.group_norm.bias"]
-        self.gamma_t, self.beta_t = prepare_gn_beta_gamma(device, norm_weights, norm_bias, self.norm_core_grid.y)
-        self.input_mask = prepare_gn_mask(self.device, norm_weights.shape[0], self.norm_groups, self.norm_core_grid.y)
+        self.gamma_t, self.beta_t = prepare_gn_beta_gamma(device, norm_weights, norm_bias, self.norm_core_grid.x)
+        self.input_mask = prepare_gn_mask(self.device, norm_weights.shape[0], self.norm_groups, self.norm_core_grid.x)
 
         q_weights = state_dict[f"{module_path}.to_q.weight"].unsqueeze(0).unsqueeze(0)
         q_bias = state_dict[f"{module_path}.to_q.bias"]
