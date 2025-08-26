@@ -6,6 +6,8 @@ import math
 import pytest
 from loguru import logger
 import os
+import time
+import pandas as pd
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import get_max_chunks_per_sync
@@ -22,6 +24,7 @@ def test_all_gather_chunk_perf(
 ):
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
+    rows = []
 
     subdir = "ag_perf"
     if arch_type == "T3K":
@@ -39,6 +42,11 @@ def test_all_gather_chunk_perf(
         total_bytes = elements * 2
         data_size_bytes_gb = total_bytes / (10**9)
         logger.info(f"Total elements: {elements}, Data size: {data_size_bytes_gb:.3f} GB")
+
+        # Track best bandwidth for this shape
+        best_bandwidth_gbps = -float("inf")
+        best_chunks_per_sync = None
+        best_chunk_size = None
 
         for chunks_per_sync in chunks_per_sync_list:
             cols = ["DEVICE KERNEL"]
@@ -69,6 +77,27 @@ def test_all_gather_chunk_perf(
                 f"Measured performance for data size {data_size_bytes_gb:.3f} GB, chunks per sync {final_chunks_per_sync}: {measured_avg/1000:.3f} us at {total_bytes/measured_avg:.6f} GB/s"
             )
 
+            # Append row for CSV output
+            rows.append(
+                {
+                    "Output Shape": str(ag_output_shape),
+                    "Chunks Per Sync": final_chunks_per_sync,
+                    "Data Size in GB": data_size_bytes_gb,
+                    "Measured Average (us)": measured_avg / 1000.0,
+                    "Measured Max (us)": measured_max / 1000.0,
+                    "Standard deviation (us)": measured_std / 1000.0,
+                    "Bandwidth (GB/s)": total_bytes / measured_avg,
+                }
+            )
+
+            # Update best bandwidth trackers for this shape
+            current_bandwidth_gbps = total_bytes / measured_avg
+            current_chunk_size = final_chunks_per_sync
+            if current_bandwidth_gbps > best_bandwidth_gbps:
+                best_bandwidth_gbps = current_bandwidth_gbps
+                best_chunks_per_sync = final_chunks_per_sync
+                best_chunk_size = current_chunk_size
+
             # Save the measurement
             benchmark_data.add_measurement(
                 profiler, 0, step_name, f"{op_name}-{final_chunks_per_sync}-min", measured_min
@@ -83,8 +112,23 @@ def test_all_gather_chunk_perf(
                 profiler, 0, step_name, f"{op_name}-{final_chunks_per_sync}-std", measured_std
             )
 
+        # After iterating over all chunks per sync, report best bandwidth for this shape
+        if best_chunks_per_sync is not None:
+            logger.info(
+                f"Best bandwidth for shape {ag_output_shape}: {best_bandwidth_gbps:.6f} GB/s at chunk size {best_chunk_size} GB (chunks per sync: {best_chunks_per_sync})"
+            )
+
     benchmark_data.save_partial_run_json(
         profiler,
         run_type=f"all_gather_chunk_perf",
         ml_model_name="ag",
     )
+
+    # Save aggregated CSV
+    curr_time = time.strftime("%Y_%m_%d_%H%M%S")
+    csv_path = f"AllGatherPerformance_{curr_time}.csv"
+    logger.info(f"Saving performance table to {csv_path}")
+    if len(rows) > 0:
+        df = pd.DataFrame(rows)
+        df.to_csv(csv_path, index=False)
+        logger.info(f"Saved performance table to {csv_path}")
