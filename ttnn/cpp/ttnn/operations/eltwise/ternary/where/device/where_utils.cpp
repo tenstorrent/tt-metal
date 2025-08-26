@@ -19,6 +19,8 @@ WhereKernelConfig::WhereKernelConfig(WhereVariant where_variant, WhereBroadcastT
                 writer_kernel = KernelName::WriterColBcastTTT;  // Use binary_ng compatible writer
             } else if (broadcast_type == WhereBroadcastType::OUTER_BCAST) {
                 reader_kernel = KernelName::ReaderOuterBcastTTT;
+                compute_kernel = KernelName::ComputeNoBcastTTT;
+                writer_kernel = KernelName::WriterNoBcastTTT;
             } else if (broadcast_type == WhereBroadcastType::ROW_BCAST) {
                 reader_kernel = KernelName::ReaderRowBcastTTT;
                 compute_kernel = KernelName::ComputeNoBcastTTT;

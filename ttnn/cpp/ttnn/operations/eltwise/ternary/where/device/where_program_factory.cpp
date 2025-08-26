@@ -441,30 +441,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
             value_false_data_format);  // Using actual false tensor format
         value_false_tensor_cb = cb2;
         value_false_tensor_cb_handle = cb2_handle;
-    } else if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // TTT with row broadcast: use row broadcast reader with pred→CB0, true→CB1, false→CB2
-
-        // CB1 = value_true tensor
-        auto [cb1, cb1_handle] = create_cb(
-            tt::CBIndex::c_1,
-            program,
-            all_device_cores,
-            value_true_single_tile_size,
-            num_tiles_per_cb,
-            value_true_data_format);
-        value_true_tensor_cb = cb1;
-        value_true_tensor_cb_handle = cb1_handle;
-
-        // CB2 = false tensor (ROW_BCAST reader now reads all 3 tensors: predicate→CB0, true→CB1, false→CB2)
-        auto [cb2, cb2_handle] = create_cb(
-            tt::CBIndex::c_2,
-            program,
-            all_device_cores,
-            value_false_single_tile_size,
-            num_tiles_per_cb,
-            value_false_data_format);
-        value_false_tensor_cb = cb2;
-        value_false_tensor_cb_handle = cb2_handle;
     } else {
         TT_THROW("Unsupported Where variant in WhereDeviceOperation. Supported: TTS, TST, TTT");
     }
