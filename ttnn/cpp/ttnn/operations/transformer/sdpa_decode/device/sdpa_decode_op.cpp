@@ -338,7 +338,8 @@ operation::ProgramWithCallbacks ScaledDotProductAttentionDecode::create_program(
         this->k_chunk_size,
         this->share_cache,
         this->use_mla.value_or(false),
-        this->head_dim_v.value_or(0));
+        this->head_dim_v.value_or(0),
+        this->enable_split_reader.value_or(false));
 }
 
 operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
@@ -356,6 +357,7 @@ operation::Hash ScaledDotProductAttentionDecode::compute_program_hash(
         this->is_causal,
         this->use_mla,
         this->head_dim_v,
+        this->enable_split_reader,
         has_attn_mask,
         has_cur_pos,
         input_tensors,

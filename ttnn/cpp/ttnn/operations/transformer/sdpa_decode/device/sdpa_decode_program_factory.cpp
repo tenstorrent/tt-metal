@@ -40,7 +40,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     const uint32_t k_chunk_size,
     std::optional<bool> share_cache,
     bool use_mla,
-    uint32_t head_dim_v) {
+    uint32_t head_dim_v,
+    bool enable_split_reader) {
     /*
     Q: 1 x B x PNH x DH
     K: B x NKV x S x DH
@@ -470,9 +471,18 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     CreateCircularBuffer(program, core_grid, c_in0_config);
 
     // K input
-    auto c_in1_config =
-        CircularBufferConfig(k_tiles * k_tile_size, {{CBIndex::c_1, k_df}}).set_page_size(CBIndex::c_1, k_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in1_config);
+    if (enable_split_reader) {
+        auto c_k0_config = CircularBufferConfig((k_tiles / 2) * k_tile_size, {{CBIndex::c_13, k_df}})
+                               .set_page_size(CBIndex::c_13, k_tile_size);
+        auto cb_k0_id = CreateCircularBuffer(program, core_grid, c_k0_config);
+        auto c_k1_config = CircularBufferConfig((k_tiles / 2) * k_tile_size, {{CBIndex::c_14, k_df}})
+                               .set_page_size(CBIndex::c_14, k_tile_size);
+        auto cb_k1_id = CreateCircularBuffer(program, core_grid, c_k1_config);
+    } else {
+        auto c_in1_config = CircularBufferConfig(k_tiles * k_tile_size, {{CBIndex::c_1, k_df}})
+                                .set_page_size(CBIndex::c_1, k_tile_size);
+        auto cb_in1_id = CreateCircularBuffer(program, core_grid, c_in1_config);
+    }
 
     // V input
     auto c_in2_config =
@@ -741,8 +751,9 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         q_chunk_size_bytes,
         is_cur_pos_tensor_sharded,
         is_page_table_sharded,
+        enable_split_reader
     };
-
+        
     if (use_attention_sink) {
         tt_metal::TensorAccessorArgs(*attention_sink->buffer()).append_to(reader_compile_time_args_common);
     } else {
@@ -767,6 +778,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         k_chunk_size,
         num_q_heads,
         num_kv_heads,
+        page_block_size_t,
         num_cores_per_head,
         num_heads_per_core,
         num_reducer_cores,
@@ -775,7 +787,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         is_causal,
         max_dynamic_chunk_size,
         q_heads_parallel_factor,
-    };
+        enable_split_reader};
 
     std::vector<uint32_t> compute_compile_time_args_common = {
         St,
@@ -807,9 +819,11 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         q_heads_parallel_factor,
         use_half_tile,
         scale_union.u,
-    };
+        enable_split_reader};
 
-    // Determine granularity for compute loops
+    // Determine define for compute and reader
+    std::map<std::string, std::string> reader_defines;
+    std::map<std::string, std::string> writer_defines;
     std::map<std::string, std::string> compute_defines;
     if (Sk_chunk_t > 0) {
         const uint32_t sub_exp_granularity = std::min(Sk_chunk_t, dst_size);
@@ -824,7 +838,6 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         compute_defines["LOG2_SUB_EXP_GRANULARITY"] = std::to_string(log2_sub_exp_granularity);
         compute_defines["MUL_BCAST_GRANULARITY"] = std::to_string(mul_bcast_granularity);
         compute_defines["LOG2_MUL_BCAST_GRANULARITY"] = std::to_string(log2_mul_bcast_granularity);
-
         // Log these
         log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
         log_debug(tt::LogOp, "log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
@@ -833,6 +846,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     } else {
         compute_defines["DYNAMIC_CHUNK_SIZE"] = "1";
     }
+
     compute_defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     compute_defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     compute_defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
@@ -869,14 +883,14 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp",
         core_grid,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args_common));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args_common, reader_defines));
 
     // Writer
     auto writer_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp",
         core_grid,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args_common));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args_common, writer_defines));
 
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
@@ -936,6 +950,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
         // writer runtime args
         std::vector<uint32_t> writer_rt_args = {
+            k_addr,
             out_addr,
             worker_id_for_reduce,
             worker_id_for_output,
