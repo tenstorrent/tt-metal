@@ -98,7 +98,7 @@ def test_model_inference(
 ):
     mesh_device.disable_and_clear_program_cache()
     test_id = request.node.callspec.id
-    num_layers = 1
+    num_layers = num_layers
     if is_ci_env:
         if "accuracy" in test_id:
             pytest.skip("CI test only runs performance mode to reduce CI pipeline load")

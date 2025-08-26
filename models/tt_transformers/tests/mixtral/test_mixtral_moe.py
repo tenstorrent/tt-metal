@@ -33,7 +33,6 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
     iterations = 1
     dtype = ttnn.bfloat8_b
     t3k_mesh_device.disable_and_clear_program_cache()
-
     model_args = ModelArgs(t3k_mesh_device)
     state_dict = model_args.load_state_dict()
     model_args.n_layers = 1
@@ -119,7 +118,6 @@ def test_mixtral_moe_inference(t3k_mesh_device, reset_seeds, mode, device_params
             .squeeze(0)
             .view(seqlen, batch, -1)
         )
-        breakpoint()
         # Reference Model Output
         logger.info(f"Starting Reeference MOE {mode}")
         ref_output = reference_model(pt_decode_input)

@@ -4,13 +4,14 @@ from loguru import logger
 
 import ttnn
 from models.demos.t3000.mixtral8x7b.reference.model import TransformerBlock, precompute_freqs_cis
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_prefill_rot_mat, get_rot_transformation_mat
 from models.tt_transformers.tt.decoder import TransformerBlock as TtTransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.utility_functions import comp_allclose, comp_pcc
 
-# pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py::test_mixtral_decoder_inference[wormhole_b0-True-16]
+# pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder_prefill.py
 
 
 def convert2ref(state_dict):
