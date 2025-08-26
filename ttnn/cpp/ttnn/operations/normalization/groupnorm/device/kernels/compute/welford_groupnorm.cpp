@@ -352,8 +352,11 @@ void MAIN {
                             uint32_t index_mask = w + index_subblock_w_offset;
                             transpose_wh_init_short(cb_x);
                             transpose_wh_tile(cb_x, index, 0);
-                            welford(0, 1, 2, curr_xy_coord, curr_xy_limit, 0);
-                            curr_xy_coord += 32;  // Test hangs when this is run
+                            bool is_last_tile_in_group = (out_block_index == num_out_blocks_padded - 1) &&
+                                                         (i == out_block_h_actual - 1) && (j == num_subblocks_w - 1) &&
+                                                         (w == subblock_w - 1);
+                            // welford(0, 1, 2, curr_xy_coord, curr_xy_limit, is_last_tile_in_group);
+                            curr_xy_coord += 32;
                         }
                         tile_regs_commit();
                         cb_pop_front(read_from_ping ? cb_ex_ping : cb_ex_pong, 2);
