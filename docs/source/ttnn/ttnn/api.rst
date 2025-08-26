@@ -450,6 +450,22 @@ Normalization
    ttnn.layer_norm
    ttnn.rms_norm
    ttnn.batch_norm
+   ttnn.scale_mask_softmax
+   ttnn.softmax_in_place
+   ttnn.scale_mask_softmax_in_place
+   ttnn.scale_causal_mask_hw_dims_softmax_in_place
+
+Normalization Program Configs
+=============================
+
+.. autosummary::
+   :toctree: api
+   :nosignatures:
+   :template: class.rst
+
+   ttnn.SoftmaxProgramConfig
+   ttnn.SoftmaxDefaultProgramConfig
+   ttnn.SoftmaxShardedMultiCoreProgramConfig
 
 
 Moreh Operations

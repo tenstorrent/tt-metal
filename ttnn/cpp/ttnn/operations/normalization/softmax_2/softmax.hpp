@@ -59,6 +59,7 @@ struct ExecuteScaleMaskSoftmax {
 struct ExecuteSoftmaxInPlace {
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
+        int dim = -1,
         const SoftmaxProgramConfig& program_config = SoftmaxDefaultProgramConfig{},
         std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         bool numeric_stable = false);
