@@ -65,10 +65,10 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
     auto my_host_neighbors = physical_system_desc.get_host_neighbors(my_host);
 
     auto unique_chip_ids = cluster.get_unique_chip_ids();
-    std::unordered_map<asic_id_t, chip_id_t> asic_id_to_chip_id;
+    std::unordered_map<AsicID, chip_id_t> asic_id_to_chip_id;
 
     for (const auto& [chip_id, asic_id] : unique_chip_ids) {
-        asic_id_to_chip_id[asic_id] = chip_id;
+        asic_id_to_chip_id[AsicID{asic_id}] = chip_id;
     }
 
     // Local Connectivity
@@ -112,13 +112,13 @@ TEST(PhysicalDiscovery, TestPhysicalSystemDescriptor) {
             auto dst_asic = exit_node.dst_exit_node;
             auto dst_chan = exit_node.eth_conn.dst_chan;
             auto [remote_asic, remote_chan] = cross_host_eth_links.at(src_chip).at(src_chan);
-            auto remote_host = physical_system_desc.get_host_name_for_asic(remote_asic);
+            auto remote_host = physical_system_desc.get_host_name_for_asic(AsicID{remote_asic});
             // Verify that the exit node asic is marked as a chip with cross host links
             EXPECT_NE(cross_host_eth_links.find(src_chip), cross_host_eth_links.end());
             // Verify that the exit node channel is marked as a cross host link
             EXPECT_NE(cross_host_eth_links.at(src_chip).find(src_chan), cross_host_eth_links.at(src_chip).end());
             // Verify that the remote asic/chan from tt_cluster and the physical descriptor match
-            EXPECT_EQ(remote_asic, dst_asic);
+            EXPECT_EQ(AsicID{remote_asic}, dst_asic);
             EXPECT_EQ(remote_chan, dst_chan);
             // Verify that remote asic belongs to a neighbor host
             EXPECT_NE(

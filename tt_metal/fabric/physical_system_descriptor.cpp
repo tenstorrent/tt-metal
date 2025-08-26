@@ -38,19 +38,19 @@ const std::unordered_map<tt::ARCH, std::vector<std ::uint16_t>> ubb_bus_ids = {
     {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
 };
 
-std::pair<tray_id_t, asic_id_t> get_ubb_id(chip_id_t chip_id) {
+std::pair<TrayID, NID> get_ubb_id(chip_id_t chip_id) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     const auto& tray_bus_ids = ubb_bus_ids.at(cluster.arch());
     const auto bus_id = cluster.get_bus_id(chip_id);
     auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
     if (tray_bus_id_it != tray_bus_ids.end()) {
-        auto ubb_asic_id = bus_id & 0x0F;
-        return {tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_asic_id};
+        auto ubb_nid = bus_id & 0x0F;
+        return {TrayID{tray_bus_id_it - tray_bus_ids.begin() + 1}, NID{ubb_nid}};
     }
     return {};
 }
 
-std::pair<tray_id_t, n_id_t> get_asic_position(
+std::pair<TrayID, NID> get_asic_position(
     chip_id_t chip_id, const std::set<uint32_t, std::greater<uint32_t>>& sorted_pcie_slots) {
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto cluster_desc = cluster.get_cluster_desc();
@@ -60,19 +60,19 @@ std::pair<tray_id_t, n_id_t> get_asic_position(
         // Derive NID based on the tunnel depth for N300 systems
         auto mmio_device = cluster.get_associated_mmio_device(chip_id);
         auto tunnels = cluster.get_tunnels_from_mmio_device(mmio_device);
-        n_id_t n_id = 0;
+        NID n_id;
         for (auto tunnel = 0; tunnel < tunnels.size(); tunnel++) {
             const auto& devices_on_tunnel = tunnels[tunnel];
             auto device_it = std::find(devices_on_tunnel.begin(), devices_on_tunnel.end(), chip_id);
             if (device_it != devices_on_tunnel.end()) {
-                n_id = device_it - devices_on_tunnel.begin() + 1;
+                n_id = NID{device_it - devices_on_tunnel.begin() + 1};
             }
         }
         // Derive Tray ID based on the Physical PCIe slot for N300 systems
         uint32_t tray_id =
             1 + std::distance(
                     sorted_pcie_slots.begin(), sorted_pcie_slots.find(cluster.get_physical_slot(chip_id).value()));
-        return {tray_id, n_id};
+        return {TrayID{tray_id}, n_id};
     } else {
         TT_THROW("Unrecognized board type. Cannot determine asic position.");
     }
@@ -80,7 +80,7 @@ std::pair<tray_id_t, n_id_t> get_asic_position(
 }
 
 struct EthEndpoint {
-    uint64_t board_id;
+    AsicID board_id;
     uint8_t chan_id;
 
     auto operator<=>(const EthEndpoint&) const = default;
@@ -185,11 +185,11 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     }
 
     for (const auto& [src, conn] : eth_connections) {
-        auto src_unique_id = chip_unique_ids.at(src);
+        auto src_unique_id = AsicID{chip_unique_ids.at(src)};
         // Populate ASIC Descriptor with Physical Information
         auto [tray_id, n_id] = get_asic_position(src, sorted_pcie_slots);
         asic_descriptors_[src_unique_id] =
-            ASICDescriptor{tray_id, n_id, cluster_desc->get_board_type(src), src_unique_id, hostname};
+            ASICDescriptor{TrayID{tray_id}, n_id, cluster_desc->get_board_type(src), src_unique_id, hostname};
 
         std::unordered_map<chip_id_t, size_t> visited_dst;
         // Populate ASIC Graph for Current Host
@@ -199,7 +199,7 @@ void PhysicalSystemDescriptor::run_local_discovery() {
             if (visited_dst.find(dst_chip) == visited_dst.end()) {
                 // This neighbor has not been visited. Add it to the graph and mark visited.
                 asic_graph[src_unique_id].push_back(
-                    {chip_unique_ids.at(dst_chip), {EthConnection(chan, dst_chan, true)}});
+                    {AsicID{chip_unique_ids.at(dst_chip)}, {EthConnection(chan, dst_chan, true)}});
                 visited_dst[dst_chip] = asic_graph[src_unique_id].size() - 1;
             } else {
                 // This neighbor has already been visited. There is more than one channel to it.
@@ -210,10 +210,10 @@ void PhysicalSystemDescriptor::run_local_discovery() {
     }
 
     for (const auto& [local_chip_id, eth_link_info] : cross_host_eth_connections) {
-        auto local_unique_id = chip_unique_ids.at(local_chip_id);
-        std::unordered_map<asic_id_t, size_t> visited_dst;
+        auto local_unique_id = AsicID{chip_unique_ids.at(local_chip_id)};
+        std::unordered_map<AsicID, size_t> visited_dst;
         for (const auto& [eth_chan, remote_info] : eth_link_info) {
-            auto dst_unique_id = std::get<0>(remote_info);
+            auto dst_unique_id = AsicID{std::get<0>(remote_info)};
             auto dst_chan = std::get<1>(remote_info);
             if (visited_dst.find(dst_unique_id) == visited_dst.end()) {
                 asic_graph[local_unique_id].push_back({dst_unique_id, {EthConnection(eth_chan, dst_chan, false)}});
@@ -383,17 +383,17 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
         YAML::Node tray_groups;
         host_node["motherboard"] = mobo_name;
 
-        std::map<tray_id_t, std::vector<ASICDescriptor>> grouped_asics;
+        std::map<TrayID, std::vector<ASICDescriptor>> grouped_asics;
 
         for (const auto& asic : system_graph_.asic_connectivity_graph[host_name]) {
-            asic_id_t asic_id = asic.first;
-            tray_id_t tray_id = asic_descriptors_.at(asic_id).tray_id;
+            AsicID asic_id = asic.first;
+            TrayID tray_id = asic_descriptors_.at(asic_id).tray_id;
             grouped_asics[tray_id].push_back(asic_descriptors_.at(asic_id));
         }
 
         for (const auto& group : grouped_asics) {
             YAML::Node tray_group;
-            tray_group["tray_id"] = group.first;  // tray_id
+            tray_group["tray_id"] = *(group.first);  // tray_id
             tray_group["board_type"] = enchantum::to_string(group.second.front().board_type);
             std::vector<ASICDescriptor> sorted_asics = group.second;
             std::sort(sorted_asics.begin(), sorted_asics.end(), [](const ASICDescriptor& a, const ASICDescriptor& b) {
@@ -403,8 +403,8 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
             YAML::Node asics_array;
             for (const auto& asic : sorted_asics) {
                 YAML::Node asic_node;
-                asic_node["nid"] = asic.n_id;
-                asic_node["asic_id"] = asic.unique_id;
+                asic_node["nid"] = *(asic.n_id);
+                asic_node["asic_id"] = *(asic.unique_id);
                 asics_array.push_back(asic_node);
             }
             tray_group["asics"] = asics_array;
@@ -435,10 +435,10 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
                     connection_pair.SetStyle(YAML::EmitterStyle::Flow);
                     src_conn_node["host_name"] = src_asic_desc.host_name;
                     dst_conn_node["host_name"] = dst_asic_desc.host_name;
-                    src_conn_node["tray_id"] = src_asic_desc.tray_id;
-                    src_conn_node["nid"] = src_asic_desc.n_id;
-                    dst_conn_node["tray_id"] = dst_asic_desc.tray_id;
-                    dst_conn_node["nid"] = dst_asic_desc.n_id;
+                    src_conn_node["tray_id"] = *(src_asic_desc.tray_id);
+                    src_conn_node["nid"] = *(src_asic_desc.n_id);
+                    dst_conn_node["tray_id"] = *(dst_asic_desc.tray_id);
+                    dst_conn_node["nid"] = *(dst_asic_desc.n_id);
                     src_conn_node["chan_id"] = +eth_conn.src_chan;
                     dst_conn_node["chan_id"] = +eth_conn.dst_chan;
 
@@ -467,10 +467,10 @@ void PhysicalSystemDescriptor::dump_to_yaml(const std::optional<std::string>& pa
     }
 }
 
-std::vector<asic_id_t> PhysicalSystemDescriptor::get_asic_neighbors(asic_id_t asic_id) const {
+std::vector<AsicID> PhysicalSystemDescriptor::get_asic_neighbors(AsicID asic_id) const {
     for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
         if (asic_group.find(asic_id) != asic_group.end()) {
-            std::vector<asic_id_t> neighbors;
+            std::vector<AsicID> neighbors;
             for (const auto& edge : asic_group.at(asic_id)) {
                 neighbors.push_back(edge.first);
             }
@@ -480,7 +480,7 @@ std::vector<asic_id_t> PhysicalSystemDescriptor::get_asic_neighbors(asic_id_t as
     return {};
 }
 
-std::vector<EthConnection> PhysicalSystemDescriptor::get_eth_connections(asic_id_t src_asic, asic_id_t dst_asic) const {
+std::vector<EthConnection> PhysicalSystemDescriptor::get_eth_connections(AsicID src_asic, AsicID dst_asic) const {
     for (const auto& [host, asic_group] : system_graph_.asic_connectivity_graph) {
         if (asic_group.find(src_asic) != asic_group.end()) {
             for (const auto& edge : asic_group.at(src_asic)) {
@@ -501,20 +501,20 @@ const AsicTopology& PhysicalSystemDescriptor::get_asic_topology(const std::strin
     return system_graph_.asic_connectivity_graph.at(hostname);
 }
 
-tray_id_t PhysicalSystemDescriptor::get_tray_id(asic_id_t asic_id) const {
+TrayID PhysicalSystemDescriptor::get_tray_id(AsicID asic_id) const {
     TT_FATAL(
         asic_descriptors_.find(asic_id) != asic_descriptors_.end(), "No ASIC descriptor found for asic_id {}", asic_id);
     return asic_descriptors_.at(asic_id).tray_id;
 }
 
-n_id_t PhysicalSystemDescriptor::get_n_id(asic_id_t asic_id) const {
+NID PhysicalSystemDescriptor::get_n_id(AsicID asic_id) const {
     TT_FATAL(
         asic_descriptors_.find(asic_id) != asic_descriptors_.end(), "No ASIC descriptor found for asic_id {}", asic_id);
     return asic_descriptors_.at(asic_id).n_id;
 }
 
-std::vector<asic_id_t> PhysicalSystemDescriptor::get_asics_connected_to_host(std::string hostname) const {
-    std::vector<asic_id_t> asics;
+std::vector<AsicID> PhysicalSystemDescriptor::get_asics_connected_to_host(std::string hostname) const {
+    std::vector<AsicID> asics;
     if (system_graph_.asic_connectivity_graph.find(hostname) != system_graph_.asic_connectivity_graph.end()) {
         for (const auto& [asic_id, _] : system_graph_.asic_connectivity_graph.at(hostname)) {
             asics.push_back(asic_id);
@@ -575,25 +575,25 @@ uint32_t PhysicalSystemDescriptor::get_rank_for_hostname(const std::string& host
     return host_to_rank_.at(host_name);
 }
 
-std::string PhysicalSystemDescriptor::get_host_name_for_asic(asic_id_t asic_id) const {
+std::string PhysicalSystemDescriptor::get_host_name_for_asic(AsicID asic_id) const {
     TT_FATAL(
         asic_descriptors_.find(asic_id) != asic_descriptors_.end(), "No ASIC descriptor found for asic_id {}", asic_id);
     return asic_descriptors_.at(asic_id).host_name;
 }
 
-u_id_t PhysicalSystemDescriptor::get_u_id(const std::string& hostname) {
+UID PhysicalSystemDescriptor::get_u_id(const std::string& hostname) {
     TT_THROW("Querying Host UID requires the Cable Spec which is not currently supported.");
 }
 
-rack_id_t PhysicalSystemDescriptor::get_rack_id(const std::string& hostname) {
+RackID PhysicalSystemDescriptor::get_rack_id(const std::string& hostname) {
     TT_THROW("Querying Host Rack ID requires the Cable Spec which is not currently supported.");
 }
 
-aisle_id_t PhysicalSystemDescriptor::get_aisle_id(const std::string& hostname) {
+AisleID PhysicalSystemDescriptor::get_aisle_id(const std::string& hostname) {
     TT_THROW("Querying Host Aisle ID requires the Cable Spec which is not currently supported.");
 }
 
-hall_id_t PhysicalSystemDescriptor::get_hall_id(const std::string& hostname) {
+HallID PhysicalSystemDescriptor::get_hall_id(const std::string& hostname) {
     TT_THROW("Querying Host Hall ID requires the Cable Spec which is not currently supported.");
 }
 

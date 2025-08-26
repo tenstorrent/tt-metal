@@ -21,7 +21,7 @@ std::vector<uint8_t> serialize_physical_descriptor_to_bytes(
     auto create_exit_node_connection = [&builder, &create_eth_connection](const tt_metal::ExitNodeConnection& conn) {
         auto eth_conn = create_eth_connection(conn.eth_conn);
         return tt::tt_metal::flatbuffer::CreateExitNodeConnection(
-            builder, conn.src_exit_node, conn.dst_exit_node, eth_conn);
+            builder, *(conn.src_exit_node), *(conn.dst_exit_node), eth_conn);
     };
 
     // Serialize ASIC descriptors
@@ -29,12 +29,12 @@ std::vector<uint8_t> serialize_physical_descriptor_to_bytes(
     for (const auto& [asic_id, descriptor] : physical_descriptor.get_asic_descriptors()) {
         auto asic_desc = tt::tt_metal::flatbuffer::CreateAsicDescriptor(
             builder,
-            descriptor.tray_id,
-            descriptor.n_id,
+            *(descriptor.tray_id),
+            *(descriptor.n_id),
             descriptor.board_type,
-            descriptor.unique_id,
+            *(descriptor.unique_id),
             builder.CreateString(descriptor.host_name));
-        auto asic_desc_map = tt::tt_metal::flatbuffer::CreateAsicDescriptorMap(builder, asic_id, asic_desc);
+        auto asic_desc_map = tt::tt_metal::flatbuffer::CreateAsicDescriptorMap(builder, *asic_id, asic_desc);
         asic_descriptor_maps.push_back(asic_desc_map);
     }
 
@@ -81,13 +81,14 @@ std::vector<uint8_t> serialize_physical_descriptor_to_bytes(
                     eth_connections.push_back(create_eth_connection(eth_conn));
                 }
                 auto eth_conn_vec = builder.CreateVector(eth_connections);
-                auto asic_edge = tt::tt_metal::flatbuffer::CreateAsicConnectionEdge(builder, edge.first, eth_conn_vec);
+                auto asic_edge =
+                    tt::tt_metal::flatbuffer::CreateAsicConnectionEdge(builder, *(edge.first), eth_conn_vec);
                 asic_edges.push_back(asic_edge);
             }
 
             auto asic_edges_vec = builder.CreateVector(asic_edges);
             auto asic_connections = tt::tt_metal::flatbuffer::CreateAsicConnnections(builder, asic_edges_vec);
-            auto asic_graph = tt::tt_metal::flatbuffer::CreateAsicGraph(builder, asic_id, asic_connections);
+            auto asic_graph = tt::tt_metal::flatbuffer::CreateAsicGraph(builder, *asic_id, asic_connections);
             asic_graphs.push_back(asic_graph);
         }
 
@@ -156,12 +157,12 @@ tt_metal::PhysicalSystemDescriptor deserialize_physical_descriptor_from_bytes(co
     if (fb_desc->asic_descriptors()) {
         for (auto fb_asic_desc : *fb_desc->asic_descriptors()) {
             tt_metal::ASICDescriptor desc;
-            desc.tray_id = fb_asic_desc->descriptor()->tray_id();
-            desc.n_id = fb_asic_desc->descriptor()->n_id();
+            desc.tray_id = TrayID{fb_asic_desc->descriptor()->tray_id()};
+            desc.n_id = NID{fb_asic_desc->descriptor()->n_id()};
             desc.board_type = static_cast<BoardType>(fb_asic_desc->descriptor()->board_type());
-            desc.unique_id = fb_asic_desc->descriptor()->unique_id();
+            desc.unique_id = AsicID{fb_asic_desc->descriptor()->unique_id()};
             desc.host_name = fb_asic_desc->descriptor()->host_name()->str();
-            result.get_asic_descriptors()[fb_asic_desc->asic_id()] = desc;
+            result.get_asic_descriptors()[AsicID{fb_asic_desc->asic_id()}] = desc;
         }
     }
 
@@ -183,8 +184,8 @@ tt_metal::PhysicalSystemDescriptor deserialize_physical_descriptor_from_bytes(co
             if (fb_exit_table->exit_connections()) {
                 for (auto fb_exit_conn : *fb_exit_table->exit_connections()) {
                     tt_metal::ExitNodeConnection conn;
-                    conn.src_exit_node = fb_exit_conn->src_exit_node();
-                    conn.dst_exit_node = fb_exit_conn->dst_exit_node();
+                    conn.src_exit_node = AsicID{fb_exit_conn->src_exit_node()};
+                    conn.dst_exit_node = AsicID{fb_exit_conn->dst_exit_node()};
                     conn.eth_conn.src_chan = fb_exit_conn->eth_conn()->src_chan();
                     conn.eth_conn.dst_chan = fb_exit_conn->eth_conn()->dst_chan();
                     connections.push_back(conn);
@@ -222,7 +223,7 @@ tt_metal::PhysicalSystemDescriptor deserialize_physical_descriptor_from_bytes(co
                             }
                         }
 
-                        asic_topology[fb_asic_graph->asic_id()] = connection_edges;
+                        asic_topology[AsicID{fb_asic_graph->asic_id()}] = connection_edges;
                     }
                 }
 
@@ -241,8 +242,8 @@ tt_metal::PhysicalSystemDescriptor deserialize_physical_descriptor_from_bytes(co
                         if (fb_host_edge->exit_node_connections()) {
                             for (auto fb_exit_conn : *fb_host_edge->exit_node_connections()) {
                                 tt_metal::ExitNodeConnection exit_conn;
-                                exit_conn.src_exit_node = fb_exit_conn->src_exit_node();
-                                exit_conn.dst_exit_node = fb_exit_conn->dst_exit_node();
+                                exit_conn.src_exit_node = AsicID{fb_exit_conn->src_exit_node()};
+                                exit_conn.dst_exit_node = AsicID{fb_exit_conn->dst_exit_node()};
                                 exit_conn.eth_conn.src_chan = fb_exit_conn->eth_conn()->src_chan();
                                 exit_conn.eth_conn.dst_chan = fb_exit_conn->eth_conn()->dst_chan();
                                 exit_node_connections.push_back(exit_conn);
