@@ -1,3 +1,6 @@
+#include "impl/context/metal_context.hpp"
+#include <tt-metalium/hal_types.hpp>
+
 #include <telemetry/ethernet/ethernet_helpers.hpp>
 
 static auto make_ordered_ethernet_connections(const auto &unordered_connections) {
@@ -35,18 +38,16 @@ std::unordered_map<tt::umd::ethernet_channel_t, CoreCoord> map_ethernet_channel_
     return ethernet_channel_to_core_coord;
 }
 
-bool is_ethernet_endpoint_up(const tt::Cluster &cluster, tt::umd::chip_id_t chip_id, tt::umd::ethernet_channel_t ethernet_channel) {
-    for (const auto &[core, channel]: cluster.get_soc_desc(chip_id).logical_eth_core_to_chan_map) {
-        if (ethernet_channel == channel) {
-            // Found the channel on the chip we are interested in, we now have the core coordinates
-            return cluster.is_ethernet_link_up(chip_id, core);
-        }
-    }
-
-    // Invalid chip ID or channel -> not connected
-    return false;
-}
-
 bool is_ethernet_endpoint_up(const tt::Cluster &cluster, const EthernetEndpoint &ep) {
-    return is_ethernet_endpoint_up(cluster, ep.chip.id, ep.channel);
+    tt_cxy_pair virtual_eth_core = tt_cxy_pair(ep.chip.id, cluster.get_virtual_coordinate_from_logical_coordinates(ep.chip.id, ep.ethernet_core, CoreType::ETH));
+    uint32_t link_up_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP);
+    uint32_t link_up_value = 0;
+    cluster.read_core(&link_up_value, sizeof(uint32_t), virtual_eth_core, link_up_addr);
+    if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
+        return link_up_value == 6;  // see eth_fw_api.h
+    } else if (cluster.arch() == tt::ARCH::BLACKHOLE) {
+        return link_up_value == 1;
+    }
+    TT_ASSERT(false, "Unsupported architecture for chip {}", ep.chip);
+    return false;
 }
