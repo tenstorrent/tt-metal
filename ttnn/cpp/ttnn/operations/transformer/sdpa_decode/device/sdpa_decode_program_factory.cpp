@@ -829,26 +829,18 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
             .defines = compute_defines});
 
     // Reader
-    tt_metal::ReaderDataMovementConfig reader_config(reader_compile_time_args_common);
-    reader_config.noc = tt_metal::NOC::NOC_1;
-    reader_config.noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
-
-    tt_metal::WriterDataMovementConfig writer_config(writer_compile_time_args_common);
-    writer_config.noc = tt_metal::NOC::NOC_1;
-    writer_config.noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC;
-
     auto reader_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/reader_decode_all.cpp",
         core_grid,
-        reader_config);
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args_common));
 
     // Writer
     auto writer_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/writer_decode_all.cpp",
         core_grid,
-        writer_config);
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args_common));
 
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
