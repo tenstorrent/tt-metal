@@ -61,42 +61,6 @@ def _run_model_pipeline(
     pipeline.cleanup()
 
 
-def run_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
-    _run_model_pipeline(
-        device,
-        tt_inputs,
-        test_infra,
-        num_warmup_iterations,
-        num_measurement_iterations,
-        num_command_queues=1,
-        trace=False,
-    )
-
-
-def run_trace_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
-    _run_model_pipeline(
-        device,
-        tt_inputs,
-        test_infra,
-        num_warmup_iterations,
-        num_measurement_iterations,
-        num_command_queues=1,
-        trace=True,
-    )
-
-
-def run_2cq_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
-    _run_model_pipeline(
-        device,
-        tt_inputs,
-        test_infra,
-        num_warmup_iterations,
-        num_measurement_iterations,
-        num_command_queues=2,
-        trace=False,
-    )
-
-
 def run_trace_2cq_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
     _run_model_pipeline(
         device,
@@ -117,7 +81,6 @@ def run_perf_e2e_yolov4(
     model_location_generator,
     resolution,
     expected_inference_throughput,
-    model_version="yolov4_trace_2cqs",
 ):
     profiler.clear()
 
@@ -145,32 +108,17 @@ def run_perf_e2e_yolov4(
     num_warmup_iterations = 5
     num_measurement_iterations = 15
 
-    if "yolov4_trace_2cqs" in model_version:
-        run_trace_2cq_model_pipeline(
-            device, ttnn_input_tensor, test_infra, num_warmup_iterations, num_measurement_iterations
-        )
-    elif "yolov4_trace" in model_version:
-        run_trace_model_pipeline(
-            device, ttnn_input_tensor, test_infra, num_warmup_iterations, num_measurement_iterations
-        )
-    elif "yolov4_2cqs" in model_version:
-        run_2cq_model_pipeline(device, ttnn_input_tensor, test_infra, num_warmup_iterations, num_measurement_iterations)
-    elif "yolov4" in model_version:
-        run_model_pipeline(device, ttnn_input_tensor, test_infra, num_warmup_iterations, num_measurement_iterations)
-    else:
-        assert False, f"Model version to run {model_version} not found"
+    run_trace_2cq_model_pipeline(
+        device, ttnn_input_tensor, test_infra, num_warmup_iterations, num_measurement_iterations
+    )
 
     first_iter_time = profiler.get("compile")
-
-    # ensuring inference time fluctuations is not noise
-    num_cqs = 2 if "2cqs" in model_version else 1
-    inference_time_avg = profiler.get(f"run_model_pipeline_{num_cqs}cqs") / num_measurement_iterations
-
+    inference_time_avg = profiler.get(f"run_model_pipeline_2cqs") / num_measurement_iterations
     compile_time = first_iter_time - 2 * inference_time_avg
     expected_inference_time = batch_size / expected_inference_throughput
 
     prep_perf_report(
-        model_name=f"ttnn_{model_version}_batch_size{batch_size}",
+        model_name=f"ttnn_yolov4_trace_2cqs_batch_size{batch_size}",
         batch_size=batch_size,
         inference_and_compile_time=first_iter_time,
         inference_time=inference_time_avg,
@@ -184,6 +132,11 @@ def run_perf_e2e_yolov4(
         f"YoloV4 {resolution[0]}x{resolution[1]} batch_size{batch_size} inference time (avg): {inference_time_avg}, FPS: {batch_size/inference_time_avg}"
     )
     logger.info(f"YoloV4 compile time: {compile_time}")
+
+    throughput_avg = batch_size / inference_time_avg
+    assert (
+        throughput_avg >= expected_inference_throughput
+    ), f"Expected end-to-end performance to exceed {expected_inference_throughput} fps but was {throughput_avg} fps"
 
 
 @run_for_wormhole_b0()
@@ -218,7 +171,6 @@ def test_e2e_performant(
         model_location_generator,
         resolution,
         expected_inference_throughput,
-        model_version="yolov4_trace_2cqs",
     )
 
 
@@ -254,5 +206,4 @@ def test_e2e_performant_dp(
         model_location_generator,
         resolution,
         expected_inference_throughput,
-        model_version="yolov4_trace_2cqs",
     )
