@@ -37,6 +37,7 @@ class CCLManager:
         self._init_semaphores()
         self.rs_ping_pong_idx = [0, 0]
         self.ag_ping_pong_idx = [0, 0]
+        self.barrier_idx = [0, 0]
 
     def _init_subdevice(self):
         compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
@@ -64,6 +65,13 @@ class CCLManager:
         self.ag_ping_pong_semaphores = {
             0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
             1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(ag_n_sems)],
+        }
+
+        # Initialize barrier semaphore
+        barrier_n_sems = 1 * 2
+        self.barrier_semaphores = {
+            0: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
+            1: [ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_n_sems)],
         }
 
     def get_rs_ping_pong_buffer(self, shape, dim, mesh_axis):
@@ -173,6 +181,15 @@ class CCLManager:
         n_sems = 2
         self.ag_ping_pong_idx[mesh_axis] = (cur_idx + 1) % 2
         return self.ag_ping_pong_semaphores[mesh_axis][cur_idx * n_sems : (cur_idx + 1) * n_sems]
+
+    def get_barrier_semaphore(self, mesh_axis):
+        """
+        Get semaphore for barrier operations.
+        """
+        cur_idx = self.barrier_idx[mesh_axis]
+        n_sems = 1
+        self.barrier_idx[mesh_axis] = (cur_idx + 1) % 2
+        return self.barrier_semaphores[mesh_axis][cur_idx]
 
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0"""

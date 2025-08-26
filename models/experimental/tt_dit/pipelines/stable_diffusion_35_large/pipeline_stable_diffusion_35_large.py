@@ -27,7 +27,7 @@ from ...encoders.t5.model_t5 import T5Encoder, T5Config
 from ...models.transformers.transformer_sd35 import SD35Transformer2DModel
 from ...models.vae.vae_sd35 import VAEDecoder
 from ...parallel.manager import CCLManager
-from ...parallel.config import DiTParallelConfig, create_vae_parallel_manager, EncoderParallelConfig, ParallelFactor
+from ...parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig, ParallelFactor
 from ...utils.padding import PaddingConfig
 from ...utils.cache import get_cache_path, load_cache_dict
 
@@ -148,11 +148,14 @@ class StableDiffusion3Pipeline:
         encoder_parallel_config = EncoderParallelConfig(
             tensor_parallel=ParallelFactor(factor=4, mesh_axis=1)  # 1x4 submesh, parallel on axis 1
         )
-        vae_parallel_manager = create_vae_parallel_manager(vae_device, self.ccl_managers[vae_submesh_idx])
 
         self.encoder_parallel_config = encoder_parallel_config
         self.encoder_device = encoder_device
-        self.vae_parallel_manager = vae_parallel_manager
+        
+        vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
+        self.vae_parallel_config = vae_parallel_config
+        self.vae_device = vae_device
+        self.vae_submesh_idx = vae_submesh_idx
 
         model_name_checkpoint = model_location_generator(checkpoint_name, model_subdir="StableDiffusion_35_Large")
 
@@ -348,9 +351,9 @@ class StableDiffusion3Pipeline:
 
         self._vae_decoder = VAEDecoder.from_torch(
             torch_ref=self._torch_vae.decoder,
-            mesh_device=vae_parallel_manager.device,
-            mesh_axis=1,
-            parallel_manager=vae_parallel_manager,
+            mesh_device=self.vae_device,
+            parallel_config=self.vae_parallel_config,
+            ccl_manager=self.ccl_managers[vae_submesh_idx],
         )
 
         if self.desired_encoder_submesh_shape != self.original_submesh_shape:
@@ -359,7 +362,7 @@ class StableDiffusion3Pipeline:
             self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
 
         self._latents_gather_semaphore = ttnn.create_global_semaphore(
-            vae_parallel_manager.device, self.ccl_managers[vae_submesh_idx].ccl_cores, 0
+            self.vae_device, self.ccl_managers[self.vae_submesh_idx].ccl_cores, 0
         )
 
     def prepare(
@@ -662,14 +665,15 @@ class StableDiffusion3Pipeline:
                 image_decoding_start_time = time.time()
 
                 # All gather replacement
+                ttnn.synchronize_device(self.vae_device)
                 tt_latents = ttnn.experimental.all_gather_async(
-                    input_tensor=tt_latents_step_list[0],
+                    input_tensor=tt_latents_step_list[self.vae_submesh_idx],
                     dim=1,
                     multi_device_global_semaphore=self._latents_gather_semaphore,
                     topology=ttnn.Topology.Linear,
-                    mesh_device=self.vae_parallel_manager.device,
+                    mesh_device=self.vae_device,
                     cluster_axis=self.dit_parallel_config.sequence_parallel.mesh_axis,
-                    num_links=self.vae_parallel_manager.num_links,
+                    num_links=self.ccl_managers[self.vae_submesh_idx].num_links,
                 )
 
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
@@ -684,8 +688,8 @@ class StableDiffusion3Pipeline:
                     torch_latents,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.bfloat16,
-                    device=self.vae_parallel_manager.device,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.vae_parallel_manager.device),
+                    device=self.vae_device,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.vae_device),
                 )
                 decoded_output = self._vae_decoder(tt_latents)
                 # decoded_output = sd_vae_decode(tt_latents, self._vae_parameters)
