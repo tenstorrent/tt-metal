@@ -10,13 +10,18 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Format Slack User Mentions
+      id: format_mentions
+      run: |
+        MENTIONS=$(echo "<@${{ inputs.owner }}>" | sed 's/,/ > <@/g')
+        echo "mentions=$MENTIONS" >> $GITHUB_OUTPUT
+      shell: bash
     - name: Report Github Pipeline Status Slack Action
       uses: slackapi/slack-github-action@v1.26.0
       with:
         payload: |
           {
-            "text": "<@${{ inputs.owner }}> ${{ github.workflow }} is failing: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. failing commit: https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }}",
-            "owner": "${{ inputs.owner }}"
+            "text": "${{ steps.format_mentions.outputs.mentions }} ${{ github.workflow }} is failing: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. failing commit: https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }}",
           }
       env:
         SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}
