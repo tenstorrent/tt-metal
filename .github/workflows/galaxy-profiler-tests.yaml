@@ -5,8 +5,6 @@ on:
   workflow_call:
   schedule:
     - cron: "0 2 * * *" # This cron schedule runs the workflow every day at 2am
-  pull_request:
-  push:
 
 jobs:
   build-artifact-profiler:
