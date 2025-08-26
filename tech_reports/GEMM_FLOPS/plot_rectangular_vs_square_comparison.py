@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Compare different matrix aspect ratios (1:1:1, 1:2:1, 1:2:4, etc.) with similar time complexity.
 Matrix multiplication has O(m*k*n) time complexity, so we'll generate matrices with

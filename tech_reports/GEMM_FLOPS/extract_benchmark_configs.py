@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Extract best configurations from test_benchmark.py and create data for plotting scripts.
 This script reads the optimized configurations and generates the data needed for

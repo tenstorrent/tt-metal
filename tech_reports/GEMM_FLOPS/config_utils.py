@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Utility functions for finding best configurations, tracing comparisons, and OOB comparisons
 from GEMM sweep data.

@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 """
 Script to insert only the best configuration for each tensor size into the GEMM_FLOPS.md report
 Usage: python3 insert_best_configs.py [--restore]
