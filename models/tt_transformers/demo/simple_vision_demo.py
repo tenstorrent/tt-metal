@@ -406,7 +406,7 @@ def test_multimodal_demo_text(
 
                     # Disable checking for eot until I have more robust code for batch > 1
                     if HF_MODEL:
-                        if next_tokens in stop_tokens:
+                        if any([t in stop_tokens for t in next_tokens]):
                             break
                     else:
                         # Disable checking for eot until I have more robust code for batch > 1

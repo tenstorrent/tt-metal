@@ -156,16 +156,15 @@ def test_decoder_inference(
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
-        # pt_decode_input = (
-        #     torch.rand(
-        #         batch_size,
-        #         max_seq_len,
-        #         model_args.dim,
-        #         dtype=get_ref_model_dype(reference_model, model_args.model_name),
-        #     )
-        #     * 2
-        # ) - 1
-        pt_decode_input = torch.load("torch_decoder_input_0.pt")
+        pt_decode_input = (
+            torch.rand(
+                batch_size,
+                max_seq_len,
+                model_args.dim,
+                dtype=get_ref_model_dype(reference_model, model_args.model_name),
+            )
+            * 2
+        ) - 1
         print("pt_decode_input shape ", pt_decode_input.shape)
         tt_decode_input = pt_decode_input.clone()
         decode_input = model_args.prepare_residual_tensor_prefill(
@@ -183,11 +182,20 @@ def test_decoder_inference(
         attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
         ref_output = reference_model(
-            pt_decode_input.to(dtype=torch.bfloat16), positions[0], freqs_cis_i, mask=attn_mask_torch
+            pt_decode_input.to(dtype=torch.bfloat16),
+            positions[0],
+            freqs_cis_i,
+            mask=attn_mask_torch.to(dtype=torch.bfloat16),
         ).unsqueeze(0)
         # Run TT model
         tt_out = tt_model(
-            decode_input, None, rot_mats_global=rot_mats, rot_mats_local=rot_mats_local, user_id=0, mode="prefill", page_table=page_table_tt
+            decode_input,
+            None,
+            rot_mats_global=rot_mats,
+            rot_mats_local=rot_mats_local,
+            user_id=0,
+            mode="prefill",
+            page_table=page_table_tt,
         )
         tt_out = ttnn.to_torch(
             tt_out,

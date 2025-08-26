@@ -48,11 +48,10 @@ def test_rms_norm_inference(
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
 
-    model_args.n_layers = 62
+    model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
-    for i in range(1):
-        state_dict_prefix = model_args.get_state_dict_prefix("", i)
-        first_layer_prefix = state_dict_prefix + "attention.q_norm."
+    state_dict_prefix = model_args.get_state_dict_prefix("", 0)
+    first_layer_prefix = state_dict_prefix + "attention_norm."
 
     # Create the inner RMSNormxw
     tt_ccl = TT_CCL(mesh_device)
@@ -73,46 +72,46 @@ def test_rms_norm_inference(
     # Wrap it in DistributedNorm
     tt_model = DistributedNorm(tt_inner_norm, model_args, tt_ccl, TG=model_args.is_galaxy)
 
-        # Create reference model (unchanged)
-        partial_state_dict = {
-            k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
-        }
-        reference_model = model_args.reference_rms_norm(i)
+    # Create reference model (unchanged)
+    partial_state_dict = {
+        k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
+    }
+    reference_model = model_args.reference_rms_norm()
+    reference_model.load_state_dict(partial_state_dict)
 
-        reference_model.load_state_dict(partial_state_dict)
+    input = torch.rand(1, 1, 32, model_args.dim)
+    reference_output = reference_model(input)
 
-        input = torch.load(f"torch_decoder/inp{i}_torch_decoder_query_states_27B.pt").unsqueeze(0)
-        print("Input shape ", input.shape)
-        reference_output = reference_model(input)
+    # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
+    tt_input = ttnn.from_torch(
+        input,
+        device=mesh_device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
+        memory_config=(
+            model_args.get_model_config()["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
+        ),
+    )
 
-        # DistributedNorm inputs are fractured across devices and interleaved in DRAM (for prefill) and L1 (for decode)
-        tt_input = ttnn.from_torch(
-            input,
-            device=mesh_device,
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        print("tt_input ", tt_input.shape)
+    tt_output = tt_model(tt_input, mode=mode)
 
-        tt_output = tt_model(tt_input, mode="prefill")
-        print("tt_output ", tt_output.shape)
+    # DistributedNorm outputs are replicated across devices
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(
+            mesh_device, dims=(0, 3) if model_args.is_galaxy else (3, 0), mesh_shape=model_args.cluster_shape
+        ),
+    )[:1, :, :, :]
 
-        # DistributedNorm outputs are replicated across devices
-        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
 
-        print("reference_output ", reference_output.shape)
-        print(tt_output_torch.shape)
+    logger.info(comp_allclose(reference_output, tt_output_torch))
+    logger.info(f"PCC: {pcc_message}")
 
-        passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc=0.9999)
+    if passing:
+        logger.info("rms_norm Passed!")
+    else:
+        logger.warning("rms_norm Failed!")
 
-        logger.info(comp_allclose(reference_output, tt_output_torch))
-        logger.info(f"PCC: of {i} {pcc_message}")
-
-        if passing:
-            logger.info("rms_norm Passed!")
-        else:
-            logger.warning("rms_norm Failed!")
-
-        assert passing, f"rms_norm output does not meet PCC requirement {0.9999}."
+    assert passing, f"rms_norm output does not meet PCC requirement {0.9999}."
