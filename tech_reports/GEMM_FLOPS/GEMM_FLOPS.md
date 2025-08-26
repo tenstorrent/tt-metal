@@ -25,44 +25,58 @@ Therefore, the peak achieved flops changes based on the datatype, the size of th
 
 ## Test it yourself!
 
+## Prerequisites
+
+> [!IMPORTANT]
+> These benchmarks require tt-metal to be built with profiler support enabled. Device-based utilization metrics are only available in profiler builds.
+
+### Build tt-metal with Profiler Support
+
+```bash
+./build_metal.sh --enable-profiler
+```
+### Running Benchmarks
+
 The matrix multiply TFLOPS results can be tested on any Wormhole or Blackhole card using:
 
-
+**For manually selected matmul configurations (best performance):**
 ```bash
 TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
 ```
 
-for manually selected matmul configurations, or using:
-
+**For out-of-box matmul configurations (default settings):**
 ```bash
 TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf_out_of_box
 ```
 
-for out-of-box matmul configurations, or using
-
+**For comprehensive sweep (to run a sweep to find the ideal config):**
 ```bash
 TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf_sweep_all
 ```
-to run a sweep to find the ideal config.
 
-for manually selected matmul configurations, or using:
+### N300 Card Instructions
 
+Alternatively, to test on an N300 card, use the following commands. 
+
+**For manually selected matmul configurations:**
 ```bash
-TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf_out_of_box
+WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf
 ```
 
-for out-of-box matmul configurations, or using
+**For out-of-box matmul configurations:**
+```bash
+WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf_out_of_box
+```
 
+**For comprehensive sweep:**
 ```bash
 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml TT_METAL_DEVICE_PROFILER=1 pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf_sweep_all
 ```
 
-to run a sweep to find the ideal config.
+Python scripts for reproducing the plots are included in this directory.
 
-Python scripts for reproducing the plots are included in the tech report directory.
-
-
-We will vary three different parameters for this experiment:
+## Design of Experiments
+The parameters of interest are 3 fold:
 1. Dimensions: The sizes of the matrices along each axis, denoted as m , n and k . (m, k) represents the size of the input tensor, while (k, n) is the size of the activation tensor. 
 Larger tensors require more computation since the number of operations needed to perform matrix multiplication increases as O(m*k*n).
 2. Computation Fidelity: Referred to as LoFi, HiFi2, HiFi3 and HiFi4. Internally, the matrix engine can adjust the number of bits being processed, which affects both the precision of the results and the computation speed.
@@ -118,7 +132,7 @@ As seen below, while Wormhole cards can perform matrix multiplications at around
 
 ### Utilization
 
-#### Utilization plot across all matrix sizes and configurations, based on the Chip TFLOPS calculated per each Math Fidelity
+#### Utilization plot across all matrix sizes and configurations, based on the chip TFLOPS calculated per each Math Fidelity
 
 Wormhole cards more easily achieve full utilization of their Tensix cores, performing at up to 83% of the theoretical value. While the larger core grid of Blackhole makes it harder to achieve high utilization, it still delivers performance north of 74% utilization at peak.
 
