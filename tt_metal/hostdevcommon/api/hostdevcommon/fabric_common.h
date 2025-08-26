@@ -123,7 +123,6 @@ struct tensix_routing_l1_info_t {
 
 struct fabric_connection_info_t {
     uint32_t edm_buffer_base_addr;
-    uint32_t edm_l1_sem_addr;
     uint32_t edm_connection_handshake_addr;
     uint32_t edm_worker_location_info_addr;
     uint32_t buffer_index_semaphore_id;
@@ -135,7 +134,7 @@ struct fabric_connection_info_t {
     uint16_t worker_free_slots_stream_id;
 } __attribute__((packed));
 
-static_assert(sizeof(fabric_connection_info_t) == 28, "Struct size mismatch!");
+static_assert(sizeof(fabric_connection_info_t) == 24, "Struct size mismatch!");
 // NOTE: This assertion can be removed once "non device-init fabric"
 //       is completely removed
 static_assert(sizeof(fabric_connection_info_t) % 4 == 0, "Struct size must be 4-byte aligned");
