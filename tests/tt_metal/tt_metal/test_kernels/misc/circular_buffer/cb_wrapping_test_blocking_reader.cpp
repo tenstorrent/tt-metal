@@ -36,6 +36,8 @@ static constexpr auto CB_ID = CBIndex::c_0;
 static constexpr std::size_t CB_STEP_SIZE = 32;
 
 using DataT = std::uint32_t;
+static constexpr std::size_t PAGE_SIZE_BYTES = 16;
+static constexpr std::size_t PAGE_SIZE = PAGE_SIZE_BYTES / sizeof(DataT);
 
 static constexpr std::size_t CHURN_TARGET = (0x10000 - 2 * CB_STEP_SIZE);
 static constexpr std::size_t CHURN_LOOP_COUNT = CHURN_TARGET / CB_STEP_SIZE;
@@ -68,7 +70,7 @@ void report_page(std::size_t i) {
 
     DataT result = 0;
     for (auto j = 0ul; j < PAGE_SIZE; j++) {
-        // result should be the same as all elements should be the same.
+        // this is a cheap way to check if the page is all the same value
         result |= read_ptr[j];
     }
     result_ptr[i] = result;
