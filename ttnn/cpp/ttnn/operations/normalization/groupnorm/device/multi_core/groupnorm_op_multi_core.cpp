@@ -3579,6 +3579,16 @@ operation::ProgramWithCallbacks groupnorm_multi_core_welford(
         tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_partial_index, cb_data_format}})
             .set_page_size(ex_cb_partial_index, single_tile_size);
     auto cb_ex_partial = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_partial_config);
+    uint32_t ex_cb_ping_index = tt::CBIndex::c_7;
+    tt::tt_metal::CircularBufferConfig ex_cb_ping_config =
+        tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_ping_index, cb_data_format}})
+            .set_page_size(ex_cb_ping_index, single_tile_size);
+    auto cb_ex_ping = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_ping_config);
+    uint32_t ex_cb_pong_index = tt::CBIndex::c_9;
+    tt::tt_metal::CircularBufferConfig ex_cb_pong_config =
+        tt::tt_metal::CircularBufferConfig(ex_partial_CB_size, {{ex_cb_pong_index, cb_data_format}})
+            .set_page_size(ex_cb_pong_index, single_tile_size);
+    auto cb_ex_pong = tt::tt_metal::CreateCircularBuffer(program, all_cores, ex_cb_pong_config);
     // ex_external
     uint32_t ex_cb_external_index = tt::CBIndex::c_10;
     tt::tt_metal::CircularBufferConfig ex_cb_external_config =

@@ -135,6 +135,8 @@ void MAIN {
     constexpr uint32_t cb_x = tt::CBIndex::c_24;
     constexpr uint32_t cb_xmm = tt::CBIndex::c_25;
     constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;
+    constexpr uint32_t cb_ex_ping = tt::CBIndex::c_7;
+    constexpr uint32_t cb_ex_pong = tt::CBIndex::c_9;
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;
     constexpr uint32_t cb_ex2pe = tt::CBIndex::c_27;
 
@@ -231,15 +233,16 @@ void MAIN {
         cb_ex_external_tiles_required++;
     }
 
-    // Copy 2 zeros to cb_ex_partial
-    cb_reserve_back(cb_ex_partial, 2);
+    // Copy 2 zeros to cb_ex_pong
+    cb_reserve_back(cb_ex_pong, 2);
     tile_regs_acquire();
     zeroacc();
     tile_regs_commit();
     tile_regs_wait();
-    pack_tile_block(0, cb_ex_partial, 2);
+    pack_tile_block(0, cb_ex_pong, 2);
     tile_regs_release();
-    cb_push_back(cb_ex_partial, 2);
+    cb_push_back(cb_ex_pong, 2);
+    bool read_from_ping = false;
 
     // Start Batch Loop
     for (uint32_t b = 0; b < batch; ++b) {
@@ -318,21 +321,21 @@ void MAIN {
                 index_h_offset = 0;
                 reconfig_data_format_srcb(cb_input_mask, cb_x);
                 transpose_wh_init(cb_x, cb_x);
-                copy_tile_init(cb_ex_partial);
+                copy_tile_init(read_from_ping ? cb_ex_ping : cb_ex_pong);
                 welford_init();
 
                 for (uint32_t i = 0; i < out_block_h_actual; ++i) {
                     curr_xy_limit += group_size;
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-                        cb_wait_front(cb_ex_partial, 2);
-                        cb_reserve_back(cb_ex_partial, 2);
                         tile_regs_acquire();
 
                         // Copy the current values to DST regs 1 and 2
-                        copy_tile_to_dst_init_short(cb_ex_partial, 0);
-                        copy_tile(cb_ex_partial, 0, 1);
-                        copy_tile(cb_ex_partial, 1, 2);
+                        cb_wait_front(read_from_ping ? cb_ex_ping : cb_ex_pong, 2);
+                        cb_reserve_back(read_from_ping ? cb_ex_pong : cb_ex_ping, 2);
+                        copy_tile_to_dst_init_short(read_from_ping ? cb_ex_ping : cb_ex_pong, 0);
+                        copy_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 0, 1);
+                        copy_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 1, 2);
 
                         // Run Welford's algorithm
                         for (uint32_t w = 0; w < subblock_w; ++w) {
@@ -340,17 +343,18 @@ void MAIN {
                             uint32_t index_mask = w + index_subblock_w_offset;
                             transpose_wh_init_short(cb_x);
                             transpose_wh_tile(cb_x, index, 0);
-                            welford(0, 1, 2, curr_xy_coord, curr_xy_limit, 0);
+                            // welford(0, 1, 2, curr_xy_coord, curr_xy_limit, 0);
                             // curr_xy_coord += 32; // Test hangs when this is run
                         }
                         tile_regs_commit();
-                        cb_pop_front(cb_ex_partial, 2);
+                        cb_pop_front(read_from_ping ? cb_ex_ping : cb_ex_pong, 2);
 
                         tile_regs_wait();
-                        pack_tile_block(1, cb_ex_partial, 2);
+                        pack_tile_block(1, read_from_ping ? cb_ex_pong : cb_ex_ping, 2);
                         tile_regs_release();
-                        cb_push_back(cb_ex_partial, 2);
+                        cb_push_back(read_from_ping ? cb_ex_pong : cb_ex_ping, 2);
                         index_subblock_w_offset += subblock_w;
+                        read_from_ping = !read_from_ping;
                     }
                     index_h_offset += block_w;
                 }
@@ -362,6 +366,17 @@ void MAIN {
                 cb_push_back(cb_x, out_block_hw_normal);
             }
 
+            cb_wait_front(read_from_ping ? cb_ex_ping : cb_ex_pong, 2);
+            cb_reserve_back(cb_ex_partial, 2);
+            tile_regs_acquire();
+            copy_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 0, 0);
+            copy_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 1, 1);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile_block(0, cb_ex_partial, 2);
+            tile_regs_release();
+            cb_pop_front(read_from_ping ? cb_ex_pong : cb_ex_ping, 2);
+            cb_push_back(cb_ex_partial, 2);
             // End Local Reduce
             // End Welford's Calculation
 
@@ -673,5 +688,6 @@ void MAIN {
         index_b_offset += num_tiles_per_batch;
     }
     // End Batch Loop
+    DPRINT << "Kernel finished" << ENDL();
 }
 }  // namespace NAMESPACE
