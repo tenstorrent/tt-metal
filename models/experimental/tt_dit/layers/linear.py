@@ -141,7 +141,7 @@ class ColParallelLinear:
             core_grid=core_grid,
             compute_kernel_config=compute_kernel_config or self.compute_config,
         )
-        if self.activation_fn == "geglu" or self.activation_fn == "gelu":
+        if self.activation_fn == "gelu":
             output = ttnn.gelu(output, fast_and_approximate_mode=False)
         elif self.activation_fn == "quick_gelu":
             output = output * ttnn.sigmoid(1.702 * output)  # quick approx gelu

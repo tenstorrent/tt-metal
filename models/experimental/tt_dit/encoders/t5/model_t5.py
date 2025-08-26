@@ -9,7 +9,7 @@ from ...utils.tensor import bf16_tensor
 from ...utils.substate import substate, indexed_substates
 from ...parallel.manager import CCLManager
 from ...parallel.config import EncoderParallelConfig
-from ...layers.feedforward import ColParallelLinear, RowParallelLinear
+from ...layers.linear import ColParallelLinear, RowParallelLinear
 import math
 from ...layers.normalization import RMSNorm
 
@@ -229,16 +229,6 @@ class T5DenseGatedActDense:
         hidden_states = ttnn.unsqueeze(hidden_states, 0)
 
         if self.parallel_config.tensor_parallel.factor > 1:
-            # hidden_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
-            #     hidden_states,
-            #     dim=3,
-            #     multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
-            #     num_links=1,
-            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            #     topology=self.ccl_manager.topology,
-            #     cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            # )
-
             hidden_states = ttnn.experimental.all_gather_async(
                 hidden_states,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(

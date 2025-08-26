@@ -10,7 +10,6 @@ from ...utils.substate import substate, indexed_substates
 from ...parallel.manager import CCLManager
 from ...parallel.config import EncoderParallelConfig
 from ...layers.feedforward import ColParallelLinear, ParallelFeedForward
-from loguru import logger
 
 
 class CLIPConfig:
@@ -392,7 +391,6 @@ class CLIPAttention:
 
         orig_shape = list(attn_output.shape)
 
-        logger.debug(f"tensor parallel factor: {self.parallel_config.tensor_parallel.factor}")
         if self.parallel_config.tensor_parallel.factor > 1:
             attn_output = ttnn.experimental.all_gather_async(
                 attn_output,

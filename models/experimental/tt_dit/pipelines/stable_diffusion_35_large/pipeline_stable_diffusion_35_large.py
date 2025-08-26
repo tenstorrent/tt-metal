@@ -120,6 +120,7 @@ class StableDiffusion3Pipeline:
         # Hacky submesh reshapes and assignment to parallelize encoders and VAE
         encoder_device = self.submesh_devices[0]
         self.original_submesh_shape = tuple(encoder_device.shape)
+        self.desired_encoder_submesh_shape = tuple(encoder_device.shape)
 
         if encoder_device.shape[1] != 4:
             # If reshaping, vae_device must be on submesh 0. That means T5 can't fit, so disable it.
@@ -133,7 +134,8 @@ class StableDiffusion3Pipeline:
             cfg_shape = tuple(encoder_device.shape)
             assert cfg_shape[0] * cfg_shape[1] == 4, f"Cannot reshape {cfg_shape} to a 1x4 mesh"
             logger.info(f"Reshaping submesh device 0 from {cfg_shape} to (1, 4) for CLIP")
-            encoder_device.reshape(ttnn.MeshShape(1, 4))
+            self.desired_encoder_submesh_shape = (1, 4)
+
         else:
             # vae_device can only be on submesh 1 if submesh is not getting reshaped.
             vae_submesh_idx = 1
@@ -144,8 +146,6 @@ class StableDiffusion3Pipeline:
             tensor_parallel=ParallelFactor(factor=4, mesh_axis=1)  # 1x4 submesh, parallel on axis 1
         )
         vae_parallel_manager = create_vae_parallel_manager(vae_device, self.ccl_managers[vae_submesh_idx])
-        # HACK: reshape submesh device 0 from 1D to 2D
-        self.submesh_devices[0].reshape(ttnn.MeshShape(*self.original_submesh_shape))
 
         self.encoder_parallel_config = encoder_parallel_config
         self.encoder_device = encoder_device
@@ -234,8 +234,9 @@ class StableDiffusion3Pipeline:
         self._torch_vae_scale_factor = 2 ** (len(self._block_out_channels) - 1)
         self._image_processor = VaeImageProcessor(vae_scale_factor=self._torch_vae_scale_factor)
 
-        # HACK: reshape submesh device 0 to 1D
-        encoder_device.reshape(ttnn.MeshShape(1, 4))  # 1x4 submesh for encoder
+        if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+            # HACK: reshape submesh device 0 to 1D
+            self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
 
         logger.info("creating TT-NN CLIP text encoder...")
 
@@ -323,20 +324,11 @@ class StableDiffusion3Pipeline:
         else:
             self._text_encoder_3 = None
 
-        # HACK: reshape submesh device 0 from 1D to 2D
-        self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
-
         self.timing_collector = None  # Set externally when timing is needed
 
         self._trace = None
 
         ttnn.synchronize_device(self.encoder_device)
-
-        # HACK: reshape submesh device 0 to 1D
-        original_vae_device_shape = tuple(self.vae_parallel_manager.device.shape)
-        encoder_tensor_parallel_shape = (1, 4)  # 1x4 submesh for encoder tensor parallel
-        if original_vae_device_shape != encoder_tensor_parallel_shape:
-            self.vae_parallel_manager.device.reshape(ttnn.MeshShape(*encoder_tensor_parallel_shape))
 
         self._vae_decoder = VAEDecoder.from_torch(
             torch_ref=self._torch_vae.decoder,
@@ -345,9 +337,10 @@ class StableDiffusion3Pipeline:
             parallel_manager=vae_parallel_manager,
         )
 
-        # HACK: reshape submesh device 0 from 1D to 2D
-        if original_vae_device_shape != encoder_tensor_parallel_shape:
-            vae_parallel_manager.device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
+        if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+            # HACK: reshape submesh device 0 to 1D
+            # If reshaping, vae device is same as encoder device
+            self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
 
         self._latents_gather_semaphore = ttnn.create_global_semaphore(
             vae_parallel_manager.device, self.ccl_managers[vae_submesh_idx].ccl_cores, 0
@@ -508,8 +501,9 @@ class StableDiffusion3Pipeline:
             logger.info("encoding prompts...")
 
             with timer.time_section("total_encoding") if timer else nullcontext():
-                # HACK: reshape submesh device 0 from 2D to 1D
-                self.encoder_device.reshape(ttnn.MeshShape(1, 4))  # 1x4 submesh for encoder
+                if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+                    # HACK: reshape submesh device 0 from 2D to 1D
+                    self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
                 prompt_encoding_start_time = time.time()
                 prompt_embeds, pooled_prompt_embeds = self._encode_prompts(
                     prompt_1=prompt_1,
@@ -523,8 +517,9 @@ class StableDiffusion3Pipeline:
                     do_classifier_free_guidance=do_classifier_free_guidance,
                     clip_skip=clip_skip,
                 )
-                # HACK: reshape submesh device 0 from 1D to 2D
-                self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
+                if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+                    # HACK: reshape submesh device 0 from 1D to 2D
+                    self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
                 prompt_encoding_end_time = time.time()
                 logger.info("preparing timesteps...")
 
@@ -664,11 +659,10 @@ class StableDiffusion3Pipeline:
                 torch_latents = ttnn.to_torch(ttnn.get_device_tensors(tt_latents)[0])
                 torch_latents = (torch_latents / self._torch_vae_scaling_factor) + self._torch_vae_shift_factor
 
-                # HACK: reshape submesh device 0 from 2D to 1D
-                original_vae_device_shape = tuple(self.vae_parallel_manager.device.shape)
-                encoder_tensor_parallel_shape = (1, 4)  # 1x4 submesh for encoder tensor parallel
-                if original_vae_device_shape != encoder_tensor_parallel_shape:
-                    self.vae_parallel_manager.device.reshape(ttnn.MeshShape(*encoder_tensor_parallel_shape))
+                if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+                    # HACK: reshape submesh device 0 from 2D to 1D
+                    # If reshaping, vae device is same as encoder device
+                    self.encoder_device.reshape(ttnn.MeshShape(*self.desired_encoder_submesh_shape))
 
                 tt_latents = ttnn.from_torch(
                     torch_latents,
@@ -681,8 +675,9 @@ class StableDiffusion3Pipeline:
                 # decoded_output = sd_vae_decode(tt_latents, self._vae_parameters)
                 decoded_output = ttnn.to_torch(ttnn.get_device_tensors(decoded_output)[0]).permute(0, 3, 1, 2)
                 # HACK: reshape submesh device 0 from 1D to 2D
-                if original_vae_device_shape != encoder_tensor_parallel_shape:
-                    self.vae_parallel_manager.device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
+                if self.desired_encoder_submesh_shape != self.original_submesh_shape:
+                    # If reshaping, vae device is same as encoder device
+                    self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
                 # image = self._torch_vae.decoder(tt_latents)
                 image = self._image_processor.postprocess(decoded_output, output_type="pt")
                 print(f"postprocessed image shape: {image.shape}")
