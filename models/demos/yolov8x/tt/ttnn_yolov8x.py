@@ -620,7 +620,14 @@ class TtDetectionModel:
             shortcut=True,
             input_params=c2f_configs["model.4"]["input_params"],
         )
-        self.conv_5 = TtConv(device, parameters, "model.5", input_params=[3, 2, 1, 640, 320], block_shard=True)
+        self.conv_5 = TtConv(
+            device,
+            parameters,
+            "model.5",
+            input_params=[3, 2, 1, 640, 320],
+            block_shard=True,
+            reshard_if_not_optimal=True,
+        )
         self.c2f_6 = TtC2f(
             device,
             parameters,
@@ -631,15 +638,22 @@ class TtDetectionModel:
             change_shard=True,
             input_params=c2f_configs["model.6"]["input_params"],
         )
-        self.conv_7 = TtConv(device, parameters, "model.7", input_params=[3, 2, 1, 640, 640], block_shard=True)
+        self.conv_7 = TtConv(
+            device,
+            parameters,
+            "model.7",
+            input_params=[3, 2, 1, 640, 640],
+            block_shard=True,
+            reshard_if_not_optimal=True,
+        )
         self.c2f_8 = TtC2f(
             device,
             parameters,
             "model.8",
             n=3,
             shortcut=True,
-            change_shard=True,
             block_shard=True,
+            reshard=True,
             input_params=c2f_configs["model.8"]["input_params"],
         )
         self.sppf_9 = TtSppf(
@@ -665,7 +679,14 @@ class TtDetectionModel:
             reshard=True,
             input_params=c2f_configs["model.15"]["input_params"],
         )
-        self.conv_16 = TtConv(device, parameters, "model.16", input_params=[3, 2, 1, 320, 320], block_shard=True)
+        self.conv_16 = TtConv(
+            device,
+            parameters,
+            "model.16",
+            input_params=[3, 2, 1, 320, 320],
+            block_shard=True,
+            reshard_if_not_optimal=True,
+        )
         self.c2f_18 = TtC2f(
             device,
             parameters,
@@ -711,14 +732,10 @@ class TtDetectionModel:
         ttnn.deallocate(c2f_2)
         c2f_4, out_h, out_w = self.c2f_4(conv_3)
         ttnn.deallocate(conv_3)
-        c2f_4 = ttnn.sharded_to_interleaved(c2f_4, ttnn.L1_MEMORY_CONFIG)
-        c2f_4 = ttnn.reallocate(c2f_4, memory_config=ttnn.L1_MEMORY_CONFIG)  # Removing this reduces the pcc to 0.98
         conv_5, out_h, out_w = self.conv_5(c2f_4)
         c2f_6, out_h, out_w = self.c2f_6(conv_5)
         ttnn.deallocate(conv_5)
-        c2f_6 = ttnn.reallocate(c2f_6, memory_config=ttnn.L1_MEMORY_CONFIG)
         conv_7, out_h, out_w = self.conv_7(c2f_6)
-        conv_7 = ttnn.sharded_to_interleaved(conv_7, ttnn.L1_MEMORY_CONFIG)
         c2f_8, out_h, out_w = self.c2f_8(conv_7)
         ttnn.deallocate(conv_7)
         nine, out_h, out_w = self.sppf_9(c2f_8)
@@ -771,9 +788,9 @@ class TtDetectionModel:
 
         c2f_15, out_h, out_w = self.c2f_15(x)
         ttnn.deallocate(x)
+        conv_16, out_h, out_w = self.conv_16(c2f_15)
         c2f_15 = ttnn.sharded_to_interleaved(c2f_15, ttnn.L1_MEMORY_CONFIG)
         fifteen = ttnn.clone(c2f_15, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        conv_16, out_h, out_w = self.conv_16(c2f_15)
         ttnn.deallocate(c2f_15)
         conv_16 = ttnn.sharded_to_interleaved(conv_16, ttnn.L1_MEMORY_CONFIG)
         conv_16 = ttnn.to_layout(conv_16, ttnn.ROW_MAJOR_LAYOUT)
