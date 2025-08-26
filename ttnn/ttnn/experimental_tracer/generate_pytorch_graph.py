@@ -11,17 +11,19 @@ from typing import Dict, List, Tuple
 from find_repeated_subgraphs import CompositeOperation
 import gzip
 import torch
+import json
 
 
 class PytorchGraph:
     def __init__(self, operation_graph: OperationGraph):
-        self.graph = operation_graph.graph
+        self.graph = operation_graph
+        assert not operation_graph.tracer.fake_original_tensor
 
     def get_imports_and_code_lines(self) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
         imports: Dict[str, List[str]] = {}
         code_lines: Dict[str, List[str]] = {}
         for node_id in list(nx.topological_sort(self.graph)):
-            operation = self.graph.nodes[node_id].get("operation")
+            operation = self.graph.graph.nodes[node_id].get("operation")
             if operation:
                 imports[node_id] = operation.generate_import_code()
                 code_lines[node_id] = operation.generate_code() + " # " + operation.unique_name
@@ -75,7 +77,9 @@ class CompositePytorchGraph(PytorchGraph):
         main_op = CompositeOperation(
             id="main",
             unique_name="OUTPUT",
-            sub_operations=list(self.graph.nodes[node_id]["operation"] for node_id in nx.topological_sort(self.graph)),
+            sub_operations=list(
+                self.graph.graph.nodes[node_id]["operation"] for node_id in nx.topological_sort(self.graph.graph)
+            ),
             function_call_name="composite",
             args=[],
             kwargs={},
@@ -83,18 +87,32 @@ class CompositePytorchGraph(PytorchGraph):
         imports["main"] = [
             "import gzip",
             "import torch",
-            "import functools",
             "import json",
             "from tracer_backend import trace_torch_model",
             "from find_repeated_subgraphs import PatternObjFactory as POFactory, find_repeated_subgraphs",
             "from generate_pytorch_graph import CompositePytorchGraph",
+            "from utils import LazyParams",
         ] + main_op.generate_import_code()
-        code_lines["main"] = 'with gzip.open("graph.pth.gz", "rb") as f:\n' + "  params = torch.load(f)\n"
+        const_meta = {
+            k: {"shape": list(v.value.shape), "dtype": str(v.value.dtype)}
+            for k, v in CompositeOperation.ALL_CONSTANTS.items()
+        }
+        # dump const meta
+        with open("const_meta.json", "w") as f:
+            json.dump(const_meta, f, indent=2)
+        code_lines[
+            "main"
+        ] = """# Set fake=True for fake tensors, fake=False for real tensors
+params = LazyParams(
+    meta_path="const_meta.json",
+    data_path="graph.pth.gz",
+    fake=True  # Change to False to load real tensors
+)\n"""
         main_op_code = main_op.generate_code()
         input_ops = [
-            self.graph.nodes[node_id]["operation"]
-            for node_id in self.graph.nodes
-            if isinstance(self.graph.nodes[node_id]["operation"], InputOp)
+            self.graph.graph.nodes[node_id]["operation"]
+            for node_id in self.graph.graph.nodes
+            if isinstance(self.graph.graph.nodes[node_id]["operation"], InputOp)
         ]
         for const in CompositeOperation.ALL_CONSTANTS:
             main_op_code = main_op_code.replace(f"{const},", f"params['{const}'],")
@@ -119,17 +137,16 @@ class CustomModel(torch.nn.Module):
         code_lines["main"] += f"\ntorch_model = CustomModel(params)"
         code_lines[
             "main"
-        ] += f"\noperation_graph = trace_torch_model(torch_model, {input_shapes}, dump_visualization=True, save_original_tensors=True)"
+        ] += f"\n# operation_graph = trace_torch_model(torch_model, {input_shapes}, dump_visualization=True, save_original_tensors=True)"
 
-        code_lines["main"] += f"\nclustered_graph, composite_ops = find_repeated_subgraphs(operation_graph)"
+        code_lines["main"] += f"\n# clustered_graph, composite_ops = find_repeated_subgraphs(operation_graph)"
+        code_lines["main"] += f"\n# pytorch_graph = CompositePytorchGraph(clustered_graph)"
+        code_lines["main"] += f"\n# pytorch_graph.dump_to_python_file('clustered_graph.py', True)"
         code_lines["main"] += f"\n# _tensor_io_log.clear()"
         code_lines["main"] += f"\n# torch_model({','.join(input_args)})"
         code_lines["main"] += (
             "\n# with open('tensor_io_log.json', 'w') as f:\n" + "#     json.dump(_tensor_io_log, f, indent=2)"
         )
-        code_lines["main"] += f"\n# pytorch_graph = CompositePytorchGraph(clustered_graph)"
-        code_lines["main"] += f"\n# pytorch_graph.dump_to_python_file('clustered_graph.py', True)"
-
         tensor_dict = {k: v.value.detach() for k, v in CompositeOperation.ALL_CONSTANTS.items()}
         with gzip.open("graph.pth.gz", "wb") as f:
             torch.save(tensor_dict, f)

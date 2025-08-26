@@ -249,39 +249,15 @@ def {self.id}({','.join(args_not_in_var_names) + ", " if len(args_not_in_var_nam
     def generate_import_code(self) -> List[str]:
         import_code = [
             "import torch",
-            """
-_tensor_io_log = []
-
-def _tensor_info(obj):
-    if isinstance(obj, torch.Tensor):
-        return {"shape": list(obj.shape), "dtype": str(obj.dtype)}
-    elif isinstance(obj, (list, tuple)):
-        return [_tensor_info(x) for x in obj]
-    elif isinstance(obj, dict):
-        return {k: _tensor_info(v) for k, v in obj.items()}
-    return str(type(obj))
-
-def track_input_output(fn):
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        input_info = _tensor_info(args)
-        output = fn(*args, **kwargs)
-        output_info = _tensor_info(output)
-        _tensor_io_log.append({
-            "function": fn.__name__,
-            "inputs": input_info,
-            "outputs": output_info,
-        })
-        return output
-    return wrapper
-""",
+            "from utils import track_input_output",
+            "_tensor_io_log = []",
         ]
         new_func, fun_body = self.get_fun_body()
         if not self.is_duplicate():
             CompositeOperation.generated_code[fun_body] = self.id
             for op in self.sub_operations:
                 import_code.extend(op.generate_import_code())
-            import_code.append("@track_input_output\n" + new_func)
+            import_code.append("@track_input_output(_tensor_io_log=_tensor_io_log)\n" + new_func)
         else:
             CompositeOperation.duplicate_ops[self.id] = CompositeOperation.generated_code[fun_body]
             if not CompositeOperation.prune:

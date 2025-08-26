@@ -4,8 +4,4 @@ python3 parse_torch_functions.py clustered_graph.py
 
 python3 clustered_graph.py
 
-python3 run_test_cases.py clustered_graph.py ttnn_composite_functions.py tensor_io_log.json -k COMPOSITE_244
-
-python3 unloop_clustered_graph.py ttnn_composite_functions.py ttnn_composite_functions_unlooped.py
-
-python3 run_test_cases.py clustered_graph.py ttnn_composite_functions_unlooped.py tensor_io_log.json
+python3 create_pytest_from_composite_funcs.py clustered_graph.py ttnn_composite_functions.py tensor_io_log.json

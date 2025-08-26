@@ -9,7 +9,6 @@ import sseclient
 import re
 from typing import Optional, Tuple
 from pytorch_graph_utils import format_file_with_black
-
 import asyncio
 import logging
 from fastmcp import Client
@@ -36,7 +35,10 @@ def deepwiki_query(question):
             except (IndexError, AttributeError):
                 final_result = str(result)
 
-    asyncio.run(main_async())
+    try:
+        asyncio.run(main_async())
+    except:
+        return None
     return final_result
 
 
@@ -147,12 +149,17 @@ if __name__ == "__main__":
         sys.exit(1)
     filename = sys.argv[1]
     funcs = extract_composite_functions(filename)
-    failed_funcs = [func for func in funcs if "torch.ops.aten." in func and "torch." in func]
-    remaining_funcs = [func for func in funcs if func not in failed_funcs]
+    failed_funcs = [(func, 0) for func in funcs if "torch.ops.aten." in func and "torch." in func]
+    remaining_funcs = [func for func in funcs if (func, 0) not in failed_funcs]
     ttnn_functions = {func: ("", func) for func in remaining_funcs}
     while failed_funcs:
-        func = failed_funcs[0]
-        failed_funcs.remove(func)
+        print(f"{len(failed_funcs)} functions remaining to process...")
+        func, num_times = failed_funcs[0]
+        failed_funcs.remove((func, num_times))
+        if num_times >= 5:
+            print(f"Tried to processes {func} 5 times. Giving up...")
+            ttnn_functions[func] = ("", func)
+            continue
         message = f"""
 Extracted composite function:
 ```python
@@ -187,12 +194,12 @@ Do NOT include any text, commentary, or formatting outside these markers. Make y
         # response = get_single_chat_response(message, "llm_yalEHGlxSUmdG8BcBpF6oQ==", 1115)
         response = deepwiki_query(message)
         if response is None:
-            failed_funcs.append(func)  # Re-add to failed list if response is None
+            failed_funcs.append((func, num_times + 1))  # Re-add to failed list if response is None
             print("Failed to get a valid response. Retrying...")
         else:
             result = parse_explanation_and_function(response)
             if result is None:
-                failed_funcs.append(func)
+                failed_funcs.append((func, num_times + 1))  # Re-add to failed list if parsing failed
                 print("Failed to parse explanation and function from the response. Trying again...")
                 continue
             explanation, new_func = result

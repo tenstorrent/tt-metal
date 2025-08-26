@@ -24,6 +24,7 @@ from tracer_backend_utils import (
     TupleOp,
     InputOp,
 )
+from utils import LazyParams
 
 
 # TODO: move this into library proper
@@ -45,6 +46,7 @@ class TracerData:
         self.constants: Dict[str, ConstantTensor] = {}
         self.id = 0
         self.save_original_tensors = save_original_tensors
+        self.fake_original_tensor = False
         ConstantTensor.ConstantTensorFromModel = save_original_tensors
 
     def get_next_id(self):
@@ -923,6 +925,11 @@ def trace_torch_model(
     assert len(input_shapes) > 0, "Input shapes must be provided"
 
     tracer = TracerData(save_original_tensors=save_original_tensors)
+    try:
+        if isinstance(model.params, LazyParams):
+            tracer.fake_original_tensor = model.params.fake
+    except:
+        pass
     Trackable_Tensor.set_tracer_data(tracer)  # Set the tracer data instance for Trackable_Tensor
     input_tensors = []
     if input_dtypes is None:
