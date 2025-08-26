@@ -71,10 +71,6 @@ def test_resnet_pcc(device, batch_size, height, width, reset_seeds):
     # Create input tensor (RGB image)
     torch_input = torch.randn(batch_size, 3, height, width, dtype=torch.bfloat16)
 
-    # Run PyTorch model
-    with torch.no_grad():
-        torch_outputs = pytorch_model(torch_input)
-
     # Convert input to TTNN format (NHWC)
     ttnn_input = ttnn.from_torch(
         torch_input.permute(0, 2, 3, 1),  # Convert NCHW to NHWC
@@ -86,6 +82,10 @@ def test_resnet_pcc(device, batch_size, height, width, reset_seeds):
     # Run TTNN model
     ttnn_outputs = ttnn_model(ttnn_input)
 
+    # Run PyTorch model
+    with torch.no_grad():
+        torch_outputs = pytorch_model(torch_input)
+
     # Convert TTNN outputs back to torch (NHWC -> NCHW) and compare each layer
     test_results = {}
     for layer_name in ["res2", "res3", "res4", "res5"]:
@@ -93,7 +93,7 @@ def test_resnet_pcc(device, batch_size, height, width, reset_seeds):
         ttnn_output = ttnn_outputs[layer_name]
         ttnn_output_torch = ttnn.to_torch(ttnn_output).permute(0, 3, 1, 2)
 
-        # Compare outputs using PCC (more relaxed for full ResNet)
+        # Compare outputs using PCC (more relaxed for full ResNets)
         pcc_passed, pcc_message = assert_with_pcc(torch_output, ttnn_output_torch, 0.95)
         test_results[layer_name] = (pcc_passed, pcc_message)
 
