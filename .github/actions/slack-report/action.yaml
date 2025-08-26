@@ -11,12 +11,12 @@ runs:
   using: "composite"
   steps:
     - name: Report Github Pipeline Status Slack Action
-      # if: ${{ github.ref == 'refs/heads/main' }}
+      if: ${{ github.ref == 'refs/heads/main' }}
       uses: slackapi/slack-github-action@v1.26.0
       with:
         payload: |
           {
-            "text": "this is just a test. see if you got this message",
+            "text": "just so you know `${{ github.event.sender.login }}` broke ${{ github.workflow }} with https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }} at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
             "owner": "${{ inputs.owner }}"
           }
       env:
