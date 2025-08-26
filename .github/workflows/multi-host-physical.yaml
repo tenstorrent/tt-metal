@@ -108,4 +108,4 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" bash -c "sudo ipmitool raw 0x30 0x8B 0xF 0xFF 0x0 0xF && sleep 180"
+            tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" bash -c "tt-smi-metal -glx_reset"
