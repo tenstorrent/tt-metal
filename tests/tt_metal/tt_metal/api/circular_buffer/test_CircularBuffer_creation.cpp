@@ -26,6 +26,9 @@
 #include <tt-metalium/program.hpp>
 #include "umd/device/tt_core_coordinates.h"
 
+// Access to internal API: ProgramImpl::get_sem_base_addr
+#include "impl/program/program_impl.hpp"
+
 namespace tt {
 enum class DataFormat : uint8_t;
 }  // namespace tt
@@ -57,12 +60,9 @@ bool test_cb_config_written_to_core(
                     CoreCoord core_coord(x, y);
                     uint32_t cb_config_buffer_size = program.get_cb_size(device, core_coord, CoreType::WORKER);
 
+                    auto sem_base_addr = program.impl().get_sem_base_addr(device, core_coord, CoreType::WORKER);
                     tt::tt_metal::detail::ReadFromDeviceL1(
-                        device,
-                        core_coord,
-                        program.get_sem_base_addr(device, core_coord, CoreType::WORKER),
-                        cb_config_buffer_size,
-                        cb_config_vector);
+                        device, core_coord, sem_base_addr, cb_config_buffer_size, cb_config_vector);
 
                     for (const auto& [buffer_index, golden_cb_config] : cb_config_per_buffer_index) {
                         auto base_index = UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * buffer_index;

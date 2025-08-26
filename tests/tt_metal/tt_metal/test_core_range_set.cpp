@@ -41,6 +41,9 @@
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
 
+// Access to internal API: ProgramImpl::get_sem_base_addr
+#include "impl/program/program_impl.hpp"
+
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -86,10 +89,11 @@ void check_semaphores_are_initialized(
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto logical_core = CoreCoord{x, y};
                 std::vector<uint32_t> res;
+                auto sem_base_addr = program.impl().get_sem_base_addr(device, logical_core, CoreType::WORKER);
                 tt_metal::detail::ReadFromDeviceL1(
                     device,
                     logical_core,
-                    program.get_sem_base_addr(device, logical_core, CoreType::WORKER),
+                    sem_base_addr,
                     program.get_sem_size(device, logical_core, CoreType::WORKER),
                     res);
                 std::vector<uint32_t> filtered_res;
@@ -197,8 +201,7 @@ bool test_program_specified_with_core_range_set(
     tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
     // Reader kernel on all cores reads from same location in DRAM
-    const std::array reader_rt_args = {
-        src_dram_buffer->address(), uint(0), num_tiles};
+    const std::array reader_rt_args = {src_dram_buffer->address(), uint(0), num_tiles};
     for (const auto& [core, dst_l1_buffer] : core_to_l1_buffer) {
         tt_metal::SetRuntimeArgs(program, unary_reader_kernel, core, reader_rt_args);
 

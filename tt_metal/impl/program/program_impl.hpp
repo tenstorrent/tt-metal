@@ -226,6 +226,8 @@ public:
     CommandQueue* get_last_used_command_queue() const;
     void populate_dispatch_data(IDevice* device);
 
+    uint32_t get_sem_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
+
     void finalize_offsets(IDevice* device);
 
     // Helper function to finalize program offsets with custom getters. Returns the maximum kernel binaries size among
