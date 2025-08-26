@@ -31,6 +31,45 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 static void RunTest(WatcherFixture* fixture, IDevice* device) {
+    Program program = Program();
+
+    CoreCoord logical_core, virtual_core;
+    if (device->get_active_ethernet_cores(true).empty()) {
+        log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
+        GTEST_SKIP();
+    }
+
+    for (auto core : device->get_active_ethernet_cores(true)) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ethernet_link_up(device->id(), core)) {
+            logical_core = core;
+            break;
+        }
+    }
+
+    virtual_core = device->ethernet_core_from_logical_core(logical_core);
+    log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
+
+    auto eth_link_kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_eth_link_check.cpp",
+        logical_core,
+        EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+
+    fixture->RunProgram(device, program);
+
+    auto x = MetalContext::instance().watcher_server()->exception_message();
+    // read out link status from L1
+    auto link_up_addr = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::LINK_UP);
+    uint32_t link_status_rd;
+    tt::tt_metal::MetalContext::instance().get_cluster().read_core(
+        &link_status_rd, sizeof(uint32_t), tt_cxy_pair(device->id(), virtual_core.x, virtual_core.y), link_up_addr);
+
+    if (x.empty()) {
+        EXPECT_NE(link_status_rd, 0);
+    } else {
+        EXPECT_EQ(link_status_rd, 0);
+    }
 }
 
 TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
@@ -52,7 +91,8 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
         // Only force a retrain on odd-numbered eth cores
         if (eth_core.y % 2) {
             CoreCoord virtual_core = device->ethernet_core_from_logical_core(eth_core);
-            tt::llrt::write_hex_vec_to_core(device->id(), virtual_core, reset_val, retrain_force_addr);
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+                device->id(), virtual_core, reset_val, retrain_force_addr);
         }
     }
 
@@ -75,4 +115,13 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     DebugToolsFixture::TearDown();  // Call parent teardown so we don't disable watcher
     MetalContext::instance().teardown();
     EXPECT_TRUE(FileContainsAllStrings(this->log_file_name, expected_strings));
+}
+
+TEST_F(WatcherFixture, ActiveEthTestWatcherDetectLinkUp) {
+    if (this->arch_ != tt::ARCH::WORMHOLE_B0) {
+        GTEST_SKIP()
+            << "Enable this test on BH when base FW updated to flush data cache and invalidate instruction cache";
+    }
+    this->RunTestOnDevice(
+        [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device); }, this->devices_[0]);
 }

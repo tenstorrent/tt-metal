@@ -22,6 +22,11 @@ from tests.ttnn.unit_tests.operations.ccl.test_new_all_reduce import (
     QKV_CRS,
     FF1_CRS,
 )
+
+from tests.ttnn.unit_tests.operations.ccl.test_llama_all_gather_matmul import (
+    run_llama_all_gather_matmul_impl,
+    BINARY_MULT_CRS,
+)
 from models.demos.llama3_70b_galaxy.tt.model_config import (
     PREFETCHER_NOC1_GRID,
 )
@@ -541,4 +546,126 @@ def test_all_reduce_6U_llama(
         validate_all=False,
         profiler=profiler,
         linear=False,
+    )
+
+
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize(
+    "cluster_axis, num_links, input_num_cores, input_core_range_set, output_num_cores, output_core_range_set",
+    [
+        (
+            1,
+            3,
+            30,
+            BINARY_MULT_CRS,
+            24,
+            RING_CRS,
+        ),
+    ],
+    ids=[
+        "binary_mult",
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [
+        (NUM_ITERATIONS),
+    ],
+)
+@pytest.mark.parametrize("trace_mode", [True])
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "trace_region_size": 23887872,
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        (8, 4),
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("has_bias", [False], ids=["no_bias"])
+@pytest.mark.parametrize(
+    "B, M, K, N, in0_dtype, in1_dtype, output_dtype, fidelity, packer_l1_acc, fp32_acc_mode, grid, in1_is_dram_interleaved",
+    [
+        (
+            1,
+            32,
+            3584,
+            2048,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+            ttnn.MathFidelity.HiFi2,
+            True,
+            True,
+            PREFETCHER_NOC1_GRID,
+            False,
+        ),
+    ],
+    ids=[
+        "ff2",
+    ],
+)
+def test_llama_all_gather_matmul(
+    mesh_device,
+    cluster_axis,
+    in0_dtype,
+    in1_dtype,
+    output_dtype,
+    fidelity,
+    has_bias,
+    fp32_acc_mode,
+    packer_l1_acc,
+    B,
+    M,
+    K,
+    N,
+    grid,
+    in1_is_dram_interleaved,
+    num_links,
+    input_num_cores,
+    input_core_range_set,
+    output_num_cores,
+    output_core_range_set,
+    num_iters,
+    trace_mode,
+    function_level_defaults,
+    ensure_devices_tg,
+):
+    run_llama_all_gather_matmul_impl(
+        mesh_device,
+        # shape params shared by AG and MM
+        B,
+        M,
+        K,
+        N,
+        cluster_axis,
+        in0_dtype,
+        # MM params for in1
+        in1_dtype,
+        num_links,
+        input_num_cores,
+        input_core_range_set,
+        output_num_cores,
+        output_core_range_set,
+        # rest of mm params
+        output_dtype,
+        fidelity,
+        has_bias,
+        fp32_acc_mode,
+        packer_l1_acc,
+        grid,
+        in1_is_dram_interleaved,
+        # common params
+        num_iters=num_iters,
+        trace_mode=trace_mode,
+        validate_all=False,
     )

@@ -285,6 +285,11 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
             this->output_mem_config,
             this->topology,
             this->cluster_axis,
+            this->sub_device_id.has_value(),
+            this->sub_device_id.has_value()
+                ? input_tensors[0].device()->worker_cores(
+                      tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+                : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
             input_shape,
             input_memory_layout,
             input_dtype,
@@ -298,6 +303,11 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->barrier_semaphore.has_value(),
         this->using_persistent_buffers,
         this->chunks_per_sync,
@@ -389,11 +399,18 @@ Tensor all_gather_async_impl(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_gather_async op is only supported for Fast Dispatch");
-    uint32_t num_devices = devices.size();
-    uint32_t ring_size = num_devices;
+
+    uint32_t num_devices;
     if (cluster_axis.has_value()) {
-        ring_size = (cluster_axis.value() == 0) ? 8 : 4;
+        auto mesh_device = input_tensor.mesh_device();
+        TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
+        const auto& mesh_view = mesh_device->get_view();
+        // Use the mesh dimensions to determine the ring size
+        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    } else {
+        num_devices = devices.size();
     }
+
     TT_FATAL(num_devices > 1, "all_gather_async op will only work for num_devices > 1, but has {}", num_devices);
     ttnn::ccl::Topology ccl_topology = topology;
 
@@ -416,7 +433,7 @@ Tensor all_gather_async_impl(
                    devices,
                    dim,
                    num_links,
-                   ring_size,
+                   num_devices,
                    memory_config.value_or(input_tensor.memory_config()),
                    ccl_topology,
                    multi_device_global_semaphore,

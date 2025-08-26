@@ -5,12 +5,9 @@
 #define COMPILE_FOR_ERISC
 
 #include "dev_msgs.h"
-#include <cstddef>
-#include <cstdint>
-#include <vector>
 
-#include "core_config.h"
 #include "eth_l1_address_map.h"
+#include "eth_fw_api.h"
 #include "llrt_common/mailbox.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
@@ -22,6 +19,9 @@
     ((uint64_t)&(((mailboxes_t*)eth_l1_mem::address_map::ERISC_MEM_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::wormhole {
+
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
+#include "core_config.h"
 
 HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     std::vector<DeviceAddr> mem_map_bases;
@@ -60,6 +60,8 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CRC_ERR)] = eth_l1_mem::address_map::CRC_ERR_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::CORR_CW)] = eth_l1_mem::address_map::CORR_CW_HI_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNCORR_CW)] = eth_l1_mem::address_map::UNCORR_CW_HI_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] =
+        MEM_SYSENG_BOOT_RESULTS_BASE + offsetof(boot_results_t, link_status);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
 
@@ -92,6 +94,7 @@ HalCoreInfoType create_active_eth_mem_map(bool is_base_routing_fw_enabled) {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_FORCE)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
         eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LINK_UP)] = sizeof(uint32_t);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::ETH_LINK_REMOTE_INFO)] =
         eth_l1_mem::address_map::ETH_LINK_REMOTE_INFO_ADDR;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::INTERMESH_ETH_LINK_CONFIG)] =

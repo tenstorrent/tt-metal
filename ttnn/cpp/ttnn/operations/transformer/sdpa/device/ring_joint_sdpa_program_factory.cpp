@@ -16,6 +16,7 @@
 #include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -322,6 +323,13 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         global_padded_NK_chunks,
         q_num_chunks};
 
+    TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_q.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_k.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(joint_tensor_v.buffer()).append_to(reader_compile_time_args);
+
     // Calculate which K chunks contain the mask boundaries
     // If a tensor does not require masking, set to MAX_UINT32. This avoids a
     // bug in the mask generation code, which would mask a full, valid chunk
@@ -359,6 +367,10 @@ operation::ProgramWithCallbacks ring_joint_sdpa(
         global_logical_NK_chunks,
         global_padded_NK_chunks,
         q_num_chunks};
+
+    TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(lse_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         B,

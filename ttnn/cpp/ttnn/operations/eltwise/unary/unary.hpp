@@ -43,6 +43,16 @@ struct ExecuteUnaryWithFastAndApproximateMode {
 };
 
 template <UnaryOpType unary_op_type>
+struct ExecuteUnaryWithFastAndApproximateModeTrue {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        bool parameter = true,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithVectorAndFastAndApproximateMode {
     static Tensor invoke(
         QueueId queue_id,
@@ -332,6 +342,12 @@ struct Tanh {
         ttnn::operations::unary::ExecuteUnaryWithFastAndApproximateMode<                        \
             ttnn::operations::unary::UnaryOpType::operation_type>>();
 
+#define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(operation_name, operation_type) \
+    constexpr auto operation_name = ttnn::register_operation<                                        \
+        "ttnn::" #operation_name,                                                                    \
+        ttnn::operations::unary::ExecuteUnaryWithFastAndApproximateModeTrue<                         \
+            ttnn::operations::unary::UnaryOpType::operation_type>>();
+
 #define REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type) \
     constexpr auto operation_name = ttnn::register_operation<                                              \
         "ttnn::" #operation_name,                                                                          \
@@ -383,10 +399,6 @@ REGISTER_UNARY_OPERATION(isnan, ISNAN);
 REGISTER_UNARY_OPERATION(isneginf, ISNEGINF);
 REGISTER_UNARY_OPERATION(isposinf, ISPOSINF);
 REGISTER_UNARY_OPERATION(lez, LEZ);
-REGISTER_UNARY_OPERATION(log, LOG);
-REGISTER_UNARY_OPERATION(log10, LOG10);
-REGISTER_UNARY_OPERATION(log2, LOG2);
-REGISTER_UNARY_OPERATION(log1p, LOG1P);
 REGISTER_UNARY_OPERATION(logical_not, LOGICAL_NOT_UNARY);
 REGISTER_UNARY_OPERATION(ltz, LTZ);
 REGISTER_UNARY_OPERATION(neg, NEG);
@@ -418,6 +430,12 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(exp, EXP);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erf, ERF);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(erfc, ERFC);
 REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(gelu, GELU);
+
+// Unaries with fast_and_approximate_mode default true
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log, LOG);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log10, LOG10);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log2, LOG2);
+REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE_TRUE(log1p, LOG1P);
 
 // Unaries with vector mode and fast and approximate mode
 REGISTER_UNARY_OPERATION_WITH_VECTOR_AND_FAST_AND_APPROXIMATE_MODE(sigmoid, SIGMOID);
