@@ -597,11 +597,22 @@ jobs:
       - name: Run ttnn sweeps generation (all sweeps)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
         run: python3 tests/sweep_framework/sweeps_parameter_generator.py --dump-file --tag ci-main --explicit
+      - name: Debug directory structure
+        run: |
+          echo "Current working directory: $(pwd)"
+          echo "Contents of /work:"
+          ls -la /work
+          echo "Contents of /work/tests:"
+          ls -la /work/tests || echo "tests directory not found"
+          echo "Contents of /work/tests/sweep_framework:"
+          ls -la /work/tests/sweep_framework || echo "sweep_framework directory not found"
+          echo "Looking for vectors_export:"
+          find /work -name "vectors_export" -type d 2>/dev/null || echo "vectors_export directory not found"
       - name: Upload sweep vectors
         uses: actions/upload-artifact@v4
         with:
           name: sweeps-vectors
-          path: tests/sweep_framework/vectors_export/
+          path: /work/tests/sweep_framework/vectors_export/
           retention-days: 1
 
   # ttnn-run-sweeps:
@@ -658,9 +669,20 @@ jobs:
   #       with:
   #         build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   #         wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  #     - name: Download sweep vectors
+  #       uses: actions/download-artifact@v4
+  #       with:
+  #         name: sweeps-vectors
+  #         path: tests/sweep_framework/vectors_export/
   #     - name: Run ttnn sweeps (single sweep)
   #       if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
   #       run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary
   #     - name: Run ttnn sweeps (all sweeps, nightly)
   #       if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
   #       run: python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary
+  #     - name: Upload sweep results
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: sweeps-results
+  #         path: tests/sweep_framework/results_export/
+  #         retention-days: 1
