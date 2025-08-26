@@ -20,12 +20,7 @@ uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
         // 0x7FC0  = 0 (sign) 11111111 (exponent) 1000000 (mantissa)
         return UINT16_C(0x7FC0);
     } else {
-        union {
-            uint32_t U32;
-            float F32;
-        };
-
-        F32 = val;
+        uint32_t U32 = std::bit_cast<uint32_t>(val);
         // Rounding bias = 0111 1111 1111 1111 (0x7FFF) if last bit of mantissa ((U32 >> 16) & 1)
         // is 0, otherwise 1000 0000 0000 0000 (0x8000).
         // This ensures that we round to the nearest even number.
