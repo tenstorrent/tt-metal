@@ -338,13 +338,22 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         all_cores,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
+    // #ifdef LAYERNORM_WELFORD
+    std::vector<uint32_t> compute_args = {
+        Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en, W, ttnn::types::TILE_SIZE};
+    // #else
+    //     std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
+    // #endif
 
     auto compute_kernels_id = CreateKernel(
         program,
         large_tensor_needed and !use_row_major_kernel and !rms_norm
             ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_large_tensor.cpp"
+#ifdef LAYERNORM_WELFORD
             : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
+#else
+            : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
+#endif
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
