@@ -248,6 +248,8 @@ def run_reduce_scatter_impl(
         (8, [1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
         (8, [1, 1, 1, 16], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, True),
         (8, [1, 1, 32, 32], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True),
+        (8, [1, 1, 256, 128], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
+        (8, [1, 1, 256, 128], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, False),
     ],
     ids=[
         "padded_dim_2_test_one",
@@ -261,6 +263,8 @@ def run_reduce_scatter_impl(
         "composite_rs_test_one",
         "composite_rs_test_two",
         "composite_rs_test_three",
+        "forge_test_tiled",
+        "forge_test_row_major",
     ],
 )
 @pytest.mark.parametrize(
@@ -300,8 +304,8 @@ def run_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "device_params, rs_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1171456}, ttnn.Topology.Linear),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1234944}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 1234944}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
