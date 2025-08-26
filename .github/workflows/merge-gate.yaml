@@ -278,7 +278,7 @@ jobs:
           optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
-      - uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@main
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@${{ github.sha }}
         if: ${{ failure() }} && github.event_name == 'merge_group'
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
