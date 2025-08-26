@@ -31,12 +31,19 @@ class IDevice;
 using namespace tt;
 using namespace tt::tt_metal;
 
-TEST_F(DeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
-    for (IDevice* device : this->devices_) {
+TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
+    for (const auto& mesh_device : this->devices_) {
         CoreCoord core = {0, 0};
+        auto& cq = mesh_device->mesh_command_queue();
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        distributed::MeshWorkload workload;
         Program program;
+        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        auto& program_ = workload.get_programs().at(device_range);
+        auto device = mesh_device->get_devices()[0];
 
-        const uint32_t write_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
+        const uint32_t write_addr = mesh_device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
         const std::map<std::string, std::string>& defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}};
 
@@ -45,7 +52,7 @@ TEST_F(DeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
         std::iota(compile_time_args.begin(), compile_time_args.end(), 0);
 
         CreateKernel(
-            program,
+            program_,
             "tests/tt_metal/tt_metal/test_kernels/misc/compile_time_args_kernel.cpp",
             core,
             DataMovementConfig{
@@ -53,7 +60,7 @@ TEST_F(DeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
                 .noc = NOC::RISCV_0_default,
                 .compile_args = compile_time_args,
                 .defines = defines});
-        this->RunProgram(device, program);
+        distributed::EnqueueMeshWorkload(cq, workload, false);
 
         const std::vector<uint32_t> compile_time_args_expected{
             std::accumulate(compile_time_args.begin(), compile_time_args.end(), 0u)};

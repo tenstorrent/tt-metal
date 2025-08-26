@@ -31,10 +31,11 @@
 
 using namespace tt::tt_metal;
 
-TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
+TEST_F(MeshDeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
 
-    for (IDevice* device : this->devices_) {
+    for (const auto& mesh_device : this->devices_) {
+        auto device = mesh_device->get_devices()[0];
         detail::ClearKernelCache();
         detail::EnablePersistentKernelCache();
 
@@ -79,10 +80,11 @@ TEST_F(DeviceFixture, TensixTestIncompleteKernelBinaryWithPersistentCache) {
     }
 }
 
-TEST_F(DeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProcessors) {
+TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentProcessors) {
     const std::string kernel_file = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
 
-    for (IDevice* device : this->devices_) {
+    for (const auto& mesh_device : this->devices_) {
+        auto device = mesh_device->get_devices()[0];
         detail::ClearKernelCache();
 
         DataMovementConfig config_riscv_0 = {.processor = DataMovementProcessor::RISCV_0};
