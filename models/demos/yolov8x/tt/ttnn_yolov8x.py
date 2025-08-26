@@ -223,9 +223,6 @@ class TtBottleneck:
         cv2, out_h, out_w = self.cv2(cv1)  # pass cv1
         ttnn.deallocate(cv1)
 
-        if self.tilize:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-
         return ttnn.add(x, cv2, memory_config=ttnn.L1_MEMORY_CONFIG) if self.shortcut else cv2
 
 
@@ -324,9 +321,6 @@ class TtC2f:
         for i in range(self.n):
             z = self.bottleneck_modules[i](y[-1])
             y.append(z)
-
-        y[0] = ttnn.to_layout(y[0], layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-        y[1] = ttnn.to_layout(y[1], layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         if not self.shortcut:
             for i in range(2, len(y)):
