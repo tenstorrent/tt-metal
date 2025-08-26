@@ -58,8 +58,12 @@ void kernel_main() {
     // Generate constant tiles for layernorm compute
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
+        // doubly packed float into a uint32_t = 1/n where n is the length of the dimension we are averaging;
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
+        // doubly packed float into a uint32_t = 1.0f;
+        uint32_t one_scaler = 0x3f803f80;
+        generate_reduce_scaler(cb_in_2, one_scaler);
     }
     constexpr uint32_t eps_cb_id = 3;
     const uint32_t eps = get_arg_val<uint32_t>(5);

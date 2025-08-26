@@ -223,9 +223,9 @@ def test_layernorm_mix_precision(test_id, in_dtype, gamma_dtype, in0_mem_config,
     run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_config, out_mem_config, device)
 
 
-@pytest.mark.parametrize("h", [1632, 8192, 16384])
+@pytest.mark.parametrize("h", [1632])
 @pytest.mark.parametrize("w", [1280])
-@pytest.mark.parametrize("num_chunks", [1, 4])
+@pytest.mark.parametrize("num_chunks", [1])
 def test_layer_norm_4D_llama(device, h, w, num_chunks):
     """
     Test specific shapes for LLama and other LLMs

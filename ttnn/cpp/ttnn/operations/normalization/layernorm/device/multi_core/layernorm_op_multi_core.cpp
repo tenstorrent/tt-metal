@@ -200,10 +200,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
     }
     uint32_t im5_t = 2 * block_size;  // for buffering to/from *gamma/+beta
     uint32_t im4_t = 8;               // 8 just in case, 4 would prob suffice
-    uint32_t im1_t = 2;
+    uint32_t im1_t = 1;               // cb_ex2
     uint32_t in2_t = 2;  // scaler for reduce coming from reader
     uint32_t in3_t = 2;  // epsilon coming from reader
-    uint32_t im2_t = 2;  //
+    uint32_t im2_t = 1;  // cb_ex
     bool cb_fits_in_L1 = CB_can_fit_in_L1(
         in0_t * in_single_tile_size,
         in1_t * inb_single_tile_size,
@@ -236,6 +236,8 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         im3_t = WtB;  // buffer for xmm^2
         in5_t = WtB;  // buffer for gamma
         in6_t = WtB;  // buffer for beta
+        im1_t = 2;
+        im2_t = 2;
         if (b) {
             im6_t = WtB;
             in0_t = 2 * block_size;

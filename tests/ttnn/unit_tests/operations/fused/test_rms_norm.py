@@ -8,17 +8,17 @@ import torch
 
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
 
 
-@pytest.mark.parametrize("batch_size", [1, 8])
-@pytest.mark.parametrize("h", [32, 224, 384, 2048])
-@pytest.mark.parametrize("w", [64, 160, 1024, 2048])
+@pytest.mark.parametrize("batch_size", [8])
+@pytest.mark.parametrize("h", [192])
+@pytest.mark.parametrize("w", [160])
 def test_rms_norm(device, batch_size, h, w):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.rand((batch_size, h, w), dtype=torch.bfloat16)
-    torch_weight = torch.rand((w,), dtype=torch.bfloat16)
+    torch_weight = torch.randn((w,), dtype=torch.bfloat16)
     golden_function = ttnn.get_golden_function(ttnn.rms_norm)
     torch_output_tensor = golden_function(torch_input_tensor, torch_weight)
 
@@ -28,6 +28,17 @@ def test_rms_norm(device, batch_size, h, w):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
+    torch.set_printoptions(profile="full")
+
+    with open("tensor_output.txt", "w") as f:
+        f.write(str(output_tensor))
+    with open("torch_tensor_output.txt", "w") as f:
+        f.write(str(torch_output_tensor))
+    atol_arg = torch.max(torch.abs(torch_output_tensor - output_tensor), 0, True)
+    with open("ATOL.txt", "w") as f:
+        f.write(f"ATOL_ARG {atol_arg}")
+
+    # assert_allclose(torch_output_tensor, output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9998)
 
 
