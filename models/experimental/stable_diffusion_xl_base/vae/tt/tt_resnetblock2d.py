@@ -51,10 +51,10 @@ class TtResnetBlock2D(nn.Module):
         self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=core_x)
 
         self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
-            device, self.norm_weights_1, self.norm_bias_1, self.norm_core_grid_1.y
+            device, self.norm_weights_1, self.norm_bias_1, self.norm_core_grid_1.x
         )
         self.input_mask_1 = prepare_gn_mask(
-            self.device, self.norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
+            self.device, self.norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.x
         )
 
         core_x, core_y, self.norm_blocks_2 = get_DRAM_GN_config(module_path, 2)
@@ -62,10 +62,10 @@ class TtResnetBlock2D(nn.Module):
         self.norm_core_grid_2 = ttnn.CoreGrid(y=core_y, x=core_x)
 
         self.gamma_t_2, self.beta_t_2 = prepare_gn_beta_gamma(
-            device, self.norm_weights_2, self.norm_bias_2, self.norm_core_grid_2.y
+            device, self.norm_weights_2, self.norm_bias_2, self.norm_core_grid_2.x
         )
         self.input_mask_2 = prepare_gn_mask(
-            self.device, self.norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.y
+            self.device, self.norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.x
         )
 
         self.compute1_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv1")
