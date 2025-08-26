@@ -278,4 +278,5 @@ void kernel_main() {
         }
         index_b_offset += num_tiles_per_batch;
     }
+    DPRINT << "Kernel finished" << ENDL();
 }
