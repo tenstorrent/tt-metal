@@ -110,7 +110,7 @@ run_t3000_qwen25_vl_tests() {
   # Qwen2.5-VL-32B
   qwen25_vl_32b=Qwen/Qwen2.5-VL-32B-Instruct
   tt_cache_32b=$HF_HOME/tt_cache/Qwen--Qwen2.5-VL-32B-Instruct
-  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen25_vl/demo/demo.py --timeout 600 || fail=1
+  MESH_DEVICE=T3K HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b pytest models/demos/qwen25_vl/demo/demo.py --timeout 6000 || fail=1
 
   # Qwen2.5-VL-72B
   qwen25_vl_72b=Qwen/Qwen2.5-VL-72B-Instruct

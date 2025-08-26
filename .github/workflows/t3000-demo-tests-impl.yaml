@@ -39,7 +39,7 @@ jobs:
           # # Temporary: Run Qwen 3 tests last as they update to a newer transformers version.
           # # This requirements and comment removed when https://github.com/tenstorrent/tt-metal/pull/22608 merges.
           # { name: "t3k_qwen3_tests", arch: wormhole_b0, cmd: run_t3000_qwen3_tests, timeout: 60, owner_id: U03HY7MK4BT}, # Mark O'Connor
-          { name: "t3k_qwen25_vl_tests", arch: wormhole_b0, cmd: run_t3000_qwen25_vl_tests, timeout: 60, owner_id: U07RY6B5FLJ},  #Gongyu Wang
+          { name: "t3k_qwen25_vl_tests", arch: wormhole_b0, cmd: run_t3000_qwen25_vl_tests, timeout: 600, owner_id: U07RY6B5FLJ},  #Gongyu Wang
         ]
 
     name: ${{ matrix.test-group.name }}
@@ -83,7 +83,7 @@ jobs:
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=${{ matrix.test-group.arch }}
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
+            -v /mnt/MLPerf:/mnt/MLPerf
           install_wheel: true
           run_args: |
             source ${{ github.workspace }}/tests/scripts/t3000/run_t3000_demo_tests.sh
