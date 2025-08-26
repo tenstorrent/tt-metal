@@ -230,7 +230,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     // Receiver
 
     // uint32_t semaphore_id_to_notify_to_start_mcast = CreateSemaphore(program, intermediate_tensor_cores, 0);
-    auto receiver_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    auto receiver_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     receiver_kernel_config.compile_args = {
         num_links,                                                         // sem_wait_val
         inter_cb_index,                                                    // intermediate cb index
@@ -255,10 +255,10 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
          0,           // core id, corresponds to the id of which device it expect data from, will be reset later
          ring_index,  // device id
          aggregated_tensor.buffer()->address(),
-         static_cast<uint32_t>(bbox_physical_start_core.x),
-         static_cast<uint32_t>(bbox_physical_start_core.y),
          static_cast<uint32_t>(bbox_physical_end_core.x),
          static_cast<uint32_t>(bbox_physical_end_core.y),
+         static_cast<uint32_t>(bbox_physical_start_core.x),
+         static_cast<uint32_t>(bbox_physical_start_core.y),
          static_cast<uint32_t>(bbox.size()),
          intermediate_tensor_shard_num_pages,
          0,    // mm_core_offset
@@ -285,10 +285,10 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
              i,
              ring_index,
              aggregated_tensor.buffer()->address(),
-             static_cast<uint32_t>(bbox_physical_start_core.x),
-             static_cast<uint32_t>(bbox_physical_start_core.y),
              static_cast<uint32_t>(bbox_physical_end_core.x),
              static_cast<uint32_t>(bbox_physical_end_core.y),
+             static_cast<uint32_t>(bbox_physical_start_core.x),
+             static_cast<uint32_t>(bbox_physical_start_core.y),
              static_cast<uint32_t>(bbox.size()),
              intermediate_tensor_shard_num_pages,
              mm_core_offset,

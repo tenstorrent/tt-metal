@@ -7,6 +7,7 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include <cstdint>
 #include <utility>
+#include "debug/dprint.h"
 
 using address_t = uint32_t;
 
@@ -49,13 +50,14 @@ void kernel_main() {
     arg_idx += num_cores_to_write_to;
     tt_l1_ptr uint32_t* core_noc_y_to_write_to = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores_to_write_to;
-
-    // interleaved addrgen
+    // DPRINT << "reader worker_reader args loaded" << ENDL();
+    //  interleaved addrgen
 
     uint32_t tiles_read = 0;
     uint32_t shard_tile_id = first_core_tile_start_offset;
     uint32_t core_id = 0;
     cb_reserve_back(cb0_id, num_tiles_to_read);
+    // DPRINT << "reader cb_reserve_back done" << ENDL();
     uint32_t l1_write_addr = get_write_ptr(cb0_id);
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core =
@@ -64,10 +66,10 @@ void kernel_main() {
         // const uint32_t l1_write_addr = get_write_ptr(cb0_id);
         uint64_t read_addr = get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0);
         read_addr += shard_tile_id * tensor0_page_size;
-
+        // DPRINT << "reader read_addr: " << ENDL();
         noc_async_read(read_addr, l1_write_addr, num_tiles_to_read_this_core * tensor0_page_size);
         // noc_async_read_barrier();
-
+        // DPRINT << "reader noc_async_read done" << ENDL();
         // cb_push_back(cb0_id, num_tiles_to_read_this_core);
         l1_write_addr += num_tiles_to_read_this_core * tensor0_page_size;
         tiles_read += num_tiles_to_read_this_core;
@@ -75,7 +77,9 @@ void kernel_main() {
         core_id++;
     }
     noc_async_read_barrier();
+    // DPRINT << "reader noc_async_read_barrier done" << ENDL();
     cb_push_back(cb0_id, num_tiles_to_read);
+    // DPRINT << "reader cb_push_back done" << ENDL();
     core_id = 0;
     uint64_t noc0_dest_noc_addr = get_noc_addr(
         core_noc_x_to_write_to[core_id], core_noc_y_to_write_to[core_id], intermediate_tensor_address0, 0 /*noc_id*/);
@@ -84,11 +88,15 @@ void kernel_main() {
         l1_read_addr,
         noc0_dest_noc_addr + intermediate_first_core_tile_start_offset * tensor0_page_size,
         num_tiles_to_read * tensor0_page_size);
+    // DPRINT << "reader noc_async_write done" << ENDL();
 
     // notify local receiver core
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
+    // DPRINT << "reader semaphore inc done" << ENDL();
     noc_async_write_barrier();
+    // DPRINT << "reader noc_async_write_barrier done" << ENDL();
     noc_async_atomic_barrier();
+    // DPRINT << "reader noc_async_atomic_barrier done" << ENDL();
 }

@@ -555,7 +555,7 @@ def test_all_reduce_6U_llama(
     [
         (
             1,
-            3,
+            4,
             30,
             BINARY_MULT_CRS,
             24,
@@ -640,6 +640,9 @@ def test_llama_all_gather_matmul(
     function_level_defaults,
     ensure_devices_tg,
 ):
+    # print all devices in mesh_device
+    print(f"mesh_device ids: {mesh_device.get_device_ids()}")
+
     run_llama_all_gather_matmul_impl(
         mesh_device,
         # shape params shared by AG and MM

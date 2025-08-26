@@ -44,36 +44,44 @@ void kernel_main() {
     // Set up for mcasting to mm workers
     volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fused_op_receiver_signal_semaphore_addr[core_id]);
+    // DPRINT << "receiver semaphore set" << ENDL();
     noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, VALID);
+    // DPRINT << "receiver semaphore set done" << ENDL();
+    // DPRINT << "receiver semaphore set" << ENDL();
 
     volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr_next_core_right =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fused_op_receiver_signal_semaphore_addr[next_core_id_to_right]);
-
-    // 1. Wait for global signal
+    // DPRINT << "receiver semaphore set done" << ENDL();
+    //  1. Wait for global signal
     {
         DeviceZoneScopedN("data waiting");
         noc_semaphore_wait_min(signal_semaphore_addr_ptr, sem_wait_val);
         noc_semaphore_set(signal_semaphore_addr_ptr, 0);
     }
-
-    // 2. multicast data to mm cores
-    // 2.1. Wait for local signal, if it's not the first core
+    // DPRINT << "receiver semaphore wait done" << ENDL();
+    //  2. multicast data to mm cores
+    //  2.1. Wait for local signal, if it's not the first core
     if (core_id != ring_index) {  // don't need to wait if it's the first core
+        // DPRINT << "receiver semaphore wait core_id: " << core_id << " ring_index: " << ring_index << ENDL();
         noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr_next_core_right, 1);
         noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr_next_core_right, 0);
+        // DPRINT << "receiver semaphore set done" << ENDL();
     }
-
+    // DPRINT << "receiver semaphore wait done: core_id != ring_index" << ENDL();
     size_t l1_read_addr = get_read_ptr(inter_cb_index);
     const uint64_t multicast_addr_noc = get_noc_multicast_addr(bbox_start_x, bbox_start_y, bbox_end_x, bbox_end_y, 0);
     uint64_t aggregated_tensor_addr_this_core =
         (uint64_t)aggregated_tensor_addr + mm_core_offset * intermediate_tensor_shard_num_pages * tensor0_page_size;
     const uint64_t multicast_addr = multicast_addr_noc | aggregated_tensor_addr_this_core;
-
+    // DPRINT << "receiver multicast addr: " << ENDL();
     noc_async_write_multicast_loopback_src(
         l1_read_addr, multicast_addr, intermediate_tensor_shard_num_pages * tensor0_page_size, bbox_size, true);
-
+    // DPRINT << "receiver multicast write done" << ENDL();
     uint64_t multicast_sema_addr = multicast_addr_noc | (uint64_t)fused_op_receiver_signal_semaphore_addr[core_id];
+    // DPRINT << "receiver multicast sema addr: " << ENDL();
     noc_semaphore_set_multicast_loopback_src(
         fused_op_receiver_signal_semaphore_addr[core_id], multicast_sema_addr, bbox_size, false);
+    // DPRINT << "receiver multicast sema set done" << ENDL();
     noc_async_write_barrier();
+    // DPRINT << "receiver async write barrier done" << ENDL();
 }

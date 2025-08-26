@@ -9,6 +9,7 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include <cstdint>
 #include <utility>
+#include "debug/dprint.h"
 
 using address_t = uint32_t;
 FORCE_INLINE void advance_local_read_address_for_fabric_write(
@@ -29,23 +30,26 @@ FORCE_INLINE void advance_local_read_address_for_fabric_write(
     // noc_async_write(payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr),
     // payload_size_bytes);
     if (fabric_connection.has_forward_connection()) {
+        // DPRINT << "writer fabric_connection forward open" << ENDL();
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+        // DPRINT << "writer fabric_connection forward send_payload_without_header_non_blocking_from_address" << ENDL();
         fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)pkt_hdr_forward, sizeof(PACKET_HEADER_TYPE));
     }
-
+    // DPRINT << "writer fabric send done" << ENDL();
     if (num_targets_backward_direction > 0 && fabric_connection.has_backward_connection()) {
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+        // DPRINT << "writer fabric_connection backward open" << ENDL();
         fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)pkt_hdr_backward, sizeof(PACKET_HEADER_TYPE));
     }
-
+    // DPRINT << "writer fabric send done" << ENDL();
     noc_async_writes_flushed();
-
+    // DPRINT << "writer noc_async_writes_flushed done" << ENDL();
     l1_read_addr += payload_size_bytes;
 }
 
@@ -95,8 +99,8 @@ void kernel_main() {
     auto fabric_connection =
         FabricConnectionManager::build_from_args<FabricConnectionManager::BUILD_AND_OPEN_CONNECTION_START_ONLY>(
             arg_idx);
-
-    // packet header cb
+    // DPRINT << "writer fabric_connection open done" << ENDL();
+    //  packet header cb
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
@@ -106,8 +110,8 @@ void kernel_main() {
     cb_reserve_back(reserved_packet_header_cb_id, 1);
     auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
     cb_push_back(reserved_packet_header_cb_id, 1);
-
-    // pre-populate packet headers
+    // DPRINT << "writer packet header cb reserve and push done" << ENDL();
+    //  pre-populate packet headers
     volatile PACKET_HEADER_TYPE* pkt_hdr_forward =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_forward);
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
@@ -116,10 +120,10 @@ void kernel_main() {
         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
     pkt_hdr_backward->to_chip_multicast(
         tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
-
+    // DPRINT << "writer packet header set done" << ENDL();
     fabric_connection.open_finish();
-
-    // 1. mcast via fabric to remote tensor addresses
+    // DPRINT << "writer fabric_connection open_finish done" << ENDL();
+    //  1. mcast via fabric to remote tensor addresses
     uint32_t tiles_read = 0;
     uint32_t shard_tile_id = first_core_tile_start_offset;
     uint32_t core_id = 0;
@@ -128,12 +132,12 @@ void kernel_main() {
         num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
         cb_wait_front(cb0_id, num_tiles_to_read_this_core);
         size_t l1_read_addr = get_read_ptr(cb0_id);
-
+        // DPRINT << "writer cb_wait_front done" << ENDL();
         uint64_t noc0_dest_noc_addr =
             get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0, 0 /*noc_id*/);
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
-
-        // This issues a flush barrier
+        // DPRINT << "writer noc0_dest_noc_addr: " << ENDL();
+        //  This issues a flush barrier
         advance_local_read_address_for_fabric_write(
             noc0_dest_noc_addr,
             pkt_hdr_forward,
@@ -142,12 +146,13 @@ void kernel_main() {
             fabric_connection,
             l1_read_addr,
             num_tiles_to_read_this_core * tensor0_page_size);
+        // DPRINT << "writer advance_local_read_address_for_fabric_write done" << ENDL();
         if constexpr (dynamic_alternate) {
             std::swap(
                 pkt_hdr_forward->routing_fields.value,
                 pkt_hdr_backward->routing_fields.value);  // alternate the packet header distance for better balancing
         }
-
+        // DPRINT << "writer packet header alternate done" << ENDL();
         cb_pop_front(cb0_id, num_tiles_to_read_this_core);
         tiles_read += num_tiles_to_read_this_core;
         shard_tile_id += num_tiles_to_read_this_core;
@@ -155,9 +160,10 @@ void kernel_main() {
             shard_tile_id = 0;
             core_id++;
         }
+        // DPRINT << "writer cb_pop_front done" << ENDL();
     }
-
-    // 2. mcast output ready semaphore
+    // DPRINT << "writer while loop done" << ENDL();
+    //  2. mcast output ready semaphore
 
     auto* pkt_hdr = reinterpret_cast<PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
     uint64_t out_ready_sem_noc_addr_in_pkt =
@@ -166,7 +172,8 @@ void kernel_main() {
         out_ready_sem_noc_addr_in_pkt,
         static_cast<uint16_t>(1),  // increment 1
         32});
-    // Write the mcast packet (forward)
+    // DPRINT << "writer pkt_hdr set done" << ENDL();
+    //  Write the mcast packet (forward)
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
         pkt_hdr->to_chip_multicast(
@@ -174,7 +181,8 @@ void kernel_main() {
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
-    // Write the mcast packet (backward)
+    // DPRINT << "writer fabric_connection forward send_payload_flush_blocking_from_address done" << ENDL();
+    //  Write the mcast packet (backward)
     if (num_targets_backward_direction > 0 && fabric_connection.has_backward_connection()) {
         pkt_hdr->to_chip_multicast(
             tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
@@ -182,7 +190,9 @@ void kernel_main() {
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
-
+    // DPRINT << "writer fabric_connection backward send_payload_non_blocking_from_address done" << ENDL();
     fabric_connection.close();
+    // DPRINT << "writer fabric_connection close done" << ENDL();
     noc_async_write_barrier();
+    // DPRINT << "writer noc_async_write_barrier done" << ENDL();
 }
