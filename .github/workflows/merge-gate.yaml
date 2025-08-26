@@ -278,8 +278,8 @@ jobs:
           optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
-      - uses: ./.github/actions/slack-report-merge-gate # TODO: change back to main
-        if: ${{ failure() }} && github.event_name == 'merge_group'
+      - if: ${{ failure() }} && github.event_name == 'merge_group'
+        uses: ./.github/actions/slack-report-merge-gate # TODO: change back to main
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
           owner: "U08GTDV8MDH,U0908S3LUMD"
