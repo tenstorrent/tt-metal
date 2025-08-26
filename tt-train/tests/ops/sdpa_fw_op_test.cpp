@@ -179,6 +179,138 @@ xt::xarray<float> generate_tilewise_symmetric_K(size_t B, size_t H, size_t S, si
     return K;
 }
 
+#include <cmath>
+#include <cstdint>
+#include <stdexcept>
+#include <vector>
+#include <xtensor/xarray.hpp>
+#include <xtensor/xbuilder.hpp>  // for xt::zeros
+
+// Naive, correctness-first SDPA with grouped KV (GQA/MQA/MHA).
+// Physical layouts:
+//   Q: (B, 1, S, qD)
+//   K: (B, 1, S, kvD)
+//   V: (B, 1, S, kvD)
+//   attn_mask: (B, 1, S, S) (additive: 0 for keep, large negative for masked)
+// Heads:
+//   q_num_heads = H
+//   kv_num_heads = G
+// Requirement: qD/H == kvD/G  (shared per-head width Dh).
+// Returns: (B, 1, S, qD)
+xt::xarray<float> sdpa_grouped_naive(
+    const xt::xarray<float>& Q,
+    const xt::xarray<float>& K,
+    const xt::xarray<float>& V,
+    const xt::xarray<float>& attn_mask,
+    std::uint32_t q_num_heads,
+    std::uint32_t kv_num_heads) {
+    // ---- shape checks ----
+    if (Q.dimension() != 4 || K.dimension() != 4 || V.dimension() != 4) {
+        throw std::invalid_argument("Q, K, V must be rank-4 (B,1,S,d).");
+    }
+    if (attn_mask.dimension() != 4) {
+        throw std::invalid_argument("attn_mask must be rank-4 (B,1,S,S).");
+    }
+    const std::size_t B = Q.shape()[0];
+    const std::size_t one = Q.shape()[1];
+    const std::size_t S = Q.shape()[2];
+    const std::size_t qD = Q.shape()[3];
+
+    if (one != 1)
+        throw std::invalid_argument("Q[1] must be 1 (layout B,1,S,d).");
+    if (K.shape()[0] != B || K.shape()[1] != 1 || K.shape()[2] != S)
+        throw std::invalid_argument("K must match Q in (B,1,S,·).");
+    if (V.shape()[0] != B || V.shape()[1] != 1 || V.shape()[2] != S)
+        throw std::invalid_argument("V must match Q in (B,1,S,·).");
+    if (attn_mask.shape()[0] != B || attn_mask.shape()[1] != 1 || attn_mask.shape()[2] != S ||
+        attn_mask.shape()[3] != S)
+        throw std::invalid_argument("attn_mask must be (B,1,S,S).");
+
+    const std::size_t kvD = V.shape()[3];
+    if (K.shape()[3] != kvD)
+        throw std::invalid_argument("K and V last dims must match.");
+
+    const std::size_t H = static_cast<std::size_t>(q_num_heads);
+    const std::size_t G = static_cast<std::size_t>(kv_num_heads);
+    if (H == 0 || G == 0)
+        throw std::invalid_argument("Head counts must be > 0.");
+    if (qD % H != 0)
+        throw std::invalid_argument("qD must be divisible by q_num_heads.");
+    if (kvD % G != 0)
+        throw std::invalid_argument("kvD must be divisible by kv_num_heads.");
+
+    const std::size_t Dh_q = qD / H;
+    const std::size_t Dh_kv = kvD / G;
+    if (Dh_q != Dh_kv)
+        throw std::invalid_argument("Per-head dims mismatch: qD/H != kvD/G.");
+    const std::size_t Dh = Dh_q;
+
+    // Output: (B,1,S,qD)
+    xt::xarray<float> Out = xt::zeros<float>({B, std::size_t(1), S, qD});
+
+    // Helpers
+    auto g_of_h = [&](std::size_t h) -> std::size_t {
+        // contiguous head blocks, works even if H % G != 0
+        return (h * G) / H;
+    };
+    const float scale = 1.0f / std::sqrt(static_cast<float>(Dh));
+
+    // Temporary buffers per row to avoid re-allocations
+    std::vector<float> scores_row;
+    scores_row.resize(S);
+
+    // ---- main loops ----
+    for (std::size_t b = 0; b < B; ++b) {
+        for (std::size_t h = 0; h < H; ++h) {
+            const std::size_t g = g_of_h(h);
+            const std::size_t q_off = h * Dh;   // Q slice offset in last dim
+            const std::size_t kv_off = g * Dh;  // K/V slice offset in last dim
+
+            for (std::size_t i = 0; i < S; ++i) {
+                // 1) scores_row[j] = (Q[b,0,i,q_off:q_off+Dh] · K[b,0,j,kv_off:kv_off+Dh]) * scale + mask
+                float rmax = -INFINITY;
+                for (std::size_t j = 0; j < S; ++j) {
+                    float dot = 0.0f;
+                    // dot product over Dh
+                    for (std::size_t t = 0; t < Dh; ++t) {
+                        dot += Q(b, 0, i, q_off + t) * K(b, 0, j, kv_off + t);
+                    }
+                    float s = dot * scale + attn_mask(b, 0, i, j);
+                    scores_row[j] = s;
+                    if (s > rmax)
+                        rmax = s;
+                }
+
+                // 2) softmax normalization for row i
+                //    denom = sum(exp(s - rmax))
+                float denom = 0.0f;
+                for (std::size_t j = 0; j < S; ++j) {
+                    denom += std::exp(scores_row[j] - rmax);
+                }
+                // guard (optional)
+                if (denom == 0.0f)
+                    denom = 1e-20f;
+
+                // 3) O[b,0,i,q_off : q_off+Dh] = sum_j softmax_ij * V[b,0,j,kv_off:kv_off+Dh]
+                //    softmax_ij = exp(s_ij - rmax) / denom
+                //    accumulate into a local buffer, then store
+                for (std::size_t t = 0; t < Dh; ++t) {
+                    float acc = 0.0f;
+                    for (std::size_t j = 0; j < S; ++j) {
+                        float w = std::exp(scores_row[j] - rmax) / denom;
+                        if (w != 0.0f) {
+                            acc += w * V(b, 0, j, kv_off + t);
+                        }
+                    }
+                    Out(b, 0, i, q_off + t) = acc;
+                }
+            }
+        }
+    }
+
+    return Out;
+}
+
 float compute_mse(const xt::xarray<float>& expected, const xt::xarray<float>& result) {
     assert(result.shape() == expected.shape());
     xt::xarray<float> diff = expected - result;

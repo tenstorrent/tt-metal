@@ -13,7 +13,38 @@
 #include "debug/dprint_pages.h"
 #include "tt-train/sources/ttml/metal/ops/common/dataflow_utils.hpp"
 
-void read_coloumn_tiles() {
+inline uint32_t get_group_idx(uint32_t q_tile_idx, uint32_t q_tiles_per_head, uint32_t heads_per_group) {
+    uint32_t head_idx = q_tile_idx / q_tiles_per_head;
+    return head_idx / heads_per_group;
+}
+
+/*
+cb_reserve_back(cb_query, q_tiles_per_head);
+        uint32_t query_l1_write_addr = get_write_ptr(cb_query);
+        for (uint32_t col = 0; col < Wt; ++col) {
+            noc_async_read_tile(q_idx + col, query_address_generator, query_l1_write_addr);
+            query_l1_write_addr += tile_bytes;
+        }
+        noc_async_read_barrier();
+        cb_push_back(cb_query, Wt);
+*/
+
+void read_head(
+    const uint32_t start_idx,
+    const uint32_t num_of_tiles,
+    const uint32_t cb_id,
+    const InterleavedAddrGenFast<true>& address_generator,
+    const uint32_t tile_bytes) {
+    cb_reserve_back(cb_id, num_of_tiles);
+    uint32_t l1_write_addr = get_write_ptr(cb_id);
+    for (uint32_t tile_idx = 0; tile_idx < num_of_tiles; ++tile_idx) {
+        // TODO[improve]: this method is deprecated
+        // need to use noc_async_read_page FORCE_INLINE void noc_async_read_page(...)
+        noc_async_read_tile(start_idx + tile_idx, address_generator, l1_write_addr);
+        l1_write_addr += tile_bytes;
+    }
+    noc_async_read_barrier();
+    cb_push_back(cb_id, num_of_tiles);
 }
 
 void kernel_main() {
@@ -43,16 +74,30 @@ void kernel_main() {
     // split K by groups
     // match heads and groups
 
-    constexpr uint32_t block_size = get_compile_time_arg_val(0);
-    constexpr uint32_t Wt = get_compile_time_arg_val(1);  // (d / TILE_W)
-    constexpr uint32_t Ht = get_compile_time_arg_val(2);  // (S / TILE_H)
-    constexpr uint32_t scaler_bits = get_compile_time_arg_val(3);
-    constexpr uint32_t minus_one_bits = get_compile_time_arg_val(4);   // used to transform mask from 1/0 to 0/-1
-    constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(5);  // used to transform mask from 0/-1 to 0/-1e9F
-
-    const uint32_t kv_chunks_number = Ht;
-    const uint32_t k_chunk_size = Wt;
-    const uint32_t v_chunk_size = Wt;
+    /*
+    std::vector<uint32_t> reader_compile_args = {
+        qWt,               // num tile in inner dim in query(d/TILE_W)
+        kWt,               // num tile in inner dim in key and value (d/TILE_W)
+        Ht_,               // num tile in seq len dim (S/TILE_H)
+        block_size,        // block size (dst_reg_count)
+        q_tiles_per_head,  // number of tiles per head in query
+        k_tiles_per_head,  // number of tiles per group in key and value
+        heads_per_group,   // number of heads per group
+        scaler,            // sqrt(Et) - sdpa scale factor
+        minus_one,         // used to transform mask from 1/0 to 0/-1
+        custom_inf         // used to transform mask from 0/-1 to 0/-1e9F
+    };
+    */
+    constexpr uint32_t qWt = get_compile_time_arg_val(0);  // (vDt / TILE_W)
+    constexpr uint32_t kWt = get_compile_time_arg_val(1);  // (kDt / TILE_W)
+    constexpr uint32_t Ht = get_compile_time_arg_val(2);   // (S / TILE_H)
+    constexpr uint32_t block_size = get_compile_time_arg_val(3);
+    constexpr uint32_t q_tiles_per_head = get_compile_time_arg_val(4);  // num of tiles per head in query
+    constexpr uint32_t k_tiles_per_head = get_compile_time_arg_val(5);  // num of tiles per group in key and value
+    constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);   // num of heads per group
+    constexpr uint32_t scaler_bits = get_compile_time_arg_val(7);       // sdpa scaler factor
+    constexpr uint32_t minus_one_bits = get_compile_time_arg_val(8);    // used to transform mask from 1/0 to 0/-1
+    constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(9);   // used to transform mask from 0/-1 to 0/-1e9F
 
     constexpr uint32_t onetile = 1U;
 
@@ -88,15 +133,28 @@ void kernel_main() {
 
     // while we process one q_chunk (row of Q), we stream all K and V chunks (rows of K and V)
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
-        uint32_t idx = (start_row + i) * Wt;
+        uint32_t q_idx = (start_row + i) * qWt;
+        uint32_t q_row_idx = (start_row + i) * qWt;
 
         // TODO[improve]: change offset calculation to support reading rows from different batches
-        uint32_t key_page_offset = ((start_row + i) / Ht) * Wt * Ht;
+        // uint32_t key_page_offset = ((start_row + i) / Ht) * Wt * Ht;
 
-        cb_reserve_back(cb_query, Wt);  // 12 head
+        // calculate offset to read relevant batch of K and V
+        uint32_t key_batch_offset = ((start_row + i) / Ht) * kWt * Ht;
+
+        for (uint32_t q_tile_idx = 0; q_tile_idx < qWt; q_tile_idx += q_tiles_per_head) {
+            read_head(q_tile_idx, q_tiles_per_head, cb_query, query_address_generator, tile_bytes);
+
+            uint32_t kv_group_idx = get_group_idx(q_tile_idx, q_tiles_per_head, heads_per_group);
+            uint32_t key_start_idx = key_batch_offset;
+            for (uint32_t h = 0; h < Ht; ++h) {
+            }
+        }
+
+        cb_reserve_back(cb_query, q_tiles_per_head);
         uint32_t query_l1_write_addr = get_write_ptr(cb_query);
         for (uint32_t col = 0; col < Wt; ++col) {
-            noc_async_read_tile(idx + col, query_address_generator, query_l1_write_addr);
+            noc_async_read_tile(q_idx + col, query_address_generator, query_l1_write_addr);
             query_l1_write_addr += tile_bytes;
         }
         noc_async_read_barrier();

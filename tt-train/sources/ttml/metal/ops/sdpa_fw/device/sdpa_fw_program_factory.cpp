@@ -180,18 +180,27 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
      */
 
     // [Debug] could I assume that Wt%(heads*TILE_WIDTH) == 0 ?
-    uint32_t num_heads = 12;  // will be passed by user into args
-    uint32_t num_groups = 4;  // will be passed by user into args
-    uint32_t heads_per_group = num_heads / num_groups;
+    auto [qBt, qHt, qSt, qDt] = query.padded_shape().to_array_4D();
+    auto [kBt, kHt, kSt, kDt] = key.padded_shape().to_array_4D();
+    auto [vBt, vHt, vSt, vDt] = value.padded_shape().to_array_4D();
+    // we assume that V has the same shape as K
+    uint32_t q_heads = 12;  // will be passed by user into args
+    uint32_t kv_heads = 4;  // will be passed by user into args
     TT_FATAL(
-        num_heads % num_groups == 0,
+        q_heads % kv_heads == 0,
         "Number of heads must be divisible by number of groups, got heads={}, groups={}",
-        num_heads,
-        num_groups);
+        q_heads,
+        kv_heads);
 
-    uint32_t tiles_per_head = Wt / num_heads;    // number of tiles per head in query
-    uint32_t tiles_per_group = Wt / num_groups;  // number of tiles per group in key and value
-    assert(heads_per_group * tiles_per_head == tiles_per_group);
+    TT_FATAL(qBt == kBt, "Query and Key batch sizes must be the same");
+    TT_FATAL(qSt == kSt, "Query and Key sequence lengths must be the same");
+
+    uint32_t heads_per_group = q_heads / kv_heads;  // we read heads_per_group heads from Q for one group of K and V
+    uint32_t qWt = qDt / tt::constants::TILE_WIDTH;
+    uint32_t kWt = kDt / tt::constants::TILE_WIDTH;
+    uint32_t q_tiles_per_head = qWt / q_heads;   // number of tiles per head in query
+    uint32_t k_tiles_per_head = kWt / kv_heads;  // number of tiles per group in key and value
+    assert(q_tiles_per_head == k_tiles_per_head);
 
     // TODO[improve]: add memory usage estimation and compare it against available memory. Based on this check,
     // determine the appropriate chunk size for Q, K, and V tensors
@@ -356,16 +365,21 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        Wt,              // num tile in inner dim (d/TILE_W)
-        Ht_,             // num tile in seq len dim (S/TILE_H)
-        block_size,      // block size (dst_reg_count)
-        tiles_per_head,  // number of tiles per head in query
-        tiles_per_group  // number of tiles per group in key and value
+        qWt,               // num tile in inner dim in query(d/TILE_W)
+        kWt,               // num tile in inner dim in key and value (d/TILE_W)
+        Ht_,               // num tile in seq len dim (S/TILE_H)
+        block_size,        // block size (dst_reg_count)
+        q_tiles_per_head,  // number of tiles per head in query
+        k_tiles_per_head,  // number of tiles per group in key and value
+        heads_per_group,   // number of heads per group
+        scaler,            // sqrt(Et) - sdpa scale factor
+        minus_one,         // used to transform mask from 1/0 to 0/-1
+        custom_inf         // used to transform mask from 0/-1 to 0/-1e9F
     };
     kernels.reader = create_reader_kernel(
         program,
         all_cores,
-        /* reader_compile_args */ {block_size, Wt, Ht_, scaler, minus_one, custom_inf},
+        /* reader_compile_args */ reader_compile_args,
         defines,
         kReaderKernelPath);
 
