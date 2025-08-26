@@ -151,8 +151,6 @@ get_sender_receiver_cores(std::vector<std::shared_ptr<distributed::MeshDevice>> 
             auto [device_id, second_eth_core] = first_device->get_connected_ethernet_core(first_eth_core);
             if (second_device->id() == device_id) {
                 std::shared_ptr<distributed::MeshDevice> sender_mesh_device, receiver_mesh_device;
-                auto sender_device = sender_mesh_device->get_devices()[0];
-                auto receiver_device = receiver_mesh_device->get_devices()[0];
                 CoreCoord sender_eth_core, receiver_eth_core;
                 if (i == 0) {
                     sender_mesh_device = first_mesh_device, receiver_mesh_device = second_mesh_device;
@@ -161,6 +159,8 @@ get_sender_receiver_cores(std::vector<std::shared_ptr<distributed::MeshDevice>> 
                     sender_mesh_device = second_mesh_device, receiver_mesh_device = first_mesh_device;
                     sender_eth_core = second_eth_core, receiver_eth_core = first_eth_core;
                 }
+                auto sender_device = sender_mesh_device->get_devices()[0];
+                auto receiver_device = receiver_mesh_device->get_devices()[0];
                 sender_receivers.push_back(
                     {sender_mesh_device, receiver_mesh_device, sender_eth_core, receiver_eth_core});
                 log_info(
