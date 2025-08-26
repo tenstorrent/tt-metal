@@ -40,9 +40,16 @@ std::vector<std::string> expected = {
 };
 
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_type) {
+static void RunTest(
+    MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device, riscv_id_t riscv_type) {
     // Set up program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     // Depending on riscv type, choose one core to run the test on.
     CoreCoord logical_core, virtual_core;
@@ -70,7 +77,7 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
     switch(riscv_type) {
         case DebugBrisc:
             CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 DataMovementConfig{
@@ -78,7 +85,7 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
             break;
         case DebugNCrisc:
             CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 DataMovementConfig{
@@ -86,35 +93,35 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
             break;
         case DebugTrisc0:
             CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 ComputeConfig{.defines = {{"TRISC0", "1"}}});
             break;
         case DebugTrisc1:
             CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 ComputeConfig{.defines = {{"TRISC1", "1"}}});
             break;
         case DebugTrisc2:
             CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 ComputeConfig{.defines = {{"TRISC2", "1"}}});
             break;
         case DebugErisc:
             CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 EthernetConfig{.noc = tt_metal::NOC::NOC_0});
             break;
         case DebugIErisc:
             CreateKernel(
-                program,
+                program_,
                 "tests/tt_metal/tt_metal/test_kernels/misc/watcher_ringbuf.cpp",
                 logical_core,
                 EthernetConfig{.eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0});
@@ -123,7 +130,7 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
     }
 
     // Run the program
-    fixture->RunProgram(device, program, true);
+    fixture->RunProgram(mesh_device, workload, true);
 
     log_info(tt::LogTest, "Checking file: {}", fixture->log_file_name);
 
@@ -137,76 +144,83 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
 }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferBrisc) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferBrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (IDevice* device : this->devices_) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugBrisc);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, DebugBrisc);
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferNCrisc) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferNCrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (IDevice* device : this->devices_) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugNCrisc);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, DebugNCrisc);
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferTrisc0) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (IDevice* device : this->devices_) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc0);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, DebugTrisc0);
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferTrisc1) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (IDevice* device : this->devices_) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc1);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, DebugTrisc1);
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferTrisc2) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferTrisc2) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (IDevice* device : this->devices_) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc2);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, DebugTrisc2);
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferErisc) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    for (IDevice* device : this->devices_) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugErisc);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, DebugErisc);
+            },
+            mesh_device);
     }
 }
 
-TEST_F(WatcherFixture, TestWatcherRingBufferIErisc) {
+TEST_F(MeshWatcherFixture, TestWatcherRingBufferIErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
         GTEST_SKIP();
     }
-    for (IDevice* device : this->devices_) {
+    for (auto& mesh_device : this->devices_) {
         this->RunTestOnDevice(
-            [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugIErisc);},
-            device
-        );
+            [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+                RunTest(fixture, mesh_device, DebugIErisc);
+            },
+            mesh_device);
     }
 }
