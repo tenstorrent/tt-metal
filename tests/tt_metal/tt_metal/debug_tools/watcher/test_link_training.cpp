@@ -125,11 +125,14 @@ TEST_F(MeshWatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     EXPECT_TRUE(FileContainsAllStrings(this->log_file_name, expected_strings));
 }
 
-TEST_F(WatcherFixture, ActiveEthTestWatcherDetectLinkUp) {
+TEST_F(MeshWatcherFixture, ActiveEthTestWatcherDetectLinkUp) {
     if (this->arch_ != tt::ARCH::WORMHOLE_B0) {
         GTEST_SKIP()
             << "Enable this test on BH when base FW updated to flush data cache and invalidate instruction cache";
     }
     this->RunTestOnDevice(
-        [](WatcherFixture* fixture, IDevice* device) { RunTest(fixture, device); }, this->devices_[0]);
+        [](MeshWatcherFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
+            RunTest(fixture, mesh_device);
+        },
+        this->devices_[0]);
 }
