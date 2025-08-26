@@ -4,6 +4,9 @@
 
 #pragma once
 
+#include "sfpu/ckernel_sfpu_exp.h"
+#include "llk_defs.h"
+
 namespace ckernel {
 namespace sfpu {
 
@@ -60,22 +63,22 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat val) {
     return y;
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en = false, int ITERATIONS = 8>
 inline void calculate_expm1() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = _sfpu_expm1_<is_fp32_dest_acc_en>(v);
+        v = _calculate_exponential_piecewise_<(APPROX_MODE == ApproximationMode::Fast), SCALE_EN, SKIP_POSITIVE_CHECK>(
+            v, exp_base_scale_factor);
+        sfpi::dst_reg[0] = v - 1.0f;
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void expm1_init() {
-    // Polynomial coefficients for approximation of exp on [1; 2]
-    sfpi::vConstFloatPrgm0 = 0.40196114e-7f;
-    sfpi::vConstIntPrgm1 = 0xf94ee7;
-    sfpi::vConstIntPrgm2 = 0x560e;
+    const uint32_t EXP_BASE_SCALE_FACTOR = 0x3F800000;
+    _init_exponential_<(APPROX_MODE == ApproximationMode::Fast), false /*fast_mode*/, EXP_BASE_SCALE_FACTOR>();
 }
 
 }  // namespace sfpu

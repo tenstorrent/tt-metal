@@ -10,8 +10,11 @@
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpi.h"
+#include "llk_defs.h"
+using namespace sfpi;
 
-namespace ckernel::sfpu {
+namespace ckernel {
+namespace sfpu {
 
 enum {
     ADD = 0,
@@ -21,7 +24,7 @@ enum {
     RSUB = 4,
 };  // BINOP_MODE
 
-template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int BINOP_MODE, int ITERATIONS = 8>
 void calculate_binop_with_scalar(uint32_t param) {
     const sfpi::vFloat parameter = Converter::as_float(param);
 
@@ -47,29 +50,29 @@ void calculate_binop_with_scalar(uint32_t param) {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 void calculate_add(uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, ADD, ITERATIONS>(param);
+    calculate_binop_with_scalar<APPROX_MODE, ADD, ITERATIONS>(param);
     return;
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 void calculate_sub(uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, SUB, ITERATIONS>(param);
+    calculate_binop_with_scalar<APPROX_MODE, SUB, ITERATIONS>(param);
     return;
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 void calculate_mul(uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, MUL, ITERATIONS>(param);
+    calculate_binop_with_scalar<APPROX_MODE, MUL, ITERATIONS>(param);
     return;
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 void calculate_div(uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, DIV, ITERATIONS>(param);
+    calculate_binop_with_scalar<APPROX_MODE, DIV, ITERATIONS>(param);
     return;
 }
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 void calculate_rsub(uint32_t param) {
-    calculate_binop_with_scalar<APPROXIMATION_MODE, RSUB, ITERATIONS>(param);
+    calculate_binop_with_scalar<APPROX_MODE, RSUB, ITERATIONS>(param);
     return;
 }
 

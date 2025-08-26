@@ -6,13 +6,14 @@
 
 #include "ckernel.h"
 #include "ckernel_sfpu_reshuffle_rows.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_reshuffle_rows(uint idx_addr) {
-    _calculate_reshuffle_rows_(idx_addr);
+    _calculate_reshuffle_rows_<(APPROX_MODE == ApproximationMode::Fast), ITERATIONS>(idx_addr);
 }
 
 }  // namespace sfpu

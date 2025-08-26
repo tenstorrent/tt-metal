@@ -6,6 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 
 namespace ckernel::sfpu {
 
@@ -73,7 +74,7 @@ inline void calculate_unary_max_min(uint value) {
     }
 }
 
-template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool IS_MAX_OP = true, ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min_int32(uint value) {
     load_value_param_int(value);
 #pragma GCC unroll 0
