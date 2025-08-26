@@ -15,7 +15,7 @@ runs:
       with:
         payload: |
           {
-            "text": "<@${{ inputs.owner }}> ${{ github.workflow }} is failing after: https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }}. failing run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+            "text": "<@${{ inputs.owner }}> ${{ github.workflow }} is failing: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. failing commit: https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }}",
             "owner": "${{ inputs.owner }}"
           }
       env:
