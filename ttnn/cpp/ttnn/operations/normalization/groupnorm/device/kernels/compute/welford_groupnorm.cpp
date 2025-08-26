@@ -20,6 +20,7 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -153,7 +154,6 @@ void MAIN {
                                     ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? cb_in : cb_out0)
                                     : cb_out0;
 #endif
-
     // tile offset
     uint32_t index_subblock_w_offset = 0;
     uint32_t index_h_offset = 0;
@@ -246,6 +246,7 @@ void MAIN {
 
     // Start Batch Loop
     for (uint32_t b = 0; b < batch; ++b) {
+        DPRINT << "Batch: " << b << " out of " << batch << ENDL();
         index_g_offset = 0;
 
         row_offset = num_cols_per_group;
@@ -257,6 +258,7 @@ void MAIN {
 
         // Start Group Loop
         for (uint32_t g = 0; g < group; ++g) {
+            DPRINT << "Group: " << g << " out of " << group << ENDL();
             // Start Welford's Calculation
             uint32_t curr_xy_coord = 0;
             uint32_t curr_xy_limit = 0;
@@ -270,6 +272,7 @@ void MAIN {
             //         // Call welford's algorithm
             //         // welford(0, 1, 2, h * c + w * 32, (h + 1) * c, 0)
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                DPRINT << "out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
                 uint32_t out_block_h_actual, out_block_hw_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
@@ -278,7 +281,10 @@ void MAIN {
                     out_block_h_actual = out_block_h_normal;
                     out_block_hw_actual = out_block_hw_normal;
                 }
+
                 cb_wait_front(cb_in0, out_block_hw_normal);
+                DPRINT << "mask: input available: out_block_index: " << out_block_index << " out of "
+                       << num_out_blocks_padded << ENDL();
 
                 index_h_offset = 0;
                 reconfig_data_format_srcb(cb_in0, cb_input_mask);
@@ -286,6 +292,7 @@ void MAIN {
                 mul_tiles_init(cb_in0, cb_input_mask);
                 cb_reserve_back(cb_x, out_block_hw_normal);
                 for (uint32_t i = 0; i < out_block_h_actual; ++i) {
+                    DPRINT << "mask: i: " << i << " out of " << out_block_h_actual << ENDL();
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
                         tile_regs_acquire();
@@ -317,6 +324,7 @@ void MAIN {
 
                 // Transpose (from cb_x) and Welford
                 cb_wait_front(cb_x, out_block_hw_normal);
+                DPRINT << "welford: read_from_ping: " << (uint32_t)read_from_ping << ENDL();
 
                 index_h_offset = 0;
                 reconfig_data_format_srcb(cb_input_mask, cb_x);
@@ -328,6 +336,7 @@ void MAIN {
                     curr_xy_limit += group_size;
                     index_subblock_w_offset = 0;
                     for (uint32_t j = 0; j < num_subblocks_w; ++j) {
+                        DPRINT << "welford: j: " << j << " out of " << num_subblocks_w << ENDL();
                         tile_regs_acquire();
 
                         // Copy the current values to DST regs 1 and 2
@@ -344,7 +353,7 @@ void MAIN {
                             transpose_wh_init_short(cb_x);
                             transpose_wh_tile(cb_x, index, 0);
                             // welford(0, 1, 2, curr_xy_coord, curr_xy_limit, 0);
-                            // curr_xy_coord += 0x1000; // Test hangs when this is run
+                            // curr_xy_coord += 32; // Test hangs when this is run
                         }
                         tile_regs_commit();
                         cb_pop_front(read_from_ping ? cb_ex_ping : cb_ex_pong, 2);
@@ -364,6 +373,7 @@ void MAIN {
                 cb_pop_front(cb_in0, out_block_hw_normal);
 #endif
                 cb_push_back(cb_x, out_block_hw_normal);
+                DPRINT << "welford done: out_block_index: " << out_block_index << ENDL();
             }
 
             cb_wait_front(read_from_ping ? cb_ex_ping : cb_ex_pong, 2);
@@ -409,6 +419,7 @@ void MAIN {
             uint32_t start_index_block_w = index_block_w;
 
             uint32_t out_block_h_offset = 0;
+            DPRINT << "Final Val Calc for group: " << g << " out of " << group << ENDL();
             // Start Final Val Calc
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                 uint32_t out_block_h_actual, out_block_hw_actual;
@@ -421,6 +432,8 @@ void MAIN {
                 }
 
                 cb_wait_front(cb_in0, out_block_hw_normal);
+                DPRINT << "Got input for out_block_index: " << out_block_index << " out of " << num_out_blocks_padded
+                       << ENDL();
                 // x - E[x]
                 sub_tiles_bcast_scalar_init_short(cb_in0, cb_ex_global);
                 cb_reserve_back(cb_xmm, out_block_hw_normal);
@@ -446,6 +459,7 @@ void MAIN {
                     cb_pop_front(cb_in0, out_block_hw_normal - out_block_hw_last);
                 }
                 cb_push_back(cb_xmm, out_block_hw_normal);
+                DPRINT << "Pushed xmm to cb: " << cb_xmm << ENDL();
 
                 // zero out the garbage values by mult mask again
                 reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
@@ -475,6 +489,7 @@ void MAIN {
                     cb_pop_front(cb_xmm, out_block_hw_normal - out_block_hw_last);
                 }
                 cb_push_back(cb_x, out_block_hw_normal);
+                DPRINT << "Pushed x to cb: " << cb_x << ENDL();
                 reconfig_data_format_srcb(cb_input_mask, cb_x);
 
                 // (x - Ex) * 1/[sqrt(Var + eps)]
@@ -503,6 +518,7 @@ void MAIN {
                 }
                 cb_pop_front(cb_x, out_block_hw_normal);
                 cb_push_back(cb_xmm, out_block_hw_normal);
+                DPRINT << "Pushed xmm to cb: " << cb_xmm << ENDL();
                 cb_wait_front(cb_xmm, out_block_hw_normal);
 
                 copy_or_add = start_copy_or_add;
@@ -568,6 +584,7 @@ void MAIN {
                 cb_pop_front(cb_xmm, out_block_hw_normal);
                 cb_pop_front(cb_reread_out, out_block_hw_normal);
                 cb_push_back(cb_reread_write_out, out_block_hw_normal);
+                DPRINT << "Pushed reread_write_out to cb: " << cb_reread_write_out << ENDL();
 
                 // Start Optional Gamma:
                 if constexpr (do_gamma) {
@@ -601,6 +618,7 @@ void MAIN {
                     cb_pop_front(cb_reread_write_out, out_block_hw_normal);
                     cb_wait_front(cb_outgamma, out_block_hw_normal);
                 }
+                DPRINT << "Optional Gamma done" << ENDL();
                 // End Optional Gamma
                 //
                 // Start Optional Beta
@@ -631,9 +649,10 @@ void MAIN {
                         index_h_offset += block_w_curr;
                     }
                     cb_push_back(cb_outbeta, out_block_hw_normal);
+                    DPRINT << "Pushed output to cb: " << cb_outbeta << ENDL();
                     cb_pop_front(cb_inbeta, out_block_hw_normal);
-                    cb_wait_front(cb_outbeta, out_block_hw_normal);
                 }
+                DPRINT << "Optional Beta done" << ENDL();
                 // End Optional Beta
 
 #ifdef UNTILIZE_OUT
@@ -683,6 +702,7 @@ void MAIN {
             cb_pop_front(cb_ex_global, 2);
             cb_pop_front(cb_ex2pe, 1);
             cb_pop_front(cb_input_mask, block_w);
+            DPRINT << "Group: " << g << " out of " << group << " done" << ENDL();
         }
         // End Group Loop
         index_b_offset += num_tiles_per_batch;
