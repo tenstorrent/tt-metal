@@ -50,7 +50,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllBroadcastAsync::create_mes
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     auto sub_device_id = this->sub_device_id;
 
     auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);
@@ -164,7 +164,7 @@ std::vector<Tensor> all_broadcast_async_impl(
 
     uint32_t num_devices;
     if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.mesh_device();
+        auto mesh_device = input_tensor.device();
         TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
         const auto& mesh_view = mesh_device->get_view();
         // Use the mesh dimensions to determine the ring size

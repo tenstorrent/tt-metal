@@ -26,7 +26,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_mesh_workload(
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto mesh_device = tensor_args.input_tensor.mesh_device();
+    auto mesh_device = tensor_args.input_tensor.device();
     auto init_barrier_semaphore =
         ttnn::global_semaphore::create_global_semaphore(mesh_device, operation_attributes.worker_core_range_set, 0);
     auto final_barrier_semaphore =

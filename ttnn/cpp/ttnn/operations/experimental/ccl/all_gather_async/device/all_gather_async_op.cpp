@@ -402,7 +402,7 @@ Tensor all_gather_async_impl(
 
     uint32_t num_devices;
     if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.mesh_device();
+        auto mesh_device = input_tensor.device();
         TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
         const auto& mesh_view = mesh_device->get_view();
         // Use the mesh dimensions to determine the ring size
