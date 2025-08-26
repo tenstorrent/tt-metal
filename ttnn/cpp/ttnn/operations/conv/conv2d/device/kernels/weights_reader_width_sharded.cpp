@@ -21,10 +21,11 @@ void kernel_main() {
     constexpr uint32_t remote_weight_height_blocks = get_compile_time_arg_val(9);
     constexpr uint32_t local_weight_height_blocks = get_compile_time_arg_val(10);
     constexpr uint32_t act_num_blocks_h = get_compile_time_arg_val(11);
+    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(12);
+    constexpr auto s_weight_args = TensorAccessorArgs<13>();
+    constexpr auto s_bias_args = TensorAccessorArgs<s_weight_args.next_compile_time_args_offset()>();
 
 #ifdef FUSE_BIAS
-    constexpr uint32_t bias_cb_id = get_compile_time_arg_val(12);
-    constexpr uint32_t bias_in_dram = get_compile_time_arg_val(13) == 1;
     constexpr bool has_bias = true;
 #else
     constexpr bool has_bias = false;
@@ -42,16 +43,10 @@ void kernel_main() {
     i += 1;
 
     const uint32_t weight_tile_nbytes = get_tile_size(cb_id_weight);
-    const DataFormat weight_df = get_dataformat(cb_id_weight);
-
-    const InterleavedAddrGenFast<true> s_weight = {
-        .bank_base_address = weight_addr_dram_base, .page_size = weight_tile_nbytes, .data_format = weight_df};
+    const auto s_weight = TensorAccessor(s_weight_args, weight_addr_dram_base, weight_tile_nbytes);
 #ifdef FUSE_BIAS
     const uint32_t bias_pagesize = get_tile_size(bias_cb_id);
-    const DataFormat bias_df = get_dataformat(bias_cb_id);
-    const InterleavedAddrGenFast<bias_in_dram> s_bias = {
-        .bank_base_address = bias_addr_dram_base, .page_size = bias_pagesize, .data_format = bias_df};
-
+    const auto s_bias = TensorAccessor(s_bias_args, bias_addr_dram_base, bias_pagesize);
 #endif
     bool to_load_bias = true;
 

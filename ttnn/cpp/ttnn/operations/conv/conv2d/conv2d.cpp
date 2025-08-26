@@ -208,6 +208,7 @@ Result conv2d_DRAM(
                         .compute_grid = compute_grid_size,
                         .weights_shape = weight_tensor.padded_shape(),
                         .weights_datatype = conv_config.weights_dtype.value_or(weight_tensor.dtype()),
+                        .input_datatype = input_tensor.dtype(),
                         .output_datatype = output_dtype,
                         .enable_bias = bias_tensor.has_value(),
                         .mm_conv = mm_conv,
@@ -222,7 +223,7 @@ Result conv2d_DRAM(
             current_num_slices <= output_sliced_dim,
             "Could not find a suitable number of slices for Conv2D DRAM Slicing. "
             "Either increase the number of slices or reduce the output dimension being sliced.");
-        log_info(tt::LogOp, "Conv2D DRAM Slicing: Automatically determined number of slices: {}", current_num_slices);
+        log_debug(tt::LogOp, "Conv2D DRAM Slicing: Automatically determined number of slices: {}", current_num_slices);
     }
     TT_FATAL(dram_slice_config.num_slices > 1, " Number of slices should be greater than 1 for Conv2D DRAM Slicing");
     TT_FATAL(

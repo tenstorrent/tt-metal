@@ -2,37 +2,38 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <fmt/base.h>
-#include <gtest/gtest.h>
-#include <stddef.h>
-#include <stdint.h>
-#include <tt-metalium/allocator.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/kernel.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <map>
 #include <memory>
-#include <set>
+#include <stddef.h>
+#include <stdint.h>
 #include <string>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include <fmt/base.h>
+#include <gtest/gtest.h>
+
+#include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/base_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include "device_fixture.hpp"
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "umd/device/types/xy_pair.h"
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/utils.hpp>
+#include <tt_stl/span.hpp>
+
+#include "device_fixture.hpp"
+#include "umd/device/types/xy_pair.h"
 
 using namespace tt;
 
@@ -43,22 +44,21 @@ enum class KernelType {
     COMPUTE = 1,
 };
 
-uint32_t get_runtime_arg_addr(uint32_t l1_unreserved_base, tt::RISCV processor, bool is_common) {
+uint32_t get_runtime_arg_addr(
+    uint32_t l1_unreserved_base, tt_metal::HalProcessorClassType processor_class, int processor_id, bool is_common) {
     uint32_t result_base = 0;
 
     // Spread results out a bit, overly generous
     constexpr uint32_t runtime_args_space = 1024 * sizeof(uint32_t);
 
-    switch (processor) {
-        case tt::RISCV::BRISC: {
-            result_base = l1_unreserved_base;
-        } break;
-        case tt::RISCV::NCRISC: {
-            result_base = l1_unreserved_base + 1 * runtime_args_space;
-        } break;
-        case tt::RISCV::COMPUTE: {
+    switch (processor_class) {
+        case tt::tt_metal::HalProcessorClassType::DM:
+            TT_ASSERT(0 <= processor_id && processor_id < 2);
+            result_base = l1_unreserved_base + processor_id * runtime_args_space;
+            break;
+        case tt::tt_metal::HalProcessorClassType::COMPUTE:
             result_base = l1_unreserved_base + 2 * runtime_args_space;
-        } break;
+            break;
         default: TT_THROW("Unknown processor");
     }
 
@@ -89,7 +89,10 @@ tt::tt_metal::Program initialize_program_data_movement_rta(
     tt::tt_metal::Program program = tt_metal::CreateProgram();
 
     uint32_t rta_base_dm = get_runtime_arg_addr(
-        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1), tt::RISCV::BRISC, common_rtas);
+        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+        tt::tt_metal::HalProcessorClassType::DM,
+        0,
+        common_rtas);
     std::map<std::string, std::string> dm_defines = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_unique_rt_args)},
@@ -119,9 +122,15 @@ tt::tt_metal::KernelHandle initialize_program_compute(
     uint32_t num_common_rt_args) {
     // Tell kernel how many unique and common RT args to expect. Will increment each.
     uint32_t rta_base_compute = get_runtime_arg_addr(
-        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1), tt::RISCV::COMPUTE, false);
+        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+        tt::tt_metal::HalProcessorClassType::COMPUTE,
+        0,
+        false);
     uint32_t common_rta_base_compute = get_runtime_arg_addr(
-        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1), tt::RISCV::COMPUTE, true);
+        device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+        tt::tt_metal::HalProcessorClassType::COMPUTE,
+        0,
+        true);
     std::vector<uint32_t> compile_args = {
         num_unique_rt_args, num_common_rt_args, rta_base_compute, common_rta_base_compute};
     bool fp32_dest_acc_en = false;
@@ -209,7 +218,10 @@ void verify_results(
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         const auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
         auto rt_args_base_addr = get_runtime_arg_addr(
-            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1), kernel->processor(), false);
+            device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+            kernel->get_kernel_processor_class(),
+            kernel->get_kernel_processor_type(0),
+            false);
 
         // Verify Unique RT Args (per core)
         for (const auto& logical_core : kernel->cores_with_runtime_args()) {
@@ -223,7 +235,10 @@ void verify_results(
         // Verify common RT Args (same for all cores) if they exist.
         if (common_rt_args.size() > 0) {
             auto common_rt_args_base_addr = get_runtime_arg_addr(
-                device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1), kernel->processor(), true);
+                device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
+                kernel->get_kernel_processor_class(),
+                kernel->get_kernel_processor_type(0),
+                true);
 
             for (auto& core_range : kernel->logical_coreranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {

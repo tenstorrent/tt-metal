@@ -29,7 +29,7 @@ struct CoreDispatchParams {
     uint32_t size_bytes = 0;
     IDevice* device = nullptr;
     uint32_t cq_id = 0;
-    CoreType dispatch_core_type;
+    CoreType dispatch_core_type{CoreType::COUNT};
     tt::stl::Span<const uint32_t> expected_num_workers_completed;
     tt::stl::Span<const SubDeviceId> sub_device_ids;
 };

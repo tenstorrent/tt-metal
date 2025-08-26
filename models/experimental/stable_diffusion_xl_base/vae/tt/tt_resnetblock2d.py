@@ -47,23 +47,25 @@ class TtResnetBlock2D(nn.Module):
             conv_bias_3 = state_dict[f"{module_path}.conv_shortcut.bias"]
 
         core_x, core_y, self.norm_blocks_1 = get_DRAM_GN_config(module_path, 1)
+        self.is_sharded_gn1 = self.norm_blocks_1 == -1
         self.norm_core_grid_1 = ttnn.CoreGrid(y=core_y, x=core_x)
 
         self.gamma_t_1, self.beta_t_1 = prepare_gn_beta_gamma(
-            device, self.norm_weights_1, self.norm_bias_1, self.norm_core_grid_1.y
+            device, self.norm_weights_1, self.norm_bias_1, self.norm_core_grid_1.x
         )
         self.input_mask_1 = prepare_gn_mask(
-            self.device, self.norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.y
+            self.device, self.norm_weights_1.shape[0], self.norm_groups, self.norm_core_grid_1.x
         )
 
         core_x, core_y, self.norm_blocks_2 = get_DRAM_GN_config(module_path, 2)
+        self.is_sharded_gn2 = self.norm_blocks_2 == -1
         self.norm_core_grid_2 = ttnn.CoreGrid(y=core_y, x=core_x)
 
         self.gamma_t_2, self.beta_t_2 = prepare_gn_beta_gamma(
-            device, self.norm_weights_2, self.norm_bias_2, self.norm_core_grid_2.y
+            device, self.norm_weights_2, self.norm_bias_2, self.norm_core_grid_2.x
         )
         self.input_mask_2 = prepare_gn_mask(
-            self.device, self.norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.y
+            self.device, self.norm_weights_2.shape[0], self.norm_groups, self.norm_core_grid_2.x
         )
 
         self.compute1_config = model_config.get_conv_compute_config(module_path=f"{module_path}.conv1")
@@ -103,19 +105,46 @@ class TtResnetBlock2D(nn.Module):
     def forward(self, input_tensor, input_shape):
         B, C, H, W = input_shape
 
-        hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
-        hidden_states = ttnn.group_norm(
-            hidden_states,
-            num_groups=self.norm_groups,
-            input_mask=self.input_mask_1,
-            weight=self.gamma_t_1,
-            bias=self.beta_t_1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=self.norm_core_grid_1,
-            epsilon=self.norm_eps,
-            inplace=False,
-            num_out_blocks=self.norm_blocks_1,
-        )
+        if self.is_sharded_gn1:
+            shard_shape = B * H * W // self.norm_core_grid_1.x, C // self.norm_core_grid_1.y
+            sharded_mem_config = ttnn.create_sharded_memory_config(
+                shard_shape,
+                core_grid=self.norm_core_grid_1,
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            hidden_states = ttnn.to_memory_config(input_tensor, sharded_mem_config)
+
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=self.norm_groups,
+                input_mask=self.input_mask_1,
+                weight=self.gamma_t_1,
+                bias=self.beta_t_1,
+                memory_config=sharded_mem_config,
+                core_grid=self.norm_core_grid_1,
+                epsilon=self.norm_eps,
+                negative_mask=None,
+                inplace=False,  # We are working with tiled sharded GN
+            )
+
+            if self.conv1_slice_config is not None:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            hidden_states = ttnn.to_memory_config(input_tensor, ttnn.DRAM_MEMORY_CONFIG)
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=self.norm_groups,
+                input_mask=self.input_mask_1,
+                weight=self.gamma_t_1,
+                bias=self.beta_t_1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                core_grid=self.norm_core_grid_1,
+                epsilon=self.norm_eps,
+                inplace=False,
+                num_out_blocks=self.norm_blocks_1,
+            )
 
         hidden_states = ttnn.silu(hidden_states)
 
@@ -144,19 +173,45 @@ class TtResnetBlock2D(nn.Module):
         )
         C = self.conv1_params["output_channels"]
 
-        hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
-        hidden_states = ttnn.group_norm(
-            hidden_states,
-            num_groups=self.norm_groups,
-            input_mask=self.input_mask_2,
-            weight=self.gamma_t_2,
-            bias=self.beta_t_2,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            core_grid=self.norm_core_grid_2,
-            epsilon=self.norm_eps,
-            inplace=False,
-            num_out_blocks=self.norm_blocks_2,
-        )
+        if self.is_sharded_gn2:
+            shard_shape = B * H * W // self.norm_core_grid_2.x, C // self.norm_core_grid_2.y
+            sharded_mem_config = ttnn.create_sharded_memory_config(
+                shard_shape,
+                core_grid=self.norm_core_grid_2,
+                strategy=ttnn.ShardStrategy.BLOCK,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config)
+
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=self.norm_groups,
+                input_mask=self.input_mask_2,
+                weight=self.gamma_t_2,
+                bias=self.beta_t_2,
+                memory_config=sharded_mem_config,
+                core_grid=self.norm_core_grid_2,
+                epsilon=self.norm_eps,
+                negative_mask=None,
+                inplace=False,  # We are working with tiled sharded GN
+            )
+            if self.conv2_slice_config is not None:
+                hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+        else:
+            hidden_states = ttnn.to_memory_config(hidden_states, ttnn.DRAM_MEMORY_CONFIG)
+            hidden_states = ttnn.group_norm(
+                hidden_states,
+                num_groups=self.norm_groups,
+                input_mask=self.input_mask_2,
+                weight=self.gamma_t_2,
+                bias=self.beta_t_2,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                core_grid=self.norm_core_grid_2,
+                epsilon=self.norm_eps,
+                inplace=False,
+                num_out_blocks=self.norm_blocks_2,
+            )
 
         hidden_states = ttnn.silu(hidden_states)  # note: silu hangs if not tile
 

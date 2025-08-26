@@ -9,6 +9,7 @@ import transformers
 import pytest
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 
@@ -22,14 +23,16 @@ class TtFalconMLP:
         ff1_linear: ttnn.Tensor = ttnn.linear(x, self.dense_h_to_4h_weights)
         gelu = ttnn.gelu(ff1_linear)
 
+        # Legacy ccl call removed until new implementation is done - see https://github.com/tenstorrent/tt-metal/issues/26649
         # Invoke CCL Ring All-Gather on gelu before passing to ff2_linear
-        gelu = ttnn.all_gather(gelu, dim=3, num_links=1)
+        # gelu = ttnn.all_gather(gelu, dim=3, num_links=1)
 
         ff2_linear: ttnn.Tensor = ttnn.linear(gelu, self.dense_4h_to_h_weights)
 
         return ff2_linear
 
 
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 def test_tensor_parallel_falcon_mlp():
     if ttnn.get_num_devices() < 8:
         pytest.skip()

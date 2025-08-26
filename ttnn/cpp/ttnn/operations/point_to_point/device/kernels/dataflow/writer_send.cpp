@@ -14,8 +14,8 @@ void kernel_main() {
     constexpr uint32_t sender_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t packet_header_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t packet_cb_id = get_compile_time_arg_val(2);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(3);
-    constexpr uint32_t alignment = get_compile_time_arg_val(4);
+    constexpr uint32_t alignment = get_compile_time_arg_val(3);
+    constexpr auto dst_buffer_args = TensorAccessorArgs<4>();
 
     constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
 
@@ -46,8 +46,7 @@ void kernel_main() {
     auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
     packet_header_ptr->to_chip_unicast(dst_num_hops);
 
-    InterleavedAddrGen<dst_is_dram> dst_buffer_addrgen{
-        .bank_base_address = receiver_base_address, .page_size = payload_size_bytes};
+    const auto dst_buffer = TensorAccessor(dst_buffer_args, receiver_base_address, payload_size_bytes);
 
     // working memory to hold coalesced packet
     cb_reserve_back(packet_cb_id, 1);
@@ -80,7 +79,7 @@ void kernel_main() {
             tt_memmove<false, false, false, 0>(packet_addr, src_addr, transfer_size_bytes);
             ++packet_page_idx;
             if (packet_page_idx >= curr_pages_per_packet) {
-                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen, 0, 0);
+                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer, 0, 0);
                 packet_header_ptr->to_noc_unicast_write(
                     tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, align(payload_size_bytes, alignment));
 

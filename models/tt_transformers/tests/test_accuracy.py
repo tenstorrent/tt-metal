@@ -10,7 +10,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.tt_transformers.tt.ccl import ag_on_padded_dim_3
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
@@ -318,12 +317,21 @@ def test_tt_model_acc(
         )
 
         if tt_model.args.num_devices > 1:
-            tt_out_gathered = ag_on_padded_dim_3(
+            cluster_axis = 0 if tt_model.args.is_galaxy else None
+            num_links = tt_model.args.num_all_gather_links if tt_model.args.is_galaxy else 1
+            tt_out_gathered = ttnn.experimental.all_gather_async(
                 tt_out,
-                tt_model.tt_ccl,
-                cluster_axis=0 if tt_model.args.is_galaxy else None,
-                num_links=tt_model.args.num_all_gather_links if tt_model.args.is_galaxy else 1,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=tt_model.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
+                num_links=num_links,
+                memory_config=tt_out.memory_config(),
+                cluster_axis=cluster_axis,
                 topology=tt_model.args.ccl_topology() if tt_model.args.is_galaxy else ttnn.Topology.Linear,
+                barrier_semaphore=tt_model.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+                chunks_per_sync=10,
+                num_workers_per_link=2,
+                num_buffers_per_channel=2,
             )
 
             ttnn.deallocate(tt_out)

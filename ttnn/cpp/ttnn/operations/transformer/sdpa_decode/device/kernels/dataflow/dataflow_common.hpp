@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include <vector>
-
 /******************************************************************************
  *                                                                             *
  *                   Common Functions for Dataflow Kernels                     *
@@ -23,19 +22,28 @@ constexpr uint32_t get_barrier_read_threshold() {
 /******************************************************************************
  *                   Page Cache Functions            *
  ******************************************************************************/
-template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
+template <typename PageT, uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
 uint32_t virtual_seq_tile_id_to_physical_tile_id(
-    uint32_t seq_tile_idx, uint32_t cur_head, volatile tt_l1_ptr const uint32_t* const page_table_ptr) {
+    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr PageT* const page_table_ptr) {
     // Given some index in the sequence tiles in range [0, max_seq_len_t]
     // Return the physical tile id for that tile row
     constexpr uint32_t block_stride = num_heads * block_size_t * Wt;
     const uint32_t head_offset = cur_head * block_size_t * Wt;
 
     const uint32_t virtual_block = seq_tile_idx / block_size_t;
-    const uint32_t physical_block = page_table_ptr[virtual_block];
+
+    const uint32_t physical_block = static_cast<uint32_t>(page_table_ptr[virtual_block]);
     const uint32_t block_row_offset = seq_tile_idx % block_size_t;
     const uint32_t block_offset = block_row_offset * Wt;
     return physical_block * block_stride + head_offset + block_offset;
+}
+
+// Backward-compatible overload (defaults to uint32_t page table entries)
+template <uint32_t num_heads, uint32_t block_size_t, uint32_t Wt>
+uint32_t virtual_seq_tile_id_to_physical_tile_id(
+    uint32_t seq_tile_idx, uint32_t cur_head, const volatile tt_l1_ptr uint32_t* const page_table_ptr) {
+    return virtual_seq_tile_id_to_physical_tile_id<uint32_t, num_heads, block_size_t, Wt>(
+        seq_tile_idx, cur_head, page_table_ptr);
 }
 
 /******************************************************************************

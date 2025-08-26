@@ -69,7 +69,7 @@ The Models team is focused on developing the following models to a customer-read
 |-------|----------------------------------------------------------------|-----------|-------|-----------------|--------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
 | 32    | [p100 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 87*       | 26.5* |                 | 848.0* | [v0.59.0-rc3](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc3) | [739dcaa](https://github.com/tenstorrent/vllm/tree/739dcaa2915fa29d757c25a02c17aadce0c58055/tt_metal) |
 | 32    | [p150 (Blackhole)](https://tenstorrent.com/hardware/blackhole) | 69*       | 29.1* |                 | 931.2* | [v0.59.0-rc3](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc3) | [739dcaa](https://github.com/tenstorrent/vllm/tree/739dcaa2915fa29d757c25a02c17aadce0c58055/tt_metal) |
-| 32    | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 104       | 24.8  | 23              | 793.6  | [v0.59.0-rc52](https://github.com/tenstorrent/tt-metal/tree/v0.59.0-rc52) | [f028da1](https://github.com/tenstorrent/vllm/tree/f028da11b5b8205272bf18a478de93bd2dd3e29e/tt_metal) |
+| 32    | [n150 (Wormhole)](https://tenstorrent.com/hardware/wormhole) | 104       | 26.0  | 23              | 832.0   | [v0.62.0-rc25](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-rc25) | [e7c329b](https://github.com/tenstorrent/vllm/tree/e7c329b1664f8591ae8b4269bed9690726e52a24/tt_metal) |
 ### [Llama 3.2 11B Vision (TP=2)](./models/tt_transformers)
 | Batch | Hardware                                                     | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                     | vLLM Tenstorrent Repo Release                                                                         |
 |-------|--------------------------------------------------------------|-----------|-------|-----------------|--------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
@@ -77,7 +77,7 @@ The Models team is focused on developing the following models to a customer-read
 ### [Qwen 2.5 72B (TP=8)](./models/tt_transformers)
 | Batch | Hardware                                                            | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                     | vLLM Tenstorrent Repo Release                                                                         |
 |-------|---------------------------------------------------------------------|-----------|-------|-----------------|--------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
-| 32    | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 249       | 15.4  | 20              | 492.8  | [v0.62.0-rc2](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-rc2) | [7ff6d6f](https://github.com/tenstorrent/vllm/tree/7ff6d6f1b62ecedf0cefa45d61ef3a48671f2dfe/tt_metal) |
+| 32    | [QuietBox (Wormhole)](https://tenstorrent.com/hardware/tt-quietbox) | 223       | 15.4  | 20              | 492.8  | [v0.62.0-rc25](https://github.com/tenstorrent/tt-metal/tree/v0.62.0-rc25) | [e7c329b](https://github.com/tenstorrent/vllm/tree/e7c329b1664f8591ae8b4269bed9690726e52a24/tt_metal) |
 ### [Qwen 3 32B (TP=8)](./models/tt_transformers)
 | Batch | Hardware                                                            | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                       | vLLM Tenstorrent Repo Release                                                                         |
 |-------|---------------------------------------------------------------------|-----------|-------|-----------------|--------|---------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
@@ -95,7 +95,7 @@ For the latest model updates and features, please see [MODEL_UPDATES.md](models/
 
 ## Model Bring-Up and Testing
 
-For information on initial model procedures, please see [Model Bring-Up and Testing](https://github.com/tenstorrent/tt-metal/tree/main/models/bringup_testing)
+For information on initial model procedures, please see [Model Bring-Up and Testing](https://github.com/tenstorrent/tt-metal/blob/main/models/docs/model_bring_up.md)
 
 ## TT-NN Tech Reports
 

@@ -16,25 +16,12 @@
 namespace ttnn::operations::experimental::ccl {
 
 bool use_composite_reduce_scatter(
-    const ttnn::Tensor& input_tensor,
-    const int32_t dim,
-    std::optional<uint32_t> cluster_axis,
-    const std::optional<GlobalSemaphore>& barrier_semaphore) {
+    const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
-    uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
 
-    // Composite only supported when barrier_semaphore is provided
-    if (!barrier_semaphore.has_value()) {
-        return false;
-    }
-
-    // Composite currently only valid for scattering on dim 3
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
-    if (scatter_dim != 3) {
-        return false;
-    }
 
     uint32_t num_devices;
     if (cluster_axis.has_value()) {
@@ -56,6 +43,11 @@ bool use_composite_reduce_scatter(
         return true;
     }
 
+    // Use composite if scattering on a dim that isn't 3
+    if (scatter_dim != 3) {
+        return true;
+    }
+
     // Use composite if tiled and scattering on padded dim 3
     auto output_shape = input_shape;
     output_shape[scatter_dim] /= num_devices;
@@ -70,21 +62,29 @@ bool use_composite_reduce_scatter(
 ttnn::Tensor composite_reduce_scatter(
     ttnn::Tensor input_tensor,
     const int32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const GlobalSemaphore& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     std::optional<uint32_t> cluster_axis) {
-    DataType input_dtype = input_tensor.dtype();
-    bool convert_to_bfloat16_for_composite = input_dtype == DataType::BFLOAT8_B;
-    bool is_tiled = input_tensor.layout() == Layout::TILE;
+    auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
+    uint32_t tile_height = tile_shape[0];
+    uint32_t tile_width = tile_shape[1];
+
+    auto input_shape = input_tensor.logical_shape();
 
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
+    bool is_tiled_and_not_tile_aligned = input_tensor.layout() == Layout::TILE &&
+                                         (input_shape[2] % tile_height != 0 || input_shape[3] % tile_width != 0);
+
+    // If we need to convert to row-major, then if the input dtype is bfloat8_b we need to typecast before untilizing
+    // and after re-tilizing
+    DataType input_dtype = input_tensor.dtype();
+    bool convert_to_bfloat16_for_composite = is_tiled_and_not_tile_aligned && input_dtype == DataType::BFLOAT8_B;
+
     // Convert to row major
-    if (is_tiled) {
+    if (is_tiled_and_not_tile_aligned) {
         // If input is tiled bfloat8_b, convert to bfloat16 to do the all_broadcast_async + concat
         if (convert_to_bfloat16_for_composite) {
             input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
@@ -94,14 +94,7 @@ ttnn::Tensor composite_reduce_scatter(
 
     // Broadcast each tensor to all other devices in the mesh
     std::vector<ttnn::Tensor> broadcasted_tensors = ttnn::operations::experimental::ccl::all_broadcast_async(
-        input_tensor,
-        multi_device_global_semaphore[0],
-        barrier_semaphore,
-        num_links,
-        memory_config,
-        ttnn::ccl::Topology::Linear,
-        cluster_axis,
-        subdevice_id);
+        input_tensor, num_links, memory_config, ttnn::ccl::Topology::Linear, cluster_axis, subdevice_id);
 
     // Reduce broadcasted tensors into a single reduced tensor
     ttnn::Tensor all_reduced_tensor = broadcasted_tensors[0];
@@ -115,7 +108,7 @@ ttnn::Tensor composite_reduce_scatter(
         all_reduced_tensor, scatter_dim, cluster_axis, memory_config.value_or(all_reduced_tensor.memory_config()));
 
     // Convert back to tiled
-    if (is_tiled) {
+    if (is_tiled_and_not_tile_aligned) {
         reduce_scatter_output_tensor = ttnn::to_layout(reduce_scatter_output_tensor, Layout::TILE);
         // If we had to convert the input dtype in order to execute the row-major composite op, convert back to the
         // input dtype
@@ -142,16 +135,8 @@ ttnn::Tensor ExecuteReduceScatterMinimalAsync::invoke(
     std::optional<uint32_t> chunks_per_sync,
     std::optional<uint32_t> num_workers_per_link,
     std::optional<uint32_t> num_buffers_per_channel) {
-    if (use_composite_reduce_scatter(input_tensor, dim, cluster_axis, barrier_semaphore)) {
-        return composite_reduce_scatter(
-            input_tensor,
-            dim,
-            multi_device_global_semaphore,
-            barrier_semaphore.value(),
-            num_links,
-            memory_config,
-            subdevice_id,
-            cluster_axis);
+    if (use_composite_reduce_scatter(input_tensor, dim, cluster_axis)) {
+        return composite_reduce_scatter(input_tensor, dim, num_links, memory_config, subdevice_id, cluster_axis);
     } else {
         return ttnn::operations::experimental::ccl::reduce_scatter_minimal_async(
             input_tensor,
