@@ -12,6 +12,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_
 from models.utility_functions import skip_for_blackhole
 
 from ttnn import ShardTensorToMesh, ConcatMeshToTensor
+from tracy import signpost
 
 
 def create_global_semaphores(t3k_mesh_device, num_devices, cores, initial_value):
@@ -156,11 +157,13 @@ def run_all_gather_impl(
         logger.info(f"Done capturing trace")
 
         # Execute trace
+        signpost("start")
         for i in range(num_iters):
             ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0, blocking=False)
             ttnn.synchronize_device(t3k_mesh_device, sub_device_ids=sub_device_stall_group)
             tt_all_gather_out_tensor_list.append(tt_all_gather_out_tensor)
         logger.info(f"Done executing trace")
+        signpost("stop")
     else:
         for i in range(num_iters):
             tt_all_gather_out_tensor = run_op(i)
@@ -661,10 +664,10 @@ def test_all_gather_async_interleaved_to_sharded(
     )
 
 
-def get_max_chunks_per_sync(ag_output_shape):
+def get_max_chunks_per_sync(num_devices, ag_output_shape):
     packet_elems = 2048
     total_elems = math.prod(ag_output_shape)
-    return total_elems // packet_elems
+    return (total_elems // packet_elems) // num_devices
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -674,9 +677,7 @@ def get_max_chunks_per_sync(ag_output_shape):
     [
         (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
-    ids=[
-        "gather_dim_0",
-    ],
+    ids=["ag_output_shape0"],
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
@@ -702,7 +703,21 @@ def get_max_chunks_per_sync(ag_output_shape):
     indirect=["device_params"],
     ids=["fabric_linear"],
 )
-@pytest.mark.parametrize("chunks_per_sync", ["MAX", 160, 80, 40, 20, 10, 5, 2, 1])
+@pytest.mark.parametrize(
+    "chunks_per_sync",
+    ["MAX", 160, 80, 40, 20, 10, 5, 2, 1],
+    ids=[
+        "MAX-chunks",
+        "160-chunks",
+        "80-chunks",
+        "40-chunks",
+        "20-chunks",
+        "10-chunks",
+        "5-chunks",
+        "2-chunks",
+        "1-chunks",
+    ],
+)
 def test_all_gather_chunks_per_sync(
     t3k_mesh_device,
     num_devices,
@@ -720,7 +735,7 @@ def test_all_gather_chunks_per_sync(
 ):
     total_elems = math.prod(ag_output_shape)
     if chunks_per_sync == "MAX":
-        chunks_per_sync = get_max_chunks_per_sync(ag_output_shape)
+        chunks_per_sync = get_max_chunks_per_sync(num_devices, ag_output_shape)
 
     if total_elems % chunks_per_sync != 0:
         pytest.skip("Total elements must be divisible by chunks per sync")
