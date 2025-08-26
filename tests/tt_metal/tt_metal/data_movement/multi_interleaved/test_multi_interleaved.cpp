@@ -103,7 +103,8 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterlea
     }
 
     std::vector<uint32_t> l1_addrs;
-    for (auto& core : corerange_to_cores(test_config.cores)) {
+    std::vector<CoreCoord> core_list = corerange_to_cores(test_config.cores);
+    for (auto& core : core_list) {
         auto [l1_addr, l1_size] = get_l1_address_and_size(mesh_device, core);
         assert(l1_size >= total_size_bytes);
         l1_addrs.push_back(l1_addr);
@@ -116,14 +117,13 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterlea
             "tests/tt_metal/tt_metal/data_movement/multi_interleaved/kernels/multi_interleaved_read.cpp",
             test_config.cores,
             DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::RISCV_1_default,
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
                 .compile_args = reader_compile_args});
 
-        for (size_t i = 0; i < test_config.cores.size(); ++i) {
+        for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
             std::vector<uint32_t> reader_run_time_args = {input_buffer_address, l1_addrs[i]};
-            tt::tt_metal::SetRuntimeArgs(
-                program, reader_kernel, corerange_to_cores(test_config.cores)[i], reader_run_time_args);
+            tt::tt_metal::SetRuntimeArgs(program, reader_kernel, core_list[i], reader_run_time_args);
         }
     }
 
@@ -133,14 +133,13 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterlea
             "tests/tt_metal/tt_metal/data_movement/multi_interleaved/kernels/multi_interleaved_write.cpp",
             test_config.cores,
             DataMovementConfig{
-                .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
+                .processor = DataMovementProcessor::RISCV_1,
+                .noc = NOC::RISCV_1_default,
                 .compile_args = writer_compile_args});
 
-        for (size_t i = 0; i < test_config.cores.size(); ++i) {
+        for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
             std::vector<uint32_t> writer_run_time_args = {output_buffer_address, l1_addrs[i]};
-            tt::tt_metal::SetRuntimeArgs(
-                program, writer_kernel, corerange_to_cores(test_config.cores)[i], writer_run_time_args);
+            tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core_list[i], writer_run_time_args);
         }
     }
 
@@ -157,9 +156,9 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterlea
         detail::WriteToBuffer(input_buffer, packed_input);
         MetalContext::instance().get_cluster().dram_barrier(device->id());
     } else {
-        for (size_t i = 0; i < test_config.cores.size(); ++i) {
+        for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
             // If not reading, write to L1 directly
-            detail::WriteToDeviceL1(device, corerange_to_cores(test_config.cores)[i], l1_addrs[i], packed_input);
+            detail::WriteToDeviceL1(device, core_list[i], l1_addrs[i], packed_input);
         }
         MetalContext::instance().get_cluster().l1_barrier(device->id());
     }
@@ -189,9 +188,8 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterlea
             print_vector<uint32_t>(packed_output);
         }
     } else {
-        for (size_t i = 0; i < test_config.cores.size(); ++i) {
-            detail::ReadFromDeviceL1(
-                device, corerange_to_cores(test_config.cores)[i], l1_addrs[i], total_size_bytes, packed_output);
+        for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
+            detail::ReadFromDeviceL1(device, core_list[i], l1_addrs[i], total_size_bytes, packed_output);
             pcc = is_close_packed_vectors<bfloat16, uint32_t>(
                 packed_output, packed_golden, [&](const bfloat16& a, const bfloat16& b) { return is_close(a, b); });
             if (!pcc) {
