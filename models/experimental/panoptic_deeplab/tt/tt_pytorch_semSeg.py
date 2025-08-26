@@ -267,22 +267,63 @@ class DeepLabV3PlusHead(nn.Module):
             y = F.interpolate(y, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
             return y, {}
 
-    def layers(self, features):
-        # Reverse feature maps into top-down order (from low to high resolution)
-        for f in self.in_features[::-1]:
-            x = features[f]
-            proj_x = self.decoder[f]["project_conv"](x)
-            if self.decoder[f]["fuse_conv"] is None:
-                # This is aspp module
-                y = proj_x
-            else:
-                # Upsample y
-                y = F.interpolate(y, size=proj_x.size()[2:], mode="bilinear", align_corners=False)
-                y = torch.cat([proj_x, y], dim=1)
-                y = self.decoder[f]["fuse_conv"](y)
-        if not self.decoder_only:
-            y = self.predictor(y)
-        return y
+    # def layers(self, features):
+    #     # Reverse feature maps into top-down order (from low to high resolution)
+    #     for f in self.in_features[::-1]:
+    #         x = features[f]
+    #         proj_x = self.decoder[f]["project_conv"](x)
+    #         if self.decoder[f]["fuse_conv"] is None:
+    #             # This is aspp module
+    #             y = proj_x
+    #         else:
+    #             # Upsample y
+    #             y = F.interpolate(y, size=proj_x.size()[2:], mode="bilinear", align_corners=False)
+    #             y = torch.cat([proj_x, y], dim=1)
+    #             y = self.decoder[f]["fuse_conv"](y)
+    #     if not self.decoder_only:
+    #         y = self.predictor(y)
+    #     return y
+    # This is the main layers method, but going to write one that I will use for debugging and after I will return to this one
+    def layers(self, features, debug_stage=None):
+        y = None
+        # Reverse feature maps
+        feature_keys = self.in_features[::-1]
+
+        # --- ASPP Stage ---
+        x = features[feature_keys[0]]
+        y = self.decoder[feature_keys[0]]["project_conv"](x)
+        if debug_stage == "aspp_out":
+            return y
+
+        # --- First Fusion Stage (e.g., res3) ---
+        x = features[feature_keys[1]]
+        proj_x = self.decoder[feature_keys[1]]["project_conv"](x)
+
+        if debug_stage == "proj_x_out":
+            return proj_x
+
+        y_upsampled = F.interpolate(y, size=proj_x.size()[2:], mode="bilinear", align_corners=False)
+
+        if debug_stage == "upsample_out":
+            return y_upsampled
+
+        y = torch.cat([proj_x, y_upsampled], dim=1)
+
+        if debug_stage == "concat_out":
+            return y
+
+        y = self.decoder[feature_keys[1]]["fuse_conv"](y)
+        if debug_stage == "fuse_1_out":
+            return y
+
+        # --- Second Fusion Stage (e.g., res2) ---
+        x = features[feature_keys[2]]
+        proj_x = self.decoder[feature_keys[2]]["project_conv"](x)
+        y_upsampled = F.interpolate(y, size=proj_x.size()[2:], mode="bilinear", align_corners=False)
+        y = torch.cat([proj_x, y_upsampled], dim=1)
+        y = self.decoder[feature_keys[2]]["fuse_conv"](y)
+        if debug_stage == "decoder_out":
+            return y  # Final decoder output
 
     def losses(self, predictions, targets):
         predictions = F.interpolate(predictions, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
@@ -445,11 +486,30 @@ class PanopticDeepLabSemSegHead(DeepLabV3PlusHead):
             y = F.interpolate(y, scale_factor=self.common_stride, mode="bilinear", align_corners=False)
             return y, {}
 
-    def layers(self, features):
-        assert self.decoder_only
-        y = super().layers(features)
+    # def layers(self, features):
+    #     assert self.decoder_only
+    #     y = super().layers(features)
+    #     y = self.head(y)
+    #     y = self.predictor(y)
+    #     return y
+    # This is the main layers method, but going to write one that I will use for debugging and after I will return to this one
+    def layers(self, features, debug_stage=None):
+        y = super().layers(features, debug_stage=debug_stage)
+        if (
+            debug_stage == "decoder_out"
+            or debug_stage == "aspp_out"
+            or debug_stage == "fuse_1_out"
+            or debug_stage == "proj_x_out"
+            or debug_stage == "upsample_out"
+            or debug_stage == "concat_out"
+        ):
+            return y
         y = self.head(y)
+        if debug_stage == "panoptic_head_out":
+            return y
         y = self.predictor(y)
+        if debug_stage == "predictor_out":
+            return y
         return y
 
     def losses(self, predictions, targets, weights=None):

@@ -174,7 +174,7 @@ class ASPP(nn.Module):
         for conv in self.convs:
             res.append(conv(x))
 
-        res[-1] = F.interpolate(res[-1], size=size, mode="bilinear", align_corners=False)
+        res[-1] = F.interpolate(res[-1], size=size, mode="bilinear", align_corners=False).to(x.dtype)
 
         res = torch.cat(res, dim=1)
 
