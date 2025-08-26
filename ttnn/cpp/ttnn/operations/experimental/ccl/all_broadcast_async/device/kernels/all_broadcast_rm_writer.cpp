@@ -19,7 +19,7 @@
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
-using namespace tt::tt_fabric;
+using namespace tt::tt_fabric::linear::experimental;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -66,7 +66,8 @@ void kernel_main() {
     const uint32_t num_connections = get_arg_val<uint32_t>(arg_idx++);
     size_t arg_for_fab = arg_idx;
 
-    auto route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto data_route_id = PacketHeaderPool::allocate_header_n(num_connections);
+    auto sem_route_id = PacketHeaderPool::allocate_header_n(num_connections);
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 #ifdef SHARDED
     typedef ShardedInfo<
@@ -84,16 +85,12 @@ void kernel_main() {
     experimental::ShardedAddrGen<tensor_shard_info> tensor0_addrgen = {
         .bank_base_address = tensor_address0, .shard_array = mapping_table};
     size_t fab_idx = arg_for_fab + rt_increment;
-    linear::experimental::open_connections(fabric_connection, route_id, fab_idx);
+    open_connections(fabric_connection, data_route_id, fab_idx);
 #else
     constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
     const auto tensor0_addrgen = get_interleaved_addr_gen<is_dram, row_size>(tensor_address0);
-    linear::experimental::open_connections(fabric_connection, route_id, arg_for_fab);
+    open_connections(fabric_connection, data_route_id, arg_for_fab);
 #endif
-
-    // Allocate packet headers from packet header pool
-    volatile PACKET_HEADER_TYPE* pkt_hdr_seminc = PacketHeaderPool::allocate_header();
-
     uint8_t starts[] = {
         static_cast<uint8_t>(forward_multicast_route_info.start_distance_in_hops),
         static_cast<uint8_t>(backward_multicast_route_info.start_distance_in_hops)};
@@ -104,24 +101,27 @@ void kernel_main() {
         starts[0] = starts[1];
         ranges[0] = ranges[1];
     }
-    linear::experimental::fabric_multicast_noc_unicast_write_set_state<
-        linear::experimental::UnicastWriteUpdateMask::None>(fabric_connection, route_id, starts, ranges);
+    fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
+        fabric_connection, data_route_id, starts, ranges);
 
     uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
 
     uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+    fabric_multicast_noc_unicast_atomic_inc_set_state<
+        UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        fabric_connection,
+        sem_route_id,
+        starts,
+        ranges,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            0,                         // ignore
+            static_cast<uint16_t>(1),  // increment 1
+            32});
 
-    for (uint8_t i = 0; i < num_connections; i++) {
-        linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            &fabric_connection.get(i).sender,
-            pkt_hdr_seminc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                barrier_sem_noc_addr_in_pkt,
-                static_cast<uint16_t>(1),  // increment 1
-                32},
-            starts[i],
-            ranges[i]);
-    }
+    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        fabric_connection,
+        sem_route_id,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0, 0});
 
     noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
@@ -142,11 +142,10 @@ void kernel_main() {
 
             const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
             noc_async_write(l1_read_addr, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), packet_size);
-            linear::experimental::fabric_multicast_noc_unicast_write_with_state<
-                linear::experimental::UnicastWriteUpdateMask::DstAddr |
-                linear::experimental::UnicastWriteUpdateMask::PayloadSize>(
+            fabric_multicast_noc_unicast_write_with_state<
+                UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                 fabric_connection,
-                route_id,
+                data_route_id,
                 l1_read_addr,
                 tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr},
                 packet_size);
@@ -162,17 +161,10 @@ void kernel_main() {
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
 
-    for (uint8_t i = 0; i < num_connections; i++) {
-        linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            &fabric_connection.get(i).sender,
-            pkt_hdr_seminc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                out_ready_sem_noc_addr_in_pkt,
-                static_cast<uint16_t>(1),  // increment 1
-                32},
-            starts[i],
-            ranges[i]);
-    }
+    fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
+        fabric_connection,
+        sem_route_id,
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{out_ready_sem_noc_addr_in_pkt, 0, 0});
     // increment locally
     uint64_t out_ready_sem_noc_addr =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
@@ -189,7 +181,7 @@ void kernel_main() {
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
     }
 
-    linear::experimental::close_connections(fabric_connection);
+    close_connections(fabric_connection);
 
     noc_async_write_barrier();
 }
