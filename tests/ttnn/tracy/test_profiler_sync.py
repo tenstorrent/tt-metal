@@ -48,18 +48,45 @@ def test_all_devices(
 
 
 def test_with_sfpu(mesh_device):
-    file_path = "tests/ttnn/tracy/test_with_sfpu_x_tensor.pt"
+    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(1, 2))
+    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    file_path = "tests/ttnn/tracy/test_with_sfpu_{}.pt"
     # torch.manual_seed(1234)
     # shape = [1, 1, 32, 32]
     # x = torch.randn(shape).bfloat16().float()
     # torch.save(x, file_path)
-    x = torch.load(file_path)
-    mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    hidden = torch.load(file_path.format("hidden"))
+    hidden_tt = ttnn.from_torch(
+        hidden,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+        mesh_mapper=mesh_mapper,
+    )
+    weights = torch.load(file_path.format("weights"))
+    weights_tt = ttnn.from_torch(
+        hidden,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+        mesh_mapper=mesh_mapper,
+    )
+    bias = torch.load(file_path.format("bias"))
+    bias_tt = ttnn.from_torch(
+        hidden,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=mem,
+        mesh_mapper=mesh_mapper,
+    )
+    # xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(mesh_device)
 
-    xt = ttnn.Tensor(x, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(mesh_device)
-
+    print(hidden_tt)
     layernorm_output = ttnn.layer_norm(
-        xt,
+        hidden_tt,
         epsilon=1e-5,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4),
         memory_config=mem,
@@ -67,10 +94,12 @@ def test_with_sfpu(mesh_device):
 
     layernorm_output = ttnn.mul(
         layernorm_output,
-        layernorm_output,
+        weights_tt,
+        memory_config=mem,
     )
 
     layernorm_output = ttnn.add(
         layernorm_output,
-        layernorm_output,
+        bias_tt,
+        memory_config=mem,
     )
