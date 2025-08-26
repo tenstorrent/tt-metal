@@ -8,6 +8,8 @@ import torch
 from diffusers import DiffusionPipeline
 from loguru import logger
 from conftest import is_galaxy
+from models.experimental.stable_diffusion_xl_base.conftest import get_device_name
+
 import ttnn
 from models.experimental.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
@@ -41,6 +43,11 @@ def run_demo_inference(
     evaluation_range,
     capture_trace,
 ):
+    print("device name: ", get_device_name())
+    print("num_avail_devices: ", ttnn.GetNumAvailableDevices()) 
+    print("cluster type: ", ttnn.cluster.get_cluster_type())
+    print("is_ci_env!!!!!!!: ", is_ci_env)
+    
     batch_size = ttnn_device.get_num_devices()
 
     start_from, _ = evaluation_range
@@ -77,6 +84,7 @@ def run_demo_inference(
         logger.info("Setting TT_MM_THROTTLE_PERF for Galaxy")
         os.environ["TT_MM_THROTTLE_PERF"] = "5"
     elif is_ci_env and ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.T3K:
+        print("aaaaaa")
         logger.info("Setting TT_MM_THROTTLE_PERF for CI on T3K")
         os.environ["TT_MM_THROTTLE_PERF"] = "5"
 
