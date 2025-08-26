@@ -23,25 +23,25 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          # { name: "t3k ttmetal tests", arch: wormhole_b0, cmd: run_t3000_ttmetal_tests, timeout: 35, owner_id: ULMEPM2MA}, #Sean Nijjar
-          # { name: "t3k ttnn tests", arch: wormhole_b0, cmd: run_t3000_ttnn_tests, timeout: 45, owner_id: UBHPP2NDP}, #Joseph Chu
-          # { name: "t3k tt_metal multiprocess tests", arch: wormhole_b0, cmd: run_t3000_tt_metal_multiprocess_tests, timeout: 25, owner_id: U03NG0A5ND7}, #Aditya Saigal
-          # { name: "t3k ttnn multiprocess tests", arch: wormhole_b0, cmd: run_t3000_ttnn_multiprocess_tests, timeout: 15, owner_id: U013121KDH9}, #Austin Ho
-          # { name: "t3k falcon7b tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 30, owner_id: UBHPP2NDP}, #Joseph Chu
-          # { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 30, owner_id: U053W15B6JF}, #Djordje Ivanovic
-          # { name: "t3k llama3-small tests", arch: wormhole_b0, cmd: run_t3000_llama3-small_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
-          # { name: "t3k llama3.2-11b tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-11b_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
-          # { name: "t3k llama3.2-11b-vision tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-11b-vision_unit_tests, timeout: 30, owner_id: U03FJB5TM5Y},  #Colman Glagovich
-          # { name: "t3k n300 mesh llama3.2-11b-vision tests", arch: wormhole_b0, cmd: run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests, timeout: 30, owner_id: U03FJB5TM5Y},  #Colman Glagovich
-          # { name: "t3k llama3.2-90b-vision tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-90b-vision_unit_tests, timeout: 30, label: pipeline-functional, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-          # #{ name: "t3k llama3.1-70b tests", arch: wormhole_b0, cmd: run_t3000_llama3.1-70b_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
-          # { name: "t3k llama3.2-90b tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-90b_tests, timeout: 30, label: pipeline-functional, owner_id: U07RY6B5FLJ},  #Gongyu Wang
-          # #{ name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 30, owner_id: U03PUAKE719}, #Miguel Tairum Cruz
-          # { name: "t3k grok tests", arch: wormhole_b0, cmd: run_t3000_grok_tests, timeout: 30, owner_id: U03HY7MK4BT}, #Mark O'Connor
-          # { name: "t3k unet shallow tests", arch: wormhole_b0, cmd: run_t3000_unet_shallow_tests, timeout: 30, owner_id: U06ECNVR0EN}, #Evan Smal
-          # { name: "t3k mistral tests", arch: wormhole_b0, cmd: run_t3000_mistral_tests, timeout: 30, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
+          { name: "t3k ttmetal tests", arch: wormhole_b0, cmd: run_t3000_ttmetal_tests, timeout: 35, owner_id: ULMEPM2MA}, #Sean Nijjar
+          { name: "t3k ttnn tests", arch: wormhole_b0, cmd: run_t3000_ttnn_tests, timeout: 45, owner_id: UBHPP2NDP}, #Joseph Chu
+          { name: "t3k tt_metal multiprocess tests", arch: wormhole_b0, cmd: run_t3000_tt_metal_multiprocess_tests, timeout: 25, owner_id: U03NG0A5ND7}, #Aditya Saigal
+          { name: "t3k ttnn multiprocess tests", arch: wormhole_b0, cmd: run_t3000_ttnn_multiprocess_tests, timeout: 15, owner_id: U013121KDH9}, #Austin Ho
+          { name: "t3k falcon7b tests", arch: wormhole_b0, cmd: run_t3000_falcon7b_tests, timeout: 30, owner_id: UBHPP2NDP}, #Joseph Chu
+          { name: "t3k falcon40b tests", arch: wormhole_b0, cmd: run_t3000_falcon40b_tests, timeout: 30, owner_id: U053W15B6JF}, #Djordje Ivanovic
+          { name: "t3k llama3-small tests", arch: wormhole_b0, cmd: run_t3000_llama3-small_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
+          { name: "t3k llama3.2-11b tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-11b_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
+          { name: "t3k llama3.2-11b-vision tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-11b-vision_unit_tests, timeout: 30, owner_id: U03FJB5TM5Y},  #Colman Glagovich
+          { name: "t3k n300 mesh llama3.2-11b-vision tests", arch: wormhole_b0, cmd: run_t3000_spoof_n300_llama3.2-11b-vision_unit_tests, timeout: 30, owner_id: U03FJB5TM5Y},  #Colman Glagovich
+          { name: "t3k llama3.2-90b-vision tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-90b-vision_unit_tests, timeout: 30, label: pipeline-functional, owner_id: U07RY6B5FLJ},  #Gongyu Wang
+          #{ name: "t3k llama3.1-70b tests", arch: wormhole_b0, cmd: run_t3000_llama3.1-70b_tests, timeout: 30, owner_id: U03PUAKE719},  #Miguel Tairum Cruz
+          { name: "t3k llama3.2-90b tests", arch: wormhole_b0, cmd: run_t3000_llama3.2-90b_tests, timeout: 30, label: pipeline-functional, owner_id: U07RY6B5FLJ},  #Gongyu Wang
+          #{ name: "t3k mixtral tests", arch: wormhole_b0, cmd: run_t3000_mixtral_tests, timeout: 30, owner_id: U03PUAKE719}, #Miguel Tairum Cruz
+          { name: "t3k grok tests", arch: wormhole_b0, cmd: run_t3000_grok_tests, timeout: 30, owner_id: U03HY7MK4BT}, #Mark O'Connor
+          { name: "t3k unet shallow tests", arch: wormhole_b0, cmd: run_t3000_unet_shallow_tests, timeout: 30, owner_id: U06ECNVR0EN}, #Evan Smal
+          { name: "t3k mistral tests", arch: wormhole_b0, cmd: run_t3000_mistral_tests, timeout: 30, owner_id: U0896VBAKFC}, # Pratikkumar Prajapati
           { name: "t3k qwen25_vl tests", arch: wormhole_b0, cmd: run_t3000_qwen25_vl_unit_tests, timeout: 40, owner_id: U07RY6B5FLJ}, #Gongyu Wang
-          # { name: "t3k gemma3-small tests", arch: wormhole_b0, cmd: run_t3000_gemma3-small_tests, timeout: 30, owner_id: U08E1JCDVNX},  #Pavle Petrovic
+          { name: "t3k gemma3-small tests", arch: wormhole_b0, cmd: run_t3000_gemma3-small_tests, timeout: 30, owner_id: U08E1JCDVNX},  #Pavle Petrovic
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
