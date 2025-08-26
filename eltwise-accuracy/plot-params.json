@@ -30,12 +30,12 @@
                 ],
                 "files": [
                     "accuracy_results/results/exp-bfloat16-[1].csv",
-                    "accuracy_results/results/exp-fast-approx-v2-bfloat16-[1].csv",
+                    "accuracy_results/results/exp-approx-bfloat16-[1].csv",
                     "accuracy_results/results/exp-fast-approx-bfloat16-[1].csv"
                 ],
                 "plot_params": {
                     "xlim": [-200, 128],
-                    "ylim": [0, 300],
+                    "ylim": [0, 20],
                     "yscale": "linear",
                     "xbase": 2,
                     "horizontal_lines": [
@@ -568,8 +568,8 @@
                     "outputs": ["accuracy_results/plots/exp-bfloat16.png"],
                     "files": [
                         "accuracy_results/results/exp-bfloat16-[32].csv",
-                        "accuracy_results/results/exp-fast-approx-bfloat16-[32].csv",
-                        "accuracy_results/results/exp-fast-approx-v2-bfloat16-[32].csv"
+                        "accuracy_results/results/exp-approx-bfloat16-[32].csv",
+                        "accuracy_results/results/exp-fast-approx-bfloat16-[32].csv"
                     ],
                     "plot_params": {
                         "xlim": [-128, 128],
@@ -988,8 +988,8 @@
                     "outputs": ["accuracy_results/plots/exp-bfloat16-zoom.png"],
                     "files": [
                         "accuracy_results/results/exp-bfloat16-[1].csv",
-                        "accuracy_results/results/exp-fast-approx-bfloat16-[1].csv",
-                        "accuracy_results/results/exp-fast-approx-v2-bfloat16-[1].csv"
+                        "accuracy_results/results/exp-approx-bfloat16-[1].csv",
+                        "accuracy_results/results/exp-fast-approx-bfloat16-[1].csv"
                     ],
                     "plot_params": {
                         "xlim": [-128, 128],
