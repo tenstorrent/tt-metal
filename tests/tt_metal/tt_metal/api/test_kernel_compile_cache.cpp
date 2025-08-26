@@ -93,16 +93,13 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
         Program program = CreateProgram();
         distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
         auto& program_ = workload.get_programs().at(device_range);
-        auto device = mesh_device->get_devices()[0];
-        detail::ClearKernelCache();
 
         DataMovementConfig config_riscv_0 = {.processor = DataMovementProcessor::RISCV_0};
         DataMovementConfig config_riscv_1 = {.processor = DataMovementProcessor::RISCV_1};
 
-        Program program = CreateProgram();
-        KernelHandle kernel_handle_riscv_0 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_0);
-        KernelHandle kernel_handle_riscv_1 = CreateKernel(program, kernel_file, CoreCoord(0, 0), config_riscv_1);
-        detail::CompileProgram(device, program);
+        KernelHandle kernel_handle_riscv_0 = CreateKernel(program_, kernel_file, CoreCoord(0, 0), config_riscv_0);
+        KernelHandle kernel_handle_riscv_1 = CreateKernel(program_, kernel_file, CoreCoord(0, 0), config_riscv_1);
+        distributed::EnqueueMeshWorkload(cq, workload, false);
 
         const uint32_t tensix_core_type =
             MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
@@ -114,7 +111,7 @@ TEST_F(MeshDeviceFixture, TensixTestEquivalentDataMovementKernelsWithDifferentPr
         const JitBuildState& build_state_riscv_1 = BuildEnvManager::get_instance().get_kernel_build_state(
             device->build_id(), tensix_core_type, dm_class_idx, riscv_1_id);
 
-        const auto& kernels = program.get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
+        const auto& kernels = program_.get_kernels(static_cast<uint32_t>(HalProgrammableCoreType::TENSIX));
         const std::string full_kernel_name_riscv_0 =
             KernelImpl::from(*kernels.at(kernel_handle_riscv_0)).get_full_kernel_name();
         const std::string full_kernel_name_riscv_1 =
