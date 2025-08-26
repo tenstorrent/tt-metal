@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_log.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -187,12 +188,12 @@ sfpi_inline sfpi::vFloat calculate_log1p_fp32(sfpi::vFloat val) {
 }
 
 /**
- * @tparam APPROXIMATION_MODE If true, use approximation mode (for consistency with log kernel)
+ * @tparam APPROX_MODE If Fast, use approximation mode (for consistency with log kernel)
  * @tparam FAST_APPROX If true, skip NaN check for negative inputs
  * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
  * @tparam ITERATIONS Number of iterations for given face
  */
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_log1p() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
@@ -209,11 +210,11 @@ inline void calculate_log1p() {
 }
 
 /**
- * @tparam APPROXIMATION_MODE If true, use approximation mode (for consistency with log kernel)
+ * @tparam APPROX_MODE If Fast, use approximation mode (for consistency with log kernel)
  * @tparam FAST_APPROX If true, skip NaN check for negative inputs
  * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
  */
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
+template <ApproximationMode APPROX_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log1p_init() {
     if constexpr (!is_fp32_dest_acc_en) {
         log_init<APPROXIMATION_MODE, FAST_APPROX, is_fp32_dest_acc_en>();
