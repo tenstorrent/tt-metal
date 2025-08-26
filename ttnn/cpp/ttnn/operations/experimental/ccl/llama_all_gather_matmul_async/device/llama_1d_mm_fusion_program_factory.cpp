@@ -550,10 +550,7 @@ process_agmm_fusion_program_and_create_override_variables(
     uint32_t bank_id = 0;
     std::vector<uint32_t> bank_ids;
     for (uint32_t i = 0; i < num_cores; ++i) {  // runtime args for mm cores
-        bool send_to_hop_core = i == 0 && use_hop_cores;
         const auto& core = worker_cores_vec[i];
-        const auto& core_noc = device->worker_core_from_logical_core(core);
-
         /* in0 - multicast receiver setup (no ring topology needed) */
         auto core_type = CORE_TYPE::WORKER_CORE;  // worker core
 
@@ -617,11 +614,8 @@ process_agmm_fusion_program_and_create_override_variables(
 
     // Runtime args for hop cores
     for (uint32_t i = 0; i < num_hop_cores; ++i) {
-        bool end_of_hop = i == num_hop_cores - 1;
-
         auto core_type = CORE_TYPE::HOP_CORE;  // hop core
         const auto& core = hop_cores_vec[i];
-        const auto& core_noc = device->worker_core_from_logical_core(core);
 
         /* in0 - hop cores not needed for multicast, but keeping for compatibility */
         std::vector<uint32_t> mm_in0_args = {
@@ -671,7 +665,6 @@ inline void override_agmm_fusion_program_parameters(
 
     auto src_buffer_a = input_tensors[0].buffer();
     auto src_buffer_b = input_tensors[1].buffer();
-    auto dst_buffer = output_tensors[0].buffer();
 
     bool src0_sharded = input_tensors[0].is_sharded();
     bool src1_sharded = input_tensors[1].is_sharded();

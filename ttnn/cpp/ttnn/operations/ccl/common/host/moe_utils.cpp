@@ -124,7 +124,7 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
     auto positive_direction = [&](tt::tt_fabric::RoutingDirection direction) {
         return direction == tt::tt_fabric::RoutingDirection::E || direction == tt::tt_fabric::RoutingDirection::S;
     };
-    auto negative_direction = [&](tt::tt_fabric::RoutingDirection direction) {
+    [[maybe_unused]] auto negative_direction = [&](tt::tt_fabric::RoutingDirection direction) {
         return direction == tt::tt_fabric::RoutingDirection::W || direction == tt::tt_fabric::RoutingDirection::N;
     };
 

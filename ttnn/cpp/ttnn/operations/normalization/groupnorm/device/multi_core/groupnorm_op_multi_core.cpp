@@ -2295,7 +2295,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core(
         for (int j = 0; j < group.size(); ++j) {
             CoreCoord core = group[j];
             CoreCoord virtual_core = virtual_group[j];
-            CoreCoord core_physical = device->worker_core_from_logical_core(core);
             uint32_t in0_start_id, out_tile_start_id;
             if (equal_batches_per_core || (virtual_core.y <= last_row_with_extra_batch)) {
                 in0_start_id = per_core_Mt_group_1 * Wt * virtual_core.y + per_core_Nt * virtual_core.x;
