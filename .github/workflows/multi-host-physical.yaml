@@ -26,7 +26,7 @@ jobs:
   #     version: 22.04
   #     build-wheel: true
   multi-host-t3k:
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.t3k_multihost == true }}
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.t3k_multihost == 'true' }}
     runs-on:
       # A physical, multi-host WH T3K that's in service
       - multi-host-t3000
