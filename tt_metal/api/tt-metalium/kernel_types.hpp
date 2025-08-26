@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -32,19 +33,21 @@ struct DataMovementConfig {
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;  // For data transfer kernels: NCRISC & BRISC
     NOC noc = NOC::RISCV_0_default;
     NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
-    std::vector<uint32_t> compile_args;
+    std::vector<uint32_t> compile_args = {};
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
-    std::map<std::string, std::string> defines;
+    std::map<std::string, std::string> defines = {};
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
+    std::unordered_map<std::string, uint32_t> named_compile_args = {};
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
     ReaderDataMovementConfig(
         std::vector<uint32_t> compile_args = {},
         std::map<std::string, std::string> defines = {},
+        std::unordered_map<std::string, uint32_t> named_compile_args = {},
         KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
 };
 
@@ -52,6 +55,7 @@ struct WriterDataMovementConfig : public DataMovementConfig {
     WriterDataMovementConfig(
         std::vector<uint32_t> compile_args = {},
         std::map<std::string, std::string> defines = {},
+        std::unordered_map<std::string, uint32_t> named_compile_args = {},
         KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
 };
 
@@ -59,29 +63,31 @@ struct ComputeConfig {
     MathFidelity math_fidelity = MathFidelity::HiFi4;
     bool fp32_dest_acc_en = false;
     bool dst_full_sync_en = false;
-    std::vector<UnpackToDestMode> unpack_to_dest_mode;
+    std::vector<UnpackToDestMode> unpack_to_dest_mode = {};
     bool bfp8_pack_precise = false;
     bool math_approx_mode = false;
-    std::vector<uint32_t> compile_args;
+    std::vector<uint32_t> compile_args = {};
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
-    std::map<std::string, std::string> defines;
+    std::map<std::string, std::string> defines = {};
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
+    std::unordered_map<std::string, uint32_t> named_compile_args = {};
 };
 
 struct EthernetConfig {
     Eth eth_mode = Eth::SENDER;
     NOC noc = NOC::NOC_0;
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;
-    std::vector<uint32_t> compile_args;
+    std::vector<uint32_t> compile_args = {};
     // Will cause CompileProgram to emit a file hlk_defines_generated.h
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
-    std::map<std::string, std::string> defines;
+    std::map<std::string, std::string> defines = {};
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
+    std::unordered_map<std::string, uint32_t> named_compile_args = {};
 };
 
 }  // namespace tt::tt_metal
