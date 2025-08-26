@@ -7,8 +7,8 @@
 #include "dataflow_api.h"
 #include "tensix_types.h"
 
-// #include "debug/dprint.h"
-// #include "debug/dprint_pages.h"
+#include "debug/dprint.h"
+#include "debug/dprint_pages.h"
 
 template <uint32_t num_of_transactions, uint32_t num_pages, uint32_t page_size_bytes, bool is_dram>
 FORCE_INLINE void noc_write_helper(const uint32_t l1_read_addr, const InterleavedAddrGen<is_dram>& s) {
@@ -22,6 +22,7 @@ FORCE_INLINE void noc_write_helper(const uint32_t l1_read_addr, const Interleave
 
 // L1 to DRAM write
 void kernel_main() {
+    DPRINT << "Kernel start" << ENDL();
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
     uint32_t l1_read_addr = get_arg_val<uint32_t>(1);
 
@@ -38,15 +39,16 @@ void kernel_main() {
     DeviceTimestampedData("Number of transactions", num_of_transactions * num_pages);
     DeviceTimestampedData("Transaction size in bytes", transaction_size_bytes);
     DeviceTimestampedData("Test id", test_id);
-
+    DPRINT << "Before cb wait" << ENDL();
     if constexpr (sync) {
         cb_wait_front(cb_id_out0, 1);
     }
     {
-        DeviceZoneScopedN("RISCV0");
+        DeviceZoneScopedN("RISCV1");
         noc_write_helper<num_of_transactions, num_pages, page_size_bytes, true>(l1_read_addr, s);
     }
     if constexpr (sync) {
         cb_pop_front(cb_id_out0, 1);
     }
+    DPRINT << "Kernel end" << ENDL();
 }
