@@ -6,6 +6,7 @@
 
 #include "ckernel_defs.h"
 #include "ckernel.h"
+#include "llk_defs.h"
 #include "noc_nonblocking_api.h"
 
 #include "sfpi.h"
@@ -20,14 +21,14 @@ sfpi_inline vFloat sfpu_reciprocal(const vFloat in) {
     return _sfpu_reciprocal_<max_iter>(in);
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_reciprocal() {
-    _calculate_reciprocal_<APPROXIMATION_MODE, ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
+    _calculate_reciprocal_<(APPROX_MODE == ApproximationMode::Fast), ITERATIONS, is_fp32_dest_acc_en>(ITERATIONS);
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void recip_init() {
-    _init_reciprocal_<APPROXIMATION_MODE>();
+    _init_reciprocal_<(APPROX_MODE == ApproximationMode::Fast)>();
 }
 
 }  // namespace sfpu

@@ -7,6 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "llk_defs.h"
 
 using namespace sfpi;
 
@@ -14,21 +15,21 @@ namespace ckernel {
 namespace sfpu {
 
 template <
-    bool APPROXIMATION_MODE,
+    ApproximationMode APPROX_MODE,
     int ITERATIONS = 8,
     InstrModLoadStore INSTRUCTION_MODE = INT32,
     bool SIGN_MAGNITUDE_FORMAT = false>
 inline void calculate_binary_left_shift(const uint dst_offset) {
-    _calculate_binary_left_shift_<APPROXIMATION_MODE, ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>(dst_offset);
+    _calculate_binary_left_shift_<(APPROX_MODE == ApproximationMode::Fast), ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>(dst_offset);
 }
 
 template <
-    bool APPROXIMATION_MODE,
+    ApproximationMode APPROX_MODE,
     int ITERATIONS = 8,
     InstrModLoadStore INSTRUCTION_MODE = INT32,
     bool SIGN_MAGNITUDE_FORMAT = false>
 inline void calculate_binary_right_shift(const uint dst_offset) {
-    _calculate_binary_right_shift_<APPROXIMATION_MODE, ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>(dst_offset);
+    _calculate_binary_right_shift_<(APPROX_MODE == ApproximationMode::Fast), ITERATIONS, INSTRUCTION_MODE, SIGN_MAGNITUDE_FORMAT>(dst_offset);
 }
 
 }  // namespace sfpu

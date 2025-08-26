@@ -6,6 +6,7 @@
 
 #include "ckernel_defs.h"
 #include "ckernel.h"
+#include "llk_defs.h"
 #include "noc_nonblocking_api.h"
 
 #include "sfpi.h"
@@ -14,14 +15,14 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8, int RECIPROCAL_ITERATIONS = 2>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8, int RECIPROCAL_ITERATIONS = 2>
 inline void calculate_sqrt() {
-    _calculate_sqrt_<APPROXIMATION_MODE, ITERATIONS, RECIPROCAL_ITERATIONS>(ITERATIONS);
+    _calculate_sqrt_<(APPROX_MODE == ApproximationMode::Fast), ITERATIONS, RECIPROCAL_ITERATIONS>(ITERATIONS);
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void sqrt_init() {
-    _init_sqrt_<APPROXIMATION_MODE>();
+    _init_sqrt_<(APPROX_MODE == ApproximationMode::Fast)>();
 }
 }  // namespace sfpu
 }  // namespace ckernel

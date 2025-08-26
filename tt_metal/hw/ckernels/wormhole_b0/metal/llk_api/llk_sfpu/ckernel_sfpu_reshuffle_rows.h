@@ -8,15 +8,16 @@
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
 #include "ckernel_sfpu_reshuffle_rows.h"
+#include "llk_defs.h"
 
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_reshuffle_rows(uint idx_addr) {
-    _calculate_reshuffle_rows_<APPROXIMATION_MODE, ITERATIONS>(idx_addr);
+    _calculate_reshuffle_rows_<(APPROX_MODE == ApproximationMode::Fast), ITERATIONS>(idx_addr);
 }
 
 }  // namespace sfpu
