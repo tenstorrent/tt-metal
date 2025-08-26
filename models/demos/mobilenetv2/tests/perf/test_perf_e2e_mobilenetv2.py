@@ -73,9 +73,8 @@ def run_mobilenetv2_e2e(
     iterations = 32
     host_inputs = [host_input_tensor] * iterations
 
-    pipe.preallocate_output_tensors_on_host(
-        len(host_inputs),
-    )
+    pipe.compile(host_input_tensor)
+    pipe.preallocate_output_tensors_on_host(len(host_inputs))
 
     start = time.time()
     outputs = pipe.enqueue(host_inputs).pop_all()

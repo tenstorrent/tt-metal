@@ -44,8 +44,9 @@ class YOLOv7PerformanceRunnerInfra:
         self.outputs_mesh_composer = outputs_mesh_composer
 
         self.torch_model = load_torch_model(self.model_location_generator)
+        batch_size_per_device = 1
         self.torch_input_tensor = (
-            torch.randn((batch_size, 3, 640, 640), dtype=torch.float32)
+            torch.randn((batch_size_per_device, 3, 640, 640), dtype=torch.float32)
             if self.torch_input_tensor is None
             else self.torch_input_tensor
         )
@@ -84,7 +85,14 @@ class YOLOv7PerformanceRunnerInfra:
 
         assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
 
-        input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
+        # For multi-device scenarios, we need to create exactly num_devices shards
+        # Each shard should contain the same input data
+        if self.num_devices > 1:
+            # Create num_devices shards, each with the same input data
+            input_tensor = [torch_input_tensor[0].unsqueeze(0) for _ in range(self.num_devices)]
+        else:
+            # Single device case
+            input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
         tt_inputs_host = ttnn.from_host_shards(
             [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
         )
@@ -113,9 +121,20 @@ class YOLOv7PerformanceRunnerInfra:
         self.output_tensor = self.ttnn_yolov7_model(self.input_tensor)[0]
 
     def validate(self, output_tensor=None, torch_output_tensor=None):
-        ttnn_output_tensor = self.output_tensor if output_tensor is None else output_tensor
+        if output_tensor is None:
+            # Use self.output_tensor (original behavior)
+            output_tensor = self.output_tensor
+        else:
+            # Handle output from pipeline (which might be a list or multi-device tensor)
+            if isinstance(output_tensor, (list, tuple)):
+                # Extract the first element from the list
+                output_tensor = output_tensor[0]
+
         torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
-        output_tensor = ttnn.to_torch(ttnn_output_tensor, mesh_composer=self.outputs_mesh_composer)
+        output_tensor = ttnn.to_torch(output_tensor, mesh_composer=self.outputs_mesh_composer)
+
+        if self.num_devices > 1 and output_tensor.shape[0] > 1:
+            output_tensor = output_tensor[0:1]
 
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=0.99)
 
