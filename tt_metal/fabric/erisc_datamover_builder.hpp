@@ -11,7 +11,7 @@
 
 #include <umd/device/types/cluster_descriptor_types.h>
 #include <tt-metalium/fabric_edm_types.hpp>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/edm_fabric_counters.hpp>
 #include <tt-metalium/routing_table_generator.hpp>  // for FabricNodeId
 #include <unordered_map>
@@ -20,10 +20,18 @@
 #include <vector>
 #include <array>
 #include <cstddef>
+#include <variant>
+#include <functional>
 
 namespace tt::tt_fabric {
 
 struct FabricRiscConfig;
+class FabricEriscDatamoverBuilder;
+class FabricTensixDatamoverBuilder;
+
+// Type alias for any fabric datamover builder
+using FabricDatamoverBuilder = std::
+    variant<std::reference_wrapper<FabricEriscDatamoverBuilder>, std::reference_wrapper<FabricTensixDatamoverBuilder>>;
 
 /**
  * Specify the EDM types—Default, Dateline, DatelineUpstream, and DatelineUpstreamAdjacentDevice—used to configure
@@ -523,7 +531,7 @@ public:
 
     [[nodiscard]] std::vector<uint32_t> get_runtime_args() const;
 
-    void connect_to_downstream_edm(FabricEriscDatamoverBuilder& downstream_edm);
+    void connect_to_downstream_edm(FabricDatamoverBuilder downstream_builder);
 
     eth_chan_directions get_direction() const;
     size_t get_configured_risc_count() const;
@@ -612,6 +620,11 @@ public:
     FabricEriscDatamoverType fabric_edm_type = FabricEriscDatamoverType::Default;
     bool dateline_connection = false;
     bool wait_for_host_signal = false;
+
+private:
+    // Shared helper for setting up VC connections
+    template <typename BuilderType>
+    void setup_downstream_vc_connection(BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id);
 };
 
 }  // namespace tt::tt_fabric
