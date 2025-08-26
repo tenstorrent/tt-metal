@@ -69,11 +69,11 @@ struct IsInCTAs {
     const output_accessor_args_type output_accessor_args;
 };
 
-FORCE_INLINE constexpr IsInCTAs get_ctas() {
-    constexpr auto elements_args = TensorAccessorArgs<11>{};
-    constexpr auto test_elements_args = TensorAccessorArgs<elements_args.next_compile_time_args_offset()>{};
-    constexpr auto output_args = TensorAccessorArgs<test_elements_args.next_compile_time_args_offset()>{};
-    return {
+FORCE_INLINE constexpr auto get_ctas() {
+    constexpr auto elements_args = TensorAccessorArgs<11>();
+    constexpr auto test_elements_args = TensorAccessorArgs<elements_args.next_compile_time_args_offset()>();
+    constexpr auto output_args = TensorAccessorArgs<test_elements_args.next_compile_time_args_offset()>();
+    return IsInCTAs<decltype(elements_args), decltype(test_elements_args), decltype(output_args)>{
         get_compile_time_arg_val(0),
         get_compile_time_arg_val(1),
         get_compile_time_arg_val(2),
@@ -83,9 +83,8 @@ FORCE_INLINE constexpr IsInCTAs get_ctas() {
         get_compile_time_arg_val(6),
         get_compile_time_arg_val(7),
         get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10) != 0,
-        get_compile_time_arg_val(11),
+        get_compile_time_arg_val(9) != 0,
+        get_compile_time_arg_val(10),
         elements_args,
         test_elements_args,
         output_args};

@@ -47,8 +47,10 @@ void IsInDeviceOperation::validate_on_program_cache_miss(
 IsInDeviceOperation::spec_return_value_t IsInDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return {
-        tensor_args.elements_tensor.logical_shape(),
-        {OUTPUT_TENSOR_DATA_TYPE, {OUTPUT_TENSOR_LAYOUT}, *args.memory_config},
+        Shape{tensor_args.elements_tensor.logical_volume()},
+        {OUTPUT_TENSOR_DATA_TYPE,
+         {OUTPUT_TENSOR_LAYOUT},
+         args.memory_config.has_value() ? *(args.memory_config) : tensor_args.elements_tensor.memory_config()},
     };
 }
 
@@ -69,7 +71,7 @@ operation::Hash IsInDeviceOperation::compute_program_hash(
         args.assume_unique,
         args.invert,
         args.memory_config,
-        args.single_fetch_chunk_size,
+        args.single_fetch_subchunk_size,
         tensor_args.elements_tensor.logical_shape(),
         tensor_args.elements_tensor.dtype(),
         tensor_args.elements_tensor.layout(),
@@ -82,14 +84,14 @@ operation::Hash IsInDeviceOperation::compute_program_hash(
 IsInDeviceOperation::invocation_result_t IsInDeviceOperation::invoke(
     const Tensor& elements_tensor,
     const Tensor& test_elements_tensor,
-    const uint32_t& single_fetch_chunk_size,
+    const uint32_t& single_fetch_subchunk_size,
     const bool& assume_unique,
     const bool& invert,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_out,
     const QueueId& queue_id) {
     return {
-        {assume_unique, invert, single_fetch_chunk_size, memory_config},
+        {assume_unique, invert, single_fetch_subchunk_size, memory_config},
         {elements_tensor, test_elements_tensor, optional_out}};
 }
 
