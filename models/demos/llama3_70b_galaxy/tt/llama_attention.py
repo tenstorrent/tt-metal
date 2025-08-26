@@ -417,6 +417,8 @@ class TtLlamaAttention(LightweightModule):
             use_optimal_ccl_for_llama=True,
         )
 
+        breakpoint()
+
         if self.qk_norm:
             rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
             rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
@@ -505,6 +507,8 @@ class TtLlamaAttention(LightweightModule):
             )
 
             breakpoint()
+
+        breakpoint()
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
