@@ -1012,6 +1012,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
 
         std::vector<std::vector<std::vector<uint16_t>>> flattened_config(2);
         int max_ref_size = 0;  // track the max remote ref size for sizing the remote temp tensor
+        int core = 0;
         for (const auto& core_config : config) {
             std::vector<std::vector<uint16_t>> flat_data(2, std::vector<uint16_t>(max_len, 0));
             uint32_t idx1 = 0, idx2 = 0;
@@ -1049,6 +1050,7 @@ std::tuple<std::vector<std::vector<std::vector<uint16_t>>>, int> generate_inplac
                 idx2 = flat_data[1][len_idx2] ? idx2 : idx2 - 3;
             }
 
+            core++;
             flattened_config[0].emplace_back(std::move(flat_data[0]));
             flattened_config[1].emplace_back(std::move(flat_data[1]));
             max_ref_size = std::max(max_ref_size, ref_size);
