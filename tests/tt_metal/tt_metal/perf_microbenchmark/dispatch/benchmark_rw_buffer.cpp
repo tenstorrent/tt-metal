@@ -10,7 +10,6 @@
 #include <memory>
 #include <string>
 #include <vector>
-#include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/bfloat16.hpp>
@@ -41,7 +40,7 @@ using namespace tt::tt_metal::distributed;
 // Page Size (Bytes): 32, 64, 128, 256, 512, 1024, 2048
 // Transfer Size: 32 MB
 // Buffer Type: DRAM, L1
-// Sharding: Default (interleave), Horizontal
+// Sharding: Default (interleave), Height Sharded, Width Sharded
 // Device: 0 (local), 1 (remote) (when possible)
 //
 ////////////////////////////////////////////////////////////////////////////////
@@ -54,12 +53,15 @@ using namespace tt::tt_metal::distributed;
  * https://docs.google.com/spreadsheets/d/1zy1teJtgf7hsMMdgy5uIOtcuI73AGVqy4lnyYwL7YFQ/edit
  */
 
-static const auto KB = 1024;
-static const auto MB = 1024 * KB;
+static constexpr auto KB = 1024;
+static constexpr auto MB = 1024 * KB;
 
 // This is the maximum transfer size we can test for on L1 for sharded cases, note the bandwidth improvement after
 // increasing this transfer size is minimal (see spreadsheet above)
-static const int64_t TRANSFER_SIZE = 32 * MB;
+static constexpr int64_t TRANSFER_SIZE = 32 * MB;
+
+// You can only pass std::vector<int64_t> to Google Benchmark's ArgsProduct, so we have to use const
+// std::vector<int64_t> for some of the parameters.
 
 // This is page sizes for non-sharded (interleaved) buffers
 static const std::vector<int64_t> PAGE_SIZES = benchmark::CreateRange(32, 2048, 2);
@@ -70,14 +72,57 @@ static constexpr std::array<BufferType, 2> BUFFER_TYPES = {BufferType::DRAM, Buf
 static constexpr std::array<TensorMemoryLayout, 3> SHARD_ORIENTATIONS = {
     TensorMemoryLayout::INTERLEAVED, TensorMemoryLayout::HEIGHT_SHARDED, TensorMemoryLayout::WIDTH_SHARDED};
 
+/**
+ * Sharding related constants:
+ *
+ * At metal API level, we need to compute the BufferShardingArgs.
+ * Which communicates how the buffer would be sliced at a per-core level as a tensor,
+ * this involves injecting meta data about the tensor that lives in the buffer.
+ *
+ * Principly we test the throughput of arbitrary buffer transfer between host and device,
+ * but to test for sharding, we must "makeup" the tensor's shape.
+ *
+ * A buffer is consisted of pages (this is the page size we are varying on),
+ * a page is assumed acrossed the system to be 32x32 element shaped (or multiple of this),
+ * where a single element is any support datatype (e.g. float32, uint16, etc.).
+ *
+ * In this context, novel page size like 32B would be unconstructable with sharding
+ * (this means a single unit of data is smaller than a byte).
+ *
+ * TODO: Finish this.
+ *
+ *
+ * A stream of data that is TRANSFER_SIZE (32MB) bytes long could be transporting:
+ *
+ *  - a tall matrix of 2048x4096 of float32
+ *  - a wide matrix of 4096x4096 of uint16
+ *
+ * We also need to be aware
+ */
+
 // Default page shape
 static constexpr std::uint32_t PAGE_SIDE = 32;
 static constexpr std::array<std::uint32_t, 2> PAGE_SHAPE = {PAGE_SIDE, PAGE_SIDE};
+
+// float32 of 2048x4096 is 32MB (transfer size)
+static constexpr std::array<std::uint32_t, 2> ELEMENT_SHAPE_4K = {2048, 4096};
+static_assert(sizeof(float) * ELEMENT_SHAPE_4K[0] * ELEMENT_SHAPE_4K[1] == TRANSFER_SIZE);
+static_assert(sizeof(float) * PAGE_SIDE * PAGE_SIDE == 4096);
+
+// uint16 of 4096x4096 is 32MB (transfer size)
+static constexpr std::array<std::uint32_t, 2> ELEMENT_SHAPE_2K = {4096, 4096};
+static_assert(sizeof(std::uint16_t) * ELEMENT_SHAPE_2K[0] * ELEMENT_SHAPE_2K[1] == TRANSFER_SIZE);
+static_assert(sizeof(std::uint16_t) * PAGE_SIDE * PAGE_SIDE == 2048);
 
 /**
  * Compute the element side after sharding across num_cores.
  *
  * The result needs to round up to a multiple of PAGE_SIDE.
+ *
+ * e.g. if a slice of 4096 needs to be split between 12 cores,
+ * each core needs at least 341.3 elements,
+ * that is a slice that needs to be at least 342 elements long.
+ * Then we need to round it up to the nearest multiple of PAGE_SIDE, which would be 352.
  */
 static constexpr auto compute_sharded_side_size(auto element_side, auto num_cores) {
     auto shard_side = element_side / num_cores;
@@ -90,10 +135,11 @@ static constexpr auto compute_sharded_side_size(auto element_side, auto num_core
 // Quick test case
 static_assert(compute_sharded_side_size(4096, 12) == 352);
 
-static constexpr auto compute_shard_shape(auto element_shape, auto num_cores, TensorMemoryLayout sharding) {
+static constexpr auto compute_shard_shape(auto element_shape, auto num_cores, TensorMemoryLayout sharding)
+    -> decltype(element_shape) {
     auto element_div_side = sharding == TensorMemoryLayout::HEIGHT_SHARDED ? element_shape[0] : element_shape[1];
     auto shard_side = compute_sharded_side_size(element_div_side, num_cores);
-    std::array<uint32_t, 2> shard_shape = element_shape;
+    auto shard_shape = element_shape;
     if (sharding == TensorMemoryLayout::HEIGHT_SHARDED) {
         shard_shape[0] = shard_side;
     } else {  // width sharded
@@ -101,16 +147,6 @@ static constexpr auto compute_shard_shape(auto element_shape, auto num_cores, Te
     }
     return shard_shape;
 }
-
-// float32 of 4096x4096 is 64MB (transfer size)
-static constexpr std::array<std::uint32_t, 2> ELEMENT_SHAPE_4K = {2048, 4096};
-static_assert(sizeof(float) * ELEMENT_SHAPE_4K[0] * ELEMENT_SHAPE_4K[1] == TRANSFER_SIZE);
-static_assert(sizeof(float) * PAGE_SIDE * PAGE_SIDE == 4096);
-
-// uint16 of 8192x4096 is 64MB (transfer size)
-static constexpr std::array<std::uint32_t, 2> ELEMENT_SHAPE_2K = {4096, 4096};
-static_assert(sizeof(std::uint16_t) * ELEMENT_SHAPE_2K[0] * ELEMENT_SHAPE_2K[1] == TRANSFER_SIZE);
-static_assert(sizeof(std::uint16_t) * PAGE_SIDE * PAGE_SIDE == 2048);
 
 static BufferShardingArgs create_sharding_args(
     auto mesh_device, auto page_size, BufferType buffer_type, TensorMemoryLayout sharding) {
@@ -129,7 +165,7 @@ static BufferShardingArgs create_sharding_args(
     std::array<uint32_t, 2> tensor2d_shape_in_pages{element_shape[0] / PAGE_SIDE, element_shape[1] / PAGE_SIDE};
     ShardSpecBuffer shard_spec_buffer(shard_spec, PAGE_SHAPE, tensor2d_shape_in_pages);
 
-    return {shard_spec_buffer, TensorMemoryLayout::HEIGHT_SHARDED};
+    return {shard_spec_buffer, sharding};
 }
 
 static std::shared_ptr<MeshBuffer> create_device_buffer(
@@ -141,6 +177,7 @@ static std::shared_ptr<MeshBuffer> create_device_buffer(
     return MeshBuffer::create(ReplicatedBufferConfig{TRANSFER_SIZE}, device_local_config, mesh_device.get());
 }
 
+// Google Benchmark entry point
 static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
     auto buffer_type = BUFFER_TYPES[state.range(1)];
@@ -151,8 +188,8 @@ static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_d
         LogTest,
         "Running Write Benchmark for Page Size: {}, Buffer Type: {}, Sharding: {}, Device ID: {}",
         page_size,
-        enchantum::to_string(buffer_type),
-        enchantum::to_string(sharding),
+        buffer_type,
+        sharding,
         device_id);
 
     auto random_buffer_seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -167,6 +204,7 @@ static void BM_write(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_d
     state.SetBytesProcessed(TRANSFER_SIZE * state.iterations());
 }
 
+// Google Benchmark entry point
 static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_device) {
     auto page_size = state.range(0);
     auto buffer_type = BUFFER_TYPES[state.range(1)];
@@ -177,12 +215,13 @@ static void BM_read(benchmark::State& state, std::shared_ptr<MeshDevice> mesh_de
         LogTest,
         "Running Read Benchmark for Page Size: {}, Buffer Type: {}, Sharding: {}, Device ID: {}",
         page_size,
-        enchantum::to_string(buffer_type),
-        enchantum::to_string(sharding),
+        buffer_type,
+        sharding,
         device_id);
 
     auto device_buffer = create_device_buffer(mesh_device, page_size, buffer_type, sharding);
-    std::vector<uint32_t> host_buffer;
+    // Zero-initialize to avoid memory allocation for this vector during benchmark
+    std::vector<uint32_t> host_buffer(TRANSFER_SIZE / sizeof(uint32_t), 0);
 
     for (auto _ : state) {
         // EnqueueReadMeshBuffer cannot read from a replicated buffer yet, have to use ReadShard
