@@ -328,12 +328,14 @@ void bind_normalization_softmax_inplace_operation(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
+               const int8_t dim,
                const SoftmaxProgramConfig& program_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
                const bool numeric_stable) -> ttnn::Tensor {
-                return self(input_tensor, program_config, compute_kernel_config, numeric_stable);
+                return self(input_tensor, dim, program_config, compute_kernel_config, numeric_stable);
             },
             py::arg("input_tensor").noconvert(),
+            py::arg("dim") = -1,
             py::kw_only(),
             py::arg("program_config") = SoftmaxDefaultProgramConfig{},
             py::arg("compute_kernel_config") = std::nullopt,
