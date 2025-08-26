@@ -4211,8 +4211,7 @@ def test_conv_sharded_rm_input(
 @pytest.mark.parametrize(
     "batch, input_channels, output_channels, input_height, input_width, kernel, deallocate_activation, math_fidelity",
     (
-        # (1, 3, 64, 1024, 1024, ttnn.bfloat8_b, ttnn.bfloat8_b, 1, (7, 7), (2, 2), (3, 3), (1, 1), True, ttnn.MathFidelity.LoFi, True, True, True, 256), # Optimum 1
-        (1, 3, 64, 1024, 1024, (7, 7), True, ttnn.MathFidelity.LoFi), # optimum
+        (1, 3, 64, 1024, 1024, (7, 7), True, ttnn.MathFidelity.LoFi),
     ),
 )
 @pytest.mark.parametrize(
