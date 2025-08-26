@@ -17,23 +17,23 @@ on:
         type: boolean
 
 jobs:
-  build-artifact:
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      version: 22.04
-      build-wheel: true
+  # build-artifact:
+  #   uses: ./.github/workflows/build-artifact.yaml
+  #   permissions:
+  #     packages: write
+  #   secrets: inherit
+  #   with:
+  #     version: 22.04
+  #     build-wheel: true
   multi-host-t3k:
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.t3k_multihost }}
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.t3k_multihost == true }}
     runs-on:
       # A physical, multi-host WH T3K that's in service
       - multi-host-t3000
       - arch-wormhole_b0
       - bare-metal
       - in-service
-    needs: build-artifact
+    # needs: build-artifact
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -76,14 +76,14 @@ jobs:
             TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
             TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml
   multi-host-galaxy:
-    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.galaxy_multihost }}
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.galaxy_multihost == 'true' }}
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-galaxy
       - arch-wormhole_b0
       - bare-metal
       - in-service
-    needs: build-artifact
+    # needs: build-artifact
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
