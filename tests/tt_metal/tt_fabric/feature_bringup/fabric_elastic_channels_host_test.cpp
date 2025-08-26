@@ -35,6 +35,9 @@
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 
+#include <array>
+#include <bit>
+
 using namespace tt;
 using namespace tt::test_utils;
 
@@ -204,11 +207,11 @@ TestConfig parse_cli_config(int argc, char** argv) {
 }
 
 struct DeviceTestResources {
-    tt_metal::IDevice* device;
-    CoreRangeSet worker_cores;
+    tt_metal::IDevice* device = nullptr;
+    CoreRangeSet worker_cores = {};
     std::vector<CoreCoord> worker_cores_vec;
-    CoreCoord eth_core;
-    tt_metal::Program program;
+    CoreCoord eth_core = {};
+    tt_metal::Program program = {};
     uint32_t worker_ack_semaphore_id = std::numeric_limits<uint32_t>::max();
     uint32_t worker_new_chunk_semaphore_id = std::numeric_limits<uint32_t>::max();
     uint32_t worker_src_buffer_address = std::numeric_limits<uint32_t>::max();
@@ -350,7 +353,7 @@ void set_worker_runtime_args(
 }
 
 TimingStats read_timing_stats(tt_metal::IDevice* device, CoreCoord core, uint32_t handshake_addr) {
-    TimingStats stats;
+    TimingStats stats{};
 
     // Read timing stats from L1 memory - use same address as calculated in host
     uint32_t timing_stats_addr = handshake_addr + 0x800;
@@ -360,20 +363,26 @@ TimingStats read_timing_stats(tt_metal::IDevice* device, CoreCoord core, uint32_
     tt_metal::detail::ReadFromDeviceL1(
         device, core, timing_stats_addr, sizeof(TimingStats), timing_data, CoreType::ETH);
 
-    std::memcpy(&stats, timing_data.data(), sizeof(TimingStats));
+    constexpr size_t num_words = sizeof(TimingStats) / sizeof(uint32_t);
+    std::array<uint32_t, num_words> arr;
+    std::memcpy(arr.data(), timing_data.data(), sizeof(arr));
+    stats = std::bit_cast<TimingStats>(arr);
 
     return stats;
 }
 
 WorkerTimingStats read_worker_timing_stats(tt_metal::IDevice* device, CoreCoord core, uint32_t timing_stats_addr) {
-    WorkerTimingStats stats;
+    WorkerTimingStats stats{};
 
     std::vector<uint32_t> timing_data;
     timing_data.resize(sizeof(WorkerTimingStats) / sizeof(uint32_t));
     tt_metal::detail::ReadFromDeviceL1(
         device, core, timing_stats_addr, sizeof(WorkerTimingStats), timing_data, CoreType::WORKER);
 
-    std::memcpy(&stats, timing_data.data(), sizeof(WorkerTimingStats));
+    constexpr size_t num_words = sizeof(WorkerTimingStats) / sizeof(uint32_t);
+    std::array<uint32_t, num_words> arr;
+    std::memcpy(arr.data(), timing_data.data(), sizeof(arr));
+    stats = std::bit_cast<WorkerTimingStats>(arr);
 
     return stats;
 }
