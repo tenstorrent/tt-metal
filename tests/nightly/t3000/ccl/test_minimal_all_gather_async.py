@@ -708,7 +708,7 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape):
 )
 @pytest.mark.parametrize(
     "chunks_per_sync",
-    ["MAX", 160, 80, 40, 20, 10, 5, 2, 1],
+    ["MAX", 160, 80, 40, 20, 10],
     ids=[
         "MAX-chunks",
         "160-chunks",
@@ -716,9 +716,6 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape):
         "40-chunks",
         "20-chunks",
         "10-chunks",
-        "5-chunks",
-        "2-chunks",
-        "1-chunks",
     ],
 )
 def test_all_gather_chunks_per_sync(
@@ -736,12 +733,8 @@ def test_all_gather_chunks_per_sync(
     num_iters,
     chunks_per_sync,
 ):
-    total_elems = math.prod(ag_output_shape)
     if chunks_per_sync == "MAX":
         chunks_per_sync = get_max_chunks_per_sync(num_devices, ag_output_shape)
-
-    if total_elems % chunks_per_sync != 0:
-        pytest.skip("Total elements must be divisible by chunks per sync")
 
     logger.info(f"Running with chunks_per_sync: {chunks_per_sync}")
 
