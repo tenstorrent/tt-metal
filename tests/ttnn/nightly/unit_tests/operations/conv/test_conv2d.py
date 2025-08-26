@@ -356,7 +356,8 @@ def run_conv_with_split(
     stride_h,
     stride_w,
     padding,
-    config_override,
+    dilation=None,
+    config_override={},
     shard_layout=None,
     split_input_channels_factor=2,
     split_output_channels_factor=1,
@@ -411,6 +412,7 @@ def run_conv_with_split(
         bias=torch_bias_tensor.reshape(-1),
         stride=(stride_h, stride_w),
         padding=(0, 0),
+        dilation=dilation,
     )
 
     split_input_tensors = torch.split(torch_input_tensor_nchw, split_input_channels, 1)
@@ -473,6 +475,7 @@ def run_conv_with_split(
                 kernel_size=(filter_height, filter_width),
                 stride=(stride_h, stride_w),
                 padding=(pad_top, pad_bottom, pad_left, pad_right),
+                dilation=dilation,
                 batch_size=batch_size,
                 input_height=input_height,
                 input_width=input_width,
