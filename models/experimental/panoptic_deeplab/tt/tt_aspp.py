@@ -28,11 +28,8 @@ def get_ttnn_norm(norm_name: str, num_channels: int, device):
         bias = ttnn.zeros((1, 1, 1, num_channels), device=device, layout=ttnn.TILE_LAYOUT)
         return lambda x: ttnn.group_norm(x, num_groups=num_groups, weight=weight, bias=bias)
     elif norm_name.lower() == "ln":
-        TILE_WIDTH = 32
-        weight_shape = (1, 1, num_channels // TILE_WIDTH, TILE_WIDTH)
-
-        weight = ttnn.ones(weight_shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-        bias = ttnn.zeros(weight_shape, device=device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        weight = ttnn.ones((1, 1, 1, num_channels), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        bias = ttnn.zeros((1, 1, 1, num_channels), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         return lambda x: ttnn.layer_norm(x, weight=weight, bias=bias)
     elif norm_name == "":
