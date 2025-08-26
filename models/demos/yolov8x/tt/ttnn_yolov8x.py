@@ -360,7 +360,7 @@ class TtC2f:
 
 
 class TtSppf:
-    def __init__(self, device, parameters, path, input_params, batch_size):
+    def __init__(self, device, parameters, path, input_params, batch_size, core_count=None):
         self.device = device
         self.parameters = parameters
         self.path = path
@@ -368,7 +368,14 @@ class TtSppf:
         self.batch_size = batch_size
 
         self.cv1 = TtConv(device, parameters, f"{path}.cv1", input_params=input_params[0], deallocate_activation=True)
-        self.cv2 = TtConv(device, parameters, f"{path}.cv2", input_params=input_params[1], reshard_if_not_optimal=True)
+        self.cv2 = TtConv(
+            device,
+            parameters,
+            f"{path}.cv2",
+            input_params=input_params[1],
+            core_count=core_count,
+            reshard_if_not_optimal=True if core_count == None else False,
+        )
 
     def __call__(self, x):
         if use_signpost:
@@ -687,11 +694,16 @@ class TtDetectionModel:
             n=3,
             shortcut=True,
             block_shard=True,
-            reshard=True,
+            core_count=64,
             input_params=c2f_configs["model.8"]["input_params"],
         )
         self.sppf_9 = TtSppf(
-            device, parameters, "model.9", input_params=sppf_configs["input_params"], batch_size=self.batch_size
+            device,
+            parameters,
+            "model.9",
+            input_params=sppf_configs["input_params"],
+            batch_size=self.batch_size,
+            core_count=64,
         )
         self.c2f_12 = TtC2f(
             device,
