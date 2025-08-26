@@ -61,42 +61,6 @@ def _run_model_pipeline(
     pipeline.cleanup()
 
 
-def run_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
-    _run_model_pipeline(
-        device,
-        tt_inputs,
-        test_infra,
-        num_warmup_iterations,
-        num_measurement_iterations,
-        num_command_queues=1,
-        trace=False,
-    )
-
-
-def run_trace_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
-    _run_model_pipeline(
-        device,
-        tt_inputs,
-        test_infra,
-        num_warmup_iterations,
-        num_measurement_iterations,
-        num_command_queues=1,
-        trace=True,
-    )
-
-
-def run_2cq_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
-    _run_model_pipeline(
-        device,
-        tt_inputs,
-        test_infra,
-        num_warmup_iterations,
-        num_measurement_iterations,
-        num_command_queues=2,
-        trace=False,
-    )
-
-
 def run_trace_2cq_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
     _run_model_pipeline(
         device,
@@ -114,7 +78,6 @@ def run_perf_e2e_yolov8x(
     batch_size_per_device,
     model_location_generator,
     expected_inference_throughput,
-    model_version="yolov8x_trace_2cqs",
 ):
     profiler.clear()
 
@@ -139,32 +102,17 @@ def run_perf_e2e_yolov8x(
     num_warmup_iterations = 5
     num_measurement_iterations = 15
 
-    if "yolov8x_trace_2cqs" in model_version:
-        run_trace_2cq_model_pipeline(
-            device, ttnn_input_tensor, test_infra, num_warmup_iterations, num_measurement_iterations
-        )
-    elif "yolov8x_trace" in model_version:
-        run_trace_model_pipeline(
-            device, ttnn_input_tensor, test_infra, num_warmup_iterations, num_measurement_iterations
-        )
-    elif "yolov8x_2cqs" in model_version:
-        run_2cq_model_pipeline(device, ttnn_input_tensor, test_infra, num_warmup_iterations, num_measurement_iterations)
-    elif "yolov8x" in model_version:
-        run_model_pipeline(device, ttnn_input_tensor, test_infra, num_warmup_iterations, num_measurement_iterations)
-    else:
-        assert False, f"Model version to run {model_version} not found"
+    run_trace_2cq_model_pipeline(
+        device, ttnn_input_tensor, test_infra, num_warmup_iterations, num_measurement_iterations
+    )
 
     first_iter_time = profiler.get("compile")
-
-    # ensuring inference time fluctuations is not noise
-    num_cqs = 2 if "2cqs" in model_version else 1
-    inference_time_avg = profiler.get(f"run_model_pipeline_{num_cqs}cqs") / num_measurement_iterations
-
+    inference_time_avg = profiler.get(f"run_model_pipeline_2cqs") / num_measurement_iterations
     compile_time = first_iter_time - 2 * inference_time_avg
     expected_inference_time = batch_size / expected_inference_throughput
 
     prep_perf_report(
-        model_name=f"ttnn_{model_version}_batch_size{batch_size}",
+        model_name=f"ttnn_yolov8x_trace_2cqs_batch_size{batch_size}",
         batch_size=batch_size,
         inference_and_compile_time=first_iter_time,
         inference_time=inference_time_avg,
@@ -201,7 +149,6 @@ def test_run_yolov8x_performant(
         batch_size_per_device,
         model_location_generator,
         expected_inference_throughput=50,
-        model_version="yolov8x_trace_2cqs",
     )
 
 
@@ -227,5 +174,4 @@ def test_run_yolov8x_performant_dp(
         batch_size_per_device,
         model_location_generator,
         expected_inference_throughput=100,
-        model_version="yolov8x_trace_2cqs",
     )
