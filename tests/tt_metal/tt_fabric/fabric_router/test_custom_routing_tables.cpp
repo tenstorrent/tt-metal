@@ -33,7 +33,7 @@ namespace tt::tt_fabric::fabric_router_tests {
 TEST_F(ControlPlaneFixture, TestCustom2x2ControlPlaneInit) {
     const std::filesystem::path mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/custom_2x2_mesh_graph_descriptor.yaml";
+        "tt_metal/fabric/mesh_graph_descriptors/n300_2x2_mesh_graph_descriptor.yaml";
     [[maybe_unused]] auto control_plane = make_control_plane(mesh_graph_desc_path);
 }
 
