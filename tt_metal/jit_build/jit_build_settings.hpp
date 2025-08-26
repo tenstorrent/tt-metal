@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 #include <functional>
-#include <map>
+#include <unordered_map>
 
 namespace tt::tt_metal {
 
