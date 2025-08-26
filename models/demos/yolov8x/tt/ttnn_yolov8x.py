@@ -7,6 +7,7 @@ import math
 import ttnn
 from models.demos.yolov8x.tt.ttnn_yolov8x_utils import ttnn_decode_bboxes
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 try:
     from tracy import signpost
@@ -76,10 +77,12 @@ class TtConv:
         enable_split_reader=False,
         reshard_if_not_optimal=False,
         batch_size=1,
+        core_count=None,
     ):
         self.device = device
         self.parameters = parameters
         self.path = path
+        self.core_count = core_count
         self.input_params = input_params
         self.groups = groups
         self.dilation = dilation
@@ -101,6 +104,10 @@ class TtConv:
         self.conv_config = self._initialize_conv_config()
         self.compute_config = self._initialize_compute_config()
         self.weights, self.bias = self.parameters[path]
+        if self.core_count is not None:
+            shard_grid = get_shard_grid_from_num_cores(self.core_count, self.device)
+            self.conv_config.core_grid = shard_grid
+            self.conv_config.override_sharding_config = True
 
     def _initialize_conv_config(self):
         conv_config = ttnn.Conv2dConfig(
@@ -253,6 +260,7 @@ class TtC2f:
         deallocate_activation=False,
         output_layout=ttnn.TILE_LAYOUT,
         reshard=False,
+        core_count=None,
     ):
         self.device = device
         self.parameters = parameters
@@ -276,6 +284,7 @@ class TtC2f:
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
+            core_count=core_count,
             reshard_if_not_optimal=reshard,
         )
 
@@ -289,6 +298,7 @@ class TtC2f:
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
             reshard_if_not_optimal=reshard,
+            core_count=core_count,
         )
 
         self.cv2 = TtConv(
@@ -297,7 +307,8 @@ class TtC2f:
             f"{self.path}.cv2",
             input_params=self.input_params[1],
             bfloat8=self.bfloat8,
-            block_shard=self.block_shard,
+            block_shard=True if core_count != None else self.block_shard,
+            reshard_if_not_optimal=True if core_count != None else False,
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
         )
@@ -658,7 +669,7 @@ class TtDetectionModel:
             n=6,
             shortcut=True,
             block_shard=False,
-            change_shard=True,
+            core_count=64,
             input_params=c2f_configs["model.6"]["input_params"],
         )
         self.conv_7 = TtConv(
