@@ -64,16 +64,9 @@ void report_page(std::size_t i) {
     read_ptr = nullptr;
 #endif
 
-    if (read_ptr == nullptr) {
-        return;
+    if (read_ptr != nullptr) {
+        result_ptr[i] = read_ptr[0];
     }
-
-    DataT result = 0;
-    for (auto j = 0ul; j < PAGE_SIZE; j++) {
-        // this is a cheap way to check if the page is all the same value
-        result |= read_ptr[j];
-    }
-    result_ptr[i] = result;
 }
 
 void core_agnostic_main() {

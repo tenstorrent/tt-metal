@@ -5,8 +5,8 @@
 /**
  *
  * Two possible invokation locations:
- * 1. Reader at UNPACKER core as Compute Kernel
- * 2. Reader at NOC 1 as dataflow
+ * 1. Writer at UNPACKER core as Compute Kernel
+ * 2. Writer at NOC 1 as dataflow
  *
  * Test will be performed in both cases.
  *
