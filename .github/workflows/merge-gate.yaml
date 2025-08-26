@@ -278,20 +278,8 @@ jobs:
           optional-jobs: "build, build-docs, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests"
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
-
-  send-slack-notification:
-    name: "Send Slack Failure Notification"
-    runs-on: ubuntu-latest
-    needs: workflow-status
-    if: >-
-      needs.workflow-status.result == 'failure' &&
-      github.event_name == 'merge_group'
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Send Failure Message to Slack
-        uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@main
+      - uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@main
+        if: ${{ failure() }} && github.event_name == 'merge_group'
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
           owner: "U08GTDV8MDH,U0908S3LUMD"
