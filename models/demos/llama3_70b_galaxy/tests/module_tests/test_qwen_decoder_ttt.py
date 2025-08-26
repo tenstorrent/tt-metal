@@ -163,11 +163,10 @@ def test_qwen_decoder_ttt_inference(
         dtype=dtype,
         state_dict=state_dict,
         layer_num=0,
-        n_layers=1,
+        n_layers=model_args.n_layers,
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=transformation_mats,
         paged_attention_config=paged_attention_config,
-        use_paged_kv_cache=paged_attention,
         prefetcher_setup=prefetcher_setup,
         tt_ccl=tt_ccl,
     )
@@ -241,62 +240,27 @@ def test_qwen_decoder_ttt_inference(
         )
         mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 
-        # Run TT Qwen decoder model
-        # For Qwen decoder, we need to handle the h tensor (residual connection state)
-        if i == 0:
-            # First iteration - h is None, will be created from x
-            tt_out = tt_model(
-                decode_input,
-                None,  # h tensor
-                current_pos_tensor,
-                rot_mats=rot_mats,
-                mode="decode",
-                page_table=page_table_tt,
-            )
-        else:
-            # Subsequent iterations - reuse h tensor (this would be more complex in a real scenario)
-            tt_out = tt_model(
-                decode_input,
-                None,  # For simplicity, using None - in practice this would be the previous h
-                current_pos_tensor,
-                rot_mats=rot_mats,
-                mode="decode",
-                page_table=page_table_tt,
-            )
-
-        tt_out = ttnn.to_torch(
+        res = None
+        tt_out, res = tt_model(
+            decode_input,
+            res,
+            current_pos_tensor,
+            rot_mats=rot_mats,
+            mode="decode",
+            page_table=page_table_tt,
+        )
+        tt_output_torch = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
-        )
-
-        tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
-
-        # Prepare reference input - adjust dimensions if needed
-        ref_input = pt_decode_input[:, :, : model_args_ref.dim]
-        if ref_input.shape[-1] != model_args_ref.dim:
-            # Pad or truncate to match reference model dimensions
-            if ref_input.shape[-1] < model_args_ref.dim:
-                padding = torch.zeros(ref_input.shape[:-1] + (model_args_ref.dim - ref_input.shape[-1],))
-                ref_input = torch.cat([ref_input, padding], dim=-1)
-            else:
-                ref_input = ref_input[:, :, : model_args_ref.dim]
+        )[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
 
         # In this test all users have the same position
         freqs_cis_i_ref = freqs_cis_ref[current_pos_val, :].unsqueeze(0)
 
         # Reference model
-        reference_output = reference_model(ref_input.to(torch.bfloat16), current_pos_val, freqs_cis_i_ref, mask=None)
-
-        # Adjust reference output dimensions to match Qwen output if needed
-        if reference_output.shape[-1] != model_args.dim:
-            if reference_output.shape[-1] < model_args.dim:
-                # Pad reference output to match Qwen dimensions
-                padding = torch.zeros(reference_output.shape[:-1] + (model_args.dim - reference_output.shape[-1],))
-                reference_output_padded = torch.cat([reference_output, padding], dim=-1)
-                reference_output = reference_output_padded
-            else:
-                # Truncate reference output to match Qwen dimensions
-                reference_output = reference_output[:, :, : model_args.dim]
+        reference_output = reference_model(
+            pt_decode_input.to(torch.bfloat16), current_pos_val, freqs_cis_i_ref, mask=None
+        )
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 

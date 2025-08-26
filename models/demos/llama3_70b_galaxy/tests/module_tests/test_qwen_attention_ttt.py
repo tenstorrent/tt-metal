@@ -9,6 +9,7 @@ from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
 from models.tt_transformers.tt.model_config import ModelArgs
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 from models.tt_transformers.tests.test_utils import get_ref_model_dype
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     precompute_freqs,
@@ -105,6 +106,10 @@ def test_qwen_attention_ttt_inference(
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if k.startswith(first_layer_prefix)
     }
+
+    reference_model_custom = Attention(args=model_args, llama3=False)  # Enable QK norm with llama3=True
+    reference_model_custom.load_state_dict(partial_state_dict)
+    logger.info(f"Reference Model Loaded with QK norm support")
 
     seq_len = 1
 
@@ -255,22 +260,11 @@ def test_qwen_attention_ttt_inference(
             page_table=page_table_tt,
         )
 
-        # multi-device attention module returns replicated output
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
-
-        # # Prepare reference input - adjust dimensions if needed
-        # ref_input = pt_attention_input[:, :, : model_args_ref.dim]
-        # if ref_input.shape[-1] != model_args_ref.dim:
-        #     # Pad or truncate to match reference model dimensions
-        #     if ref_input.shape[-1] < model_args_ref.dim:
-        #         padding = torch.zeros(ref_input.shape[:-1] + (model_args_ref.dim - ref_input.shape[-1],))
-        #         ref_input = torch.cat([ref_input, padding], dim=-1)
-        #     else:
-        #         ref_input = ref_input[:, :, : model_args_ref.dim]
 
         # In this test all users have the same position (if using batch > 1)
         freqs_cis_i_ref = freqs_cis_ref[current_pos[0], :].unsqueeze(0)
@@ -279,17 +273,8 @@ def test_qwen_attention_ttt_inference(
             pt_attention_input.to(torch.bfloat16), current_pos[0], freqs_cis_i_ref, mask=None
         )
 
-        # Adjust reference output dimensions to match Qwen output if needed
-        if reference_output.shape[-1] != model_args.dim:
-            if reference_output.shape[-1] < model_args.dim:
-                # Pad reference output to match Qwen dimensions
-                padding = torch.zeros(reference_output.shape[:-1] + (model_args.dim - reference_output.shape[-1],))
-                reference_output_padded = torch.cat([reference_output, padding], dim=-1)
-                reference_output = reference_output_padded
-            else:
-                # Truncate reference output to match Qwen dimensions
-                reference_output = reference_output[:, :, : model_args.dim]
-
+        reference_output_custom = reference_model_custom(pt_attention_input, current_pos[0], freqs_cis_i_ref, mask=None)
+        passing, pcc_message = comp_pcc(reference_output, reference_output_custom, pcc)
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
         logger.info(comp_allclose(reference_output, tt_output_torch))

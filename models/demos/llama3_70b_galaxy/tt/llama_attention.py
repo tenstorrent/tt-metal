@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import torch
 
 import ttnn
@@ -305,24 +306,8 @@ class TtLlamaAttention(LightweightModule):
                 sharded_output_config=self.reshape_output_k_mem_cfg,
             )
 
-            # self.pre_alloc_k_padding = ttnn.from_torch(
-            #     torch.zeros([1, 24, 1, 128]),
-            #     dtype=ttnn.bfloat16,
-            #     layout=ttnn.ROW_MAJOR_LAYOUT,
-            #     device=self.mesh_device,
-            #     memory_config=ttnn.create_sharded_memory_config(
-            #         shape=(3, 128),
-            #         core_grid=ttnn.CoreRangeSet(
-            #             [
-            #                 ttnn.CoreRange(ttnn.CoreCoord(3, 2), ttnn.CoreCoord(3, 2)),
-            #                 ttnn.CoreRange(ttnn.CoreCoord(1, 3), ttnn.CoreCoord(3, 4)),
-            #                 ttnn.CoreRange(ttnn.CoreCoord(1, 5), ttnn.CoreCoord(1, 5)),
-            #             ]
-            #         ),
-            #         strategy=ttnn.ShardStrategy.HEIGHT,
-            #     ),
-            #     mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            # )
+            self.scaling_factor = 1.0 / math.sqrt(self.head_dim)
+
         else:
             self.qk_norm = False
 
@@ -433,15 +418,11 @@ class TtLlamaAttention(LightweightModule):
             use_optimal_ccl_for_llama=True,
         )
 
-        breakpoint()
+        # breakpoint()
 
         if self.qk_norm:
             rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
             rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
-
-            # # Insert padding concat for k
-            # k_heads_pre_rot_1BKD = ttnn.concat([k_heads_pre_rot_1BKD, self.pre_alloc_k_padding], dim=1)
-            # breakpoint()
 
             # Reshape and prepare tensors for QK norm
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(
@@ -472,18 +453,39 @@ class TtLlamaAttention(LightweightModule):
             q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
             k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
 
+            # Create scaling tensors with same shape as q and k tensors
+            scaling_tensor_q = ttnn.from_torch(
+                torch.full([1, 1, 64, 128], self.scaling_factor),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=q_heads_pre_rot_1BQD.memory_config(),  # Use same memory config as q tensor
+            )
+
+            scaling_tensor_k = ttnn.from_torch(
+                torch.full([1, 1, 64, 128], self.scaling_factor),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
+                memory_config=k_heads_pre_rot_1BKD.memory_config(),  # Use same memory config as k tensor
+            )
+
+            # Apply elementwise scaling
+            q_heads_pre_rot_1BQD = ttnn.mul(q_heads_pre_rot_1BQD, scaling_tensor_q)
+            k_heads_pre_rot_1BKD = ttnn.mul(k_heads_pre_rot_1BKD, scaling_tensor_k)
+
             q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
 
             q_heads_pre_rot_1BQD = ttnn.reshape(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
             k_heads_pre_rot_1BKD = ttnn.reshape(k_heads_pre_rot_1BKD, [1, 8, 8, 128])  # ==> [1, 8, 1 (8), 128]
 
-            # [1, 8 + (24), 1, 128]
-
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
 
-        breakpoint()
+            # Deallocate scaling tensors
+            ttnn.deallocate(scaling_tensor_q)
+            ttnn.deallocate(scaling_tensor_k)
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
@@ -492,7 +494,7 @@ class TtLlamaAttention(LightweightModule):
             q_heads_pre_rot_1BQD, k_heads_pre_rot_1BKD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"]
         )  # [1, 8, 8, 128], [1, 8, 8, 128]
 
-        breakpoint()
+        # breakpoint()
 
         ttnn.deallocate(q_heads_pre_rot_1BQD)
         ttnn.deallocate(k_heads_pre_rot_1BKD)
