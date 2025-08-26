@@ -5,7 +5,7 @@
 import csv
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from enum import Enum
 from pathlib import Path
 from typing import Optional
@@ -50,6 +50,10 @@ class ProfilerData:
     unpack: list[ProfilerTimestamp | ProfilerZoneScoped]
     math: list[ProfilerTimestamp | ProfilerZoneScoped]
     pack: list[ProfilerTimestamp | ProfilerZoneScoped]
+
+    def __iter__(self):
+        for field in fields(self):
+            yield field.name, getattr(self, field.name)
 
 
 class Profiler:
@@ -96,7 +100,7 @@ class Profiler:
             ]
         )
 
-        for thread, entries in profiler_data.items():
+        for thread, entries in profiler_data:
             for entry in entries:
                 full_marker = entry.full_marker
 
