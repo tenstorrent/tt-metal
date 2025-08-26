@@ -86,7 +86,7 @@ operation::ProgramWithCallbacks frmsnorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                            Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    ttnn::MeshDevice* mesh_device = a.mesh_device();
+    ttnn::MeshDevice* mesh_device = a.device();
     tt::tt_metal::Program program{};
     uint32_t output_page_size = 0;
     uint32_t stats_page_size;

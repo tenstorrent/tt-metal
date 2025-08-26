@@ -120,7 +120,7 @@ tt::tt_metal::operation::ProgramWithCallbacks AllGatherMatmulAsync::create_progr
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     ::ttnn::ccl::get_device_sender_receiver_config(
         mesh_device->get_device(mesh_coord),
         this->all_gather_async_struct.devices,

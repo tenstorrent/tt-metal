@@ -163,7 +163,7 @@ static Tensor zero_volume_reduce(
         fill_value,
         input_tensor.dtype(),
         input_tensor.layout(),
-        *input_tensor.mesh_device(),
+        *input_tensor.device(),
         memory_config);
 }
 

@@ -252,10 +252,6 @@ public:
     // Throws if the tensor is not allocated on a device.
     distributed::MeshDevice* device() const;
 
-    // NOTE: Keeping this for backward compatibility.
-    // This is deprecated
-    distributed::MeshDevice* mesh_device() const { return device(); }
-
     bool is_sharded() const;
 
     // Size in bytes of a single element held in tensor

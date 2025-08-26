@@ -55,7 +55,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     const auto input_dtype = input_tensor.dtype();
 
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     const auto src_physical_device_id = mesh_device->get_device(mesh_coordinate)->id();
 

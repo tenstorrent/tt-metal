@@ -687,7 +687,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     TT_ASSERT(num_edm_channels_per_link > 0);
 
     const auto& device =
-        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(target_device_id) : input_tensor.device();
+        input_tensor.device() ? input_tensor.device()->get_device(target_device_id) : input_tensor.device();
     auto const& topology_config = ttnn::ccl::RingTopology(
         device, topology, sender_device_id, receiver_device_id, num_links, ring_size, ring_index);
     bool is_linear = topology_config.is_linear;

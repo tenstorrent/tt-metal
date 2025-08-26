@@ -58,7 +58,7 @@ MeshPartitionDeviceOperation::MeshPartition::create_at(
 
     const uint32_t cluster_size = detail::get_cluster_axis_size(input_tensor, operation_attributes.cluster_axis);
     uint32_t cluster_index =
-        detail::get_cluster_axis_index(input_tensor.mesh_device()->get_view(), mesh_coordinate, operation_attributes);
+        detail::get_cluster_axis_index(input_tensor.device()->get_view(), mesh_coordinate, operation_attributes);
     TT_FATAL(
         cluster_index < cluster_size,
         "cluster_index ({}) must be less than cluster_size ({})",

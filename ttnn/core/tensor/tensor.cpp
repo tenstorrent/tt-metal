@@ -612,7 +612,7 @@ void memcpy(
 
 void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
     ZoneScoped;
-    if (auto mesh_device = src.mesh_device()) {
+    if (auto mesh_device = src.device()) {
         memcpy(mesh_device->mesh_command_queue(), dst, src, region, blocking);
     } else {
         memcpy(src.device()->command_queue(), dst, src, region, blocking);
@@ -650,7 +650,7 @@ void memcpy(
 
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
-    if (auto mesh_device = dst.mesh_device()) {
+    if (auto mesh_device = dst.device()) {
         memcpy(mesh_device->mesh_command_queue(), dst, src, region);
     } else {
         memcpy(dst.device()->command_queue(), dst, src, region);
@@ -698,13 +698,13 @@ void memcpy(
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        if (auto mesh_device = src.mesh_device()) {
+        if (auto mesh_device = src.device()) {
             memcpy(mesh_device->mesh_command_queue(), dst, src, region);
         } else {
             memcpy(src.device()->command_queue(), dst, src, region);
         }
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        if (auto mesh_device = dst.mesh_device()) {
+        if (auto mesh_device = dst.device()) {
             memcpy(mesh_device->mesh_command_queue(), dst, src, region);
         } else {
             memcpy(dst.device()->command_queue(), dst, src, region);

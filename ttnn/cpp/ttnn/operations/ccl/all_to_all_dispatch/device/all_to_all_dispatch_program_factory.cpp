@@ -51,7 +51,7 @@ std::pair<std::array<uint32_t, 6>, std::array<uint32_t, 6>> get_cb_sizes(
     auto indices_pages = get_num_pages(indices_tensor);
     auto mapping_pages = get_num_pages(mapping_tensor);
 
-    auto mesh_view = input_tensor.mesh_device()->get_view();
+    auto mesh_view = input_tensor.device()->get_view();
     uint32_t num_devices = mesh_view.num_devices();
 
     uint32_t tokens_per_device = get_num_rows(input_tensor);
@@ -121,7 +121,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     auto num_links = operation_attributes.num_links;
     auto topology = tt::tt_fabric::get_fabric_topology();
 
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
     auto src_device = mesh_device->get_device(mesh_coordinate);
     auto src_physical_device_id = src_device->id();

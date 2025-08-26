@@ -212,7 +212,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
     std::optional<uint32_t> num_workers_per_direction_opt,
     std::optional<uint32_t> num_buffers_per_channel,
     const CoreCoord core_grid_offset) {
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
 
@@ -726,7 +726,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
      * - otherwise, receive a slice, locally reduce it, and send the result in that direction
      *
      */
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
     bool is_last_chip = ring_index == ring_size - 1;
 

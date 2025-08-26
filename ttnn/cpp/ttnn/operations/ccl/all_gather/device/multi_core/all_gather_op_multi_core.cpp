@@ -304,7 +304,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_multi_core_with_workers
     }
 
     const auto& device =
-        input_tensor.mesh_device() ? input_tensor.mesh_device()->get_device(target_device_id) : input_tensor.device();
+        input_tensor.device() ? input_tensor.device()->get_device(target_device_id) : input_tensor.device();
 
     /* All gather fusion */
     bool fuse_op = fused_op_signaler.has_value();

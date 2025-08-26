@@ -101,7 +101,7 @@ tt::tt_metal::operation::ProgramWithCallbacks MatmulReduceScatterAsync::create_p
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     ::ttnn::ccl::get_device_sender_receiver_config(
         mesh_device->get_device(mesh_coord),
         this->reduce_scatter_minimal_async_struct.devices,

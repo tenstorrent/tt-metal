@@ -83,7 +83,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
-    auto mesh_device = input_tensor[0].mesh_device();
+    auto mesh_device = input_tensor[0].device();
     const bool is_first_chip = ring_index == 0;
     const bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
