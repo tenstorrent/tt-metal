@@ -316,7 +316,7 @@ class GroupNorm:
         self.weight = None
         self.bias = None
         self.mask = None
-        self.core_grid = core_grid or self.mesh_device.core_grid
+        self.core_grid = core_grid or ttnn.CoreGrid(x=8, y=8)  # self.mesh_device.core_grid # Issue on 6U 8x9 grid
 
         # Assert group norm parameters
         assert (
