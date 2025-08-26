@@ -181,7 +181,7 @@ private:
     void updateTracyContext(std::pair<uint32_t, CoreCoord> device_core);
 
     // Dump device results to files
-    void dumpDeviceResults(std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers_vec) const;
+    void dumpDeviceResults() const;
 
     // Iterate over all markers and update their data if needed
     void processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers);
@@ -202,9 +202,7 @@ public:
     // Number of bytes reserved in each DRAM bank for storing device profiling data
     uint32_t profile_buffer_bank_size_bytes{};
 
-    // Device markers
-    // std::set<tracy::TTDeviceMarker> device_markers;
-
+    // Device markers grouped by (physical core, risc index)
     std::map<CoreCoord, std::map<uint32_t, std::set<tracy::TTDeviceMarker>>> device_markers_per_core_risc_map;
 
     std::set<tracy::TTDeviceMarker> device_sync_markers;
