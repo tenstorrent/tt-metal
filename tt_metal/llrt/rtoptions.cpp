@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <tt-logger/tt-logger.hpp>
 
 #include "assert.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -271,7 +272,9 @@ const std::string& RunTimeOptions::get_root_dir() const {
 }
 
 const std::string& RunTimeOptions::get_profiler_logs_dir() const {
-    TT_FATAL(is_profiler_logs_dir_specified(), "Cannot determine PROFILER logs directory.");
+    if (!is_profiler_logs_dir_specified()) {
+        log_warning(tt::LogType::LogAlways, "Cannot determine PROFILER logs directory.");
+    }
 
     return profiler_logs_dir_;
 }
