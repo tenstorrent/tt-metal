@@ -16,7 +16,6 @@ namespace fs = std::filesystem;
 
 namespace tt {
 namespace utils {
-static std::chrono::duration<float> timeout_duration = std::chrono::duration<float>(-1.f);
 bool run_command(const std::string& cmd, const std::string& log_file, const bool verbose) {
     // ZoneScoped;
     // ZoneText( cmd.c_str(), cmd.length());
@@ -59,14 +58,16 @@ const std::string& get_reports_dir() {
 }
 
 std::chrono::duration<float> get_timeout_duration_for_operations() {
-    if (timeout_duration.count() == -1.f) {
-        const char* env_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
-        // If not configured, is infinite (0.f means no timeout)
-        float seconds = env_value ? std::stof(env_value) : 0.f;
-        timeout_duration = std::chrono::duration<float>(seconds);
-    }
+    static std::once_flag flag;
+    static std::chrono::duration<float> cached_duration;
 
-    return timeout_duration;
+    std::call_once(flag, [&]() {
+        const char* env_value = std::getenv("TT_METAL_OPERATION_TIMEOUT_SECONDS");
+        float seconds = env_value ? std::stof(env_value) : 0.f;
+        cached_duration = std::chrono::duration<float>(seconds);
+    });
+
+    return cached_duration;
 }
 }  // namespace utils
 

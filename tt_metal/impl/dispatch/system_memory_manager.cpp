@@ -425,7 +425,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
             "TIMEOUT: device timeout, potential hang detected, please check out the documentation");
     };
 
-    tt::utils::wait_with_timeout(
+    tt::utils::loop_and_wait_with_timeout(
         wait_operation_body, wait_condition, on_timeout, tt::utils::get_timeout_duration_for_operations());
 
     return write_ptr_and_toggle;
