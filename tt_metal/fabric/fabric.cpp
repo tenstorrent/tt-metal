@@ -4,11 +4,11 @@
 
 #include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "erisc_datamover_builder.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>

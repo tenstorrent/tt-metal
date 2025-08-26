@@ -6,7 +6,7 @@
 #include "debug/assert.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/api/tt-metalium/edm_fabric_counters.hpp"
 #include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
 
