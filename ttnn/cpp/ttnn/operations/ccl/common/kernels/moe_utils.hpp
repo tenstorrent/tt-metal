@@ -268,7 +268,7 @@ inline void fabric_send_chip_unicast_noc_unicast(
 }
 
 template <uint32_t FabricMaxPacketSzBytes>
-inline void fabric_send_noc_unicast_with_semaphore(
+inline void l1_only_fabric_send_noc_unicast_with_semaphore(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t payload_l1_address,
@@ -278,7 +278,7 @@ inline void fabric_send_noc_unicast_with_semaphore(
     uint32_t alignment,
     uint16_t increment_value,
     bool flush) {
-    // This api needs to be depricated as it causes a BH DRAM ND-HANG
+    // This api is only for L1 as it can cause a DRAM hang in blackhole
     while (size_bytes > 0) {
         uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, (uint32_t)size_bytes);
 
@@ -347,7 +347,7 @@ inline void fabric_send_noc_unicast_with_semaphore(
 
 // Insert helper that handles the remote-device metadata path with fused atomic increment
 template <uint32_t SrcChipId, uint32_t MeshRows, uint32_t MeshCols, uint32_t FabricMaxPacketSzBytes>
-inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
+inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t dest_chip_id,
@@ -359,7 +359,7 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
     uint32_t alignment,
     uint16_t increment_value,
     bool flush) {
-    // This api needs to be depricated as it causes a BH DRAM ND-HANG
+    // This api is only for L1 as it can cause a DRAM hang in blackhole
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
@@ -371,7 +371,7 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
         dest_mesh_id,
         MeshCols);
 
-    return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
+    return l1_only_fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         fabric_connections[route],
         packet_header,
         payload_l1_address,
@@ -499,7 +499,7 @@ template <
     uint32_t MeshRows,
     uint32_t MeshCols,
     int32_t FabricMaxPacketSzBytes>
-inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
+inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4>& fabric_connections,
     volatile PACKET_HEADER_TYPE* packet_header,
     const uint32_t linearized_dest_mesh_coord,
@@ -510,13 +510,13 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     const uint32_t alignment,
     uint16_t increment_value,
     bool flush) {
-    // This api needs to be depricated as it causes a BH DRAM ND-HANG
+    // This api is only for L1 as it can cause a DRAM hang in blackhole
     uint32_t distance =
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     packet_header->to_chip_unicast(distance);
 
     uint32_t route = get_route<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
-    return fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
+    return l1_only_fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         fabric_connections[route],
         packet_header,
         payload_l1_address,

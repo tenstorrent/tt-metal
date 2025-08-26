@@ -331,7 +331,7 @@ void kernel_main() {
                     base_indices_addr, noc_core_offset_md_write_addr, indices_size_per_core);
             } else if (is_configured_target<linearized_mesh_coord, mesh_rows, mesh_cols, axis>(d)) {
                 if constexpr (is_1d_topology<topology>()) {
-                    fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
+                    l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore_1d<
                         linearized_mesh_coord,
                         topology,
                         mesh_rows,
@@ -348,7 +348,7 @@ void kernel_main() {
                         1,
                         true);
                 } else {
-                    fabric_send_chip_unicast_noc_unicast_with_semaphore<
+                    l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore<
                         src_chip_id,
                         mesh_rows,
                         mesh_cols,
