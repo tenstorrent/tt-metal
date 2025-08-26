@@ -36,7 +36,7 @@ struct IsInDeviceOperation {
     static invocation_result_t invoke(
         const Tensor& elements,
         const Tensor& test_elements,
-        const uint32_t& single_fetch_chunk_size,
+        const uint32_t& single_fetch_subchunk_size,
         const bool& assume_unique,
         const bool& invert,
         const std::optional<MemoryConfig>& memory_config,
