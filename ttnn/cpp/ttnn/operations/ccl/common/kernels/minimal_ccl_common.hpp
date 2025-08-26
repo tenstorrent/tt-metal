@@ -17,7 +17,7 @@
 
 FORCE_INLINE void perform_payload_send(
     tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
-    size_t& l1_read_addr,
+    size_t l1_read_addr,
     uint32_t payload_size_bytes,
     volatile PACKET_HEADER_TYPE* pkt_hdr) {
     fabric_connection.wait_for_empty_write_slot();

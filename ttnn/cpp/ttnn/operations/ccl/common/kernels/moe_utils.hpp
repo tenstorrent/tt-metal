@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 
 namespace ttnn::operations::ccl::common {
 
@@ -204,17 +205,17 @@ inline void fabric_send_noc_unicast(
     uint32_t payload_l1_address,
     uint64_t noc_page,
     int32_t size_bytes,
-    uint32_t alignment) {
+    uint32_t alignment,
+    uint32_t offset = 0) {
     while (size_bytes > 0) {
         uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, (uint32_t)size_bytes);
 
         tt::tt_fabric::linear::to_noc_unicast_write(
-            align(curr_packet_size, alignment), packet_header, noc_page, addrgen);
-        perform_payload_send(fabric_connection, payload_l1_address, curr_packet_size, packet_header)
-            payload_l1_address += curr_packet_size;
+            align(curr_packet_size, alignment), packet_header, noc_page, addrgen, offset);
+        perform_payload_send(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
 
         payload_l1_address += curr_packet_size;
-        noc_payload_write_address += curr_packet_size;
+        offset += curr_packet_size;
         size_bytes -= curr_packet_size;
     }
 }
@@ -242,7 +243,8 @@ inline void fabric_send_chip_unicast_noc_unicast(
     uint32_t payload_l1_address,
     uint32_t noc_payload_page,
     int32_t size_bytes,
-    const uint32_t alignment) {
+    const uint32_t alignment,
+    uint32_t offset = 0) {
     const uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
@@ -255,7 +257,52 @@ inline void fabric_send_chip_unicast_noc_unicast(
         MeshCols);
 
     fabric_send_noc_unicast<FabricMaxPacketSzBytes>(
-        addrgen, fabric_connections[route], packet_header, payload_l1_address, noc_payload_page, size_bytes, alignment);
+        addrgen,
+        fabric_connections[route],
+        packet_header,
+        payload_l1_address,
+        noc_payload_page,
+        size_bytes,
+        alignment,
+        offset);
+}
+
+template <uint32_t FabricMaxPacketSzBytes>
+inline void fabric_send_noc_unicast_with_semaphore(
+    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t payload_l1_address,
+    uint64_t noc_payload_write_address,
+    uint64_t noc_remote_semaphore_address,
+    int32_t size_bytes,
+    uint32_t alignment,
+    uint16_t increment_value,
+    bool flush) {
+    // This api needs to be depricated as it causes a BH DRAM ND-HANG
+    while (size_bytes > 0) {
+        uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, (uint32_t)size_bytes);
+
+        if ((uint32_t)size_bytes == curr_packet_size) {
+            // Fill header for fused unicast + atomic increment command when it is the last packet
+            packet_header->to_noc_fused_unicast_write_atomic_inc(
+                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
+                    noc_payload_write_address, noc_remote_semaphore_address, increment_value, 32, flush),
+                align(curr_packet_size, alignment));
+        } else {
+            // Fill header for fused unicast + atomic increment command when it is not the last packet
+            packet_header->to_noc_unicast_write(
+                tt::tt_fabric::NocUnicastCommandHeader{noc_payload_write_address}, align(curr_packet_size, alignment));
+        }
+
+        // Send payload followed by header over the fabric.
+        fabric_connection.wait_for_empty_write_slot();
+        fabric_connection.send_payload_without_header_non_blocking_from_address(payload_l1_address, curr_packet_size);
+        fabric_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+
+        payload_l1_address += curr_packet_size;
+        noc_payload_write_address += curr_packet_size;
+        size_bytes -= curr_packet_size;
+    }
 }
 
 template <uint32_t FabricMaxPacketSzBytes, typename AddrGenType>
@@ -293,44 +340,7 @@ inline void fabric_send_noc_unicast_with_semaphore(
         // Send payload followed by header over the fabric.
         perform_payload_send(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
         payload_l1_address += curr_packet_size;
-        noc_payload_write_address += curr_packet_size;
-        size_bytes -= curr_packet_size;
-    }
-}
-
-template <uint32_t FabricMaxPacketSzBytes>
-inline void fabric_send_noc_unicast_with_semaphore(
-    tt::tt_fabric::WorkerToFabricEdmSender& fabric_connection,
-    volatile PACKET_HEADER_TYPE* packet_header,
-    uint32_t payload_l1_address,
-    uint64_t noc_payload_write_address,
-    uint64_t noc_remote_semaphore_address,
-    int32_t size_bytes,
-    uint32_t alignment,
-    uint16_t increment_value,
-    bool flush) {
-    while (size_bytes > 0) {
-        uint32_t curr_packet_size = std::min(FabricMaxPacketSzBytes, (uint32_t)size_bytes);
-
-        if ((uint32_t)size_bytes == curr_packet_size) {
-            // Fill header for fused unicast + atomic increment command when it is the last packet
-            packet_header->to_noc_fused_unicast_write_atomic_inc(
-                tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader(
-                    noc_payload_write_address, noc_remote_semaphore_address, increment_value, 32, flush),
-                align(curr_packet_size, alignment));
-        } else {
-            // Fill header for fused unicast + atomic increment command when it is not the last packet
-            packet_header->to_noc_unicast_write(
-                tt::tt_fabric::NocUnicastCommandHeader{noc_payload_write_address}, align(curr_packet_size, alignment));
-        }
-
-        // Send payload followed by header over the fabric.
-        fabric_connection.wait_for_empty_write_slot();
-        fabric_connection.send_payload_without_header_non_blocking_from_address(payload_l1_address, curr_packet_size);
-        fabric_connection.send_payload_flush_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
-
-        payload_l1_address += curr_packet_size;
-        noc_payload_write_address += curr_packet_size;
+        offset += curr_packet_size;
         size_bytes -= curr_packet_size;
     }
 }
@@ -349,6 +359,7 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore(
     uint32_t alignment,
     uint16_t increment_value,
     bool flush) {
+    // This api needs to be depricated as it causes a BH DRAM ND-HANG
     uint32_t route = get_next_hop_router_direction(dest_mesh_id, dest_chip_id);
 
     // Populate packet header with routing information
@@ -464,7 +475,8 @@ inline void fabric_send_chip_unicast_noc_unicast_1d(
     uint32_t payload_l1_address,
     uint32_t noc_payload_page,
     int32_t size_bytes,
-    const uint32_t alignment) {
+    const uint32_t alignment,
+    uint32_t offset = 0) {
     uint32_t distance =
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     packet_header->to_chip_unicast(distance);
@@ -476,9 +488,9 @@ inline void fabric_send_chip_unicast_noc_unicast_1d(
         packet_header,
         payload_l1_address,
         noc_payload_page,
-        noc_payload_write_address,
         size_bytes,
-        alignment);
+        alignment,
+        offset);
 }
 
 template <
@@ -498,6 +510,7 @@ inline void fabric_send_chip_unicast_noc_unicast_with_semaphore_1d(
     const uint32_t alignment,
     uint16_t increment_value,
     bool flush) {
+    // This api needs to be depricated as it causes a BH DRAM ND-HANG
     uint32_t distance =
         manhattan_distance<Topology, MeshRows, MeshCols>(LinearizedSrcMeshCoord, linearized_dest_mesh_coord);
     packet_header->to_chip_unicast(distance);
