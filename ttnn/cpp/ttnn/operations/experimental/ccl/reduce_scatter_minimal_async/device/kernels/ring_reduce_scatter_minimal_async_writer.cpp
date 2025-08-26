@@ -22,6 +22,7 @@
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
 using ttnn::ccl::Topology;
+using namespace tt::tt_fabric::linear::experimental;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -171,29 +172,56 @@ void kernel_main() {
         fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_address);
 
     // pre-populate packet headers
-    auto pkt_hdr = PacketHeaderPool::allocate_header();
+    auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
+    auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
     auto pkt_hdr_seminc = PacketHeaderPool::allocate_header();
-    ccl_routing_utils::fabric_set_line_unicast_route(pkt_hdr, unicast_route_info);
+    auto pkt_hdr_mcastseminc = PacketHeaderPool::allocate_header();
 
     tt::tt_fabric::fabric_client_connect(mux_connection_handle);
 
+    fabric_multicast_noc_unicast_atomic_inc_set_state<
+        UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        pkt_hdr_mcastseminc,
+        static_cast<uint8_t>(multicast_route_info.start_distance_in_hops),
+        static_cast<uint8_t>(multicast_route_info.range_hops),
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            0,                         // ignore
+            static_cast<uint16_t>(1),  // increment 1
+            32});
     if (use_barrier_sem) {
         // multicast to entire ring of workers going in the same direction
         uint64_t barrier_sem_noc_addr_in_pkt =
             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-        tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+        fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             &mux_connection_handle,
-            pkt_hdr_seminc,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                barrier_sem_noc_addr_in_pkt,
-                static_cast<uint16_t>(1),  // increment 1
-                32},
-            static_cast<uint8_t>(multicast_route_info.start_distance_in_hops),
-            static_cast<uint8_t>(multicast_route_info.range_hops));
+            pkt_hdr_mcastseminc,
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0, 0});
 
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), ring_size - 1);
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
+
+    auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(intermediate_addrgen);
+    fabric_unicast_noc_scatter_write_set_state<
+        UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+        pkt_scatter_hdr,
+        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+        NocUnicastScatterCommandHeader{
+            {0, 0},  // ignore
+            static_cast<uint16_t>(page_size)},
+        page_size * 2);
+
+    fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+        pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, intermediate_page_size);
+
+    fabric_unicast_noc_unicast_atomic_inc_set_state<
+        UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        pkt_hdr_seminc,
+        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            0,                         // ignore
+            static_cast<uint16_t>(1),  // increment 1
+            32});
 
     uint32_t chunk_count = 0;
     for (uint32_t b = 0; b < num_batches; b++) {
@@ -230,7 +258,6 @@ void kernel_main() {
                 }
 
                 chunk_count = 0;
-                auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(intermediate_addrgen);
                 while (tiles_read < tiles_to_read) {
                     uint32_t tiles_remaining_to_read = tiles_to_read - tiles_read;
 
@@ -270,14 +297,11 @@ void kernel_main() {
 
                                 auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                                     intermediate_addrgen, tile_two_id, 0);
-                                tt::tt_fabric::linear::experimental::fabric_unicast_noc_scatter_write(
+                                fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                                     &mux_connection_handle,
-                                    pkt_hdr,
+                                    pkt_scatter_hdr,
                                     l1_read_addr,
-                                    page_size * 2,
-                                    NocUnicastScatterCommandHeader{
-                                        {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-                                    static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                                    NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
                                 l1_read_addr += page_size * 2;
                                 tiles_read += 2;
                                 tiles_read_in_current_direction += 2;
@@ -285,13 +309,11 @@ void kernel_main() {
                             }
                             case 1:
                             default: {
-                                tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
+                                fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                                     &mux_connection_handle,
-                                    pkt_hdr,
+                                    pkt_unicast_hdr,
                                     l1_read_addr,
-                                    intermediate_page_size,
-                                    NocUnicastCommandHeader{noc_address0},
-                                    static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                                    NocUnicastCommandHeader{noc_address0});
                                 l1_read_addr += intermediate_page_size;
                                 tiles_read++;
                                 tiles_read_in_current_direction++;
@@ -327,14 +349,12 @@ void kernel_main() {
                         // 2. unicast output ready semaphore
                         uint64_t out_ready_sem_noc_addr_in_pkt =
                             safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                        tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+                        fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             &mux_connection_handle,
                             pkt_hdr_seminc,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                                out_ready_sem_noc_addr_in_pkt,
-                                static_cast<uint16_t>(1),  // increment 1
-                                32},
-                            static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                                out_ready_sem_noc_addr_in_pkt, 0, 0  // ignore
+                            });
                     }
                 }
 
@@ -342,14 +362,12 @@ void kernel_main() {
                     // 2. unicast output ready semaphore
                     uint64_t out_ready_sem_noc_addr_in_pkt =
                         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
-                    tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                         &mux_connection_handle,
                         pkt_hdr_seminc,
                         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                            out_ready_sem_noc_addr_in_pkt,
-                            static_cast<uint16_t>(1),  // increment 1
-                            32},
-                        static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                            out_ready_sem_noc_addr_in_pkt, 0, 0  // ignore
+                        });
                 }
                 noc_async_writes_flushed();
             } else {
@@ -399,16 +417,10 @@ void kernel_main() {
                 // 2. mcast half batch ready semaphore
                 uint64_t batch_ready_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, batch_ready_sem, 0);
-                tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     &mux_connection_handle,
-                    pkt_hdr_seminc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                        batch_ready_sem_noc_addr_in_pkt,
-                        static_cast<uint16_t>(1),  // increment 1
-                        32},
-                    static_cast<uint8_t>(multicast_route_info.start_distance_in_hops),
-                    static_cast<uint8_t>(multicast_route_info.range_hops));
-
+                    pkt_hdr_mcastseminc,
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0, 0});
                 noc_async_writes_flushed();
             }
 

@@ -20,6 +20,7 @@
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
 using ttnn::ccl::Topology;
+using namespace tt::tt_fabric::linear::experimental;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -156,7 +157,8 @@ void kernel_main() {
     }
 
     // pre-populate packet headers
-    auto pkt_hdr = PacketHeaderPool::allocate_header();
+    auto pkt_scatter_hdr = PacketHeaderPool::allocate_header();
+    auto pkt_unicast_hdr = PacketHeaderPool::allocate_header();
     auto pkt_hdr_sem_inc = PacketHeaderPool::allocate_header();
 
     if (mux_connection_valid) {
@@ -164,7 +166,15 @@ void kernel_main() {
     }
 
     if (use_barrier_sem) {
-        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_sem_inc, barrier_multicast_route_info);
+        fabric_multicast_noc_unicast_atomic_inc_set_state<
+            UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+            pkt_hdr_sem_inc,
+            static_cast<uint8_t>(barrier_multicast_route_info.start_distance_in_hops),
+            static_cast<uint8_t>(barrier_multicast_route_info.range_hops),
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+                0,                         // ignore
+                static_cast<uint16_t>(1),  // increment 1
+                32});
         if (topology == Topology::Linear) {
             // multicast to both the forward and backward worker on all devices that you write to
             bool signal_on_barrier_semaphore =
@@ -173,43 +183,28 @@ void kernel_main() {
                 // device going in the same direction
                 uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-                tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
-                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                            same_direction_barrier_sem_noc_addr_in_pkt,
-                            static_cast<uint16_t>(1),  // increment 1
-                            32},
-                    static_cast<uint8_t>(barrier_multicast_route_info.start_distance_in_hops),
-                    static_cast<uint8_t>(barrier_multicast_route_info.range_hops));
-
+                    tt::tt_fabric::NocUnicastAtomicIncCommandHeader{same_direction_barrier_sem_noc_addr_in_pkt, 0, 0});
 
                 // device going in the opposite direction
                 uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-                tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+                fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                            opposite_direction_barrier_sem_noc_addr_in_pkt,
-                            static_cast<uint16_t>(1),  // increment 1
-                            32},
-                    static_cast<uint8_t>(barrier_multicast_route_info.start_distance_in_hops),
-                    static_cast<uint8_t>(barrier_multicast_route_info.range_hops));
+                        opposite_direction_barrier_sem_noc_addr_in_pkt, 0, 0});
             }
         } else if (topology == Topology::Ring) {
             // multicast to entire ring of workers going in the same direction
             uint64_t barrier_sem_noc_addr_in_pkt =
                 safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-            tt::tt_fabric::linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
+            fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                 mux_connection_handle,
                 pkt_hdr_sem_inc,
-                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                        barrier_sem_noc_addr_in_pkt,
-                        static_cast<uint16_t>(1),  // increment 1
-                        32},
-                static_cast<uint8_t>(barrier_multicast_route_info.start_distance_in_hops),
-                static_cast<uint8_t>(barrier_multicast_route_info.range_hops));
+                tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0, 0});
         } else {
             ASSERT(false);
         }
@@ -233,11 +228,31 @@ void kernel_main() {
         tile_id_start = my_chip_id * input_tensor_Ht * input_tensor_Wt;
     }
 
+    auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(output_addrgen);
+    fabric_unicast_noc_scatter_write_set_state<
+        UnicastScatterWriteUpdateMask::ChunkSizes | UnicastScatterWriteUpdateMask::PayloadSize>(
+        pkt_scatter_hdr,
+        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+        NocUnicastScatterCommandHeader{
+            {0, 0},  // ignore
+            static_cast<uint16_t>(page_size)},
+        page_size * 2);
+
+    fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::PayloadSize>(
+        pkt_unicast_hdr, static_cast<uint8_t>(unicast_route_info.distance_in_hops), nullptr, output_page_size);
+
+    fabric_unicast_noc_unicast_atomic_inc_set_state<
+        UnicastAtomicIncUpdateMask::Wrap | UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
+        pkt_hdr_sem_inc,
+        static_cast<uint8_t>(unicast_route_info.distance_in_hops),
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+            0,                         // ignore
+            static_cast<uint16_t>(1),  // increment 1
+            32});
     // 2. unicast output ready semaphore
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
     uint32_t chunk_count = 0;
-    auto page_size = tt::tt_fabric::linear::addrgen_detail::get_page_size(output_addrgen);
     for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count; bh_idx++) {
         chunk_count = 0;
         while (tiles_read < tiles_to_read) {
@@ -269,14 +284,11 @@ void kernel_main() {
                         output_addrgen, tile_two_id, 0);
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
-                            tt::tt_fabric::linear::experimental::fabric_unicast_noc_scatter_write(
+                            fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                                 mux_connection_handle,
-                                pkt_hdr,
+                                pkt_scatter_hdr,
                                 l1_read_addr,
-                                page_size * 2,
-                                NocUnicastScatterCommandHeader{
-                                    {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-                                static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                                NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
                         }
                         uint64_t local_noc0_dest_noc_addr_tile_one = get_noc_addr(tile_one_id, output_addrgen);
                         uint64_t local_noc0_dest_noc_addr_tile_two = get_noc_addr(tile_two_id, output_addrgen);
@@ -287,14 +299,11 @@ void kernel_main() {
                         noc_async_write_barrier();
                     } else {
                         if (num_targets_forward_direction) {
-                            tt::tt_fabric::linear::experimental::fabric_unicast_noc_scatter_write(
+                            fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                                 mux_connection_handle,
-                                pkt_hdr,
+                                pkt_scatter_hdr,
                                 l1_read_addr,
-                                page_size * 2,
-                                NocUnicastScatterCommandHeader{
-                                    {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-                                static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                                NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
                         }
                     }
                     tiles_read += 2;
@@ -304,26 +313,22 @@ void kernel_main() {
                 default: {
                     if (direction == 1) {
                         if (num_targets_backward_direction) {
-                            tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
+                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                                 mux_connection_handle,
-                                pkt_hdr,
+                                pkt_unicast_hdr,
                                 l1_read_addr,
-                                output_page_size,
-                                NocUnicastCommandHeader{noc_address0},
-                                static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                                NocUnicastCommandHeader{noc_address0});
                         }
                         uint64_t local_noc0_dest_noc_addr = get_noc_addr(tile_one_id, output_addrgen);
                         noc_async_write(l1_read_addr, local_noc0_dest_noc_addr, output_page_size);
                         noc_async_write_barrier();
                     } else {
                         if (num_targets_forward_direction) {
-                            tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
+                            fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                                 mux_connection_handle,
-                                pkt_hdr,
+                                pkt_unicast_hdr,
                                 l1_read_addr,
-                                output_page_size,
-                                NocUnicastCommandHeader{noc_address0},
-                                static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                                NocUnicastCommandHeader{noc_address0});
                         }
                     }
                     tiles_read++;
@@ -338,14 +343,12 @@ void kernel_main() {
                 // 2. unicast output ready semaphore
                 if ((direction == 1 && num_targets_backward_direction) ||
                     (direction == 0 && num_targets_forward_direction)) {
-                    tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                         mux_connection_handle,
                         pkt_hdr_sem_inc,
                         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                                out_ready_sem_noc_addr_in_pkt,
-                                static_cast<uint16_t>(1),  // increment 1
-                                32},
-                        static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                            out_ready_sem_noc_addr_in_pkt, 0, 0  // ignore
+                        });
                 }
             }
             noc_async_writes_flushed();
@@ -355,14 +358,12 @@ void kernel_main() {
             // Write the unicast packet
             if ((direction == 1 && num_targets_backward_direction) ||
                 (direction == 0 && num_targets_forward_direction)) {
-                tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                            out_ready_sem_noc_addr_in_pkt,
-                            static_cast<uint16_t>(1),  // increment 1
-                            32},
-                    static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                        out_ready_sem_noc_addr_in_pkt, 0, 0  // ignore
+                    });
             }
         }
 
@@ -461,26 +462,21 @@ void kernel_main() {
 
                         auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(
                             output_addrgen, tile_two_id, 0);
-                        tt::tt_fabric::linear::experimental::fabric_unicast_noc_scatter_write(
+                        fabric_unicast_noc_scatter_write_with_state<UnicastScatterWriteUpdateMask::DstAddrs>(
                             mux_connection_handle,
-                            pkt_hdr,
+                            pkt_scatter_hdr,
                             l1_read_addr,
-                            page_size * 2,
-                            NocUnicastScatterCommandHeader{
-                                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
-                            static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                            NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, 0});
                         tiles_read += 2;
                         break;
                     }
                     case 1:
                     default: {
-                        tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_write(
+                        fabric_unicast_noc_unicast_write_with_state<UnicastWriteUpdateMask::DstAddr>(
                             mux_connection_handle,
-                            pkt_hdr,
+                            pkt_unicast_hdr,
                             l1_read_addr,
-                            output_page_size,
-                            NocUnicastCommandHeader{noc_address0},
-                            static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                            NocUnicastCommandHeader{noc_address0});
                         tiles_read++;
                         break;
                     }
@@ -491,28 +487,24 @@ void kernel_main() {
                 chunk_count++;
                 if (chunk_count % chunks_per_sync == 0) {
                     // 2. unicast output ready semaphore
-                    tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+                    fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                         mux_connection_handle,
                         pkt_hdr_sem_inc,
                         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                                out_ready_sem_noc_addr_in_pkt,
-                                static_cast<uint16_t>(1),  // increment 1
-                                32},
-                        static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                            out_ready_sem_noc_addr_in_pkt, 0, 0  // ignore
+                        });
                 }
                 noc_async_writes_flushed();
             }
 
             if (chunk_count % chunks_per_sync != 0) {
                 // 2. unicast output ready semaphore
-                tt::tt_fabric::linear::experimental::fabric_unicast_noc_unicast_atomic_inc(
+                fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                     mux_connection_handle,
                     pkt_hdr_sem_inc,
                     tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-                            out_ready_sem_noc_addr_in_pkt,
-                            static_cast<uint16_t>(1),  // increment 1
-                            32},
-                    static_cast<uint8_t>(unicast_route_info.distance_in_hops));
+                        out_ready_sem_noc_addr_in_pkt, 0, 0  // ignore
+                    });
             }
 
             tile_id_start += output_tensor_Wt * output_tensor_Ht;

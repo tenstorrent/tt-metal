@@ -377,15 +377,17 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
  */
 // clang-format on
-template <UnicastWriteUpdateMask UpdateMask>
+template <UnicastWriteUpdateMask UpdateMask, typename FabricSenderType>
 FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
-    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
+    tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header = {},
     uint16_t packet_size_bytes = 0) {
+    static_assert(
+        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType>,
+        "FabricSenderType must be WorkerToFabricEdmSender or WorkerToFabricMuxSender");
     populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, noc_unicast_command_header);
-
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
@@ -545,11 +547,14 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc(
  * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| False    |
  */
 // clang-format on
-template <UnicastAtomicIncUpdateMask UpdateMask>
+template <UnicastAtomicIncUpdateMask UpdateMask, typename FabricSenderType>
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
-    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
+    tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
+    static_assert(
+        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType>,
+        "FabricSenderType must be WorkerToFabricEdmSender or WorkerToFabricMuxSender");
     populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, noc_unicast_atomic_inc_command_header);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -713,16 +718,18 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                       | False    |
  */
 // clang-format on
-template <UnicastScatterWriteUpdateMask UpdateMask>
+template <UnicastScatterWriteUpdateMask UpdateMask, typename FabricSenderType>
 FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
-    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
+    tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header = {},
     uint16_t packet_size_bytes = 0) {
+    static_assert(
+        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType>,
+        "FabricSenderType must be WorkerToFabricEdmSender or WorkerToFabricMuxSender");
     populate_unicast_scatter_write_fields<UpdateMask>(
         packet_header, packet_size_bytes, noc_unicast_scatter_command_header);
-
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
@@ -882,13 +889,15 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write(
  * | noc_unicast_inline_write_command_header | Inline write command header           | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | False |
  */
 // clang-format on
-template <UnicastInlineWriteUpdateMask UpdateMask>
+template <UnicastInlineWriteUpdateMask UpdateMask, typename FabricSenderType>
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
-    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
+    tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header) {
+    static_assert(
+        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType>,
+        "FabricSenderType must be WorkerToFabricEdmSender or WorkerToFabricMuxSender");
     populate_unicast_inline_fields<UpdateMask>(packet_header, noc_unicast_inline_write_command_header);
-
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
@@ -1047,13 +1056,16 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc(
  * | packet_size_bytes                         | Payload size override if masked        | uint16_t                                          | False    |
  */
 // clang-format on
-template <UnicastFusedAtomicIncUpdateMask UpdateMask>
+template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename FabricSenderType>
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
-    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
+    tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header = {},
     uint16_t packet_size_bytes = 0) {
+    static_assert(
+        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType>,
+        "FabricSenderType must be WorkerToFabricEdmSender or WorkerToFabricMuxSender");
     populate_unicast_fused_atomic_inc_fields<UpdateMask>(
         packet_header, packet_size_bytes, noc_fused_unicast_atomic_inc_command_header);
     client_interface->wait_for_empty_write_slot();
@@ -1230,13 +1242,16 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
  * | packet_size_bytes          | Payload size override if masked         | uint16_t                                   | False    |
  */
 // clang-format on
-template <UnicastWriteUpdateMask UpdateMask>
+template <UnicastWriteUpdateMask UpdateMask, typename FabricSenderType>
 FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
-    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
+    tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header = {},
     uint16_t packet_size_bytes = 0) {
+    static_assert(
+        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType>,
+        "FabricSenderType must be WorkerToFabricEdmSender or WorkerToFabricMuxSender");
     populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, noc_unicast_command_header);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(
@@ -1405,11 +1420,14 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
  * | noc_unicast_atomic_inc_command_header | Atomic increment command header         | tt::tt_fabric::NocUnicastAtomicIncCommandHeader| False    |
  */
 // clang-format on
-template <UnicastAtomicIncUpdateMask UpdateMask>
+template <UnicastAtomicIncUpdateMask UpdateMask, typename FabricSenderType>
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
-    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
+    tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastAtomicIncCommandHeader noc_unicast_atomic_inc_command_header) {
+    static_assert(
+        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType>,
+        "FabricSenderType must be WorkerToFabricEdmSender or WorkerToFabricMuxSender");
     populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, noc_unicast_atomic_inc_command_header);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -1590,16 +1608,18 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
  * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
  */
 // clang-format on
-template <UnicastScatterWriteUpdateMask UpdateMask>
+template <UnicastScatterWriteUpdateMask UpdateMask, typename FabricSenderType>
 FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
-    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
+    tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header = {},
     uint16_t packet_size_bytes = 0) {
+    static_assert(
+        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType>,
+        "FabricSenderType must be WorkerToFabricEdmSender or WorkerToFabricMuxSender");
     populate_unicast_scatter_write_fields<UpdateMask>(
         packet_header, packet_size_bytes, noc_unicast_scatter_command_header);
-
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(
         src_addr, packet_header->payload_size_bytes);
@@ -1767,11 +1787,14 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
  * | noc_unicast_inline_write_command_header | Inline write command header   | tt::tt_fabric::NocUnicastInlineWriteCommandHeader | False |
  */
 // clang-format on
-template <UnicastInlineWriteUpdateMask UpdateMask>
+template <UnicastInlineWriteUpdateMask UpdateMask, typename FabricSenderType>
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
-    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
+    tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     tt::tt_fabric::NocUnicastInlineWriteCommandHeader noc_unicast_inline_write_command_header) {
+    static_assert(
+        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType>,
+        "FabricSenderType must be WorkerToFabricEdmSender or WorkerToFabricMuxSender");
     populate_unicast_inline_fields<UpdateMask>(packet_header, noc_unicast_inline_write_command_header);
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
@@ -1945,13 +1968,16 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
  * | packet_size_bytes                     | Payload size override if masked  | uint16_t                                          | False    |
  */
 // clang-format on
-template <UnicastFusedAtomicIncUpdateMask UpdateMask>
+template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename FabricSenderType>
 FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
-    tt_l1_ptr tt::tt_fabric::WorkerToFabricEdmSender* client_interface,
+    tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
     tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader noc_fused_unicast_atomic_inc_command_header = {},
     uint16_t packet_size_bytes = 0) {
+    static_assert(
+        is_edm_sender_v<FabricSenderType> || is_mux_sender_v<FabricSenderType>,
+        "FabricSenderType must be WorkerToFabricEdmSender or WorkerToFabricMuxSender");
     populate_unicast_fused_atomic_inc_fields<UpdateMask>(
         packet_header, packet_size_bytes, noc_fused_unicast_atomic_inc_command_header);
     client_interface->wait_for_empty_write_slot();
