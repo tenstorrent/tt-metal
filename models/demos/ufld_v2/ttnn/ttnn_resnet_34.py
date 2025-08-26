@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -46,7 +46,6 @@ class TtnnResnet34:
             device=self.device,
             is_downsample=True,
             blk_sharded=True,
-            core_count=64,
         )
         self.layer3_1 = TtnnBasicBlock(
             conv_args.layer3[1], conv_pth.layer3_1, device=self.device, is_downsample=False, blk_sharded=True
@@ -78,12 +77,9 @@ class TtnnResnet34:
         channel_padding_needed = min_channels - c
         x = ttnn.pad(input, ((0, 0), (0, channel_padding_needed), (0, 0), (0, 0)), value=0.0)
         ttnn.deallocate(input)
-        # print("efore permute",x.shape,x.memory_config())
         x = ttnn.permute(x, (0, 2, 3, 1))
-        # print("after permute",x.shape,x.memory_config())
         x = ttnn.reshape(x, (1, 1, n * h * w, min_channels))
         x1, out_ht, out_wdth = self.conv1(x)
-        # print("conv out dtype is", x1.dtype)
         ttnn.deallocate(x)
         x1 = ttnn.max_pool2d(
             x1,
@@ -96,7 +92,6 @@ class TtnnResnet34:
             padding=[self.maxpool_args.padding, self.maxpool_args.padding],
             dilation=[self.maxpool_args.dilation, self.maxpool_args.dilation],
         )
-        # print("output of pool", x1.shape, x1.memory_config()) #torch ([1, 64, 80, 200])
         mem_config = ttnn.create_sharded_memory_config_(
             ttnn.Shape([shard_height_for_maxcores, x1.shape[-1]]),
             x1.memory_config().shard_spec.grid,
@@ -104,44 +99,23 @@ class TtnnResnet34:
             ttnn.ShardOrientation.ROW_MAJOR,
             tile_layout=True,
         )
-        # print("mem config is",mem_config)
         x = ttnn.to_memory_config(x1, mem_config)
-        # x = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        # ttnn.deallocate(x1)
-        # x = ttnn.reallocate(x)
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        # print("output of after layout", x.shape, x.memory_config())
-        print("layer1_0 is called")
         x = self.layer1_0(x)
-        print("layer1_1 is called")
         x = self.layer1_1(x)
-        print("layer1_2 is called")
         x = self.layer1_2(x)
-        print("layer2_0 is called")
         x = self.layer2_0(x)
-        print("layer2_1 is called")
         x = self.layer2_1(x)
-        print("layer2_2 is called")
         x = self.layer2_2(x)
-        print("layer2_3 is called")
         x = self.layer2_3(x)
-        print("layer3_0 is called")
         x = self.layer3_0(x)
-        print("layer3_1 is called")
         x = self.layer3_1(x)
-        print("layer3_2 is called")
         x = self.layer3_2(x)
-        print("layer3_3 is called")
         x = self.layer3_3(x)
-        print("layer3_4 is called")
         x = self.layer3_4(x)
-        print("layer3_5 is called")
         x = self.layer3_5(x)
-        print("layer4_0 is called")
         x = self.layer4_0(x)
-        print("layer4_1 is called")
         x = self.layer4_1(x)
-        print("layer4_2 is called")
         x = self.layer4_2(x)
 
         return x

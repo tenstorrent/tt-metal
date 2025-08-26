@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -59,9 +59,6 @@ class TtnnBasicBlock:
                 memory_config_req = x.memory_config()
                 memory_config_req.shard_spec.shape = x_identity.memory_config().shard_spec.shape
                 memory_config_req.shard_spec.grid = x_identity.memory_config().shard_spec.grid
-                print("configs before reshard")
-                print("1st ", x.memory_config())
-                print("2nd ", memory_config_req)
                 x = ttnn.reshard(x, memory_config_req)
         x = ttnn.add(x, x_identity, memory_config=x.memory_config())
         x = ttnn.relu(x)
