@@ -32,6 +32,19 @@ def merge_dicts(parent, child, prefix):
             parent[prefix + f"{k}"] = v
 
 
+def create_whole_model_state_dict(model_path, hf_config):
+    state_dict = {}
+    state_dict_temp = load_state_dict(model_path, "model.embed_tokens")
+    merge_dicts(state_dict, state_dict_temp, "embed_tokens.")
+    for li in range(hf_config.num_hidden_layers):
+        state_dict_temp = load_state_dict(model_path, f"model.layers.{li}")
+        merge_dicts(state_dict, state_dict_temp, f"layers.{li}.")
+    state_dict_temp = load_state_dict(model_path, "model.norm")
+    merge_dicts(state_dict, state_dict_temp, "norm.")
+
+    return state_dict
+
+
 @pytest.fixture
 def hf_config(hf_config):
     """Load DeepSeek config for testing."""
@@ -93,15 +106,7 @@ def test_forward_pass(
             block_shape=hf_config.quantization_config["weight_block_size"],
         )
     else:
-        state_dict = {}
-        state_dict_temp = load_state_dict(model_path, "model.embed_tokens")
-        merge_dicts(state_dict, state_dict_temp, "embed_tokens.")
-        for li in range(hf_config.num_hidden_layers):
-            state_dict_temp = load_state_dict(model_path, f"model.layers.{li}")
-            merge_dicts(state_dict, state_dict_temp, f"layers.{li}.")
-        state_dict_temp = load_state_dict(model_path, "model.norm")
-        merge_dicts(state_dict, state_dict_temp, "norm.")
-
+        state_dict = create_whole_model_state_dict(model_path, hf_config)
         dequantized_state_dict = dequantize_state_dict(state_dict, hf_config)
         reference_model.load_state_dict(dequantized_state_dict)
 
