@@ -136,7 +136,7 @@ def create_tt_qwen_model(
         dummy_weights=dummy_weights,
     )
     # When running running prefill-only profile, run just 1 layer
-    tt_model_args.n_layers = num_layers if not prefill_profile else 1
+    tt_model_args.n_layers = num_layers
 
     state_dict = tt_model_args.load_state_dict()
     page_table = None
@@ -432,7 +432,7 @@ def create_tt_qwen_model(
     "device_params",
     [
         {
-            "trace_region_size": 10459136,
+            "trace_region_size": 21925888,
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             # "worker_l1_size": 1344544,
@@ -509,10 +509,10 @@ def test_qwen_demo_text(
         1,
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
-    print_outputs = request.config.getoption("--print_outputs") or print_outputs
+    print_outputs = True
 
-    enable_trace = True  # Use tracing for better perf
-    prefill_enable_trace = True  # repeat_batches > 1
+    enable_trace = False  # Use tracing for better perf
+    prefill_enable_trace = False  # repeat_batches > 1
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 64 and instruct  # if using instruct weights it must be full model
     input_lengths = (
@@ -619,6 +619,8 @@ def test_qwen_demo_text(
         prefill_profile=prefill_profile,
     )
 
+    logger.info(f"Model loaded with {len(model.layers)} layers")
+
     # Use Qwen tokenizer instead of Llama tokenizer
     tokenizer = AutoTokenizer.from_pretrained(model_args.TOKENIZER_PATH)
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
@@ -651,7 +653,7 @@ def test_qwen_demo_text(
 
         # Load reference outputs for PCC check
         if pcc_check:
-            vocab_size = 128256  # Qwen vocab size
+            vocab_size = 151936  # Qwen vocab size
             if is_ci_env or galaxy_type == "6U":
                 ref_output_path = f"/mnt/MLPerf/tt_dnn-models/qwen/Qwen3-70B-Instruct/qwen3_70b_text_demo_ref_outputs/qwen3_70b_ref_outputs_{num_layers}L_decode.refpt"
             else:

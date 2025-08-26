@@ -465,8 +465,9 @@ class TtTransformer(LightweightModule):
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
+        x_embd = self.embd(x)
         tt_logits = self.forward(
-            x,
+            x_embd,
             current_pos=None,
             rot_mats=rot_mats if rot_mats is not None else self.tt_rot_mats_prefill,
             user_id=user_id,
