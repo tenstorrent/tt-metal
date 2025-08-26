@@ -8,6 +8,7 @@
 
 #include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::experimental::ssm::detail {
 
@@ -106,21 +107,18 @@ operation::ProgramWithCallbacks multi_core_ssm_eltwise_mul(
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_intermed3_config);
 
     // Compile time args
-    bool in0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool in1_is_dram = src1_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
-    bool out_is_dram = out_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)cb_intermed1_index,
         (std::uint32_t)cb_intermed2_index,
-        (std::uint32_t)in0_is_dram,
-        (std::uint32_t)in1_is_dram,
     };
+    tt::tt_metal::TensorAccessorArgs(src0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(src1_buffer).append_to(reader_compile_time_args);
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
-        (std::uint32_t)out_is_dram,
     };
+    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
     std::vector<uint32_t> compute_args = {
         (std::uint32_t)src0_cb_index,
         (std::uint32_t)src1_cb_index,

@@ -13,10 +13,10 @@ void kernel_main() {
     const auto num_output_tiles = get_arg_val<uint32_t>(2);
     const auto input_tile_offset = get_arg_val<uint32_t>(3);
     const auto start_id = get_arg_val<uint32_t>(4);
-    const auto input_is_dram = get_compile_time_arg_val(0) == 1;
-    const auto HtWt = get_arg_val<uint32_t>(6);
-    const auto CHtWt = get_arg_val<uint32_t>(7);
-    const auto dim = get_compile_time_arg_val(1);
+    const auto HtWt = get_arg_val<uint32_t>(5);
+    const auto CHtWt = get_arg_val<uint32_t>(6);
+    const auto dim = get_compile_time_arg_val(0);
+    constexpr auto dram_input_addrg_args = TensorAccessorArgs<1>();
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
@@ -31,9 +31,7 @@ void kernel_main() {
 
     uint32_t l1_write_addr_in0;
     uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
-    const auto input_data_format = get_dataformat(cb_id_in0);
-    const InterleavedAddrGenFast<input_is_dram> dram_input_addrg = {
-        .bank_base_address = input_addr, .page_size = input_tile_bytes, .data_format = input_data_format};
+    const auto dram_input_addrg = TensorAccessor(dram_input_addrg_args, input_addr, input_tile_bytes);
 
     uint32_t read_tile_id_temp = (dim == 0) ? (start_id) : (start_id / HtWt * CHtWt) + (start_id % HtWt);
     uint32_t start_tile_id = start_id / HtWt * CHtWt;

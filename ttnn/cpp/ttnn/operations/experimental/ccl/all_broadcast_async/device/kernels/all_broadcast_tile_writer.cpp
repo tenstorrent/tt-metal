@@ -15,6 +15,7 @@
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
@@ -30,10 +31,12 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(2);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(3);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(4);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(6);
-constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
-constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
-constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
+constexpr ccl_routing_utils::line_multicast_route_info_t forward_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<6>();
+constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<6 + ccl_routing_utils::num_line_multicast_args>();
+
+inline constexpr uint32_t sharded_args_start_idx = 6 + 2 * ccl_routing_utils::num_line_multicast_args;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -65,13 +68,13 @@ void kernel_main() {
     tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 #ifdef SHARDED
     typedef ShardedInfo<
-        get_compile_time_arg_val(7),
-        get_compile_time_arg_val(8),
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10),
-        get_compile_time_arg_val(11),
-        get_compile_time_arg_val(12),
-        get_compile_time_arg_val(13)>
+        get_compile_time_arg_val(sharded_args_start_idx),
+        get_compile_time_arg_val(sharded_args_start_idx + 1),
+        get_compile_time_arg_val(sharded_args_start_idx + 2),
+        get_compile_time_arg_val(sharded_args_start_idx + 3),
+        get_compile_time_arg_val(sharded_args_start_idx + 4),
+        get_compile_time_arg_val(sharded_args_start_idx + 5),
+        get_compile_time_arg_val(sharded_args_start_idx + 6)>
         tensor_shard_info;
     // Sharded addrgen
     const auto [mapping_table, rt_increment] =
@@ -91,15 +94,19 @@ void kernel_main() {
     // Allocate packet headers from packet header pool
     volatile PACKET_HEADER_TYPE* pkt_hdr_seminc = PacketHeaderPool::allocate_header();
 
-    uint8_t starts[] = {1, 1};
+    uint8_t starts[] = {
+        static_cast<uint8_t>(forward_multicast_route_info.start_distance_in_hops),
+        static_cast<uint8_t>(backward_multicast_route_info.start_distance_in_hops)};
     uint8_t ranges[] = {
-        static_cast<uint8_t>(num_targets_forward_direction), static_cast<uint8_t>(num_targets_backward_direction)};
+        static_cast<uint8_t>(forward_multicast_route_info.range_hops),
+        static_cast<uint8_t>(backward_multicast_route_info.range_hops)};
     if (ranges[0] == 0) {
+        starts[0] = starts[1];
         ranges[0] = ranges[1];
     }
     linear::experimental::fabric_multicast_noc_unicast_write_set_state<
         linear::experimental::UnicastWriteUpdateMask::PayloadSize>(
-        route_id, starts, ranges, nullptr, tensor0_page_size);
+        fabric_connection, route_id, starts, ranges, nullptr, tensor0_page_size);
 
     uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
 
@@ -107,7 +114,7 @@ void kernel_main() {
 
     for (uint8_t i = 0; i < num_connections; i++) {
         linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            &fabric_connection.get(i),
+            &fabric_connection.get(i).sender,
             pkt_hdr_seminc,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 barrier_sem_noc_addr_in_pkt,
@@ -138,14 +145,6 @@ void kernel_main() {
                 fabric_connection, route_id, l1_read_addr, tt::tt_fabric::NocUnicastCommandHeader{noc0_dest_noc_addr});
             noc_async_writes_flushed();
             l1_read_addr += tensor0_page_size;
-
-            if constexpr (dynamic_alternate) {
-                if (PacketHeaderPool::get_num_headers(route_id) > 1) {
-                    std::swap(
-                        PacketHeaderPool::header_table[route_id].first->routing_fields.value,
-                        (PacketHeaderPool::header_table[route_id].first + 1)->routing_fields.value);
-                }
-            }
             tile_id++;
         }
 
@@ -154,21 +153,16 @@ void kernel_main() {
     // 2. mcast output ready semaphore
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
-    uint8_t num_sync_targets[] = {
-        static_cast<uint8_t>(num_sync_targets_forward), static_cast<uint8_t>(num_sync_targets_backward)};
-    if (num_sync_targets[0] == 0) {
-        num_sync_targets[0] = num_sync_targets[1];
-    }
     for (uint8_t i = 0; i < num_connections; i++) {
         linear::experimental::fabric_multicast_noc_unicast_atomic_inc(
-            &fabric_connection.get(i),
+            &fabric_connection.get(i).sender,
             pkt_hdr_seminc,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 out_ready_sem_noc_addr_in_pkt,
                 static_cast<uint16_t>(1),  // increment 1
                 32},
             starts[i],
-            num_sync_targets[i]);
+            ranges[i]);
     }
     // increment locally
     uint64_t out_ready_sem_noc_addr =

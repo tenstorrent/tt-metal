@@ -95,7 +95,7 @@ For the latest model updates and features, please see [MODEL_UPDATES.md](models/
 
 ## Model Bring-Up and Testing
 
-For information on initial model procedures, please see [Model Bring-Up and Testing](https://github.com/tenstorrent/tt-metal/tree/main/models/bringup_testing)
+For information on initial model procedures, please see [Model Bring-Up and Testing](https://github.com/tenstorrent/tt-metal/blob/main/models/docs/model_bring_up.md)
 
 ## TT-NN Tech Reports
 

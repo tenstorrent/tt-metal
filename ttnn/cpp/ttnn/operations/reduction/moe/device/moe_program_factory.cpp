@@ -6,6 +6,7 @@
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operation.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::tt_metal;
 
@@ -145,16 +146,10 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
     tt::tt_metal::CreateCircularBuffer(program, core, c_out0_config);
 
     std::vector<uint32_t> reader_compile_time_args = {
-        input_cb_index,
-        index_cb_index,
-        topk_mask_cb_index,
-        expert_mask_cb_index,
-        (uint32_t)input_is_dram,
-        (uint32_t)topk_mask_is_dram,
-        (uint32_t)expert_mask_is_dram,
-        Ht,
-        Wt,
-        k};
+        input_cb_index, index_cb_index, topk_mask_cb_index, expert_mask_cb_index, Ht, Wt, k};
+    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(topk_mask_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(expert_mask_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/reader_create_index_tensor.cpp",
@@ -173,8 +168,8 @@ operation::ProgramWithCallbacks moe_single_core_interleaved(
 
     bfloat16 bfloat_identity_scalar = bfloat16(1.0f);
     uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
-    std::vector<uint32_t> writer_compile_time_args = {
-        out_cb_index, (uint32_t)out_is_dram, Ht, k, packed_identity_scalar};
+    std::vector<uint32_t> writer_compile_time_args = {out_cb_index, Ht, k, packed_identity_scalar};
+    tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_compile_time_args);
     tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/dataflow/writer_unary_interleaved.cpp",
