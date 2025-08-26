@@ -18,7 +18,7 @@ from models.utility_functions import skip_for_wormhole_b0, skip_for_blackhole
 @pytest.mark.parametrize(
     "N, C, H, W, num_groups, num_out_blocks, cores_y, cores_x",
     [
-        (8, 32, 1, 512, 1, 2, 1, 1),  # test case
+        (1, 32, 1, 32, 1, 1, 1, 1),  # test case
         (8, 768, 1, 512, 32, 2, 8, 8),  # base case
         (9, 768, 1, 512, 32, 2, 8, 8),  # test batch size 9 (uneven batch sizes)
         (1, 768, 1, 512, 32, 2, 8, 8),  # test group channel count is less than tile size

@@ -6,6 +6,7 @@
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
+#include "debug/dprint.h"
 
 void kernel_main() {
     // clang-format off
@@ -275,8 +276,10 @@ void kernel_main() {
         for (uint32_t b = 0; b < num_batches; ++b) {
             index_g_offset = 0;
             row_offset = num_cols_per_group;
+            DPRINT << "Batch: " << b << " out of " << num_batches << ENDL();
 
             for (uint32_t m = 0; m < num_groups; ++m) {
+                DPRINT << "Group: " << m << " out of " << num_groups << ENDL();
             //The following loop is for the 3 passes of input tensor required for GroupNorm
             //First Pass: Calculates average value
             //Second Pass: Calculates the Variance value
@@ -317,6 +320,7 @@ void kernel_main() {
                                 }
                             }
                             cb_push_back(cb_in0, out_block_hw_normal);
+                            DPRINT << "input sent for iteration: " << cur_read_iteration << " out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
                         }
 #endif
                         if (cur_read_iteration == 2) {
