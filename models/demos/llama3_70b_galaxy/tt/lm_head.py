@@ -98,7 +98,7 @@ class LMHead(LightweightModule):
                         layout=ttnn.TILE_LAYOUT,
                         dtype=dtype,
                         memory_config=memory_config_prefill,
-                        # cache_file_name=cache_file_name_prefill,
+                        cache_file_name=cache_file_name_prefill,
                     )
                 )
         else:

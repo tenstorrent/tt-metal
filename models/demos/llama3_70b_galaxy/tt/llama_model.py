@@ -541,8 +541,7 @@ class TtTransformer(LightweightModule):
         It returns ttnn device tensors.
         """
         rot_mats = self.rope_setup.get_rm_rot_mats(rot_mat_idxs)
-        # x_embd = self.embd(x)
-        x_embd = x
+        x_embd = self.embd(x)
         tt_logits = self.forward(
             x_embd,
             current_pos,
