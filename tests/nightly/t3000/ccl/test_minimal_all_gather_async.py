@@ -666,10 +666,10 @@ def test_all_gather_async_interleaved_to_sharded(
     )
 
 
-def get_max_chunks_per_sync(num_devices, ag_output_shape):
+def get_max_chunks_per_sync(num_devices, ag_output_shape, num_links):
     packet_elems = 2048
     total_elems = math.prod(ag_output_shape)
-    return (total_elems // packet_elems) // num_devices
+    return (total_elems // packet_elems) // (num_devices * num_links)
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -679,8 +679,8 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape):
     [
         (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
         (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 8192, 10240], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 8192, 16384], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 8192, 10240], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        (8, [1, 1, 8192, 16384], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ],
     ids=["ag_output_shape0", "ag_output_shape1", "ag_output_shape2", "ag_output_shape3"],
 )
@@ -703,10 +703,11 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape):
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["fabric_ring"],
+    ids=["ring", "linear"],
 )
 @pytest.mark.parametrize(
     "chunks_per_sync",
@@ -719,6 +720,11 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape):
         "20-chunks",
         "10-chunks",
     ],
+)
+@pytest.mark.parametrize(
+    "num_workers_per_link",
+    [8, 4, 2, 1],
+    ids=["8-workers", "4-workers", "2-workers", "1-worker"],
 )
 def test_all_gather_chunks_per_sync(
     t3k_mesh_device,
@@ -734,9 +740,10 @@ def test_all_gather_chunks_per_sync(
     all_gather_topology,
     num_iters,
     chunks_per_sync,
+    num_workers_per_link,
 ):
     if chunks_per_sync == "MAX":
-        chunks_per_sync = get_max_chunks_per_sync(num_devices, ag_output_shape)
+        chunks_per_sync = get_max_chunks_per_sync(num_devices, ag_output_shape, num_links)
 
     logger.info(f"Running with chunks_per_sync: {chunks_per_sync}")
 
@@ -757,5 +764,5 @@ def test_all_gather_chunks_per_sync(
         use_persistent_buffers=False,
         chunks_per_sync=chunks_per_sync,
         skip_check=True,
-        num_workers_per_link=2,
+        num_workers_per_link=num_workers_per_link,
     )
