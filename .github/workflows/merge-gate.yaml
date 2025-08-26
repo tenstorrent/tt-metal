@@ -280,7 +280,7 @@ jobs:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
 
   send-slack-notification:
-    name: "Send Slack Failure Notification" # Renamed for clarity
+    name: "Send Slack Failure Notification"
     runs-on: ubuntu-latest
     needs: workflow-status
     if: >-
