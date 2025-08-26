@@ -186,7 +186,11 @@ tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
-        this->sub_device_id,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         input_shape,
         input_memory_layout,
         input_dtype,
