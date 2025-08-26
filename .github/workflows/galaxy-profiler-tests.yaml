@@ -1,4 +1,4 @@
-name: "(T3K) T3000 profiler tests"
+name: "Galaxy profiler tests"
 
 on:
   workflow_dispatch:
@@ -21,8 +21,7 @@ jobs:
     secrets: inherit
     runs-on:
       - arch-wormhole_b0
-      - config-t3000
-      - pipeline-functional
+      - topology-6u
     uses: ./.github/workflows/profiler-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
