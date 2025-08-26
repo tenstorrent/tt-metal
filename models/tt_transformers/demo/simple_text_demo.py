@@ -30,13 +30,12 @@ class TokenAccuracy:
     def __init__(self, model_name):
         self.gt_pos = -1
         self.store_predicted_tokens = []
-        file_list = [str(path) for path in Path("models/tt_transformers/tests/reference_outputs/").glob("*.refpt")]
-        reference_data_file = [f for f in file_list if model_name in f][0]
+        reference_data_file = os.path.join("models/tt_transformers/tests/reference_outputs/", model_name) + ".refpt"
         assert os.path.exists(reference_data_file)
         logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)
         self.reference_tokens = reference_data["reference_tokens"]
-        split_point = self.reference_tokens.shape[-1] // 2 + 1
+        split_point = self.reference_tokens.shape[-1] // 2
         self.input_prompt = self.reference_tokens[0, :split_point]
         self.gt_tokens = self.reference_tokens[0, split_point:]
         self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
@@ -56,7 +55,7 @@ class TokenAccuracy:
         count_t5 = 0
         matching_sz = min(len(self.gt_tokens), len(self.store_predicted_tokens))
         for i in range(matching_sz):
-            if self.gt_tokens[i].item() == self.store_predicted_tokens[i]:
+            if self.top5_tokens[i, 0].item() == self.store_predicted_tokens[i]:
                 count += 1
             if self.store_predicted_tokens[i] in self.top5_tokens[i, :]:
                 count_t5 += 1
@@ -479,6 +478,22 @@ def prepare_generator_args(
             False,  # token_accuracy
             True,  # stress_test
         ),
+        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            1024,  # max_seq_len
+            1,  # batch_size
+            500,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            True,  # stop_at_eos
+            True,  # ci_only
+            1,  # data_parallel
+            True,  # token_accuracy
+            False,  # stress_test
+        ),
     ],
     ids=[
         "batch-1",  # latency
@@ -497,6 +512,7 @@ def prepare_generator_args(
         "ci-b1-DP-16",  # CI DP 16 batch 1
         "ci-b1-DP-32",  # CI DP 32 batch 1
         "ci-stress-1",  # CI Stress test batch-1
+        "ci-token-matching",  # CI performs token accuracy matching with reference procomputed tokens
     ],
 )
 @pytest.mark.parametrize(
@@ -670,6 +686,7 @@ def test_demo_text(
 
     if token_accuracy:
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)
+        instruct = False
 
     repeat_batch_prompts = []
     for i in range(repeat_batches):
@@ -788,6 +805,7 @@ def test_demo_text(
             # Get the next token
             if device_sampling_params is not None:
                 out_tok = logits.unsqueeze(1)
+
             else:
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
@@ -1053,7 +1071,25 @@ def test_demo_text(
             step_warm_up_num_iterations=None,
             target=None,
         )
-
+        if token_accuracy:
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "top1_token_accuracy",
+                acc[0] * 100,
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
+            benchmark_data.add_measurement(
+                profiler,
+                0,
+                "inference_decode",
+                "top5_token_accuracy",
+                acc[1] * 100,
+                step_warm_up_num_iterations=None,
+                target=None,
+            )
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"{tt_device_name}-demo",
