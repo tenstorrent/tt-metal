@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 using namespace tt::tt_fabric::linear::experimental;
 

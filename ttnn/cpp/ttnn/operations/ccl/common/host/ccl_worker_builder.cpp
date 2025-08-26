@@ -11,7 +11,6 @@
 #include <tt-metalium/fabric.hpp>
 #include "tt-metalium/kernel_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include <tt-metalium/erisc_datamover_builder.hpp>
 
 #include "ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include <tt-metalium/host_api.hpp>
@@ -832,7 +831,7 @@ tt::tt_metal::KernelHandle generate_multi_command_stream_kernel_ct_args(
     const auto reserved_packet_header_CB_index =
         datamovement_kernel_config.processor == tt::tt_metal::DataMovementProcessor::RISCV_0 ? tt::CB::c_in6 : tt::CB::c_in7;
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
@@ -1027,160 +1026,6 @@ static void log_command_stream(ttnn::ccl::cmd::CclHostLowLevelCommandSequence co
     }
 }
 
-std::vector<uint32_t> generate_edm_connection_rt_args(
-    const tt::tt_fabric::SenderWorkerAdapterSpec& connection_info,
-    chip_id_t chip_id,
-    Program &program,
-    CoreRangeSet worker_cores) {
-    std::vector<uint32_t> new_rt_args;
-    auto worker_teardown_semaphore_id = CreateSemaphore(program, worker_cores, 0);
-    auto worker_buffer_index_semaphore_id = CreateSemaphore(program, worker_cores, 0);
-    tt::tt_fabric::append_worker_to_fabric_edm_sender_rt_args(
-        connection_info,
-        chip_id,
-        worker_cores,
-        worker_teardown_semaphore_id,
-        worker_buffer_index_semaphore_id,
-        new_rt_args);
-
-    return new_rt_args;
-}
-
-void generate_multi_input_command_stream_kernel_rt_args(
-    Program& program,
-    tt::tt_metal::KernelHandle kernel_id,
-    std::vector<Tensor const*> const& tensors,
-    std::vector<size_t> const& page_sizes,
-    IDevice* device,
-    uint32_t num_pages_per_edm_buffer,  // TODO: get from fabric
-    CoreRangeSet const& worker_core_range,
-    ttnn::ccl::cmd::CclHostLowLevelCommandSequence const& ccl_command_stream0,
-    std::optional<ttnn::ccl::cmd::CclHostLowLevelCommandSequence> const& ccl_command_stream1,
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& forward_fabric_connections,
-    std::optional<tt::tt_fabric::SenderWorkerAdapterSpec> const& backward_fabric_connections,
-    std::optional<std::unordered_map<const Tensor*, IDevice*>> const& tensor_device_override,
-    std::optional<std::vector<size_t>> const& tensor_indices,
-    ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider) {
-
-    bool fill_args_overrider = rt_args_overrider != nullptr;
-
-    if (fill_args_overrider) {
-        TT_FATAL(tensor_indices.has_value(), "Internal Error. Tensor indices must be provided when using rt_args_overrider");
-        const size_t tensor_count = std::count_if(tensors.begin(), tensors.end(), [](Tensor const* t) { return t != nullptr; });
-        TT_FATAL(tensor_indices.value().size() == tensor_count, "Internal Error. Tensor indices must match the number of tensors");
-        for (auto tensor_index : tensor_indices.value()) {
-            while (rt_args_overrider->size() <= tensor_index) {
-                rt_args_overrider->add_tensor();
-            }
-        }
-    }
-
-    // TODO: see if we can pull the kernel defines to understand if we built the kernel in single command stream mode
-    log_trace(
-        tt::LogOp,
-        "Generating multi command stream kernel RT args for kernel {} on core(s): {}",
-        kernel_id,
-        worker_core_range);
-    log_trace(tt::LogOp, "Command stream 0:");
-    log_command_stream(ccl_command_stream0, 1);
-    if (ccl_command_stream1) {
-        log_trace(tt::LogOp, "Command stream 1:");
-        log_command_stream(ccl_command_stream1.value(), 1);
-    }
-
-    std::vector<const std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand>*> command_streams = {
-        &ccl_command_stream0};
-    if (ccl_command_stream1.has_value()) {
-        command_streams.push_back(&ccl_command_stream1.value());
-    }
-
-    // RT ARGS
-    const size_t num_command_streams = command_streams.size();
-    TT_FATAL(
-        tensors.size() <= num_command_streams,
-        "Current CCL Command Processor kernel only supports a 1-to-1 mapping between command streams and tensors. "
-        "Switching between tensors within a command stream is future work");
-    TT_FATAL(page_sizes.size() == tensors.size(), "Number of page sizes must match with the number of tensors");
-    auto command_stream_start_arg_indices = std::vector<size_t>(num_command_streams, 0);
-    std::vector<uint32_t> rt_args;
-    rt_args.reserve(200);
-    for (size_t i = 0; i < tensors.size(); i++) {
-        if (tensors[i]) {
-            if (fill_args_overrider) {
-                rt_args_overrider->add_runtime_arg_index(tensor_indices.value()[i], rt_args.size());
-            }
-            rt_args.push_back(tensors[i]->buffer()->address());
-        } else {
-            // take up the rt arg with filler value  in case user built a kernel across a core range
-            // set with multiple command streams/tensors, but this particular core doesn't actualy need/use
-            // both tensors/command streams
-            rt_args.push_back(0xdeaddead);
-        }
-    }
-    for (size_t i = 0; i < num_command_streams; i++) {
-        rt_args.push_back(command_streams[i]->size());  // in0_read_command_slices
-        command_stream_start_arg_indices[i] = rt_args.size();
-        rt_args.push_back(0);  // in0_command_start_offset
-    }
-    rt_args.push_back(num_pages_per_edm_buffer);
-    TT_FATAL(tensors.size() == page_sizes.size(), "Number of pages must match with the number of tensors");
-    for (size_t i = 0; i < tensors.size(); i++) {
-        if (tensors[i]) {
-            rt_args.push_back(page_sizes[i]);  // in0
-        } else {
-            rt_args.push_back(0xdeaddead);
-        }
-    }
-
-    for (Tensor const* t : tensors) {
-        if (t) {
-            bool rt_args_enabled = true;
-            rt_args.push_back(rt_args_enabled);
-            if (tensor_device_override.has_value() and
-                tensor_device_override.value().find(t) != tensor_device_override.value().end()) {
-                std::ranges::copy(
-                    ttnn::ccl::emit_address_generator_runtime_args(tensor_device_override->at(t), *t),
-                    std::back_inserter(rt_args));
-            } else {
-                std::ranges::copy(
-                    ttnn::ccl::emit_address_generator_runtime_args(t->buffer()->device(), *t),
-                    std::back_inserter(rt_args));
-            }
-        } else {
-            bool rt_args_enabled = false;
-            rt_args.push_back(rt_args_enabled);
-        }
-        // else: Interleaved addrgen passes no additional args - we specify interleaved addrgen as the default
-    }
-
-    rt_args.push_back(forward_fabric_connections.has_value());
-    if (forward_fabric_connections.has_value()) {
-        const auto new_rt_args =
-            generate_edm_connection_rt_args(*forward_fabric_connections, device->id(), program, worker_core_range);
-        std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args));
-    }
-    rt_args.push_back(backward_fabric_connections.has_value());
-    if (backward_fabric_connections.has_value()) {
-        const auto new_rt_args =
-            generate_edm_connection_rt_args(*backward_fabric_connections, device->id(), program, worker_core_range);
-        std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args));
-    }
-
-    for (size_t i = 0; i < num_command_streams; i++) {
-        // Update the command stream start arg index argument to point to here (i.e. where
-        // this command stream's commands will start)
-        rt_args[command_stream_start_arg_indices[i]] = rt_args.size();
-        generate_ccl_command_stream_to_kernel_args((*command_streams[i]), i, tensor_indices, rt_args_overrider, rt_args);
-    }
-
-    log_trace(tt::LogOp, "\tMulti-input command processor RT Args");
-    for (size_t i = 0; i < rt_args.size(); i++) {
-        [[maybe_unused]] auto const& arg = rt_args[i];
-        log_trace(tt::LogOp, "\t\t{}: {}", i, arg);
-    }
-    tt::tt_metal::SetRuntimeArgs(program, kernel_id, worker_core_range, rt_args);
-
-}
 
 void generate_multi_input_command_stream_kernel_rt_args(
     Program& program,
