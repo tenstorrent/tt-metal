@@ -344,6 +344,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     const uint32_t ncores_c,
     const uint32_t max_out_nsticks_per_core,
     const uint32_t max_ref_size,
+    const uint32_t in_out_shard_size_delta,
     const Tensor& padding_config,
     const Tensor& local_config,
     const Tensor& remote_config,
@@ -490,10 +491,6 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
     const bool is_block_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     const bool is_width_sharded = input_tensor.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED;
 
-    int32_t in_out_buffer_start_delta = max_out_nsticks_per_core - input_npages;
-    if (!skip_untilize) {
-        in_out_buffer_start_delta = 0;
-    }
     const auto delta = output_tensor.buffer()->aligned_size_per_bank() - input_tensor.buffer()->aligned_size_per_bank();
     TT_ASSERT(
         src_buffer->address() == dst_buffer->address() + delta,
@@ -596,7 +593,7 @@ operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_core(
         rectangular_y,
         last_active_x,
         semaphore_id,
-        in_out_buffer_start_delta,
+        in_out_shard_size_delta,
         temp_cb_id,
         ntiles_per_block,
         input_nblocks_per_core,

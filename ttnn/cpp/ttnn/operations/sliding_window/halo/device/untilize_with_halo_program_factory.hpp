@@ -35,6 +35,7 @@ tt::tt_metal::operation::ProgramWithCallbacks inplace_untilize_with_halo_multi_c
     uint32_t ncores_c,
     uint32_t max_out_nsticks_per_core,
     uint32_t max_ref_size,
+    uint32_t in_out_shard_size_delta,
     const Tensor& padding_config,
     const Tensor& local_config,
     const Tensor& remote_config,
