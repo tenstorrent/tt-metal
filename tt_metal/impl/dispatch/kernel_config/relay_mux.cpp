@@ -19,7 +19,76 @@
 
 namespace tt::tt_metal {
 
+void RelayMux::configure_fabric_tensix_extension(
+    const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+    const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+    uint32_t link_index) {
+    TT_FATAL(
+        GetCoreType() == CoreType::WORKER, "MUX_ALL_LINKS and MUX_DISPATCH_LINK configs only support worker cores");
+
+    // Get forwarding direction and ethernet channel
+    const auto forwarding_direction =
+        tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto candidate_eth_chans =
+        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction);
+    TT_FATAL(
+        link_index < candidate_eth_chans.size(),
+        "Link index {} out of bounds for {} channels",
+        link_index,
+        candidate_eth_chans.size());
+    const uint16_t eth_channel = candidate_eth_chans[link_index];
+
+    // Get configuration from FabricTensixConfig using existing APIs
+    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& tensix_config = fabric_context.get_tensix_config();
+
+    // Use existing APIs to get RISC ID and configuration
+    auto risc_id = tensix_config.get_risc_id_for_channel(device_->id(), eth_channel);
+    auto mux_config = tensix_config.get_mux_config(risc_id);
+
+    static_config_.buffer_base_address = static_cast<uint32_t>(tensix_config.get_base_l1_address(risc_id));
+    static_config_.num_full_size_channels = static_cast<uint32_t>(mux_config->get_num_full_size_channels());
+    static_config_.num_header_only_channels = static_cast<uint32_t>(mux_config->get_num_header_only_channels());
+    static_config_.buffer_size_bytes = static_cast<uint32_t>(tensix_config.get_buffer_size_bytes_full_size_channel());
+
+    dispatch_channel_offset_ = tensix_config.get_dispatch_channel_offset_for_eth_channel(device_->id(), eth_channel);
+
+    CoreCoord logical_core = tensix_config.get_core_for_channel(device_->id(), eth_channel);
+    logical_core_ = tt_cxy_pair(device_->id(), logical_core.x, logical_core.y);
+
+    mux_kernel_config_ = mux_config;
+    mux_ct_args_ = mux_kernel_config_->get_fabric_mux_compile_time_args();
+    mux_rt_args_ = mux_kernel_config_->get_fabric_mux_run_time_args(
+        src_fabric_node_id, dst_fabric_node_id, link_index, *program_, {logical_core_});
+}
+
 void RelayMux::GenerateStaticConfigs() {
+    const auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+
+    // Common setup - calculate destination device and fabric topology once
+    int destination_device_id = -1;
+    TT_FATAL(!(d2h_ && device_->is_mmio_capable()), "There is no D2H (return path) for MMIO devices");
+    if (d2h_) {
+        destination_device_id = tt::tt_metal::FDKernel::GetUpstreamDeviceId(device_id_);
+    } else {
+        destination_device_id = tt::tt_metal::FDKernel::GetDownstreamDeviceId(device_id_, tunnel_id_);
+    }
+
+    const auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device_id_);
+    const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(destination_device_id);
+    auto link_index = get_dispatch_link_index(src_fabric_node_id, dst_fabric_node_id, device_);
+
+    // populate the configs from fabric tensix config, if enabled for dispatch
+    bool has_tensix_extension_for_dispatch =
+        fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_ALL_LINKS ||
+        fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_DISPATCH_LINK;
+    if (has_tensix_extension_for_dispatch) {
+        configure_fabric_tensix_extension(src_fabric_node_id, dst_fabric_node_id, link_index);
+        return;
+    }
+
+    // Existing logic for DISABLED and MUX configs
     uint32_t l1_base = 0;
     uint32_t l1_size = 0;
 
@@ -84,20 +153,6 @@ void RelayMux::GenerateStaticConfigs() {
 
     uint32_t mux_buffer_end = mux_kernel_config_->get_memory_map_end_address();
     TT_ASSERT(mux_buffer_end < l1_size, "RelayMux Buffer End {} Exceeds Max L1 {}", mux_buffer_end, l1_size);
-
-    int destination_device_id = -1;
-    TT_FATAL(!(d2h_ && device_->is_mmio_capable()), "There is no D2H (return path) for MMIO devices");
-    if (d2h_) {
-        // Get the device which is upstream
-        destination_device_id = tt::tt_metal::FDKernel::GetUpstreamDeviceId(device_id_);
-    } else {
-        // Get the device which is downstream on the specified tunnel
-        destination_device_id = tt::tt_metal::FDKernel::GetDownstreamDeviceId(device_id_, tunnel_id_);
-    }
-    const auto src_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(device_id_);
-    const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(destination_device_id);
-
-    auto link_index = get_dispatch_link_index(src_fabric_node_id, dst_fabric_node_id, device_);
     log_debug(
         tt::LogMetal,
         "RelayMux Device:{}, HeaderCh:{}, FullCh:{}, FullB:{}, Logical:{}, Virtual: {}, D2H: {} Channel Size: {}, Num "
@@ -123,6 +178,13 @@ void RelayMux::GenerateStaticConfigs() {
 void RelayMux::GenerateDependentConfigs() {}
 
 void RelayMux::CreateKernel() {
+    const auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+
+    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_ALL_LINKS ||
+        fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_DISPATCH_LINK) {
+        // Skip kernel creation - handled by fabric tensix builder
+        return;
+    }
     auto mux_kernel =
         configure_kernel_variant(dispatch_kernel_file_names[FABRIC_MUX], mux_ct_args_, {}, false, false, false);
 
@@ -136,7 +198,7 @@ int RelayMux::GetWorkerChannelIndex(int worker_id, tt::tt_fabric::FabricMuxChann
                                                                                                  : downstream_kernels_;
     for (int i = 0; i < kernels.size(); ++i) {
         if (kernels[i]->GetNodeId() == worker_id) {
-            return i;
+            return i + dispatch_channel_offset_;
         }
     }
 

@@ -1084,11 +1084,9 @@ void build_tt_fabric_program(
 
             auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
             bool is_dispatch_link = device_has_dispatch_tunnel && link_idx == dispatch_link_idx;
-            auto fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED;
-            // if not the link used by dispatch, get the fabric router config with tensix extension.
-            if (fabric_tensix_extension_enabled && !is_dispatch_link) {
-                fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::MUX;
-            }
+
+            // Get the global fabric tensix configuration
+            auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
             const auto& curr_edm_config = fabric_context.get_fabric_router_config(
                 fabric_edm_type, fabric_edm_axis, fabric_tensix_config, eth_direction);
 
@@ -1104,13 +1102,23 @@ void build_tt_fabric_program(
                 eth_direction);
             edm_builders.insert({eth_chan, edm_builder});
 
-            if (fabric_tensix_extension_enabled) {
-                // Only create tensix builder if this channel is not used by dispatch
-                if (!is_dispatch_link) {
-                    auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
-                        device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
-                    tensix_builders.insert({eth_chan, tensix_builder});
-                }
+            // Create tensix builder based on the fabric tensix config
+            bool should_create_tensix_builder = false;
+            if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_ALL_LINKS) {
+                // MUX_ALL_LINKS: Create tensix builder for ALL links (dispatch and non-dispatch)
+                should_create_tensix_builder = true;
+            } else if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_DISPATCH_LINK) {
+                // MUX_DISPATCH_LINK: Create tensix builder ONLY for dispatch links
+                should_create_tensix_builder = is_dispatch_link;
+            } else if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
+                // MUX: Create tensix builder only for non-dispatch links (existing behavior)
+                should_create_tensix_builder = !is_dispatch_link;
+            }
+            if (should_create_tensix_builder) {
+                auto tensix_builder = tt::tt_fabric::FabricTensixDatamoverBuilder::build(
+                    device, *fabric_program_ptr, fabric_node_id, remote_fabric_node_id, eth_chan, eth_direction);
+                tensix_builders.insert({eth_chan, tensix_builder});
+            }
             }
         }
 
@@ -1131,7 +1139,15 @@ void build_tt_fabric_program(
         auto& edm_builder1 = edm_builders.at(eth_chan_dir1);
         auto& edm_builder2 = edm_builders.at(eth_chan_dir2);
 
-        if (fabric_tensix_extension_enabled) {
+        const auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+
+        if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_DISPATCH_LINK) {
+            // In MUX_DISPATCH_LINK mode: only EDM-to-EDM connections between fabric routers
+            edm_builder1.connect_to_downstream_edm(edm_builder2);
+        } else if (
+            fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_ALL_LINKS ||
+            fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX) {
+            // Use tensix builders for connections when available
             if (tensix_builders.find(eth_chan_dir1) != tensix_builders.end() &&
                 tensix_builders.find(eth_chan_dir2) != tensix_builders.end()) {
                 auto& tensix_builder1 = tensix_builders.at(eth_chan_dir1);

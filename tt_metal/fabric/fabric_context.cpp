@@ -267,6 +267,19 @@ tt::tt_fabric::FabricEriscDatamoverConfig& FabricContext::get_fabric_router_conf
                 direction);
             return *this->router_with_mux_config_[direction].get();
             break;
+        case tt::tt_fabric::FabricTensixConfig::MUX_ALL_LINKS:
+            // MUX_ALL_LINKS uses the same router config as MUX (with tensix extension)
+            TT_FATAL(
+                this->router_with_mux_config_[direction] != nullptr,
+                "Error, fabric router config with mux extension is uninitialized for direction {}",
+                direction);
+            return *this->router_with_mux_config_[direction].get();
+            break;
+        case tt::tt_fabric::FabricTensixConfig::MUX_DISPATCH_LINK:
+            // MUX_DISPATCH_LINK uses the default router config (no tensix extension between fabric routers)
+            TT_FATAL(this->router_config_ != nullptr, "Error, fabric router config is uninitialized");
+            return *this->router_config_.get();
+            break;
         default: TT_FATAL(false, "Error, invalid fabric_tensix_config: {}", fabric_tensix_config);
     }
 };

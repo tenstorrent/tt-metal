@@ -63,6 +63,13 @@ private:
     bool d2h_ = false;
     int tunnel_id_ = 0;
 
+    size_t dispatch_channel_offset_ = 0;
+    // Helper method for fabric tensix extension configs
+    void configure_fabric_tensix_extension(
+        const tt::tt_fabric::FabricNodeId& src_fabric_node_id,
+        const tt::tt_fabric::FabricNodeId& dst_fabric_node_id,
+        uint32_t link_index);
+
 public:
     RelayMux(
         int node_id,

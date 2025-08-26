@@ -27,7 +27,10 @@ enum class FabricConfig : uint32_t {
 // - downstream fabric router.
 enum class FabricTensixConfig : uint32_t {
     DISABLED = 0,  // not using tensix extension
-    MUX = 1,       // using mux kernel as tensix extension
+    MUX = 1,  // using mux kernel as tensix extension, only the non-dispatch plane has mux in-between fabric routers
+    MUX_ALL_LINKS = 2,      // both the non-dispatch and dispatch routing plane has mux in-between fabric routers
+    MUX_DISPATCH_LINK = 3,  // only the dispatch plane has mux in-between worker and fabric router, there wont be any
+                            // mux between fabric routers, since the non-dispatch link also not having mux in-between.
 };
 
 enum class FabricReliabilityMode : uint32_t {

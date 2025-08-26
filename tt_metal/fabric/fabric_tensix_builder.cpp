@@ -73,6 +73,9 @@ static size_t find_max_eth_channels(const std::vector<tt_metal::IDevice*>& all_a
             for (const auto& eth_chan : active_fabric_eth_channels[direction]) {
                 auto link_idx = control_plane.get_routing_plane_id(fabric_node_id, eth_chan);
 
+                // in MUX_ALL_LINKS config, no need to check dispatch link, since we will be building the tensix builder
+                // for it as well. so we need to push all the eth chan to the active_channels in MUX_DISPATCH_LINK, only
+                // the dispatch link will be building the tensix builder for it
                 if (!(has_dispatch_tunnel && link_idx == dispatch_link_idx)) {
                     non_dispatch_active_channels.push_back(eth_chan);
                 }
@@ -174,6 +177,13 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
 
+    // in MUX_ALL_LINKS config, we need extra channels (full size and header only) for the dispatch routing plane
+    // num_channels_ should have the dispatch channels at the end, after normal fabric channels. we need to get the
+    // number of upstream kernels and downstream kernels from dispatch side (perhaps from relay mux or topology.cpp,
+    // depends on how the upstream kernels and downstream kernels are calculated). in MUX_DISPATCH_LINK config, we dont
+    // have any other channels, except for one worker channel at the first, then all other channels are just dispatch
+    // channels.
+
     // Get buffer size from fabric context
     buffer_size_bytes_full_size_channel_ =
         fabric_context.get_fabric_packet_header_size_bytes() + tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
@@ -191,23 +201,46 @@ void FabricTensixDatamoverConfig::calculate_buffer_allocations() {
     size_t space_per_risc = l1_size / num_used_riscs_per_tensix_;     // Split between BRISC and NCRISC
     space_per_risc = (space_per_risc / l1_alignment) * l1_alignment;  // Align down to L1 alignment
 
-    // Get the maximum number of channels per RISC based on fabric topology from fabric context
+    // Get fabric tensix config type
+    const auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+
+    // Calculate fabric channels based on topology
+    size_t fabric_channels = 0;
     auto topology = fabric_context.get_fabric_topology();
 
     switch (topology) {
         case tt::tt_fabric::Topology::Linear:
-            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_1d_linear;
+            fabric_channels = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_1d_linear;
             break;
         case tt::tt_fabric::Topology::Mesh:
-            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_mesh;
+            fabric_channels = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_mesh;
             break;
         case tt::tt_fabric::Topology::Ring:
-            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_1d_ring;
+            fabric_channels = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_1d_ring;
             break;
         case tt::tt_fabric::Topology::Torus:
-            num_channels_ = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_torus;
+            fabric_channels = tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_torus;
             break;
         default: TT_THROW("unknown fabric topology: {}", topology); break;
+    }
+
+    // Add dispatch channels for new MUX configs
+    size_t dispatch_channels = 0;
+    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_ALL_LINKS ||
+        fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_DISPATCH_LINK) {
+        uint32_t num_hw_cqs = tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_num_hw_cqs();
+        dispatch_channels = num_hw_cqs * 2;  // Static allocation: num_hw_cqs * 2 channels
+
+        if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_DISPATCH_LINK) {
+            // Only dispatch channels + 1 worker channel
+            num_channels_ = 1 + dispatch_channels;
+        } else {
+            // MUX_ALL_LINKS: fabric + dispatch channels
+            num_channels_ = fabric_channels + dispatch_channels;
+        }
+    } else {
+        // Existing behavior for DISABLED and MUX configs
+        num_channels_ = fabric_channels;
     }
 
     // Calculate buffers per channel based on available space and max channels
@@ -342,6 +375,36 @@ std::pair<uint32_t, uint32_t> FabricTensixDatamoverConfig::get_termination_addre
     auto mux_config = get_mux_config(risc_id);
     return std::make_pair(
         mux_config->get_termination_signal_address(), tt::tt_fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+}
+
+// Helper method for RelayMux dispatch channel offset calculation
+
+size_t FabricTensixDatamoverConfig::get_dispatch_channel_offset_for_eth_channel(
+    chip_id_t device_id, uint32_t eth_chan_id) const {
+    const auto fabric_tensix_config = tt::tt_metal::MetalContext::instance().get_fabric_tensix_config();
+
+    if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_DISPATCH_LINK) {
+        // In MUX_DISPATCH_LINK: first channel is worker, then dispatch channels
+        return 1;
+    } else if (fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::MUX_ALL_LINKS) {
+        // In MUX_ALL_LINKS: fabric channels first, then dispatch channels
+        const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+        auto topology = fabric_context.get_fabric_topology();
+
+        switch (topology) {
+            case tt::tt_fabric::Topology::Linear:
+                return tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_1d_linear;
+            case tt::tt_fabric::Topology::Mesh:
+                return tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_mesh;
+            case tt::tt_fabric::Topology::Ring:
+                return tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_1d_ring;
+            case tt::tt_fabric::Topology::Torus:
+                return tt::tt_fabric::FabricEriscDatamoverConfig::num_sender_channels_2d_torus;
+            default: TT_THROW("unknown fabric topology: {}", topology);
+        }
+    }
+
+    return 0;  // No offset for other configs
 }
 
 // FabricTensixDatamoverBuilder implementation

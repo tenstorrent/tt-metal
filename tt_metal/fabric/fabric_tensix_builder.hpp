@@ -73,6 +73,9 @@ public:
     size_t get_channel_credits_stream_id(chip_id_t device_id, uint32_t eth_chan_id, uint32_t channel_id) const;
     std::pair<uint32_t, uint32_t> get_termination_address_and_signal(chip_id_t device_id, uint32_t eth_chan_id) const;
 
+    // Helper method for RelayMux dispatch channel offset calculation
+    size_t get_dispatch_channel_offset_for_eth_channel(chip_id_t device_id, uint32_t eth_chan_id) const;
+
 private:
     std::vector<CoreCoord> logical_fabric_mux_cores_;
     std::vector<CoreCoord> logical_dispatch_mux_cores_;
