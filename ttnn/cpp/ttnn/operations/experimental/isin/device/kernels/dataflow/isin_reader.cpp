@@ -116,8 +116,8 @@ FORCE_INLINE void isin_subchunks(
         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(elements_l1_read_addr);
     volatile tt_l1_ptr elements_number_type* test_elements_subchunk_ptr =
         reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(test_elements_l1_read_addr);
-    volatile tt_l1_ptr elements_number_type* output_subchunk_ptr =
-        reinterpret_cast<volatile tt_l1_ptr elements_number_type*>(output_l1_write_addr);
+    volatile tt_l1_ptr output_number_type* output_subchunk_ptr =
+        reinterpret_cast<volatile tt_l1_ptr output_number_type*>(output_l1_write_addr);
     for (uint32_t elements_index = 0; elements_index < elements_subchunk_size; ++elements_index) {
         for (uint32_t test_elements_index = 0; test_elements_index < test_elements_subchunk_size;
              ++test_elements_index) {
@@ -175,11 +175,11 @@ void kernel_main() {
     constexpr uint32_t elements_start_subchunk_id = 0;
     constexpr uint32_t test_elements_start_subchunk_id = 0;
 
-    for (uint32_t elements_subchunk_id = elements_start_subchunk_id; elements_subchunk_id < elements_end_subchunk_id;
-         ++elements_subchunk_id) {
-        const uint32_t elements_subchunk_size = std::min(
-            ctas.elements_size - elements_subchunk_id * ctas.single_fetch_subchunk_size,
-            ctas.single_fetch_subchunk_size);
+    for (uint32_t elements_subchunk_id = elements_start_subchunk_id, elements_offset = 0;
+         elements_offset < ctas.elements_size;
+         ++elements_subchunk_id, elements_offset += ctas.single_fetch_subbchunk_size) {
+        const uint32_t elements_subchunk_size =
+            std::min(ctas.elements_size - elements_offset, ctas.single_fetch_subchunk_size);
         load_to_cb<elements_number_type, decltype(elements_addr_gtor)>(
             ctas.elements_cb, elements_addr_gtor, elements_subchunk_id, elements_subchunk_size);
         cb_wait_front(ctas.elements_cb, ONE_PAGE);
@@ -188,12 +188,11 @@ void kernel_main() {
         const uint32_t output_l1_write_addr = get_write_ptr(cb.output_cb);
         prefill_output(output_l1_write_addr, elements_subchunk_size);
 
-        for (uint32_t test_elements_subchunk_id = test_elements_start_subchunk_id;
-             test_elements_subchunk_id < test_elements_end_subchunk_id;
-             ++test_elements_subchunk_id) {
-            const uint32_t test_elements_subchunk_size = std::min(
-                ctas.test_elements_size - ctas.single_fetch_subchunk_size * test_elements_subchunk_id,
-                ctas.single_fetch_subchunk_size);
+        for (uint32_t test_elements_subchunk_id = test_elements_start_subchunk_id, test_elements_offset = 0;
+             test_elements_offset < ctas.test_elements_size;
+             ++test_elements_subchunk_id, test_elements_offset += ctss.single_fetch_subchunk_size) {
+            const uint32_t test_elements_subchunk_size =
+                std::min(ctas.test_elements_size - test_elements_offset, ctas.single_fetch_subchunk_size);
             load_to_cb<test_elements_number_type, decltype(test_elements_addr_gtor)>(
                 ctas.test_elements_cb, test_elements_addr_gtor, offset_bytes, subchunk_size);
             cb_wait_front(ctas.test_elements_cb, ONE_PAGE);
