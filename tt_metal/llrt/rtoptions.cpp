@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <iostream>
 
 #include "assert.hpp"
 #include <umd/device/tt_core_coordinates.h>
@@ -249,17 +250,6 @@ RunTimeOptions::RunTimeOptions() {
     if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
         this->log_kernels_compilation_commands = true;
     }
-
-    {
-        auto* env = std::getenv("TT_METAL_PROFILER_DIR");
-        if (env) {
-            profiler_logs_dir_ = std::string(env) + "/";
-            is_profiler_logs_dir_specified_ = true;
-        } else if (is_root_dir_specified()) {
-            profiler_logs_dir_ = root_dir + "/generated/profiler/.logs/";
-            is_profiler_logs_dir_specified_ = true;
-        }
-    }
 }
 
 const std::string& RunTimeOptions::get_root_dir() const {
@@ -270,12 +260,30 @@ const std::string& RunTimeOptions::get_root_dir() const {
     return root_dir;
 }
 
-const std::string& RunTimeOptions::get_profiler_logs_dir() const {
-    if (!is_profiler_logs_dir_specified()) {
+std::string RunTimeOptions::get_profiler_logs_dir() const {
+    // Read environment variables fresh each time this function is called
+    auto* env = std::getenv("TT_METAL_PROFILER_DIR");
+    std::string profiler_logs_dir;
+
+    if (env) {
+        profiler_logs_dir = std::string(env) + "/";
+    } else if (is_root_dir_specified()) {
+        profiler_logs_dir = root_dir + "/generated/profiler/.logs/";
+    } else {
         TT_THROW("Cannot determine PROFILER logs directory.");
     }
 
-    return profiler_logs_dir_;
+    std::cout << "BAZINGA!!!! Profiler logs directory: " << profiler_logs_dir << std::endl;
+    return profiler_logs_dir;
+}
+
+bool RunTimeOptions::is_profiler_logs_dir_specified() const {
+    // Check if TT_METAL_PROFILER_DIR is set or if we can determine a default path
+    auto* env = std::getenv("TT_METAL_PROFILER_DIR");
+    if (env) {
+        return true;
+    }
+    return is_root_dir_specified();
 }
 
 const std::string& RunTimeOptions::get_cache_dir() const {
