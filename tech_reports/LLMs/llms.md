@@ -1223,7 +1223,6 @@ The second key concept to scaling a model to multiple devices are Collective Com
 - ReduceScatter
 - AllReduce
 
-See the [CCL Developer Guide](../EthernetMultichip/CclDeveloperGuide.md) for more comprehensive coverage about CCL and their implementation details. Our library of supported operations can be found [here](../EthernetMultichip/CclDeveloperGuide.md#op-list-op-list).
 
 #### 3.3.1 AllGather
 The AllGather operation collects data from all devices, concatenating each chunk along a specified dimension. The result is stored on each device (replication).
