@@ -8,10 +8,8 @@
 #include <enchantum/enchantum.hpp>
 #include <numeric>
 #include <string>
-#include <vector>
 
 #include "blackhole/bh_hal.hpp"
-#include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
 #include "hal_types.hpp"
@@ -55,6 +53,13 @@ static constexpr float INF_BH = 1.7014e+38;
 namespace tt {
 
 namespace tt_metal {
+
+namespace blackhole {
+
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
+#include "core_config.h"  // ProgrammableCoreType
+
+}
 
 class HalJitBuildQueryBlackHole : public hal_1xx::HalJitBuildQueryBase {
 public:
@@ -189,6 +194,7 @@ public:
 };
 
 void Hal::initialize_bh() {
+    using namespace blackhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
