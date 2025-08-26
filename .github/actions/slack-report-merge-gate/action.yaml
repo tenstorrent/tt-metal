@@ -21,7 +21,7 @@ runs:
       with:
         payload: |
           {
-            "text": "${{ steps.format_mentions.outputs.mentions }} ${{ github.workflow }} is failing: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. failing commit: https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }}"
+            "text": "${{ steps.format_mentions.outputs.mentions }} ${{ github.workflow }} is failing: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}. \nfailing commit: https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }}"
           }
       env:
         SLACK_WEBHOOK_URL: ${{ inputs.slack_webhook_url }}
