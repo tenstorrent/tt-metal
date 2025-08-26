@@ -62,11 +62,10 @@ to run a sweep to find the ideal config.
 Python scripts for reproducing the plots are included in the tech report directory.
 
 
-We vary three different parameters in this experiment:
-
-We will vary three different parameters for this experiment
-1. Dimensions: The sizes of the matrices along each axis, denoted as m , n , and k . (m ,k ) represents the size of the input tensor, while (k ,n ) is the size of the activation tensor. Larger tensors require more computation since the number of operations needed to perform matrix multiplication increases as O(m*k*n).
-2. Computation Fidelity: Referred to as LoFi, HiFi2, HiFi3, and HiFi4. Internally, the matrix engine can adjust the number of bits being processed, which affects both the precision of the results and the computation speed.
+We will vary three different parameters for this experiment:
+1. Dimensions: The sizes of the matrices along each axis, denoted as m , n and k . (m, k) represents the size of the input tensor, while (k, n) is the size of the activation tensor. 
+Larger tensors require more computation since the number of operations needed to perform matrix multiplication increases as O(m*k*n).
+2. Computation Fidelity: Referred to as LoFi, HiFi2, HiFi3 and HiFi4. Internally, the matrix engine can adjust the number of bits being processed, which affects both the precision of the results and the computation speed.
 3. Input/Output Datatype: Larger datatypes require more memory for storage. As a result, more precise datatypes can become bottlenecked if stored in DRAM.
 
 For more details please refer to the tech reports [Matrix Engine](../matrix_engine/matrix_engine.md) and [Data Formats](../data_formats/data_formats.md)
