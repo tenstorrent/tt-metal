@@ -5,6 +5,7 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "hostdevcommon/common_values.hpp"
+#include "welford_combine.h"
 
 void kernel_main() {
     // clang-format off
@@ -232,6 +233,24 @@ void kernel_main() {
                     cb_reserve_back(cb_ex_global, 2);
 
                     cb_wait_front(cb_ex_partial, 2);
+
+                    auto mean_ptr = get_read_ptr(cb_ex_partial);
+                    auto var_ptr = mean_ptr + single_tile_size_bytes;
+                    // Read mean and variance arrays from cb_ex_partial, then combine using Welford
+                    // Assume mean_ptr and var_ptr are uint32_t L1 addresses; cast to float* for access
+                    float* means = reinterpret_cast<float*>(mean_ptr);
+                    float* vars = reinterpret_cast<float*>(var_ptr);
+                    WelfordStats result = combine_welford(32, means, vars, 1);
+                    float mean = result.mean;
+                    float var = result.variance;
+
+                    // Write this to cb_ex_global
+                    auto result_ptr = get_write_ptr(cb_ex_global);
+                    float* result_fptr = reinterpret_cast<float*>(result_ptr);
+                    result_fptr[0] = mean;
+                    result_fptr[1] = var;
+                    cb_push_back(cb_ex_global, 2);
+
                     // Signal to sender that our partial data is ready
                     noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
                     // Wait for sender to signal that it has received our partial data
@@ -241,7 +260,6 @@ void kernel_main() {
 
                     // Wait for sender to signal that it has sent the global data
                     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-                    cb_push_back(cb_ex_global, 2);
                 }
             }
 
@@ -294,4 +312,5 @@ void kernel_main() {
         cb_pop_front(cb_repack_out, per_core_N);
     }
 #endif
+    DPRINT << "Kernel finished" << ENDL();
 }
