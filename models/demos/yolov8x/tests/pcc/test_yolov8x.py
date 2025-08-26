@@ -65,7 +65,6 @@ def test_yolov8x_640(device, input_tensor, use_pretrained_weights, model_locatio
         state_dict = torch_model.state_dict()
     parameters = custom_preprocessor(device, state_dict, inp_h, inp_w)
     ttnn_model = TtYolov8xModel(device=device, parameters=parameters)
-    parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
 
     n, c, h, w = input_tensor.shape
     if c == 3:
