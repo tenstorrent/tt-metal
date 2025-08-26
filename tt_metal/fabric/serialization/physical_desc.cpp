@@ -77,6 +77,7 @@ std::vector<uint8_t> serialize_physical_descriptor_to_bytes(
 
             for (const auto& edge : connection_edges) {
                 std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::EthConnection>> eth_connections;
+                eth_connections.reserve(edge.second.size());
                 for (const auto& eth_conn : edge.second) {
                     eth_connections.push_back(create_eth_connection(eth_conn));
                 }
@@ -105,6 +106,8 @@ std::vector<uint8_t> serialize_physical_descriptor_to_bytes(
 
         for (const auto& edge : connection_edges) {
             std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::ExitNodeConnection>> exit_node_connections;
+            exit_node_connections.reserve(edge.second.size());
+
             for (const auto& exit_conn : edge.second) {
                 exit_node_connections.push_back(create_exit_node_connection(exit_conn));
             }
