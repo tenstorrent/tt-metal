@@ -9,7 +9,9 @@ from models.demos.yolov8x.tt.ttnn_yolov8x_utils import ttnn_decode_bboxes
 from models.experimental.yolo_common.yolo_utils import determine_num_cores, get_core_grid_from_num_cores
 
 
-def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
+def sharded_concat(
+    input_tensors, num_cores=64, dim=3, skip_S2I=True
+):  # expected input tensors to be in fp16, RM, same (h*w)
     shard_height = (input_tensors[0].shape[2] + num_cores - 1) // num_cores
 
     input_sharded_memory_configs = []
@@ -36,7 +38,8 @@ def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensor
     )
 
     output = ttnn.concat(sharded_inputs, dim, memory_config=out_sharded_memory_config)
-    output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
+    if not skip_S2I:
+        output = ttnn.sharded_to_interleaved(output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     return output
 
@@ -241,6 +244,7 @@ class TtC2f:
         block_shard=False,
         deallocate_activation=False,
         output_layout=ttnn.TILE_LAYOUT,
+        reshard=False,
     ):
         self.device = device
         self.parameters = parameters
@@ -264,6 +268,7 @@ class TtC2f:
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
+            reshard_if_not_optimal=reshard,
         )
 
         self.cv1_b = TtConv(
@@ -275,6 +280,7 @@ class TtC2f:
             change_shard=self.change_shard,
             deallocate_activation=self.deallocate_activation,
             output_layout=self.output_layout,
+            reshard_if_not_optimal=reshard,
         )
 
         self.cv2 = TtConv(
@@ -344,7 +350,7 @@ class TtSppf:
         self.batch_size = batch_size
 
         self.cv1 = TtConv(device, parameters, f"{path}.cv1", input_params=input_params[0], deallocate_activation=True)
-        self.cv2 = TtConv(device, parameters, f"{path}.cv2", input_params=input_params[1])
+        self.cv2 = TtConv(device, parameters, f"{path}.cv2", input_params=input_params[1], reshard_if_not_optimal=True)
 
     def __call__(self, x):
         cv1, out_h, out_w = self.cv1(x)
@@ -367,7 +373,7 @@ class TtSppf:
         y[0] = ttnn.sharded_to_interleaved(y[0])
         y[0] = ttnn.to_layout(y[0], ttnn.ROW_MAJOR_LAYOUT)
 
-        x = sharded_concat(y)
+        x = sharded_concat(y, skip_S2I=False)
         for i in range(len(y)):
             ttnn.deallocate(y[i])
 
@@ -653,6 +659,7 @@ class TtDetectionModel:
             shortcut=False,
             bfloat8=True,
             block_shard=True,
+            reshard=True,
             input_params=c2f_configs["model.12"]["input_params"],
         )
         self.c2f_15 = TtC2f(
@@ -661,6 +668,7 @@ class TtDetectionModel:
             "model.15",
             n=3,
             shortcut=False,
+            reshard=True,
             input_params=c2f_configs["model.15"]["input_params"],
         )
         self.conv_16 = TtConv(device, parameters, "model.16", input_params=[3, 2, 1, 320, 320], block_shard=True)
@@ -671,6 +679,7 @@ class TtDetectionModel:
             n=3,
             shortcut=False,
             block_shard=True,
+            reshard=True,
             input_params=c2f_configs["model.18"]["input_params"],
         )
         self.conv_19 = TtConv(device, parameters, "model.19", input_params=[3, 2, 1, 640, 640], block_shard=True)
@@ -787,7 +796,7 @@ class TtDetectionModel:
         conv_19 = ttnn.sharded_to_interleaved(conv_19, ttnn.L1_MEMORY_CONFIG)
         conv_19 = ttnn.to_layout(conv_19, ttnn.ROW_MAJOR_LAYOUT)
         nine = ttnn.to_layout(nine, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = sharded_concat([conv_19, nine])
+        x = sharded_concat([conv_19, nine], skip_S2I=False)
         ttnn.deallocate(nine)
         ttnn.deallocate(conv_19)
         c2f_21, out_h, out_w = self.c2f_21(x)
