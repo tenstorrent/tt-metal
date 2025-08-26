@@ -21,8 +21,9 @@ const std::string& get_reports_dir();
 std::chrono::duration<float> get_timeout_duration_for_operations();
 
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
+// Please note that the FuncBody is going to loop until the FuncWait returns false.
 template <typename FuncBody, typename FuncWait, typename OnTimeout, typename... Args>
-auto wait_with_timeout(
+auto loop_and_wait_with_timeout(
     FuncBody&& func_body,
     FuncWait&& wait_condition,
     OnTimeout&& on_timeout,
@@ -32,9 +33,8 @@ auto wait_with_timeout(
 
     do {
         func_body(args...);
-        std::this_thread::yield();
-
         if (timeout_duration.count() > 0.0f) {
+            std::this_thread::yield();
             auto current_time = std::chrono::high_resolution_clock::now();
             auto elapsed = std::chrono::duration<float>(current_time - start_time).count();
 

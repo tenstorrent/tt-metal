@@ -127,7 +127,7 @@ FDMeshCommandQueue::FDMeshCommandQueue(
 FDMeshCommandQueue::~FDMeshCommandQueue() {
     if (in_use_) {
         // If the FDMeshCommandQueue is being used, have it clear worker state
-        // before going out of scope. This is a blocking operation -     it waits
+        // before going out of scope. This is a blocking operation - it waits
         // for all queued up work to complete.
         // This allows physical device close to proceed correctly, since we still
         // rely on single device CQs during this step. Not needed for functionality
@@ -730,18 +730,13 @@ void FDMeshCommandQueue::read_completion_queue() {
                 auto mesh_read_descriptor = *(completion_queue_reads_.pop());
                 std::visit(
                     [&](auto&& mesh_read_descriptor) {
-                        try {
-                            using T = std::decay_t<decltype(mesh_read_descriptor)>;
-                            if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
-                                this->copy_buffer_data_to_user_space(mesh_read_descriptor);
-                            } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
-                                this->read_completion_queue_event(mesh_read_descriptor);
-                            } else {
-                                this->read_l1_data_from_completion_queue(mesh_read_descriptor);
-                            }
-                        } catch (const std::runtime_error& e) {
-                            // Re-throw to be caught by the outer try-catch block
-                            throw;
+                        using T = std::decay_t<decltype(mesh_read_descriptor)>;
+                        if constexpr (std::is_same_v<T, MeshBufferReadDescriptor>) {
+                            this->copy_buffer_data_to_user_space(mesh_read_descriptor);
+                        } else if constexpr (std::is_same_v<T, MeshReadEventDescriptor>) {
+                            this->read_completion_queue_event(mesh_read_descriptor);
+                        } else {
+                            this->read_l1_data_from_completion_queue(mesh_read_descriptor);
                         }
                     },
                     mesh_read_descriptor);
