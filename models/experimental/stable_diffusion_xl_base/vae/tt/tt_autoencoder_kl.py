@@ -9,7 +9,12 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare
 
 
 class TtAutoencoderKL(nn.Module):
-    def __init__(self, device, state_dict, model_config, batch_size=1):
+    def __init__(
+        self,
+        device,
+        state_dict,
+        model_config,
+    ):
         super().__init__()
 
         self.device = device
@@ -20,7 +25,11 @@ class TtAutoencoderKL(nn.Module):
         self.dilation = (1, 1)
         self.groups = 1
 
-        self.decoder = TtDecoder(device, state_dict, model_config, batch_size=batch_size)
+        self.decoder = TtDecoder(
+            device,
+            state_dict,
+            model_config,
+        )
 
         post_quant_conv_weights = state_dict[f"post_quant_conv.weight"].squeeze()
         post_quant_conv_bias = state_dict[f"post_quant_conv.bias"]
