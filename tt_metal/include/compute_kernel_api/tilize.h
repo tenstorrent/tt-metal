@@ -42,6 +42,16 @@ ALWI void tilize_init(uint32_t icb, uint32_t block, uint32_t ocb) {
 #endif
 }
 
+ALWI void tilize_dest_init(uint32_t icb, uint32_t block) {
+    UNPACK((llk_unpack_tilize_init(icb, block)));
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          false /*is_int_en*/,
+          true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+}
+
 #if (defined(REDUCE_OP) and defined(REDUCE_DIM)) or defined(__DOXYGEN__)
 
 // clang-format off
@@ -116,6 +126,20 @@ ALWI void tilize_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t
 #endif
 }
 
+ALWI void tilize_dest_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t block) {
+    MATH((llk_math_eltwise_unary_datacopy_init<
+          A2D,
+          DST_ACCUM_MODE,
+          BroadcastType::NONE,
+          false /*is_int_en*/,
+          true /*tilize en*/>(false /*transpose of faces*/, false /*transpose within 16x16 face*/, new_icb)));
+    // This reconfig call checks if old operand has different data format to
+    // new operand idx, otherwise no reconfig call occurs
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+    UNPACK((llk_unpack_tilize_init(new_icb, block)));
+}
+
 // clang-format off
 /**
  * Performs the tilize operation on a block.
@@ -146,6 +170,22 @@ ALWI void tilize_block(
         // Release dest
         MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
         PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+    }
+}
+
+ALWI void tilize_dest_block(uint32_t icb, uint32_t block, uint32_t dst_idx, uint32_t input_tile_index = 0) {
+    UNPACK((llk_unpack_tilize_block(icb, block, input_tile_index)));
+
+    for (uint32_t t = 0; t < block; t++) {
+        // Acquire dst
+        // MATH((llk_math_wait_for_dest_available()));
+
+        // Datacopy
+        MATH((llk_math_eltwise_unary_datacopy<A2D, DST_ACCUM_MODE, BroadcastType::NONE, UnpackToDestEn>(
+            dst_idx /*dst index*/)));
+
+        // Release dest
+        // MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
     }
 }
 
@@ -208,6 +248,8 @@ ALWI void tilize_uninit(uint32_t icb, uint32_t ocb) {
 #endif
 }
 
+ALWI void tilize_dest_uninit(uint32_t icb) { UNPACK((llk_unpack_tilize_uninit(icb))); }
+
 // clang-format off
 /**
  * Uninitializes the tilize operation and reconfigures the unpacker with CB data types.
@@ -231,6 +273,12 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_init(ocb)));
 #endif
+}
+
+ALWI void tilize_dest_uninit_with_dt(uint32_t old_icb, uint32_t new_icb) {
+    UNPACK((llk_unpack_tilize_uninit(old_icb)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
 }
 
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb) {
