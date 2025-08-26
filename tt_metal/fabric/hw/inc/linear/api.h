@@ -400,6 +400,31 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write_with_state(
  *
  * | Argument                              | Description                             | Type                                           | Required |
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
+ * | num_hops                              | Per-header unicast hop counts           | uint8_t                                        | True     |
+ * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
+ * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                       | False    |
+ */
+// clang-format on
+template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t num_hops,
+    CommandHeaderT command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    packet_header->to_chip_unicast(num_hops);
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+    populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
+}
+
+// clang-format off
+/**
+ * Unicast write (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                           | Required |
+ * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
  * | route_id                              | Route whose headers will be updated     | uint8_t                                        | True     |
  * | num_hops                              | Per-header unicast hop counts           | uint8_t*                                       | True     |
  * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
@@ -410,9 +435,8 @@ template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT = std::null
 FORCE_INLINE void fabric_unicast_noc_unicast_write_set_state(
     uint8_t route_id, uint8_t* num_hops, CommandHeaderT command_header = nullptr, uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        packet_header->to_chip_unicast(num_hops[i]);
-        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
-        populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
+        fabric_unicast_noc_unicast_write_set_state<UpdateMask>(
+            packet_header, num_hops[i], command_header, packet_size_bytes);
     });
 }
 
@@ -523,6 +547,30 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_with_state(
  *
  * | Argument                              | Description                             | Type                                           | Required |
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                   | True     |
+ * | num_hops                              | Per-header unicast hop counts           | uint8_t                                       | True     |
+ * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
+ */
+// clang-format on
+template <
+    UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
+    typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header, uint8_t num_hops, CommandHeaderT command_header) {
+    packet_header->to_chip_unicast(num_hops);
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_ATOMIC_INC;
+    packet_header->payload_size_bytes = 0;
+    populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, command_header);
+}
+
+// clang-format off
+/**
+ * Unicast atomic increment (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                           | Required |
+ * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
  * | route_id                              | Route whose headers will be updated     | uint8_t                                        | True     |
  * | num_hops                              | Per-header unicast hop counts           | uint8_t*                                       | True     |
  * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
@@ -534,10 +582,7 @@ template <
 FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
     uint8_t route_id, uint8_t* num_hops, CommandHeaderT command_header) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        packet_header->to_chip_unicast(num_hops[i]);
-        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_ATOMIC_INC;
-        packet_header->payload_size_bytes = 0;
-        populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, command_header);
+        fabric_unicast_noc_unicast_atomic_inc_set_state<UpdateMask>(packet_header, num_hops[i], command_header);
     });
 }
 
@@ -667,6 +712,31 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
  *
  * Return value: None
  *
+ * | Argument                              | Description                             | Type                          | Required |
+ * |---------------------------------------|-----------------------------------------|-------------------------------|----------|
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*  | True     |
+ * | num_hops                              | Per-header unicast hop counts           | uint8_t                      | True     |
+ * | command_header                        | Template command header                 | CommandHeaderT                | False    |
+ * | packet_size_bytes                     | Payload size override if masked         | uint16_t                      | False    |
+ */
+// clang-format on
+template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t num_hops,
+    CommandHeaderT command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    packet_header->to_chip_unicast(num_hops);
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
+    populate_unicast_scatter_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
+}
+
+// clang-format off
+/**
+ * Unicast scatter write (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
  * | Argument                              | Description                             | Type          | Required |
  * |---------------------------------------|-----------------------------------------|---------------|----------|
  * | route_id                              | Route whose headers will be updated     | uint8_t       | True     |
@@ -679,9 +749,8 @@ template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT = st
 FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     uint8_t route_id, uint8_t* num_hops, CommandHeaderT command_header = nullptr, uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        packet_header->to_chip_unicast(num_hops[i]);
-        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
-        populate_unicast_scatter_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
+        fabric_unicast_noc_scatter_write_set_state<UpdateMask>(
+            packet_header, num_hops[i], command_header, packet_size_bytes);
     });
 }
 
@@ -793,6 +862,28 @@ FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_with_state(
  *
  * | Argument                              | Description                             | Type                         | Required |
  * |---------------------------------------|-----------------------------------------|------------------------------|----------|
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*  | True     |
+ * | num_hops                              | Per-header unicast hop counts           | uint8_t                      | True     |
+ * | command_header                        | Template command header                 | CommandHeaderT               | False    |
+ */
+// clang-format on
+template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header, uint8_t num_hops, CommandHeaderT command_header) {
+    packet_header->to_chip_unicast(num_hops);
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_INLINE_WRITE;
+    packet_header->payload_size_bytes = 0;
+    populate_unicast_inline_fields<UpdateMask>(packet_header, command_header);
+}
+
+// clang-format off
+/**
+ * Unicast inline write (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                         | Required |
+ * |---------------------------------------|-----------------------------------------|------------------------------|----------|
  * | route_id                              | Route whose headers will be updated     | uint8_t                      | True     |
  * | num_hops                              | Per-header unicast hop counts           | uint8_t*                     | True     |
  * | command_header                        | Template command header                 | CommandHeaderT               | False    |
@@ -802,10 +893,7 @@ template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std
 FORCE_INLINE void fabric_unicast_noc_unicast_inline_write_set_state(
     uint8_t route_id, uint8_t* num_hops, CommandHeaderT command_header) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        packet_header->to_chip_unicast(num_hops[i]);
-        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_INLINE_WRITE;
-        packet_header->payload_size_bytes = 0;
-        populate_unicast_inline_fields<UpdateMask>(packet_header, command_header);
+        fabric_unicast_noc_unicast_inline_write_set_state<UpdateMask>(packet_header, num_hops[i], command_header);
     });
 }
 
@@ -936,6 +1024,31 @@ FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_with_state(
  *
  * | Argument                       | Description                             | Type                             | Required |
  * |--------------------------------|-----------------------------------------|----------------------------------|----------|
+ * | packet_header                  | Packet header to use                    | volatile PACKET_HEADER_TYPE*      | True     |
+ * | num_hops                       | Per-header unicast hop counts           | uint8_t                          | True     |
+ * | command_header                 | Template fused command header           | CommandHeaderT                   | False    |
+ * | packet_size_bytes              | Payload size override if masked         | uint16_t                         | False    |
+ */
+// clang-format on
+template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t num_hops,
+    CommandHeaderT command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    packet_header->to_chip_unicast(num_hops);
+    packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
+    populate_unicast_fused_atomic_inc_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
+}
+
+// clang-format off
+/**
+ * Fused unicast write + atomic increment (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                       | Description                             | Type                             | Required |
+ * |--------------------------------|-----------------------------------------|----------------------------------|----------|
  * | route_id                       | Route whose headers will be updated     | uint8_t                          | True     |
  * | num_hops                       | Per-header unicast hop counts           | uint8_t*                         | True     |
  * | command_header                 | Template fused command header           | CommandHeaderT                   | False    |
@@ -946,9 +1059,8 @@ template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = 
 FORCE_INLINE void fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state(
     uint8_t route_id, uint8_t* num_hops, CommandHeaderT command_header = nullptr, uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        packet_header->to_chip_unicast(num_hops[i]);
-        packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
-        populate_unicast_fused_atomic_inc_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
+        fabric_unicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
+            packet_header, num_hops[i], command_header, packet_size_bytes);
     });
 }
 
@@ -1082,6 +1194,33 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_with_state(
  *
  * | Argument                              | Description                             | Type                                 | Required |
  * |---------------------------------------|-----------------------------------------|--------------------------------------|----------|
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*         | True     |
+ * | start_distance                        | Per-header multicast start distance     | uint8_t                             | True     |
+ * | range                                 | Per-header multicast range              | uint8_t                             | True     |
+ * | command_header                        | Template command header                 | CommandHeaderT                       | False    |
+ * | packet_size_bytes                     | Payload size override if masked         | uint16_t                             | False    |
+ */
+// clang-format on
+template <UnicastWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t start_distance,
+    uint8_t range,
+    CommandHeaderT command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
+    populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
+}
+
+// clang-format off
+/**
+ * Multicast unicast write (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                 | Required |
+ * |---------------------------------------|-----------------------------------------|--------------------------------------|----------|
  * | route_id                              | Route whose headers will be updated     | uint8_t                              | True     |
  * | start_distance                        | Per-header multicast start distance     | uint8_t*                             | True     |
  * | range                                 | Per-header multicast range              | uint8_t*                             | True     |
@@ -1097,9 +1236,8 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance[i], range[i]});
-        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_WRITE;
-        populate_unicast_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
+        fabric_multicast_noc_unicast_write_set_state<UpdateMask>(
+            packet_header, start_distance[i], range[i], command_header, packet_size_bytes);
     });
 }
 
@@ -1214,6 +1352,34 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_with_state(
  *
  * | Argument                              | Description                             | Type                                          | Required |
  * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
+ * | start_distance                        | Per-header multicast start distance     | uint8_t                                       | True     |
+ * | range                                 | Per-header multicast range              | uint8_t                                       | True     |
+ * | command_header                        | Template command header                 | CommandHeaderT                                | False    |
+ */
+// clang-format on
+template <
+    UnicastAtomicIncUpdateMask UpdateMask = UnicastAtomicIncUpdateMask::None,
+    typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t start_distance,
+    uint8_t range,
+    CommandHeaderT command_header = nullptr) {
+    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_ATOMIC_INC;
+    packet_header->payload_size_bytes = 0;
+    populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, command_header);
+}
+
+// clang-format off
+/**
+ * Multicast unicast atomic inc (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
  * | route_id                              | Route whose headers will be updated     | uint8_t                                       | True     |
  * | start_distance                        | Per-header multicast start distance     | uint8_t*                                      | True     |
  * | range                                 | Per-header multicast range              | uint8_t*                                      | True     |
@@ -1226,10 +1392,8 @@ template <
 FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
     uint8_t route_id, uint8_t* start_distance, uint8_t* range, CommandHeaderT command_header = nullptr) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance[i], range[i]});
-        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_ATOMIC_INC;
-        packet_header->payload_size_bytes = 0;
-        populate_unicast_atomic_inc_fields<UpdateMask>(packet_header, command_header);
+        fabric_multicast_noc_unicast_atomic_inc_set_state<UpdateMask>(
+            packet_header, start_distance[i], range[i], command_header);
     });
 }
 
@@ -1365,6 +1529,33 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
  *
  * | Argument                              | Description                             | Type                                          | Required |
  * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
+ * | start_distance                        | Per-header multicast start distance     | uint8_t                                       | True     |
+ * | range                                 | Per-header multicast range              | uint8_t                                       | True     |
+ * | command_header                       | Template command header                  | CommandHeaderT                                | False    |
+ * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
+ */
+// clang-format on
+template <UnicastScatterWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t start_distance,
+    uint8_t range,
+    CommandHeaderT command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
+    populate_unicast_scatter_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
+}
+
+// clang-format off
+/**
+ * Multicast unicast scatter write (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
  * | route_id                              | Route whose headers will be updated     | uint8_t                                       | True     |
  * | start_distance                        | Per-header multicast start distance     | uint8_t*                                      | True     |
  * | range                                 | Per-header multicast range              | uint8_t*                                      | True     |
@@ -1380,9 +1571,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance[i], range[i]});
-        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_SCATTER_WRITE;
-        populate_unicast_scatter_write_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
+        fabric_multicast_noc_scatter_write_set_state<UpdateMask>(
+            packet_header, start_distance[i], range[i], command_header, packet_size_bytes);
     });
 }
 
@@ -1497,6 +1687,29 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_with_state(
  *
  * | Argument                              | Description                             | Type                                           | Required |
  * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
+ * | start_distance                        | Per-header multicast start distance     | uint8_t                                       | True     |
+ * | range                                 | Per-header multicast range              | uint8_t                                       | True     |
+ * | command_header                        | Template command header                 | CommandHeaderT                                 | False    |
+ */
+// clang-format on
+template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header, uint8_t start_distance, uint8_t range, CommandHeaderT command_header) {
+    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
+    packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_INLINE_WRITE;
+    packet_header->payload_size_bytes = 0;
+    populate_unicast_inline_fields<UpdateMask>(packet_header, command_header);
+}
+
+// clang-format off
+/**
+ * Multicast unicast inline write (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                           | Required |
+ * |---------------------------------------|-----------------------------------------|------------------------------------------------|----------|
  * | route_id                              | Route whose headers will be updated     | uint8_t                                        | True     |
  * | start_distance                        | Per-header multicast start distance     | uint8_t*                                       | True     |
  * | range                                 | Per-header multicast range              | uint8_t*                                       | True     |
@@ -1507,10 +1720,8 @@ template <UnicastInlineWriteUpdateMask UpdateMask, typename CommandHeaderT = std
 FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
     uint8_t route_id, uint8_t* start_distance, uint8_t* range, CommandHeaderT command_header) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance[i], range[i]});
-        packet_header->noc_send_type = tt::tt_fabric::NOC_UNICAST_INLINE_WRITE;
-        packet_header->payload_size_bytes = 0;
-        populate_unicast_inline_fields<UpdateMask>(packet_header, command_header);
+        fabric_multicast_noc_unicast_inline_write_set_state<UpdateMask>(
+            packet_header, start_distance[i], range[i], command_header);
     });
 }
 
@@ -1651,6 +1862,33 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_with_state(
  *
  * | Argument                              | Description                             | Type                                          | Required |
  * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
+ * | packet_header                         | Packet header to use                    | volatile PACKET_HEADER_TYPE*                  | True     |
+ * | start_distance                        | Per-header multicast start distance     | uint8_t                                       | True     |
+ * | range                                 | Per-header multicast range              | uint8_t                                       | True     |
+ * | command_header                        | Template fused command header           | CommandHeaderT                                | False    |
+ * | packet_size_bytes                     | Payload size override if masked         | uint16_t                                      | False    |
+ */
+// clang-format on
+template <UnicastFusedAtomicIncUpdateMask UpdateMask, typename CommandHeaderT = std::nullptr_t>
+FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t start_distance,
+    uint8_t range,
+    CommandHeaderT command_header = nullptr,
+    uint16_t packet_size_bytes = 0) {
+    packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance, range});
+    packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
+    populate_unicast_fused_atomic_inc_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
+}
+
+// clang-format off
+/**
+ * Multicast fused unicast write + atomic increment (set-state): pre-configures headers for repeated use across the route.
+ *
+ * Return value: None
+ *
+ * | Argument                              | Description                             | Type                                          | Required |
+ * |---------------------------------------|-----------------------------------------|-----------------------------------------------|----------|
  * | route_id                              | Route whose headers will be updated     | uint8_t                                       | True     |
  * | start_distance                        | Per-header multicast start distance     | uint8_t*                                      | True     |
  * | range                                 | Per-header multicast range              | uint8_t*                                      | True     |
@@ -1666,9 +1904,8 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        packet_header->to_chip_multicast(tt::tt_fabric::MulticastRoutingCommandHeader{start_distance[i], range[i]});
-        packet_header->noc_send_type = tt::tt_fabric::NOC_FUSED_UNICAST_ATOMIC_INC;
-        populate_unicast_fused_atomic_inc_fields<UpdateMask>(packet_header, packet_size_bytes, command_header);
+        fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
+            packet_header, start_distance[i], range[i], command_header, packet_size_bytes);
     });
 }
 
