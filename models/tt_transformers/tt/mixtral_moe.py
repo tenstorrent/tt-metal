@@ -117,6 +117,7 @@ class TtMoeLayer(LightweightModule):
             topk_values, topk_indices = ttnn.topk(gate_logits_1SB8, 32)
             topk_values = ttnn.add(topk_values, self.top2_mask_11BB)
             mask_B2 = ttnn.eqz(topk_indices)
+            mask_B2 = ttnn.typecast(mask_B2, dtype=ttnn.bfloat16)
             weights_1SB1 = ttnn.sum(ttnn.softmax(topk_values, dim=-1) * mask_B2, dim=3)
             topk_values.deallocate(True)
             topk_indices.deallocate(True)
@@ -125,6 +126,7 @@ class TtMoeLayer(LightweightModule):
         gate_logits_1SB8.deallocate()
         # MLP and masking
         weights = expert_i_HH(input_i_1SBH, mode=mode)
+
         if mode == "prefill":
             weights_1SB1 = ttnn.unsqueeze(weights_1SB1, dim=3)
             results_11BH = ttnn.mul(weights, weights_1SB1)
@@ -134,57 +136,34 @@ class TtMoeLayer(LightweightModule):
         weights.deallocate(True)
         weights_1SB1.deallocate(True)
 
-        # All gather
-        if mode == "prefill":
-            output = tt_all_reduce(
-                results_11BH,
-                self.mesh_device,
-                cluster_axis=1,
-                tt_ccl=self.tt_ccl,
-                dim=3,
-                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-                num_all_gather_links=self.args.num_all_gather_links,
-                sharded=(mode == "decode"),
-                memory_config=(w2_out.memory_config() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG),
-                dtype=self.args.ccl_dtype,
-                use_composite=False,
-                topology=self.args.ccl_topology(),
-            )
-            # Ensure dim 0 and 1 are 1
-            original_shape = output.shape
-            output = ttnn.reshape(
-                output, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
-            )
+        seq_len = results_11BH.shape[-2]
 
-        else:  # Decode mode
-            seq_len = results_11BH.shape[-2]
+        if seq_len >= 2048 and mode == "decode":  # Reshape back to intended shape
+            results_11BH = ttnn.reshape(results_11BH, [1, 1, seq_len, self.model_args.dim])
 
-            if seq_len >= 2048:  # Reshape back to intended shape
-                results_11BH = ttnn.reshape(results_11BH, [1, 1, seq_len, self.model_args.dim])
+        output = tt_all_reduce(
+            results_11BH,
+            self.mesh_device,
+            tt_ccl=self.tt_ccl,
+            cluster_axis=0,
+            dim=3,
+            num_reduce_scatter_links=self.args.num_reduce_scatter_links,
+            num_all_gather_links=self.args.num_all_gather_links,
+            sharded=(mode == "decode"),
+            memory_config=(results_11BH.memory_config() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG),
+            dtype=self.args.ccl_dtype,
+            use_composite=False,
+            topology=self.args.ccl_topology(),
+        )
 
-            output = tt_all_reduce(
-                results_11BH,
-                self.mesh_device,
-                tt_ccl=self.tt_ccl,
-                cluster_axis=1,
-                dim=3,
-                num_reduce_scatter_links=self.args.num_reduce_scatter_links,
-                num_all_gather_links=self.args.num_all_gather_links,
-                sharded=(mode == "decode"),
-                memory_config=(results_11BH.memory_config() if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG),
-                dtype=self.args.ccl_dtype,
-                use_composite=False,
-                topology=self.args.ccl_topology(),
-            )
+        # Ensure dim 0 and 1 are 1
+        original_shape = output.shape
+        output = ttnn.reshape(
+            output, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
+        )
+
+        if mode == "decode":  # Decode mode
             results_11BH.deallocate(True)
-
-            # # Ensure dim 0 and 1 are 1
-            original_shape = output.shape
-
-            output = ttnn.reshape(
-                output, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
-            )
-
             output = ttnn.to_memory_config(
                 output,
                 self.model_config["DECODE_RESIDUAL_MEMCFG"],

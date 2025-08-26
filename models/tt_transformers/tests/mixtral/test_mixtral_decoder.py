@@ -32,7 +32,8 @@ def convert2ref(state_dict):
     "batch",
     (32,),
 )
-def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
+@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch, device_params):
     """
     b: batch
     s: sequence length
@@ -145,15 +146,15 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
         logger.info(pcc_message)
 
         if passing:
-            logger.info("Mistral Decoder Block Passed!")
+            logger.info("Mixtral Decoder Block Passed!")
         else:
-            logger.warning("Mistral Decoder Block Failed!")
+            logger.warning("Mixtral Decoder Block Failed!")
             all_tests_pass = False
 
         current_rot_mat = ttnn.linear(rot_matrix, current_rot_mat)
 
     if all_tests_pass:
-        logger.info(f"All {generation_length} Mistral decode iterations Passed!")
+        logger.info(f"All {generation_length} Mixtral decode iterations Passed!")
     else:
-        logger.warning("One or more iterations of Mistral decode Failed!")
+        logger.warning("One or more iterations of Mixtral decode Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
