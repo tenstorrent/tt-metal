@@ -161,8 +161,11 @@ get_sender_receiver_cores(std::vector<std::shared_ptr<distributed::MeshDevice>> 
                 }
                 auto sender_device = sender_mesh_device->get_devices()[0];
                 auto receiver_device = receiver_mesh_device->get_devices()[0];
+                sender_receivers.push_back(
                     {sender_mesh_device, receiver_mesh_device, sender_eth_core, receiver_eth_core});
                 log_info(
+                    tt::LogTest,
+                    "Sender: {} Receiver: {} Sender Eth: {} Receiver Eth: {}",
                     sender_device->id(),
                     receiver_device->id(),
                     sender_eth_core.str(),
