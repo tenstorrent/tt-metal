@@ -149,3 +149,29 @@ target_link_libraries(
         test_common_libs
 )
 target_sources(test_fabric_1d_bw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test_fabric_edm.cpp)
+
+# cabling_generator
+
+add_executable(cabling_generator)
+target_include_directories(
+    cabling_generator
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/)
+target_link_libraries(
+    cabling_generator
+    PRIVATE
+        tt_metal
+        protobuf 
+)
+set_target_properties(
+    cabling_generator
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric)
+target_sources(
+    cabling_generator 
+    PRIVATE         
+        ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/cabling_generator.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/cabling.pb.cc
+        ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/deployment.pb.cc
+)

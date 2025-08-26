@@ -1,13 +1,12 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 /**
  * Cabling Generator
- * Dependencies: protobuf
- *     Installation: sudo apt install protobuf-compiler
- *                   sudo apt install libprotobuf-dev
+ *    Dependencies: protobuf
  *
- *    Compile command: g++ cabling_generator.cpp deployment.pb.cc cabling.pb.cc -o cabling_generator \
- *                     -lprotobuf -o cabling_generator
- *
- *    TODO: Add to CMakeLists.txt for ease of use.
+ *    Description: Generates a cut sheet CSV file based on deployment and cabling specifications.
  *
  *    Usage: ./cabling_generator <deployment.textproto> <cabling.textproto>
  */
@@ -137,8 +136,7 @@ int main(int argc, char* argv[]) {
         output_file << host_info_b.hall() << "," << host_info_b.aisle() << "," << std::setw(2) << host_info_b.rack()
                     << "," << host_info_b.shelf_u() << "," << connection.ep_b().tray() << ","
                     << connection.ep_b().port() << "," << label.str() << ",";
-        output_file << cable_length_str.at(cable_l) << ","                   // Cable Length
-                    << ((cable_l == OPTICAL_CABLE) ? "Optical" : "QSFP_DD")  // Cable Type
+        output_file << cable_length_str.at(cable_l) << "," << ((cable_l == OPTICAL_CABLE) ? "Optical" : "QSFP_DD")
                     << std::endl;
     }
 
