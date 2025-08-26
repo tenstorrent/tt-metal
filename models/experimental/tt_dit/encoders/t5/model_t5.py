@@ -9,7 +9,7 @@ from ...utils.tensor import bf16_tensor
 from ...utils.substate import substate, indexed_substates
 from ...parallel.manager import CCLManager
 from ...parallel.config import EncoderParallelConfig
-from ...layers.feedforward import ColParallelLinear
+from ...layers.feedforward import ColParallelLinear, RowParallelLinear
 import math
 from ...layers.normalization import RMSNorm
 
@@ -205,14 +205,14 @@ class T5DenseGatedActDense:
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
             init=True,
         )
-        self.wo = ColParallelLinear(
+        self.wo = RowParallelLinear(
             in_features=self.config.ff_dim,
             out_features=self.config.embed_dim,
             bias=False,
             mesh_device=self.mesh_device,
             mesh_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            ccl_manager=self.ccl_manager,
             init=True,
-            shard_dim=-2,
         )
 
     def load_state_dict(self, state_dict):
@@ -221,29 +221,28 @@ class T5DenseGatedActDense:
         self.wo.load_state_dict({"weight": state_dict["wo.weight"]})
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # breakpoint()
         gelu = new_gelu_activation(self.wi0(x))
         linear = self.wi1(x)
         x = gelu * linear
         hidden_states = self.wo(x)
-
-        hidden_states_shape = list(hidden_states.shape)
         hidden_states = ttnn.unsqueeze(hidden_states, 0)
 
         if self.parallel_config.tensor_parallel.factor > 1:
-            hidden_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
-                hidden_states,
-                dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                topology=self.ccl_manager.topology,
-                cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
-            )
+            # hidden_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
+            #     hidden_states,
+            #     dim=3,
+            #     multi_device_global_semaphore=self.ccl_manager.get_rs_ping_pong_semaphore(),
+            #     num_links=1,
+            #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            #     topology=self.ccl_manager.topology,
+            #     cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
+            # )
 
             hidden_states = ttnn.experimental.all_gather_async(
-                hidden_states_scattered,
+                hidden_states,
                 persistent_output_buffer=self.ccl_manager.get_ag_ping_pong_buffer(
-                    hidden_states_scattered.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
+                    hidden_states.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
@@ -252,7 +251,8 @@ class T5DenseGatedActDense:
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        hidden_states = ttnn.reshape(hidden_states, hidden_states_shape, hidden_states.shape)
+            breakpoint()
+        hidden_states = ttnn.squeeze(hidden_states, 0)
         return hidden_states
 
 
@@ -291,9 +291,11 @@ class T5EncoderLayer:
         )
 
         hidden_states_residual1 = attn_output + hidden_states
+
         hidden_states_ff = self.ff(
             hidden_states_residual1, ccl_manager=self.ccl_manager, parallel_config=self.parallel_config
         )
+        breakpoint()
         return hidden_states_ff + hidden_states_residual1
 
 

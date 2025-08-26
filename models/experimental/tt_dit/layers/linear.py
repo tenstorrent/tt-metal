@@ -81,27 +81,25 @@ class ColParallelLinear:
         mesh_device=None,
         mesh_axis=0,
         init=False,
-        shard_dim=-1,
     ):
         self.in_features = in_features
         self.out_features = out_features
         self.activation_fn = activation_fn
         self.mesh_device = mesh_device
         self.mesh_axis = mesh_axis
-        self.shard_dim = shard_dim
         if init:
             self.weight = bf16_tensor(
                 torch.randn(in_features, out_features),
                 device=self.mesh_device,
                 mesh_axis=self.mesh_axis,
-                shard_dim=self.shard_dim,
+                shard_dim=-1,
             )
             if bias:
                 self.bias = bf16_tensor(
                     torch.randn(1, out_features),
                     device=self.mesh_device,
                     mesh_axis=self.mesh_axis,
-                    shard_dim=self.shard_dim,
+                    shard_dim=-1,
                 )
             else:
                 self.bias = None
@@ -124,10 +122,10 @@ class ColParallelLinear:
 
         if transform is not None:
             weight, bias = transform(weight, bias)
-        self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=self.shard_dim)
+        self.weight = bf16_tensor(weight, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
         if bias is not None:
             bias = bias.reshape(1, -1)
-            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=self.shard_dim)
+            self.bias = bf16_tensor(bias, device=self.mesh_device, mesh_axis=self.mesh_axis, shard_dim=-1)
         else:
             self.bias = None
 
