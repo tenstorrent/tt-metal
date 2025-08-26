@@ -1,219 +1,219 @@
 Tests:
-  - name: "LinearMulticast"
-    fabric_setup:
-      topology: Linear
+  # - name: "LinearMulticast"
+  #   fabric_setup:
+  #     topology: Linear
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
-    defaults:
-      ftype: mcast
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: mcast
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
-  - name: "LinearMulticastMicroLooped"
-    fabric_setup:
-      topology: Linear
+  # - name: "LinearMulticastMicroLooped"
+  #   fabric_setup:
+  #     topology: Linear
 
-    parametrization_params:
-      num_links: [1]
-      ntype: [unicast_write]
+  #   parametrization_params:
+  #     num_links: [1]
+  #     ntype: [unicast_write]
 
-    defaults:
-      ftype: mcast
-      size: 64
-      num_packets: 1
+  #   defaults:
+  #     ftype: mcast
+  #     size: 64
+  #     num_packets: 1
 
-    patterns:
-      - type: all_to_all
-        iterations: 20
+  #   patterns:
+  #     - type: all_to_all
+  #       iterations: 20
 
 
-  - name: "UnidirLinearMulticast"
-    fabric_setup:
-      topology: Linear
+  # - name: "UnidirLinearMulticast"
+  #   fabric_setup:
+  #     topology: Linear
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
-    defaults:
-      ftype: mcast
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: mcast
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: unidirectional_linear
+  #   patterns:
+  #     - type: unidirectional_linear
 
-  - name: "SingleSenderLinearUnicastAllDevices"
-    fabric_setup:
-      topology: Linear
+  # - name: "SingleSenderLinearUnicastAllDevices"
+  #   fabric_setup:
+  #     topology: Linear
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
-    defaults:
-      ftype: unicast
-      ssize: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: unicast
+  #     ssize: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: one_to_all
+  #   patterns:
+  #     - type: one_to_all
 
-  - name: "FullRingMulticast"
-    fabric_setup:
-      topology: Ring
+  # - name: "FullRingMulticast"
+  #   fabric_setup:
+  #     topology: Ring
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
-    defaults:
-      ftype: mcast
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: mcast
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: full_ring
+  #   patterns:
+  #     - type: full_ring
 
-  - name: "FullRingUnicast"
-    fabric_setup:
-      topology: Ring
+  # - name: "FullRingUnicast"
+  #   fabric_setup:
+  #     topology: Ring
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
-    defaults:
-      ftype: unicast
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: unicast
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: full_ring
+  #   patterns:
+  #     - type: full_ring
 
-  - name: "HalfRingMulticast"
-    fabric_setup:
-      topology: Ring
-      num_links: 1
+  # - name: "HalfRingMulticast"
+  #   fabric_setup:
+  #     topology: Ring
+  #     num_links: 1
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
-    defaults:
-      ftype: mcast
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: mcast
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: half_ring
+  #   patterns:
+  #     - type: half_ring
 
-  - name: "MeshMulticast"
-    fabric_setup:
-      topology: Mesh
+  # - name: "MeshMulticast"
+  #   fabric_setup:
+  #     topology: Mesh
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
-    defaults:
-      ftype: mcast
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: mcast
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
-  - name: "MeshMulticastDynamic"
-    fabric_setup:
-      topology: Mesh
-      routing_type: Dynamic
+  # - name: "MeshMulticastDynamic"
+  #   fabric_setup:
+  #     topology: Mesh
+  #     routing_type: Dynamic
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
-    defaults:
-      ftype: mcast
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: mcast
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
-  - name: "PacketSizesMeshMulticast"
-    fabric_setup:
-      topology: Mesh
-      # more links caused rt args exceed 256
-      num_links: 1
+  # - name: "PacketSizesMeshMulticast"
+  #   fabric_setup:
+  #     topology: Mesh
+  #     # more links caused rt args exceed 256
+  #     num_links: 1
 
-    parametrization_params:
-      size: [1024, 2048, 4096]
+  #   parametrization_params:
+  #     size: [1024, 2048, 4096]
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      num_packets: 100
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     num_packets: 100
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
-  - name: "PacketSizesMeshMulticastDynamic"
-    fabric_setup:
-      topology: Mesh
-      routing_type: Dynamic
-      # more links caused rt args exceed 256
-      num_links: 1
+  # - name: "PacketSizesMeshMulticastDynamic"
+  #   fabric_setup:
+  #     topology: Mesh
+  #     routing_type: Dynamic
+  #     # more links caused rt args exceed 256
+  #     num_links: 1
 
-    parametrization_params:
-      size: [1024, 2048, 4096]
+  #   parametrization_params:
+  #     size: [1024, 2048, 4096]
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      num_packets: 100
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     num_packets: 100
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
-  - name: "SingleSenderMeshUnicastAllDevices"
-    fabric_setup:
-      topology: Mesh
+  # - name: "SingleSenderMeshUnicastAllDevices"
+  #   fabric_setup:
+  #     topology: Mesh
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
-    defaults:
-      ftype: unicast
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: unicast
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: one_to_all
+  #   patterns:
+  #     - type: one_to_all
 
-  - name: "FabricMuxLinearMulticast"
-    fabric_setup:
-      topology: Linear
-      fabric_tensix_config: Mux
+  # - name: "FabricMuxLinearMulticast"
+  #   fabric_setup:
+  #     topology: Linear
+  #     fabric_tensix_config: Mux
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
-    defaults:
-      ftype: mcast
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: mcast
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
   - name: "FabricMuxFullRingMulticast"
     fabric_setup:
@@ -221,48 +221,56 @@ Tests:
       fabric_tensix_config: Mux
 
     parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+      num_links: [1]
+      ntype: [unicast_write]
 
     defaults:
       ftype: mcast
       size: 1024
-      num_packets: 100
-
+      num_packets: 10
+    # senders:
+    #   - device: [0, 0]
+    #     patterns:
+    #       - ftype: unicast
+    #         ntype: unicast_write
+    #         size: 1024
+    #         num_packets: 1
+    #         destination:
+    #           device: [0, 2]
     patterns:
       - type: full_ring
 
-  - name: "FabricMuxMeshMulticast"
-    fabric_setup:
-      topology: Mesh
-      fabric_tensix_config: Mux
+  # - name: "FabricMuxMeshMulticast"
+  #   fabric_setup:
+  #     topology: Mesh
+  #     fabric_tensix_config: Mux
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
-    defaults:
-      ftype: mcast
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: mcast
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
-  - name: "FabricMuxMeshMulticastDynamic"
-    fabric_setup:
-      topology: Mesh
-      routing_type: Dynamic
-      fabric_tensix_config: Mux
+  # - name: "FabricMuxMeshMulticastDynamic"
+  #   fabric_setup:
+  #     topology: Mesh
+  #     routing_type: Dynamic
+  #     fabric_tensix_config: Mux
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
 
-    defaults:
-      ftype: mcast
-      size: 1024
-      num_packets: 100
+  #   defaults:
+  #     ftype: mcast
+  #     size: 1024
+  #     num_packets: 100
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all

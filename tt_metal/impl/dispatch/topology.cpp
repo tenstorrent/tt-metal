@@ -1074,6 +1074,13 @@ void build_tt_fabric_program(
             remote_fabric_node_id.chip_id,
             wrap_around_mesh);
 
+        log_info(
+            tt::LogTest,
+            "fabric_node_id {}, direction {}, fabric_edm_type {}",
+            fabric_node_id,
+            direction,
+            fabric_edm_type);
+
         // Create fabric tensix builder for this ethernet channel
         // Skip the link used by dispatch using relay mux API
         uint32_t dispatch_link_idx = RelayMux::get_dispatch_link_index(fabric_node_id, remote_fabric_node_id, device);
@@ -1091,6 +1098,10 @@ void build_tt_fabric_program(
             }
             const auto& curr_edm_config = fabric_context.get_fabric_router_config(
                 fabric_edm_type, fabric_edm_axis, fabric_tensix_config, eth_direction);
+            bool has_tensix_extension = false;
+            if (fabric_tensix_extension_enabled && !is_dispatch_link) {
+                has_tensix_extension = true;
+            }
 
             auto edm_builder = tt::tt_fabric::FabricEriscDatamoverBuilder::build(
                 device,
@@ -1101,7 +1112,8 @@ void build_tt_fabric_program(
                 curr_edm_config,
                 false, /* build_in_worker_connection_mode */
                 fabric_edm_type,
-                eth_direction);
+                eth_direction,
+                has_tensix_extension);
             edm_builders.insert({eth_chan, edm_builder});
 
             if (fabric_tensix_extension_enabled) {
@@ -1137,8 +1149,8 @@ void build_tt_fabric_program(
                 auto& tensix_builder1 = tensix_builders.at(eth_chan_dir1);
                 auto& tensix_builder2 = tensix_builders.at(eth_chan_dir2);
 
-                edm_builder1.connect_to_downstream_edm(tensix_builder2);
-                edm_builder2.connect_to_downstream_edm(tensix_builder1);
+                edm_builder1.connect_to_downstream_edm(tensix_builder2, edm_builder2);
+                edm_builder2.connect_to_downstream_edm(tensix_builder1, edm_builder1);
             } else {
                 // build the downstream connection for the eth channels without tensix extension (dispatch routing
                 // plane)
