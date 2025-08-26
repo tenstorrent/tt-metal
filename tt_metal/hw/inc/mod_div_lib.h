@@ -38,6 +38,10 @@ inline __attribute__((always_inline)) uint32_t fast_udiv_70(uint32_t n) {
     return (((uint64_t)n * 0xEA0EA0EB) >> 32) >> 6;
 }
 
+inline __attribute__((always_inline)) uint32_t fast_udiv_72(uint32_t n) {
+    return (((uint64_t)n * 0x38E38E39) >> 32) >> 4;
+}
+
 inline __attribute__((always_inline)) uint32_t fast_udiv_80(uint32_t n) {
     return (((uint64_t)n * 0xCCCCCCCD) >> 32) >> 6;
 }
@@ -86,6 +90,8 @@ inline __attribute__((always_inline)) uint32_t udivsi3_const_divisor(uint32_t n)
         return fast_udiv_56(n);
     } else if constexpr (d == 70) {
         return fast_udiv_70(n);
+    } else if constexpr (d == 72) {
+        return fast_udiv_72(n);
     } else if constexpr (d == 80) {
         return fast_udiv_80(n);
     } else if constexpr (d == 94) {
