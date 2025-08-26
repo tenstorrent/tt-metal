@@ -5,25 +5,25 @@
 #pragma once
 
 #include "ckernel.h"
-#include "ckernel_sfpu_recip.h"
+#include "llk_defs.h"
 
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_softsign() {
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat v = sfpi::dst_reg[0];
         sfpi::vFloat tmp = sfpi::abs(v) + sfpi::vConst1;
-        tmp = sfpu_reciprocal<APPROXIMATION_MODE>(tmp);
+        tmp = _sfpu_reciprocal_<(APPROX_MODE == ApproximationMode::Fast) ? 2 : 3>(tmp);
         sfpi::dst_reg[0] = v * tmp;
         sfpi::dst_reg++;
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void init_softsign() {
-    sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    _init_reciprocal_<(APPROX_MODE == ApproximationMode::Fast)>();
 }
 
 }  // namespace ckernel::sfpu

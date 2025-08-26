@@ -7,10 +7,11 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
+#include "llk_defs.h"
 #include <type_traits>
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
 inline void calculate_rsub_int(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(
         is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
@@ -39,7 +40,7 @@ inline void calculate_rsub_int(const uint dst_index_in0, const uint dst_index_in
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 void calculate_rsub_scalar_int32(uint32_t scalar) {
     int int_scalar = scalar;
     // Load scalar value param to lreg2

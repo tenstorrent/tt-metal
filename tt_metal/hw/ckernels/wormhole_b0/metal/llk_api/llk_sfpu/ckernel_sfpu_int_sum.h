@@ -8,6 +8,7 @@
 #include "ckernel_defs.h"
 
 #include "sfpi.h"
+#include "llk_defs.h"
 
 using namespace sfpi;
 
@@ -41,7 +42,7 @@ sfpi_inline vInt sfpu_twos_comp_to_sign_mag(vInt value) {
     return value;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void calculate_sum_int_col() {
     for (unsigned i = 0; i < 2; ++i) {
         vInt a = dst_reg[i];
@@ -64,7 +65,7 @@ inline void calculate_sum_int_col() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void calculate_sum_int_row() {
     for (unsigned i = 0; i < 8; i += 2) {
         vInt a = dst_reg[i];
@@ -82,10 +83,10 @@ inline void calculate_sum_int_row() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void sum_int_init() {}
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void add_int(const uint dst_offset) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

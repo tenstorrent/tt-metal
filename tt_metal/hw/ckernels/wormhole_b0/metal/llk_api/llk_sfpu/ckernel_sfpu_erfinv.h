@@ -9,11 +9,12 @@
 #include "ckernel_sfpu_log.h"
 
 #include "sfpi.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 sfpi_inline sfpi::vFloat calculate_sqrt_custom(sfpi::vFloat in) {
     sfpi::vFloat val = in;
     sfpi::vFloat out;
@@ -32,7 +33,7 @@ sfpi_inline sfpi::vFloat calculate_sqrt_custom(sfpi::vFloat in) {
     return out;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
     // Algorithm based on "A handy approximation for the error function and its inverse" by Sergei Winitzki (2008)
     // This approximation defines erfinv(x) as:
@@ -67,7 +68,7 @@ sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
     return result;
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 inline void calculate_erfinv() {
     // SFPU microcode
     constexpr int ITERATIONS = 8;
@@ -93,7 +94,7 @@ inline void calculate_erfinv() {
     }
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void erfinv_init() {
     log_init<false, false, false>();
 }
