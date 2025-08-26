@@ -59,7 +59,7 @@ The Models team is focused on developing the following models to a customer-read
 ### [Llama 3.1 70B (TP=32)](./models/demos/llama3_70b_galaxy)
 | Batch | Hardware                                                     | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                     | vLLM Tenstorrent Repo Release                                                                         |
 |-------|--------------------------------------------------------------|-----------|-------|-----------------|--------|-------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------|
-| 32    | [Galaxy (Wormhole)](https://tenstorrent.com/hardware/galaxy) | 53        | 72.5  | 80              | 2268.8 | [v0.62.2](https://github.com/tenstorrent/tt-metal/tree/v0.62.2)) | [c348d08](https://github.com/tenstorrent/vllm/tree/c348d085a463340a66194bbee9cd4bfc5f9c697a/tt_metal) |
+| 32    | [Galaxy (Wormhole)](https://tenstorrent.com/hardware/galaxy) | 53        | 72.5  | 80              | 2268.8 | [v0.62.2](https://github.com/tenstorrent/tt-metal/tree/v0.62.2) | [c348d08](https://github.com/tenstorrent/vllm/tree/c348d085a463340a66194bbee9cd4bfc5f9c697a/tt_metal) |
 
 ### [Qwen 3 32B (TP=8)](./models/tt_transformers)
 | Batch | Hardware                                                            | TTFT (MS) | T/S/U | Target<br>T/S/U | T/S    | TT-Metalium Release                                                       | vLLM Tenstorrent Repo Release                                                                         |
