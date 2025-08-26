@@ -71,6 +71,12 @@ public:
     // Get port for a specific asic_channel
     const Port& get_port_for_asic_channel(const AsicChannel& asic_channel) const;
 
+    // Get number of asics on this board
+    uint32_t get_num_asics() const;
+
+    // Get number of ports of a specific type
+    uint32_t get_num_ports(PortType port_type) const;
+
     // Mark a port as used (remove from available list)
     void mark_port_used(PortType port_type, uint32_t port_id);
 

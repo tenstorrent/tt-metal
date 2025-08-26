@@ -15,7 +15,6 @@
 
 namespace tt::tt_fabric {
 
-// Constructor that takes maps directly
 Board::Board(
     const std::unordered_map<PortType, std::unordered_map<uint32_t, std::vector<AsicChannel>>>& ports,
     const std::unordered_map<PortType, std::vector<std::pair<uint32_t, uint32_t>>>& internal_connections,
@@ -54,10 +53,8 @@ Board::Board(
     }
 }
 
-// Virtual method for board-specific configuration
 const tt::umd::BoardType& Board::get_board_type() const { return board_type_; }
 
-// Get available port IDs for a specific port type
 const std::vector<uint32_t>& Board::get_available_port_ids(PortType port_type) const {
     auto it = available_port_ids_.find(port_type);
     if (it == available_port_ids_.end()) {
@@ -66,7 +63,6 @@ const std::vector<uint32_t>& Board::get_available_port_ids(PortType port_type) c
     return it->second;
 }
 
-// Get channels for a specific port
 const std::vector<AsicChannel>& Board::get_port_channels(PortType port_type, uint32_t port_id) const {
     auto port_type_it = ports_.find(port_type);
     if (port_type_it == ports_.end()) {
@@ -81,7 +77,16 @@ const std::vector<AsicChannel>& Board::get_port_channels(PortType port_type, uin
     return port_it->second;
 }
 
-// Mark a port as used (remove from available list)
+uint32_t Board::get_num_asics() const { return asic_indices_.size(); }
+
+uint32_t Board::get_num_ports(PortType port_type) const {
+    auto port_type_it = ports_.find(port_type);
+    if (port_type_it == ports_.end()) {
+        throw std::runtime_error("Port type not found");
+    }
+    return port_type_it->second.size();
+}
+
 void Board::mark_port_used(PortType port_type, uint32_t port_id) {
     auto& available_ports = available_port_ids_[port_type];
     auto it = std::find(available_ports.begin(), available_ports.end(), port_id);
