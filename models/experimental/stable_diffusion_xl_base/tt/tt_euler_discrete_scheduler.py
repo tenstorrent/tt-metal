@@ -100,22 +100,26 @@ class TtEulerDiscreteScheduler(nn.Module):
                     layout=ttnn.TILE_LAYOUT,
                 ),
             )
-        sigma_step = self.tt_sigmas[0]
-        self.tt_sigma_step = ttnn.allocate_tensor_on_device(
-            sigma_step.shape,
-            sigma_step.dtype,
-            sigma_step.layout,
-            self.device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
-        sigma_next_step = self.tt_sigmas[1]
-        self.tt_sigma_next_step = ttnn.allocate_tensor_on_device(
-            sigma_next_step.shape,
-            sigma_next_step.dtype,
-            sigma_next_step.layout,
-            self.device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if not hasattr(self, "tt_sigma_step"):
+            sigma_step = self.tt_sigmas[0]
+
+            self.tt_sigma_step = ttnn.allocate_tensor_on_device(
+                sigma_step.shape,
+                sigma_step.dtype,
+                sigma_step.layout,
+                self.device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+        if not hasattr(self, "tt_sigma_next_step"):
+            sigma_next_step = self.tt_sigmas[1]
+
+            self.tt_sigma_next_step = ttnn.allocate_tensor_on_device(
+                sigma_next_step.shape,
+                sigma_next_step.dtype,
+                sigma_next_step.layout,
+                self.device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
 
     def update_device_sigmas(self):
         ttnn.copy_host_to_device_tensor(self.tt_sigmas[self.step_index], self.tt_sigma_step)
@@ -131,14 +135,17 @@ class TtEulerDiscreteScheduler(nn.Module):
                     layout=ttnn.TILE_LAYOUT,
                 ),
             )
-        tt_timestep_step = self.timesteps[0]
-        self.tt_timestep = ttnn.allocate_tensor_on_device(
-            tt_timestep_step.shape,
-            tt_timestep_step.dtype,
-            tt_timestep_step.layout,
-            self.device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
+
+        if not hasattr(self, "tt_timestep"):
+            tt_timestep_step = self.timesteps[0]
+
+            self.tt_timestep = ttnn.allocate_tensor_on_device(
+                tt_timestep_step.shape,
+                tt_timestep_step.dtype,
+                tt_timestep_step.layout,
+                self.device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
 
     def update_device_timestep(self):
         ttnn.copy_host_to_device_tensor(self.timesteps[self.step_index], self.tt_timestep)
@@ -153,14 +160,17 @@ class TtEulerDiscreteScheduler(nn.Module):
                     layout=ttnn.TILE_LAYOUT,
                 ),
             )
-        tt_val_step = self.variance_normalization_factor[0]
-        self.tt_norm_factor = ttnn.allocate_tensor_on_device(
-            tt_val_step.shape,
-            tt_val_step.dtype,
-            tt_val_step.layout,
-            self.device,
-            ttnn.DRAM_MEMORY_CONFIG,
-        )
+
+        if not hasattr(self, "tt_norm_factor"):
+            tt_val_step = self.variance_normalization_factor[0]
+
+            self.tt_norm_factor = ttnn.allocate_tensor_on_device(
+                tt_val_step.shape,
+                tt_val_step.dtype,
+                tt_val_step.layout,
+                self.device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
 
     def update_device_norm_factor(self):
         ttnn.copy_host_to_device_tensor(self.variance_normalization_factor[self.step_index], self.tt_norm_factor)
