@@ -1,17 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
 from models.demos.ufld_v2.ttnn.common import TtnnUFLDV2Conv2D
 from models.demos.ufld_v2.ttnn.ttnn_resnet_34 import TtnnResnet34
-
-
-def p(x, a="x"):
-    print(f"{a}'s  shape: {x.shape}")
-    print(f"{a}'s  layout: {x.layout}")
-    print(f"{a}'s  dtype: {x.dtype}")
-    print(f"{a}'s config: {x.memory_config()}")
 
 
 class TtnnUFLDv2:
@@ -37,13 +30,9 @@ class TtnnUFLDv2:
         self.res_model = TtnnResnet34(conv_args, conv_pth.res_model, device=device)
         self.pool = TtnnUFLDV2Conv2D(conv_args.pool, conv_pth.pool, activation="", device=device)
 
-    def __call__(self, input, batch_size=1):
+    def __call__(self, input, batch_size=1, grid_size=(8, 8), tile_size=32):
         fea = self.res_model(input, batch_size=batch_size)
         fea, out_h, out_w = self.pool(fea)
-        # if fea.is_sharded():
-        #     fea = ttnn.sharded_to_interleaved(fea, ttnn.L1_MEMORY_CONFIG)
-        # print("beforep",fea.shape,fea.memory_config())
-        grid_size = (8, 8)
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
@@ -53,58 +42,34 @@ class TtnnUFLDv2:
             }
         )
         mem_config = ttnn.create_sharded_memory_config_(
-            ttnn.Shape([256 * 8, 32]),
+            ttnn.Shape([fea.shape[-2] * fea.shape[-1], tile_size]),
             shard_grid,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.ShardOrientation.ROW_MAJOR,
             tile_layout=True,
         )
-        # print("created config is",mem_config)
         fea = ttnn.to_memory_config(fea, mem_config)
         fea = ttnn.permute(fea, (0, 1, 3, 2))
-        # print("afterp",fea.shape,fea.memory_config())
         fea = ttnn.reshape(fea, (fea.shape[0], fea.shape[1], 1, fea.shape[2] * fea.shape[3]))
-        # print("after reshape",fea.shape,fea.memory_config())
-        shard_spec = ttnn.ShardSpec(shard_grid, [32, 32], ttnn.ShardOrientation.ROW_MAJOR)
-        width_sharded_mem_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, shard_spec
-        )
-        fea = ttnn.to_memory_config(fea, width_sharded_mem_config)
-        # print("input to lin1", fea.shape)
         compute_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,  # or HiFi2, HiFi4
+            math_fidelity=ttnn.MathFidelity.LoFi,
             math_approx_mode=False,
             fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
-        matmul_program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=(8, 8),
-            in0_block_w=4,
-            out_subblock_h=1,
-            out_subblock_w=1,
-            per_core_M=1,
-            per_core_N=1,
-            transpose_mcast=False,
-            fused_activation=None,
-        )
-        # p(fea, "input to lin1")
         out = ttnn.linear(
             fea,
             self.conv_pth.cls.linear_1.weight,
             bias=self.conv_pth.cls.linear_1.bias,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            # compute_kernel_config=compute_config,
-            # program_config=matmul_program_config
+            compute_kernel_config=compute_config,
         )
         out = ttnn.relu(out)
-        print("input to lin2", out.shape)
-        # p(out, "input to lin2")
         out = ttnn.linear(
             out,
             self.conv_pth.cls.linear_2.weight,
             bias=self.conv_pth.cls.linear_2.bias,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-            # compute_kernel_config=compute_config,
-            # program_config=matmul_program_config,
+            compute_kernel_config=compute_config,
         )
         return out
