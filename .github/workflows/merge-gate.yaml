@@ -279,14 +279,12 @@ jobs:
   #       env:
   #         NEEDS_CONTEXT: '${{ toJSON(needs) }}'
 
-  notify-on-failure:
-    name: Notify on Failure
-    # needs: [workflow-status]
-    # if: ${{ needs.workflow-status.result == 'failure' }}
+  send-test-notification:
+    name: "Test Slack Notification"
     runs-on: ubuntu-latest
     steps:
-      - name: Report Workflow Failure to Slack
-        uses: tenstorrent/tt-metal/.github/actions/slack-report@ebanerjee/slack-pinging-MG
+      - name: Send a Test Message
+        uses: ./.github/actions/slack-report-merge-gate@ebanerjee/slack-pinging-MG
         with:
-          owner: "U08GTDV8MDH" # Evan Banerjee
-          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
+          owner: "U08GTDV8MDH,U0908S3LUMD" # Evan Banerjee
