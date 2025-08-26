@@ -31,10 +31,7 @@ from models.tt_transformers.tt.load_checkpoints import (
     load_meta_state_dict,
     reverse_permute,
     standardize_hf_keys,
-<<<<<<< HEAD
     standardize_hf_keys_multimodal,
-=======
->>>>>>> b9fa291715 (2nd squash)
 )
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 

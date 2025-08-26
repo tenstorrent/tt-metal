@@ -11,7 +11,7 @@ from ttnn import ReplicateTensorToMesh, ShardTensorToMesh
 
 
 class TtMoeLayer(LightweightModule):
-    def __init__(self, mesh_device, state_dict, experts, args, layer_num: int, dtype):
+    def __init__(self, mesh_device, state_dict, experts, args, layer_num: int, dtype, tt_ccl):
         super().__init__()
         self.mesh_device = mesh_device
         self.experts = experts
@@ -22,6 +22,7 @@ class TtMoeLayer(LightweightModule):
         assert self.tile_size == 32, "tile size must be 32"
         self.num_devices = args.num_devices
         assert self.num_devices == 8, "num devices must be 8 for Mixtral MoE"
+        self.tt_ccl = tt_ccl
 
         gate_name = f"layers.{layer_num}.block_sparse_moe.gate.weight"
         if args.dummy_weights:
@@ -107,7 +108,6 @@ class TtMoeLayer(LightweightModule):
             core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=ttnn.bfloat16,
         )
-
         # get weights for top-2 experts -- masking out everything except the 8 experts (needed because top-k works with a min input of size 64)
         gate_logits_1SB8 = ttnn.add(gate_logits_1SB8, self.top8_mask_11B_64)
 
@@ -139,7 +139,8 @@ class TtMoeLayer(LightweightModule):
             output = tt_all_reduce(
                 results_11BH,
                 self.mesh_device,
-                cluster_axis=0,
+                cluster_axis=1,
+                tt_ccl=self.tt_ccl,
                 dim=3,
                 num_reduce_scatter_links=self.args.num_reduce_scatter_links,
                 num_all_gather_links=self.args.num_all_gather_links,
@@ -164,7 +165,8 @@ class TtMoeLayer(LightweightModule):
             output = tt_all_reduce(
                 results_11BH,
                 self.mesh_device,
-                cluster_axis=0,
+                tt_ccl=self.tt_ccl,
+                cluster_axis=1,
                 dim=3,
                 num_reduce_scatter_links=self.args.num_reduce_scatter_links,
                 num_all_gather_links=self.args.num_all_gather_links,

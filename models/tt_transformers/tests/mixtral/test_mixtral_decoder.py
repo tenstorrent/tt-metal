@@ -8,6 +8,7 @@ from loguru import logger
 import ttnn
 from models.demos.t3000.mixtral8x7b.reference.model import TransformerBlock, precompute_freqs_cis
 from models.demos.t3000.mixtral8x7b.tt.mixtral_common import get_single_rot_mat
+from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.decoder import TransformerBlock as TtTransformerBlock
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
@@ -67,6 +68,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
     )
     transformation_mats = rope_setup.get_both_trans_mats()
 
+    tt_ccl = TT_CCL(t3k_mesh_device)
     tt_model = TtTransformerBlock(
         mesh_device=t3k_mesh_device,
         state_dict=state_dict,
@@ -75,6 +77,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
         dtype=dtype,
         weight_cache_path=model_args.weight_cache_path(dtype),
         transformation_mats=rope_setup.get_both_trans_mats(),
+        tt_ccl=tt_ccl,
     )
 
     current_rot_mat, rot_matrix = get_single_rot_mat(
@@ -118,7 +121,7 @@ def test_mixtral_decoder_inference(t3k_mesh_device, reset_seeds, batch):
         tt_out_b1sh = tt_model(
             decode_input,
             current_pos_tensor,
-            rot_mats=rot_mats,
+            rot_mats_global=rot_mats,
             mode="decode",
         )
         tt_out = (
