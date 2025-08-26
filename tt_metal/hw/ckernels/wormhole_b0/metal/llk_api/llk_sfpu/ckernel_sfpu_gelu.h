@@ -6,28 +6,29 @@
 
 #include "ckernel_defs.h"
 #include "ckernel.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void gelu_init() {
-    _init_gelu_<APPROXIMATION_MODE>();
+    _init_gelu_<(APPROX_MODE == ApproximationMode::Fast)>();
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void gelu_derivative_init() {
-    _init_gelu_derivative_<APPROXIMATION_MODE>();
+    _init_gelu_derivative_<(APPROX_MODE == ApproximationMode::Fast)>();
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_gelu() {
-    _calculate_gelu_<APPROXIMATION_MODE, ITERATIONS>();
+    _calculate_gelu_<(APPROX_MODE == ApproximationMode::Fast), ITERATIONS>();
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_gelu_derivative() {
-    _calculate_gelu_derivative_<APPROXIMATION_MODE, ITERATIONS>();
+    _calculate_gelu_derivative_<(APPROX_MODE == ApproximationMode::Fast), ITERATIONS>();
 }
 
 }  // namespace sfpu
