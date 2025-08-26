@@ -2,32 +2,52 @@ syntax = "proto3";
 
 package tt.tt_fabric.proto;
 
+// Mesh Graph Descriptor 2.0 schema
+// Brief field notes are provided inline. For full documentation and examples,
+// see MGD_README.md
+
 message MeshGraphDescriptor {
+    // Reusable mesh templates (definitions) referenced by graphs and instances.
     repeated MeshDescriptor mesh_descriptors = 1;
+    // Optional logical groupings and connectivity across meshes/graphs.
     repeated GraphDescriptor graph_descriptors = 2;
+    // Single root NodeRef to instantiate (mesh or graph instance).
     NodeRef top_level_instance = 3;
 }
 
 message MeshDescriptor {
+  // Logical identifier used in MeshRef.mesh_descriptor (e.g., "M0").
   string name = 1;
+  // Target device architecture for this mesh.
   Architecture arch = 2;
+  // Device grid shape. `dims` required; `types` optional per dimension (LINE/RING).
   TorusTopology device_topology = 3;
+  // Required per-neighbor link count; optional Policy controls enforcement.
   Channels channels = 4;
+  // Host layout shape spanning this mesh (dims only).
   MeshTopology host_topology = 5;
   message ExpressConnection {
+    // Explicit intra-mesh express link from device `src` to device `dst`.
     int32 src = 1;
     int32 dst = 2;
   }
+  // Optional list of explicit intra-mesh express links.
   repeated ExpressConnection express_connections = 7;
 }
 
 
 message GraphDescriptor {
+  // Logical identifier used in GraphRef.graph_descriptor (e.g., "G0").
   string name = 1;
+  // Freeform grouping label (e.g., "FABRIC", "POD", "CLUSTER").
   string type = 2;
+  // Members of this graph. All entries must be the same NodeRef kind (mesh OR graph).
   repeated NodeRef instances = 3;
+  // Default per-edge channels when using graph_topology; optional otherwise.
   optional Channels channels = 4;
+  // Shorthand connectivity pattern (e.g., ALL_TO_ALL, RING). Use with `channels`.
   optional GraphTopology graph_topology = 5;
+  // Explicit connections as an alternative to `graph_topology`.
   repeated Connection connections = 6;
 }
 
@@ -39,23 +59,31 @@ message NodeRef {
 }
 
 message GraphRef {
+  // Name of target GraphDescriptor (must match `GraphDescriptor.name`).
   string graph_descriptor = 1;
+  // Instance index of the referenced graph.
   int32 graph_id = 2;
 
   oneof sub_ref {
+    // Optional nested reference to a sub-mesh (and optionally device) within this graph.
     MeshRef mesh = 3;
+    // Optional nested reference to a sub-graph within this graph.
     GraphRef graph = 4;
   }
 
 }
 
 message MeshRef {
+  // Name of target MeshDescriptor (must match `MeshDescriptor.name`).
   string mesh_descriptor = 1;
+  // Instance index of the referenced mesh.
   int32 mesh_id = 2;
+  // Optional device index within the mesh (linearized).
   optional int32 device_id = 3;
 }
 
 message MeshTopology {
+  // Required mesh dimensions (positive integers).
   repeated int32 dims = 1;  // required
 }
 
@@ -65,7 +93,9 @@ message TorusTopology {
     LINE = 1;
     RING = 2;
   }
+  // Required device dimensions.
   repeated int32 dims = 3;  // required
+  // Optional per-dimension types; align by index with `dims`. Missing entries imply LINE.
   repeated Type types = 4;
 }
 
@@ -89,12 +119,17 @@ enum Architecture {
 }
 
 message Channels {
+  // Required per-connection lane count.
   int32 count = 1;
+  // Optional enforcement policy (STRICT/RELAXED).
   optional Policy policy = 2;
 }
 
 message Connection {
+  // Typically two NodeRefs; multi-endpoint not recommended unless explicitly supported.
   repeated NodeRef nodes = 1;
+  // Required channels for this edge.
   Channels channels = 2;
+  // Optional directionality; defaults to false (undirected) when absent.
   optional bool directional = 3;
 }
