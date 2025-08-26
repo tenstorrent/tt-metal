@@ -9,7 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/assert.hpp>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "persistent_kernel_cache.hpp"

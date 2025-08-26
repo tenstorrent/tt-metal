@@ -43,7 +43,7 @@ void kernel_main() {
 
     if constexpr (with_state) {
         set_state<num_send_dir, is_chip_multicast, noc_send_type>(
-            route_id, hop_info, static_cast<uint16_t>(packet_payload_size_bytes));
+            connections, route_id, hop_info, static_cast<uint16_t>(packet_payload_size_bytes));
     }
 
     for (uint32_t i = 0; i < num_packets; i++) {
