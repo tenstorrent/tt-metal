@@ -119,6 +119,11 @@ def run_avg_pool2d(
     else:
         raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
 
+    if (
+        output_data_format == ttnn.bfloat8_b or output_data_format == ttnn.bfloat4_b
+    ) and output_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout")
+
     if skips_enabled:
         # skips to avoid unimportant combinations
         if divisor_override is not None:
@@ -277,15 +282,18 @@ def run_avg_pool2d(
     # when using small divisor overrides with large kernels we see much large values which
     # overwhelm the atol and the rtol becomes significant
     rtol = 0.01
-    if dtype == ttnn.bfloat8_b:
+    if output_data_format == ttnn.bfloat4_b:
+        pcc_thresh = 0.98
+    if dtype == ttnn.bfloat8_b or output_data_format == ttnn.bfloat8_b:
         atol = 0.35
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
     # Ensure both tensors have the same dtype for comparison
     if output_data_format != ttnn.bfloat16:
         ttnn_output = ttnn_output.to(torch.bfloat16)
 
-    allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
-    assert allclose
+    if output_data_format != ttnn.bfloat4_b:
+        allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
+        assert allclose
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
@@ -429,7 +437,7 @@ def test_avg_pool_tiled_simple(device, tensor_map):
     (
         (  # resnet shapes
             [1, 32 * 3, 64 * 2, 64 * 2],
-            # [1, 320, 16, 16],
+            [1, 320, 16, 16],
             [1, 32 * 10, 64, 64],
             [4, 32, 12, 12],
         )
@@ -440,7 +448,7 @@ def test_avg_pool_tiled_simple(device, tensor_map):
     (
         (3, 3),  # 1 face 1 chunk
         (5, 5),  # 2 faces 1 chunk
-        # (7, 7),  # 2 chunks
+        (7, 7),  # 2 chunks
         (9, 9),  # 3 chunks
     ),
 )
@@ -471,6 +479,7 @@ def test_avg_pool_tiled_simple(device, tensor_map):
     [
         ttnn.bfloat16,
         ttnn.bfloat8_b,
+        ttnn.bfloat4_b,
     ],
 )
 @pytest.mark.parametrize(
@@ -526,16 +535,13 @@ def test_run_avg_pool_height_shard_tile(
         kernel_size,
         stride,
         padding,
-        ceil_mode=False,
-        divisor_override=None,
-        count_include_pad=False,
+        ceil_mode=ceil_mode,
+        divisor_override=divisor_override,
+        count_include_pad=count_include_pad,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        output_data_format=ttnn.bfloat16,
-        output_layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
-        run_twice=False,
-        skips_enabled=False,  # Disable skips
-        nightly_skips=False,  # Disable nightly skips
+        output_data_format=out_dtype,
+        output_layout=out_layout,
+        dtype=dtype,
     )
     # run_avg_pool2d(
     #     device,

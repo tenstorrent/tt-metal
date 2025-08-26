@@ -69,9 +69,10 @@ def run_max_pool(
     else:
         raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
 
-    # Skip unsupported BFLOAT8_B + ROW_MAJOR combination
-    if output_data_format == ttnn.bfloat8_b and output_layout == ttnn.ROW_MAJOR_LAYOUT:
-        pytest.skip("BFLOAT8_B output data format is not supported with ROW_MAJOR layout")
+    if (
+        output_data_format == ttnn.bfloat8_b or output_data_format == ttnn.bfloat4_b
+    ) and output_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout")
 
     # skips to avoid unimportant combinations
     if ceil_mode:
@@ -219,6 +220,9 @@ def run_max_pool(
     if dtype == ttnn.bfloat8_b or output_data_format == ttnn.bfloat8_b:
         pcc_thresh = 0.997
         atol = 0.35
+    if dtype == ttnn.bfloat4_b or output_data_format == ttnn.bfloat4_b:
+        pcc_thresh = 0.93
+        atol = 0.5
     assert_with_pcc(ttnn_output, torch_output, pcc_thresh)
     if output_data_format != ttnn.bfloat16:
         ttnn_output = ttnn_output.to(torch.bfloat16)
@@ -371,6 +375,7 @@ def test_run_max_pool_height_shard(
     [
         ttnn.bfloat16,
         ttnn.bfloat8_b,
+        ttnn.bfloat4_b,
     ],
 )
 @pytest.mark.parametrize(
@@ -675,7 +680,7 @@ def test_run_max_pool_squeeze_net_model(
 
 # Simplified test for new API parameters: output_data_format and output_layout
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize("output_data_format", [ttnn.bfloat16, ttnn.bfloat8_b])
+@pytest.mark.parametrize("output_data_format", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_max_pool2d_output_formats_and_layouts(device, tensor_map, output_data_format, output_layout):
     """

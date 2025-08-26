@@ -46,6 +46,14 @@ static Tensor pool2d_invoke(
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     bool is_out_tiled = output_layout == Layout::TILE;
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
+    TT_FATAL(
+        output_data_format == DataType::BFLOAT16 || output_data_format == DataType::BFLOAT8_B ||
+            output_data_format == DataType::BFLOAT4_B,
+        "Currently only BFLOAT16, BFLOAT8_B, and BFLOAT4_B output data formats are supported");
+    TT_FATAL(
+        !((output_data_format == DataType::BFLOAT8_B || output_data_format == DataType::BFLOAT4_B) &&
+          output_layout == Layout::ROW_MAJOR),
+        "BFLOAT8_B/BFLOAT4_B output data format is not supported with ROW_MAJOR layout");
     validate_input_params(
         input_tensor,
         batch_size,
@@ -265,13 +273,6 @@ Tensor MaxPool2DOp::invoke(
     bool reallocate_halo_output,
     const DataType output_data_format,
     const Layout output_layout) {
-    TT_FATAL(
-        output_data_format == DataType::BFLOAT16 || output_data_format == DataType::BFLOAT8_B,
-        "Currently only BFLOAT16 and BFLOAT8_B output data formats are supported");
-    TT_FATAL(
-        !(output_data_format == DataType::BFLOAT8_B && output_layout == Layout::ROW_MAJOR),
-        "BFLOAT8_B output data format is not supported with ROW_MAJOR layout");
-
     return pool2d_invoke(
         queue_id,
         input_tensor,
@@ -316,13 +317,6 @@ Tensor AvgPool2DOp::invoke(
     bool reallocate_halo_output,
     const DataType output_data_format,
     const Layout output_layout) {
-    TT_FATAL(
-        output_data_format == DataType::BFLOAT16 || output_data_format == DataType::BFLOAT8_B,
-        "Currently only BFLOAT16 and BFLOAT8_B output data formats are supported");
-    TT_FATAL(
-        !(output_data_format == DataType::BFLOAT8_B && output_layout == Layout::ROW_MAJOR),
-        "BFLOAT8_B output data format is not supported with ROW_MAJOR layout");
-
     return pool2d_invoke(
         queue_id,
         input_tensor,
