@@ -21,7 +21,7 @@ public:
     ARCTelemetryAvailableMetric(size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader);
 
     const std::vector<std::string> telemetry_path() const override;
-    void update(const tt::Cluster& cluster) override;
+    void update(const tt::Cluster& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
     std::shared_ptr<ARCTelemetryReader> reader_;
@@ -62,7 +62,7 @@ public:
     ARCUintMetric(size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader, CommonTelemetryTag common_metric);
 
     const std::vector<std::string> telemetry_path() const override;
-    void update(const tt::Cluster& cluster) override;
+    void update(const tt::Cluster& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
     std::shared_ptr<ARCTelemetryReader> reader_;
@@ -104,7 +104,7 @@ public:
     ARCDoubleMetric(size_t chip_id, std::shared_ptr<ARCTelemetryReader> reader, CommonTelemetryTag common_metric);
 
     const std::vector<std::string> telemetry_path() const override;
-    void update(const tt::Cluster& cluster) override;
+    void update(const tt::Cluster& cluster, std::chrono::steady_clock::time_point start_of_update_cycle) override;
 
 private:
     std::shared_ptr<ARCTelemetryReader> reader_;

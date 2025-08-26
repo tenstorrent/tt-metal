@@ -47,7 +47,7 @@ public:
         return { "dummy", "metric", "someone", "forgot", "to", "implement", "telemetry", "path", "function" };
     }
 
-    virtual void update(const tt::Cluster &cluster) {
+    virtual void update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     }
 
     bool changed_since_transmission() const {

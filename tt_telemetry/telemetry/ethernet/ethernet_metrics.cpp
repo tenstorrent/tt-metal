@@ -17,8 +17,16 @@ const std::vector<std::string> EthernetEndpointUpMetric::telemetry_path() const 
     return path;
 }
 
-void EthernetEndpointUpMetric::update(const tt::Cluster &cluster) {
-    bool is_up_now = is_ethernet_endpoint_up(cluster, endpoint_);
+void EthernetEndpointUpMetric::update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
+    // Check if enough time has elapsed since last force refresh
+    bool should_force_refresh = (start_of_update_cycle - last_force_refresh_time_) >= FORCE_REFRESH_LINK_STATUS_TIMEOUT;
+    
+    // If we're forcing a refresh, update the timestamp
+    if (should_force_refresh) {
+        last_force_refresh_time_ = start_of_update_cycle;
+    }
+    
+    bool is_up_now = is_ethernet_endpoint_up(cluster, endpoint_, should_force_refresh);
     bool is_up_old = value_;
     changed_since_transmission_ = is_up_now != is_up_old;
     value_ = is_up_now;
@@ -49,7 +57,7 @@ const std::vector<std::string> EthernetCRCErrorCountMetric::telemetry_path() con
     return path;
 }
 
-void EthernetCRCErrorCountMetric::update(const tt::Cluster &cluster) {
+void EthernetCRCErrorCountMetric::update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     if (!virtual_eth_core_.has_value()) {
         // Architecture not yet supported
         return;
@@ -82,7 +90,7 @@ const std::vector<std::string> EthernetRetrainCountMetric::telemetry_path() cons
     return path;
 }
 
-void EthernetRetrainCountMetric::update(const tt::Cluster &cluster) {
+void EthernetRetrainCountMetric::update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     std::vector<uint32_t> data;
     cluster.read_core(data, sizeof(uint32_t), virtual_eth_core_, retrain_count_addr_);
     if (data.size() >= 1) {
@@ -115,7 +123,7 @@ const std::vector<std::string> EthernetCorrectedCodewordCountMetric::telemetry_p
     return path;
 }
 
-void EthernetCorrectedCodewordCountMetric::update(const tt::Cluster &cluster) {
+void EthernetCorrectedCodewordCountMetric::update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     if (!virtual_eth_core_.has_value()) {
         // Architecture not yet supported
         return;
@@ -152,7 +160,7 @@ const std::vector<std::string> EthernetUncorrectedCodewordCountMetric::telemetry
     return path;
 }
 
-void EthernetUncorrectedCodewordCountMetric::update(const tt::Cluster &cluster) {
+void EthernetUncorrectedCodewordCountMetric::update(const tt::Cluster &cluster, std::chrono::steady_clock::time_point start_of_update_cycle) {
     if (!virtual_eth_core_.has_value()) {
         // Architecture not yet supported
         return;

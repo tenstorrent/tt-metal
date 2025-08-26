@@ -69,16 +69,18 @@ static void update(
     std::vector<std::unique_ptr<UIntMetric>>& uint_metrics,
     std::vector<std::unique_ptr<DoubleMetric>>& double_metrics,
     const tt::Cluster& cluster) {
+    std::chrono::steady_clock::time_point start_of_update_cycle = std::chrono::steady_clock::now();
+
     for (auto &metric: bool_metrics) {
-        metric->update(cluster);
+        metric->update(cluster, start_of_update_cycle);
     }
 
     for (auto &metric: uint_metrics) {
-        metric->update(cluster);
+        metric->update(cluster, start_of_update_cycle);
     }
 
     for (auto& metric : double_metrics) {
-        metric->update(cluster);
+        metric->update(cluster, start_of_update_cycle);
     }
 }
 
