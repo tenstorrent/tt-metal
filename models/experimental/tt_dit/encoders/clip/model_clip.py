@@ -242,7 +242,16 @@ class CLIPEncoderLayer:
         )
 
         self.self_attn.load_state_dict(substate(state_dict, "self_attn"))
-        self.mlp.load_state_dict(substate(state_dict, "mlp"))
+
+        # remap MLP keys from fc1/fc2 to ff1/ff2 format
+        mlp_state = substate(state_dict, "mlp")
+        remapped_mlp_state = {
+            "ff1.weight": mlp_state["fc1.weight"],
+            "ff1.bias": mlp_state["fc1.bias"],
+            "ff2.weight": mlp_state["fc2.weight"],
+            "ff2.bias": mlp_state["fc2.bias"],
+        }
+        self.mlp.load_state_dict(remapped_mlp_state)
 
     def __call__(
         self,

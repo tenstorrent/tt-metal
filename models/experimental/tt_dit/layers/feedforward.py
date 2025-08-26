@@ -38,17 +38,8 @@ class FeedForward:
     def load_state_dict(self, state_dict, transform=None):
         assert transform is None, "Haven't figured out how to pass two transformations yet"
 
-        has_fc_keys = any(k.startswith("fc1.") or k.startswith("fc2.") for k in state_dict.keys())
-        has_ff_keys = any(k.startswith("ff1.") or k.startswith("ff2.") for k in state_dict.keys())
-
-        if has_fc_keys:
-            # CLIP format: fc1, fc2
-            self.ff1.load_state_dict(substate(state_dict, "fc1"))
-            self.ff2.load_state_dict(substate(state_dict, "fc2"))
-        else:
-            # standard format: ff1, ff2
-            self.ff1.load_state_dict(substate(state_dict, "ff1"))
-            self.ff2.load_state_dict(substate(state_dict, "ff2"))
+        self.ff1.load_state_dict(substate(state_dict, "ff1"))
+        self.ff2.load_state_dict(substate(state_dict, "ff2"))
 
     def __call__(self, x, core_grid=None, compute_kernel_config=None):
         ff1_out = self.ff1(x, core_grid=core_grid, compute_kernel_config=compute_kernel_config)
@@ -104,17 +95,8 @@ class ParallelFeedForward:
     def load_state_dict(self, state_dict, transform=None):
         assert transform is None, "Haven't figured out how to pass two transformations yet"
 
-        has_fc_keys = any(k.startswith("fc1.") or k.startswith("fc2.") for k in state_dict.keys())
-        has_ff_keys = any(k.startswith("ff1.") or k.startswith("ff2.") for k in state_dict.keys())
-
-        if has_fc_keys:
-            # CLIP format: fc1, fc2
-            self.ff1.load_state_dict(substate(state_dict, "fc1"))
-            self.ff2.load_state_dict(substate(state_dict, "fc2"))
-        else:
-            # standard format: ff1, ff2
-            self.ff1.load_state_dict(substate(state_dict, "ff1"))
-            self.ff2.load_state_dict(substate(state_dict, "ff2"))
+        self.ff1.load_state_dict(substate(state_dict, "ff1"))
+        self.ff2.load_state_dict(substate(state_dict, "ff2"))
 
     def __call__(self, x, core_grid=None, compute_kernel_config=None):
         """
