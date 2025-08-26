@@ -35,6 +35,7 @@ public:
         BUILD_AND_OPEN_CONNECTION_START_ONLY,
     };
 
+    // These field for FABRIC_2D are used by fabric_set_unicast_route
 #ifdef FABRIC_2D
     uint32_t ew_dim;
     uint32_t my_dev_id;
