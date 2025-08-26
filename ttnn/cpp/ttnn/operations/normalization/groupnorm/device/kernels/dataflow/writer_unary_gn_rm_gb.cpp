@@ -102,11 +102,13 @@ void kernel_main() {
     constexpr uint32_t row_tile_max_index = num_cols_tile_gamma_beta;
 
     for (uint32_t b = 0; b < num_batches_per_core; ++b) {
+        DPRINT << "Batch: " << b << " out of " << num_batches_per_core << ENDL();
         uint32_t input_mask_tile_id = input_mask_tile_start_id;
         index_g_offset = 0;
         row_offset = num_cols_per_group;
 
         for (uint32_t i = 0; i < num_groups_per_core; ++i) {
+            DPRINT << "Group: " << i << " out of " << num_groups_per_core << ENDL();
             cb_reserve_back(cb_input_mask, block_w);
             uint32_t l1_write_addr_input_mask = get_write_ptr(cb_input_mask);
             for (uint32_t j = 0; j < block_w; ++j) {
@@ -116,6 +118,7 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_push_back(cb_input_mask, block_w);
+            DPRINT << "Input mask sent" << ENDL();
 
             if (i == 0 and b == 0) {
                 constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
@@ -206,6 +209,7 @@ void kernel_main() {
                     cb_push_back(cb_beta, num_cols_tile_gamma_beta);
                 }
             }
+            DPRINT << "Gamma and Beta sent done" << ENDL();
 
             // add or copy with previous output results
             uint32_t block_w_curr = index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
@@ -214,6 +218,7 @@ void kernel_main() {
 
             uint32_t out_block_start_id_offset = 0;
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                DPRINT << "out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
                 uint32_t out_block_h_actual, out_block_hw_actual;
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     out_block_h_actual = out_block_h_last;
@@ -222,10 +227,12 @@ void kernel_main() {
                     out_block_h_actual = out_block_h_normal;
                     out_block_hw_actual = out_block_hw_normal;
                 }
+                DPRINT << "Waiting for output at cb: " << cb_out << ENDL();
                 cb_wait_front(cb_out, out_block_hw_normal);
                 uint32_t l1_read_addr = get_read_ptr(cb_out);
 
                 for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
+                    DPRINT << "mt: " << mt << " out of " << out_block_h_actual << ENDL();
                     for (uint32_t nt = 0; nt < block_w_curr; nt++) {
                         // Checks, only relevant to the last group, that we are not indexing out of bounds
                         // for the cases where our last group does not span the length of our max tile span for a group
@@ -275,6 +282,7 @@ void kernel_main() {
                     index_g_offset += block_w_minus_two;
                 }
             }
+            DPRINT << "Group: " << i << " out of " << num_groups_per_core << " done" << ENDL();
         }
         index_b_offset += num_tiles_per_batch;
     }
