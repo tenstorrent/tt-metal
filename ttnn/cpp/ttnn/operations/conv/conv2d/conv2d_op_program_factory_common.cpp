@@ -202,7 +202,8 @@ std::vector<CBInfo> get_cb_info(
                 weights_tile_size,
                 weights_shape[2] / (kernel_size[0] * kernel_size[1]),
                 weights_shape[3],
-                kernel_size[1])) {
+                kernel_size[1],
+                tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE)) {
             uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
             uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
             uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
@@ -371,22 +372,85 @@ CBInfo& access_cb_info_by_name(const std::vector<CBInfo>& cb_info, Conv2dCb cb_n
     return const_cast<CBInfo&>(get_cb_info_by_name(cb_info, cb_name));
 }
 
+// Helper function to calculate NOC transfer rate using clamped linear approximation
+float_t get_noc_transfer_rate(uint32_t transfer_size, bool is_blackhole) {
+    // Clamped linear approximation based on empirical data
+    // Wormhole: Linear growth from 16B to 1024B, then clamped at peak
+    // Blackhole: Linear growth from 16B to 2048B, then clamped at peak
+
+    const uint32_t min_transfer_size = 16;
+
+    // Default to Wormhole: Linear growth from 16B to 1024B, then clamped at peak
+    uint32_t linear_max_transfer_size = 1024;
+    float_t min_rate = 0.868f;  // GB/s at 16B
+    float_t peak_rate = 27.7f;  // GB/s peak (>=1024B)
+
+    if (is_blackhole) {
+        // Blackhole: Linear growth from 16B to 2048B, then clamped at peak
+        linear_max_transfer_size = 2048;
+        min_rate = 0.671f;  // GB/s at 16B
+        peak_rate = 48.5f;  // GB/s peak (>=2048B)
+    }
+
+    uint32_t clamped_transfer_size = std::max(min_transfer_size, std::min(transfer_size, linear_max_transfer_size));
+    float_t slope = (peak_rate - min_rate) / static_cast<float_t>(linear_max_transfer_size - min_transfer_size);
+
+    return min_rate + slope * (clamped_transfer_size - min_transfer_size);
+}
+
 bool is_split_reader_viable(
     uint32_t per_core_out_matrix_height_ntiles,
     uint32_t input_tile_size,
     uint32_t weights_tile_size,
     uint32_t input_channels,
     uint32_t output_channels,
-    uint32_t kernel_width) {
-    const float_t noc_transfer_c = 0.054;
-    const float_t upper_bound_noc_transfer_c = 27.7;
+    uint32_t kernel_width,
+    bool is_blackhole) {
     const float_t noc_transfer_unit = 2 * input_channels * kernel_width;
-    const float_t noc_transfer_time =
-        noc_transfer_unit / fmin(noc_transfer_c * noc_transfer_unit, upper_bound_noc_transfer_c);
-    const float_t weights_cost = 1.0 * input_channels * output_channels * kernel_width / 16;
+
+    // Get architecture-specific NOC transfer rate based on empirical data
+    const float_t noc_transfer_rate = get_noc_transfer_rate(static_cast<uint32_t>(noc_transfer_unit), is_blackhole);
+    const float_t noc_transfer_time = noc_transfer_unit / noc_transfer_rate;
+
+    // Architecture-specific DRAM multicast factor
+    // Wormhole: 32 Gbps DRAM / 2 for multicast = 16
+    // Blackhole: 64 Gbps DRAM / 2 for multicast = 32
+    const uint32_t dram_multicast_factor = is_blackhole ? 32 : 16;
+    const float_t weights_cost = 1.0 * input_channels * output_channels * kernel_width / dram_multicast_factor;
+
     const float_t act_cost = per_core_out_matrix_height_ntiles * tt::constants::TILE_HEIGHT * noc_transfer_time;
 
-    return act_cost > weights_cost;
+    // Additional heuristic factors from stash insights
+    // Weight size per core estimation (assuming BFLOAT16, 2 bytes per element)
+    const uint32_t weight_size_per_core_bytes = input_channels * output_channels * kernel_width * 2;
+    const uint32_t weight_size_per_core_kb = weight_size_per_core_bytes / 1024;
+
+    // Performance-tuned threshold from UNet analysis: More restrictive based on empirical results
+    constexpr uint32_t OPTIMAL_WEIGHT_THRESHOLD_KB = 50;
+
+    // Memory pressure analysis
+    const float_t estimated_dram_bandwidth = is_blackhole ? 49.6f : 27.9f;  // GB/s peak bandwidth
+    const float_t memory_pressure = static_cast<float_t>(weight_size_per_core_kb) * 2.0f / estimated_dram_bandwidth;
+    const float_t activation_benefit = static_cast<float_t>(per_core_out_matrix_height_ntiles) / 1.5f;
+
+    // Combined decision: math model + weight size + cost-benefit analysis (more restrictive)
+    bool math_decision = act_cost > weights_cost;
+    bool weight_size_ok = weight_size_per_core_kb <= OPTIMAL_WEIGHT_THRESHOLD_KB;
+    bool cost_benefit_ok = memory_pressure <= activation_benefit * 1.0f;  // More restrictive threshold
+
+    bool final_decision = math_decision && weight_size_ok && cost_benefit_ok;
+
+    // Log detailed split_reader decision
+    // log_info(tt::LogOp, "SPLIT_READER_DECISION: arch={}, in_ch={}, out_ch={}, ker_w={}, per_core_tiles={},
+    // noc_unit={}, noc_rate={:.3f}, noc_time={:.3f}, dram_factor={}, act_cost={:.3f}, weights_cost={:.3f},
+    // weight_kb={}, mem_pressure={:.3f}, act_benefit={:.3f}, math={}, weight_ok={}, cost_ok={}, decision={}",
+    //     (device_arch == tt::ARCH::BLACKHOLE) ? "BH" : "WH",
+    //     input_channels, output_channels, kernel_width, per_core_out_matrix_height_ntiles,
+    //     noc_transfer_unit, noc_transfer_rate, noc_transfer_time, dram_multicast_factor,
+    //     act_cost, weights_cost, weight_size_per_core_kb, memory_pressure, activation_benefit,
+    //     math_decision, weight_size_ok, cost_benefit_ok, final_decision);
+
+    return final_decision;
 }
 
 bool is_split_reader_supported(
@@ -398,7 +462,8 @@ bool is_split_reader_supported(
     uint32_t weights_tile_size,
     uint32_t input_channels,
     uint32_t output_channels,
-    uint32_t kernel_width) {
+    uint32_t kernel_width,
+    bool is_blackhole) {
     return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1 &&
            is_split_reader_viable(
                per_core_out_matrix_height_ntiles,
@@ -406,7 +471,8 @@ bool is_split_reader_supported(
                weights_tile_size,
                input_channels,
                output_channels,
-               kernel_width);
+               kernel_width,
+               is_blackhole);
 }
 
 }  // namespace conv2d

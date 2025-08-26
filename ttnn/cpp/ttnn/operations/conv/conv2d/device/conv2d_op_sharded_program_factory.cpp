@@ -303,7 +303,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),
         shard_shape[1],
         output_channels,
-        filter_w);
+        filter_w,
+        device->arch() == tt::ARCH::BLACKHOLE);
     log_info(tt::LogOp, "enable_split_reader: {}", enable_split_reader);
 
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");

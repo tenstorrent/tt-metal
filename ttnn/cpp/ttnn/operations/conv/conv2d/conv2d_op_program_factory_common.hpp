@@ -99,7 +99,8 @@ bool is_split_reader_supported(
     uint32_t weights_tile_size,
     uint32_t input_channels,
     uint32_t output_channels,
-    uint32_t kernel_width);
+    uint32_t kernel_width,
+    bool is_blackhole);
 
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv
