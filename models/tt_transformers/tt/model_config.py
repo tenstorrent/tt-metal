@@ -2308,16 +2308,16 @@ class ModelArgs:
                 else:
                     if self.cache_hf_flag and self.cached_hf_model is None:
                         model = AutoModelForCausalLM.from_pretrained(
-                        self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
-                    )
+                            self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
+                        )
                         self.cached_hf_model = model
                     elif self.cache_hf_flag and self.cached_hf_model is not None:
                         model = self.cached_hf_model
                     else:
                         # No caching - load fresh each time
                         model = AutoModelForCausalLM.from_pretrained(
-                        self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
-                    )
+                            self.CKPT_DIR, trust_remote_code=self.trust_remote_code_hf
+                        )
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
                     model.model = model.language_model
@@ -2503,8 +2503,8 @@ class ModelArgs:
             else:
                 rotary_emb_local = None
             wrapper = HfDecoderWrapper(
-                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None
-            , rotary_emb_local)
+                layer, self.head_dim, model.model.rotary_emb if use_position_embeddings else None, rotary_emb_local
+            )
             return wrapper
 
     def reference_attention(self):
