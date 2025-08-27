@@ -7,6 +7,7 @@
 #include <bit>
 #include <cstdint>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "cross_entropy_bw_device_operation_types.hpp"
 #include "metal/ops/common/program_utils.hpp"
@@ -295,16 +296,19 @@ CrossEntropyBackwardProgramFactory::cached_program_t CrossEntropyBackwardProgram
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
 
     CrossEntropyBackwardKernels kernels;
-    kernels.reader = create_reader_kernel(
-        program,
-        all_cores,
-        /* reader_compile_args */
-        {block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size},
-        defines,
-        kReaderKernelPath);
+    {
+        std::vector<uint32_t> reader_compile_time_args{
+            block_size, Wt, mask_w, target_indexes_inner_dim_size, Ht, uint32_read_page_size};
+        tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+        tt::tt_metal::TensorAccessorArgs(target_buffer).append_to(reader_compile_time_args);
+        kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
+    }
 
-    kernels.writer = create_writer_kernel(
-        program, all_cores, /* writer_compile_args */ {block_size, Wt, scaler_bits}, defines, kWriterKernelPath);
+    {
+        std::vector<uint32_t> writer_compile_time_args{block_size, Wt, scaler_bits};
+        tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+        kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
+    }
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for cross_entropy_bw
