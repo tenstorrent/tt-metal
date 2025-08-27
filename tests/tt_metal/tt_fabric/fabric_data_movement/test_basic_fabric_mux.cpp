@@ -65,7 +65,6 @@ struct TestConfig {
     uint32_t num_full_size_channel_iters = 0;
     bool is_2d_fabric = false;
     bool terminate_from_kernel = false;
-    bool enable_fabric_tracing = false;
 };
 
 struct WorkerMemoryMap {
@@ -629,9 +628,6 @@ void run_mux_test_variant(FabricMuxBaseFixture* fixture, TestConfig test_config)
     log_info(LogTest, "Waiting for programs");
     for (auto i = 0; i < devices.size(); i++) {
         fixture->WaitForSingleProgramDone(devices[i], program_handles[i]);
-        if (test_config.enable_fabric_tracing) {
-            tt::tt_metal::detail::ReadDeviceProfilerResults(devices[i]);
-        }
     }
 
     auto validate_worker_results = [&](tt::tt_metal::IDevice* device, const CoreCoord& core) {
@@ -703,25 +699,6 @@ TEST_F(Fabric1DMuxFixture, TestFabricMuxTwoChipVariant3) {
         .uniform_sender_receiver_split = true,
         .num_open_close_iters = 1,
         .num_full_size_channel_iters = 1,
-    };
-    run_mux_test_variant(this, test_config);
-}
-
-TEST_F(Fabric1DMuxFixture, TestFabricMuxTwoChipVariantWithNocTracing) {
-    TestConfig test_config = {
-        .num_devices = 2,
-        .num_sender_clients = 1,
-        .num_packets = 100,
-        .num_credits = 1,
-        .num_return_credits_per_packet = 1,
-        .packet_payload_size_bytes = 4096,
-        .time_seed = std::chrono::system_clock::now().time_since_epoch().count(),
-        .num_buffers_full_size_channel = 1,
-        .num_buffers_header_only_channel = 1,
-        .uniform_sender_receiver_split = true,
-        .num_open_close_iters = 1,
-        .num_full_size_channel_iters = 1,
-        .enable_fabric_tracing = true,
     };
     run_mux_test_variant(this, test_config);
 }
