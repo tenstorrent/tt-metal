@@ -61,9 +61,9 @@ public:
     void set_last_inner_loop_instr(uint op);
     void set_last_outer_loop_instr(uint op);
 
-    void program(volatile uint *instrn_buffer);         // just programs the registers
-    static void run(volatile uint *instrn_buffer);      // runs - assumes that registers were already programmed
-    void program_and_run(volatile uint *instrn_buffer); // calls program, then run
+    void program();         // just programs the registers
+    static void run();      // runs - assumes that registers were already programmed
+    void program_and_run(); // calls program, then run
 };
 
 class ckernel_unpack_template
@@ -246,10 +246,10 @@ public:
     static ckernel_unpack_template loopx1instr(uint instr0, uint skip0 = TT_OP_NOP);
     static ckernel_unpack_template loopx2instr(uint instr0, uint instr1, uint skip0 = TT_OP_NOP, uint skip1 = TT_OP_NOP);
 
-    void program(volatile uint *instrn_buffer) const;                                                  // just programs the registers
-    static void run(volatile uint *instrn_buffer, const uint8_t count, const uint32_t zmask);          // runs - assumes that registers were already programmed
-    static void run(volatile uint *instrn_buffer, const uint8_t count);                                // runs - assumes that registers were already programmed
-    void program_and_run(volatile uint *instrn_buffer, const uint8_t count, const uint32_t zmask = 0); // calls program, then run
+    void program() const;                                                // just programs the registers
+    static void run(const uint8_t count, const uint32_t zmask);          // runs - assumes that registers were already programmed
+    static void run(const uint8_t count);                                // runs - assumes that registers were already programmed
+    void program_and_run(const uint8_t count, const uint32_t zmask = 0); // calls program, then run
 };
 
 inline ckernel_template::ckernel_template(uint outer_loop_len, uint inner_loop_len) :
@@ -332,18 +332,18 @@ inline void ckernel_template::set_last_outer_loop_instr(uint op)
     m_loop0_last_instr = op;
 }
 
-inline void ckernel_template::program_and_run(volatile uint *instrn_buffer)
+inline void ckernel_template::program_and_run()
 {
-    program(instrn_buffer);
-    run(instrn_buffer);
+    program();
+    run();
 }
 
-inline void ckernel_template::run(volatile uint *instrn_buffer)
+inline void ckernel_template::run()
 {
     TTI_MOP(1, 0, 0); // run the double-loop template
 }
 
-inline void ckernel_template::program(volatile uint *instrn_buffer)
+inline void ckernel_template::program()
 {
     volatile uint *mop_cfg = reinterpret_cast<volatile uint *>(TENSIX_MOP_CFG_BASE);
 
@@ -360,25 +360,25 @@ inline void ckernel_template::program(volatile uint *instrn_buffer)
     mop_cfg[8] = m_loop1_last_instr;
 }
 
-inline void ckernel_unpack_template::program_and_run(volatile uint *instrn_buffer, const uint8_t count, const uint32_t zmask)
+inline void ckernel_unpack_template::program_and_run(const uint8_t count, const uint32_t zmask)
 {
-    program(instrn_buffer);
-    run(instrn_buffer, count, zmask);
+    program();
+    run(count, zmask);
 }
 
-inline void ckernel_unpack_template::run(volatile uint *instrn_buffer, const uint8_t count, const uint32_t zmask)
+inline void ckernel_unpack_template::run(const uint8_t count, const uint32_t zmask)
 {
     TT_MOP_CFG(zmask >> 16);              // Set the top 16 bits of zmask - we could skip this for count <= 16
     TT_MOP(0, count - 1, zmask & 0xFFFF); // Run the template
 }
 
 // Version without zmask, should be slightly faster by eliminating one instruction.
-inline void ckernel_unpack_template::run(volatile uint *instrn_buffer, const uint8_t count)
+inline void ckernel_unpack_template::run(const uint8_t count)
 {
     TT_MOP(0, count - 1, 0); // Run the template
 }
 
-inline void ckernel_unpack_template::program(volatile uint *instrn_buffer) const
+inline void ckernel_unpack_template::program() const
 {
     volatile uint *mop_cfg = reinterpret_cast<volatile uint *>(TENSIX_MOP_CFG_BASE);
 

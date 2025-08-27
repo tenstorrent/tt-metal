@@ -49,17 +49,17 @@ inline void _llk_math_transpose_dest_(const std::uint32_t dst_index)
         if constexpr (transpose_of_faces)
         {
             // 4x 32b face transpositions followed by 8x middle-face row swaps.
-            ckernel_unpack_template::run(instrn_buffer, 12, 0xff0);
+            ckernel_unpack_template::run(12, 0xff0);
         }
         else
         {
             // 4x 32b face transpositions.
-            ckernel_unpack_template::run(instrn_buffer, 4, 0);
+            ckernel_unpack_template::run(4, 0);
         }
     }
     else
     {
-        ckernel_unpack_template::run(instrn_buffer, 2, 2);
+        ckernel_unpack_template::run(2, 2);
     }
 
     TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
@@ -169,7 +169,7 @@ inline void transpose_dest_configure_mop()
         // - zmask 0-bits: 32b 16x16 face transpose.
         // - zmask 1-bits: 32b 32x1 middle face row swap via SFPU.
         ckernel_unpack_template tmp(true, true, movd2b_hi, transpose, movb2d_hi_d2b_lo, transpose, /* skip A */ macro0, /* B */ movb2d_lo, /* skip B */ macro1);
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else
     {
@@ -214,7 +214,7 @@ inline void transpose_dest_configure_mop()
 
         // The following MOP config simply runs the above 7 instructions in order (when executed with zmask 0b10):
         ckernel_unpack_template tmp(true, true, EFGHIJKLM, EFGHI, ABCDEFG, P, /* skip A */ Q, /* B */ IJKL, /* skip B */ EFGHIJKLMNO);
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
 }
 

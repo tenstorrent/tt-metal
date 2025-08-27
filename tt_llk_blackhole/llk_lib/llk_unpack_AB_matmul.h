@@ -185,7 +185,7 @@ inline void _llk_unpack_AB_matmul_mop_config_(
         0,
         0);
 
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>

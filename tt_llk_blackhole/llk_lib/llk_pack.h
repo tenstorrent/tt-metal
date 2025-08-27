@@ -136,7 +136,7 @@ inline void _llk_pack_mop_config_(
             p_pacr::NO_CTXT_CTRL,
             0,
             1));
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else if constexpr (tilize && !untilize)
     {
@@ -402,7 +402,7 @@ inline void _llk_pack_mop_config_(
             tmp.set_end_op(TT_OP_SETADCZW(p_setadc::PAC, 0, 2, 0, 0, 0b0100)); // ch0_z = 0, ch1_z = 2;
         }
 
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else
     {
@@ -467,7 +467,7 @@ inline void _llk_pack_mop_config_(
             tmp.set_end_op(TT_OP_STOREIND(1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
         }
 
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
 }
 

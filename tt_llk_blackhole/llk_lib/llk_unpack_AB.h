@@ -37,7 +37,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, co
         {
             tmp.set_end_op(unpack_srcb_set_z);
         }
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else if constexpr (BType == BroadcastType::ROW)
     {
@@ -47,7 +47,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, co
         const uint32_t innerloop                   = num_faces < 2 ? 1 : 2;
         ckernel_template tmp(outerloop, innerloop, narrow_tile ? unpack_srcb_no_z_inc : unpack_srcb, unpack_srca);
         tmp.set_end_op(unpack_srcb_clear_z);
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else if constexpr (BType == BroadcastType::SCALAR)
     {
@@ -55,7 +55,7 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, co
         const uint32_t innerloop = num_faces;
         ckernel_template tmp(outerloop, innerloop, unpack_srca);
         tmp.set_start_op(unpack_srcb);
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else
     {
@@ -67,14 +67,14 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces = false, co
             const uint32_t innerloop                 = num_faces < 2 ? 1 : 2;
             ckernel_template tmp(outerloop, innerloop, num_faces < 4 ? unpack_srca : unpack_srca_skip_z, unpack_srcb);
             tmp.set_end_op(srca_set_z);
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
         else
         {
             constexpr uint32_t outerloop = 1;
             const uint32_t innerloop     = num_faces;
             ckernel_template tmp(outerloop, innerloop, unpack_srca, unpack_srcb);
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
     }
 }
@@ -143,7 +143,7 @@ inline void _llk_unpack_AB_(const std::uint32_t address_a, const std::uint32_t a
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     // Run MOP
-    ckernel::ckernel_template::run(instrn_buffer);
+    ckernel::ckernel_template::run();
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);

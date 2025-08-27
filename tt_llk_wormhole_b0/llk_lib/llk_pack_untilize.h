@@ -76,14 +76,14 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
         tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
         tmp.set_last_inner_loop_instr(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
         tmp.set_end_ops(TT_OP_SETADCXX(p_setadc::PAC, 1 - 1, 0x0), TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0)); // w cnt points to the next tile
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else
     {
         if constexpr (narrow_row)
         { // always
             ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, 0, 0, 0));
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
         else
         {
@@ -95,13 +95,13 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
                 tmp.set_end_ops(
                     TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0),
                     TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0)); // w cnt points to the next tile
-                tmp.program(instrn_buffer);
+                tmp.program();
             }
             else
             {
                 ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
                 tmp.set_end_op(TT_OP_INCADCZW(p_setadc::PAC, 0, 0, 1, 0)); // w cnt points to the next tile
-                tmp.program(instrn_buffer);
+                tmp.program();
             }
         }
 
@@ -160,7 +160,7 @@ inline void _llk_pack_untilize_(
 
     if constexpr (narrow_row)
     {
-        ckernel::ckernel_template::run(instrn_buffer);
+        ckernel::ckernel_template::run();
     }
     else
     {
@@ -169,7 +169,7 @@ inline void _llk_pack_untilize_(
         for (std::uint32_t row = 0; row < num_rows; row++)
         {
             TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, tile_dst_offset); // Clear tile counter
-            ckernel::ckernel_template::run(instrn_buffer);
+            ckernel::ckernel_template::run();
             TTI_ADDRCRXY(p_setadc::PAC, 0, 0, 1, 0, 0b0010); // Read new row in the tile
             if constexpr (block_ct_dim != full_ct_dim)
             {

@@ -43,7 +43,7 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
         }
         else if constexpr (HIGH_FIDELITY)
         {
-            ckernel_template::run(instrn_buffer);
+            ckernel_template::run();
             TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
         }
         else
@@ -57,7 +57,7 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
         }
         else if constexpr (HIGH_FIDELITY)
         {
-            ckernel_template::run(instrn_buffer);
+            ckernel_template::run();
         }
         else
         {
@@ -172,7 +172,7 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
             }
             else if constexpr (HIGH_FIDELITY)
             {
-                ckernel_template::run(instrn_buffer);
+                ckernel_template::run();
                 TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
             }
             else
@@ -186,7 +186,7 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
             }
             else if constexpr (HIGH_FIDELITY)
             {
-                ckernel_template::run(instrn_buffer);
+                ckernel_template::run();
             }
             else
             {
@@ -292,7 +292,7 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
             {
                 if constexpr (HIGH_FIDELITY)
                 {
-                    ckernel_template::run(instrn_buffer);
+                    ckernel_template::run();
                 }
                 else
                 {
@@ -312,7 +312,7 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
                 {
                     if constexpr (HIGH_FIDELITY)
                     {
-                        ckernel_template::run(instrn_buffer);
+                        ckernel_template::run();
                     }
                     else
                     {
@@ -337,7 +337,7 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
             {
                 if constexpr (HIGH_FIDELITY)
                 {
-                    ckernel_template::run(instrn_buffer);
+                    ckernel_template::run();
                     TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
                 }
                 else
@@ -355,7 +355,7 @@ inline void _llk_math_reduce_(const uint dst_index, bool narrow_tile = false, co
         {
             if constexpr (HIGH_FIDELITY)
             {
-                ckernel_template::run(instrn_buffer);
+                ckernel_template::run();
             }
             else
             {
@@ -437,14 +437,14 @@ inline void reduce_configure_mop()
         ckernel_template tmp(1, num_fidelity_phases, TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 4));
         tmp.set_last_inner_loop_instr(TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4));
         tmp.set_last_outer_loop_instr(TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4));
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else
     {
         ckernel_template tmp(1, num_fidelity_phases, TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0));
         tmp.set_last_inner_loop_instr(TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0));
         tmp.set_last_outer_loop_instr(TT_OP_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0));
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
 }
 

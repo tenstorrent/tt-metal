@@ -27,7 +27,7 @@ inline void _llk_unpack_reduce_mop_config_(const std::uint32_t num_faces)
     constexpr uint32_t innerloop = 1;
     ckernel_template tmp(outerloop, innerloop, unpack_zerosrca, unpack_srca);
     tmp.set_start_op(unpack_srcb);
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
@@ -101,7 +101,7 @@ inline void _llk_unpack_reduce_(const std::uint32_t address)
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     // Run MOP
-    ckernel::ckernel_template::run(instrn_buffer);
+    ckernel::ckernel_template::run();
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
