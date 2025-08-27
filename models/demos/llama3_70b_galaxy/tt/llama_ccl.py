@@ -1260,6 +1260,7 @@ def tt_sharded_distributed_rmsnorm(
     cluster_axis = 1
     semaphore = tt_ccl.gather_semaphore_handles[cluster_axis][tt_ccl.gather_idx[cluster_axis]]
     persistent_buffer = tt_ccl.all_gather_buffers.get("LAYERNORM", None)
+    # breakpoint()
     tt_out = ttnn.fused_rms_1_1_32_8192(
         inp,
         ln_sharded_progcfg,
