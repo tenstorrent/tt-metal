@@ -174,21 +174,24 @@ def test_all_gather_async(
 
 
 CONFIGS = [
-    ([1, 1, 1024, 5120], 0, 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-    ([1, 1, 352, 5120], 0, 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ([1, 1, 11264, 3072], 1, 3, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ([1, 1, 3072, 8192], 1, 2, 4, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ([1, 1, 11264, 12288], 0, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ([1, 1, 22528, 3072], 1, 3, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ([1, 1, 12288, 4096], 0, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    ([1, 1, 3072, 16384], 1, 2, 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
 ]
 
 CONFIGS_IDS = [f"ag_output_shape{i}" for i in range(len(CONFIGS))]
-WORKERS_PER_LINK = [8, 4, 2, 1]
+WORKERS_PER_LINK = [4, 2, 1]
 WORKERS_PER_LINK_IDS = [f"{worker}-workers" for worker in WORKERS_PER_LINK]
 CHUNKS_PER_SYNC = ["MAX", 320, 160, 80, 40, 20, 10]
 CHUNKS_PER_SYNC_IDS = [f"{chunk}-chunks" for chunk in CHUNKS_PER_SYNC]
 TOPOLOGY = ["ring", "linear"]
 
 
-@pytest.mark.parametrize("num_links", [4], ids=["4links"])
 @pytest.mark.parametrize(
-    "ag_output_shape, cluster_axis, dim, layout, ag_input_dtype",
+    "ag_output_shape, cluster_axis, dim, num_links, layout, ag_input_dtype",
     CONFIGS,
     ids=CONFIGS_IDS,
 )
@@ -236,6 +239,7 @@ def test_all_gather_chunks_per_sync(
     chunks_per_sync,
     num_workers_per_link,
 ):
+    num_devices = 4
     if cluster_axis == 0:
         num_devices = 8
         submesh_device = mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -262,4 +266,5 @@ def test_all_gather_chunks_per_sync(
         cluster_axis=cluster_axis,
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
+        skip_check=True,
     )

@@ -36,9 +36,7 @@ def test_all_gather_chunk_perf(
     rows = []
 
     subdir = "ag_perf"
-    num_links = 1
     file = f"pytest tests/nightly/tg/ccl/test_minimal_all_gather_async.py"
-    num_links = 4
 
     base_command = file + "::test_all_gather_chunks_per_sync"
 
@@ -47,7 +45,7 @@ def test_all_gather_chunk_perf(
     topology_list = TOPOLOGY
     for topology in topology_list:
         for i, config in enumerate(CONFIGS):
-            ag_output_shape, cluster_axis, dim, layout, ag_input_dtype = config
+            ag_output_shape, cluster_axis, dim, num_links, layout, ag_input_dtype = config
             elements = total_elems(ag_output_shape)
             total_bytes = elements * 2
             if cluster_axis == 0:
@@ -66,8 +64,8 @@ def test_all_gather_chunk_perf(
             best_bandwidth_gbps = -float("inf")
             best_chunks_per_sync = None
             best_num_workers_per_link = None
-            for chunks_per_sync in chunks_per_sync_list:
-                for num_workers_per_link in num_workers_per_link_list:
+            for j, chunks_per_sync in enumerate(chunks_per_sync_list):
+                for k, num_workers_per_link in enumerate(num_workers_per_link_list):
                     cols = ["DEVICE KERNEL"]
                     op_name = "AllGatherAsync"
                     step_name = (
@@ -77,7 +75,7 @@ def test_all_gather_chunk_perf(
                     # Filter by both chunks_per_sync and shape
                     final_command = (
                         base_command
-                        + f' -k "{CHUNKS_PER_SYNC_IDS[i]} and {CONFIGS_IDS[i]} and {WORKERS_PER_LINK_IDS[i]} and {topology}"'
+                        + f' -k "{CHUNKS_PER_SYNC_IDS[j]} and {CONFIGS_IDS[i]} and {WORKERS_PER_LINK_IDS[k]} and {topology}"'
                     )
                     results = None
                     try:
