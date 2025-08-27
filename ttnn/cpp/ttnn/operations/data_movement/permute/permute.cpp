@@ -16,7 +16,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
-namespace ttnn::operations::data_movement {
+namespace ttnn {
 namespace detail {
 
 ttnn::Tensor permute_impl(
@@ -155,10 +155,7 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
     return true;
 }
 
-}  // namespace detail
-
-ttnn::Tensor ExecutePermute::invoke(
-    QueueId queue_id,
+ttnn::Tensor permute_impl(
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
@@ -204,9 +201,27 @@ ttnn::Tensor ExecutePermute::invoke(
     return output_tensor;
 }
 
-ttnn::Tensor ExecutePermute::invoke(
-    const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int64_t>& dims, const std::optional<float>& pad_value) {
-    return invoke(DefaultQueueId, input_tensor, dims, std::nullopt, pad_value);
+}  // namespace detail
+
+template <typename... Args>
+auto traced_call(const std::string& name, const std::function<ttnn::Tensor(Args...)>& func, Args... args) {
+    // trace things before
+    auto output = func(args...);
+    // trace things after
+    return output;
 }
 
-}  // namespace ttnn::operations::data_movement
+ttnn::Tensor permute(
+    const ttnn::Tensor& input_tensor,
+    const SmallVector<int64_t>& dims,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<float>& pad_value = 0.0f) {
+    return traced_call("permute", permute_impl, input_tensor, dims, memory_config, pad_value);
+}
+
+ttnn::Tensor permute(
+    const ttnn::Tensor& input_tensor, const SmallVector<int64_t>& dims, const std::optional<float>& pad_value = 0.0f) {
+    return permute(input_tensor, dims, std::nullopt, pad_value);
+}
+
+}  // namespace ttnn
