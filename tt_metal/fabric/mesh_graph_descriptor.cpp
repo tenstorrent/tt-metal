@@ -424,16 +424,30 @@ bool MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& prot
         }
     }
 
-    return success;
-}
+    // ----------------------------------------------------------------------------
 
-void MeshGraphDescriptor::create_mesh_graph() {
-    // TODO: Implement
+    // Static checks that ARE TO BE DELETED AFTER transition from MGD 1.0 is complete
+
+    // Check all channel counts are exactly the same for all mesh descriptors
+    int num_channels = proto_->mesh_descriptors(0).channels().count();
+    for (const auto& mesh : proto_->mesh_descriptors()) {
+        if (mesh.channels().count() != num_channels) {
+            log_error(LogFabric, "MeshGraphDescriptor: All mesh descriptors must have the same number of channels");
+            success = false;
+        }
+    }
+
+    // TODO: Add a board descriptor and validation
+
+    return success;
 }
 
 // Dynamic checks to implement
 // Check that all instances have been defined somewhere
 // Check that all instances are of the same type
 // Validate that connection nodes reference valid instances in this graph
+
+
+// TODO: Determeine if we're going to support graphs in MGD 1.0 at the moment
 
 }  // namespace tt::tt_fabric

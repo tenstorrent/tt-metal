@@ -161,6 +161,10 @@ std::unordered_map<chip_id_t, RouterEdge> MeshGraph::get_valid_connections(
     return valid_connections;
 }
 
+void MeshGraph::initialize_from_proto(const proto::MeshGraphDescriptor& proto) {
+
+}
+
 void MeshGraph::initialize_from_yaml(const std::string& mesh_graph_desc_file_path) {
     std::ifstream fdesc(mesh_graph_desc_file_path);
     TT_FATAL(not fdesc.fail(), "Failed to open file: {}", mesh_graph_desc_file_path);
