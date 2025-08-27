@@ -620,6 +620,30 @@ struct MeshPacketHeader : public PacketHeaderBase<MeshPacketHeader> {
     void to_chip_multicast_impl(const MulticastRoutingCommandHeader& chip_multicast_command_header) volatile {}
 };
 
+enum ControlPacketType : uint8_t {
+    HANDSHAKE_INIT = 0,
+    ACKNOWLEDGMENT = 1,
+    TERMINATE_START = 2,
+    REROUTE_INIT = 3,
+    REROUTE_CONFIRM = 4,
+    REROUTE_READY = 5
+};
+
+struct ControlPacketHeader {
+    union {
+        struct {
+            uint16_t dst_chip_id;
+            uint16_t dst_mesh_id;
+        };
+        uint32_t dst_node_id;  // Used for efficiently writing the dst info
+    };
+    uint8_t dst_channel_id;
+    ControlPacketType type;
+    uint8_t unique_id;
+    uint8_t seq_num;
+    uint8_t reserved[8];
+};
+
 // TODO: When we remove the 32B padding requirement, reduce to 16B size check
 static_assert(sizeof(PacketHeader) == 32, "sizeof(PacketHeader) is not equal to 32B");
 // Host code still hardcoded to sizeof(PacketHeader) so we need to keep this check
@@ -627,6 +651,7 @@ static_assert(
     sizeof(LowLatencyPacketHeader) == sizeof(PacketHeader), "sizeof(LowLatencyPacketHeader) is not equal to 32B");
 static_assert(sizeof(LowLatencyMeshPacketHeader) == 64, "sizeof(LowLatencyMeshPacketHeader) is not equal to 64B");
 static_assert(sizeof(MeshPacketHeader) == 48, "sizeof(MeshPacketHeader) is not equal to 48B");
+static_assert(sizeof(ControlPacketHeader) == 16, "sizeof(ControlPacketHeader) is not equal to 16B");
 
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
