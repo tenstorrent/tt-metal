@@ -2,10 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+import datasets.builder
+import datasets.utils.file_utils
 import pytest
 import torch
 import transformers
 from datasets import load_dataset
+from datasets.utils.filelock import SoftFileLock
 from loguru import logger
 from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfig, WhisperModel
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -393,6 +398,12 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence
     torch.manual_seed(0)
     config = WhisperConfig.from_pretrained(model_name)
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
+
+    if os.getenv("CI") == "true" or True:
+        # UnixFileLock throws error while creating FileLock in read-only system
+        datasets.builder.FileLock = SoftFileLock
+        datasets.utils.file_utils.FileLock = SoftFileLock
+
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
     inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features

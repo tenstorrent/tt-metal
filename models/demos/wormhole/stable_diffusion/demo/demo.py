@@ -5,10 +5,13 @@
 import json
 import os
 
+import datasets.builder
+import datasets.utils.file_utils
 import numpy as np
 import pytest
 import torch
 from datasets import load_dataset
+from datasets.utils.filelock import SoftFileLock
 from diffusers import AutoencoderKL, UNet2DConditionModel
 from loguru import logger
 from PIL import Image
@@ -370,6 +373,12 @@ def run_demo_inference_diffusiondb(
     assert (
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
+
+    if os.getenv("CI") == "true" or True:
+        # UnixFileLock throws error while creating FileLock in read-only system
+        datasets.builder.FileLock = SoftFileLock
+        datasets.utils.file_utils.FileLock = SoftFileLock
+
     # 0. Load a sample prompt from the dataset
     dataset = load_dataset("poloclub/diffusiondb", "2m_random_1k")
     data_1k = dataset["train"]
