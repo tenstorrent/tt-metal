@@ -185,7 +185,7 @@ class TtLlamaMLP(LightweightModule):
                 sub_device_id=self.prefetcher_setup.worker_sub_device_id if mode == "decode" else None,
             )
 
-            ttnn.deallocate(x)
+            # ttnn.deallocate(x)
 
             w3_out_reduced = self.tt_ccl.line_reduce_scatter(
                 w3_out, cluster_axis=1, num_links=1, memory_config=self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]

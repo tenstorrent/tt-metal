@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import torch
 
 import ttnn
@@ -24,6 +23,8 @@ class TtLlamaAttention(LightweightModule):
         use_paged_kv_cache=False,
         prefetcher_setup=None,
         tt_ccl=None,
+        scaling_tensor_q=None,
+        scaling_tensor_k=None,
     ):
         super().__init__()
 
@@ -306,7 +307,9 @@ class TtLlamaAttention(LightweightModule):
                 sharded_output_config=self.reshape_output_k_mem_cfg,
             )
 
-            self.scaling_factor = 1.0 / math.sqrt(self.head_dim)
+            # Use shared scaling tensors from the model
+            self.scaling_tensor_q = scaling_tensor_q
+            self.scaling_tensor_k = scaling_tensor_k
 
         else:
             self.qk_norm = False
@@ -453,26 +456,9 @@ class TtLlamaAttention(LightweightModule):
             q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
             k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
 
-            # Create scaling tensors with same shape as q and k tensors
-            scaling_tensor_q = ttnn.from_torch(
-                torch.full([1, 1, 64, 128], self.scaling_factor),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=q_heads_pre_rot_1BQD.memory_config(),  # Use same memory config as q tensor
-            )
-
-            scaling_tensor_k = ttnn.from_torch(
-                torch.full([1, 1, 64, 128], self.scaling_factor),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.mesh_device,
-                memory_config=k_heads_pre_rot_1BKD.memory_config(),  # Use same memory config as k tensor
-            )
-
             # Apply elementwise scaling
-            q_heads_pre_rot_1BQD = ttnn.mul(q_heads_pre_rot_1BQD, scaling_tensor_q)
-            k_heads_pre_rot_1BKD = ttnn.mul(k_heads_pre_rot_1BKD, scaling_tensor_k)
+            q_heads_pre_rot_1BQD = ttnn.mul(q_heads_pre_rot_1BQD, self.scaling_tensor_q)
+            k_heads_pre_rot_1BKD = ttnn.mul(k_heads_pre_rot_1BKD, self.scaling_tensor_k)
 
             q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
@@ -482,10 +468,6 @@ class TtLlamaAttention(LightweightModule):
 
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
-
-            # Deallocate scaling tensors
-            ttnn.deallocate(scaling_tensor_q)
-            ttnn.deallocate(scaling_tensor_k)
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)

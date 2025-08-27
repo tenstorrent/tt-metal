@@ -307,7 +307,7 @@ def run_qwen_demo(
         num_compile_iters = 1
     for i in range(num_compile_iters):
         tt_decode_input = tt_embd(tt_out_tok)
-        logger.info(f"tt_decode_input done")
+        # logger.info(f"tt_decode_input done")
 
         tt_out = tt_model(
             tt_decode_input,
@@ -319,7 +319,7 @@ def run_qwen_demo(
 
         # Sampling
         _ = tt_sampling(tt_out[0], top_k, top_p, seed, tt_out_tok=tt_out_tok)  # Compile once with setting the seed
-        logger.info(f"Sampling done")
+        # logger.info(f"Sampling done")
 
     if not stress_test:
         ttnn.plus_one(
@@ -345,7 +345,6 @@ def run_qwen_demo(
 
     # Get cos/sin matrices for the current position of each user
     rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
-    breakpoint()
     tt_out = tt_model(
         tt_decode_input,
         current_pos_tensor,
@@ -609,7 +608,7 @@ def run_qwen_demo(
         ),
         (  # quick 1L demo
             "instruct",
-            1,
+            3,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -711,7 +710,8 @@ def run_qwen_demo(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 10459136,
+            "trace_region_size": 12459136,
+            # "trace_region_size": 10459136,
             "fabric_config": True,
         }
     ],

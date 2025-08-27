@@ -1277,35 +1277,3 @@ def tt_sharded_distributed_rmsnorm(
     )
     tt_ccl.gather_idx[cluster_axis] = (tt_ccl.gather_idx[cluster_axis] + 1) % tt_ccl.num_cbs
     return tt_out, res
-
-
-def tt_qwen_sharded_distributed_rmsnorm(
-    inp, epsilon, gamma, mesh_device, ln_sharded_input_memcfg, ln_sharded_progcfg, ln_sharded_stats_memcfg
-):
-    inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
-
-    # Run distributed rmsnorm part 1
-    tt_stats = ttnn.rms_norm_pre_all_gather(inp, program_config=ln_sharded_progcfg)
-
-    # All gather stats
-    tt_stats = ttnn.all_gather(
-        tt_stats,
-        3,
-        num_links=1,
-        cluster_axis=1,
-        mesh_device=mesh_device,
-        memory_config=ln_sharded_stats_memcfg,
-        topology=ttnn.Topology.Linear,
-    )
-
-    # Run distributed rmsnorm part 2
-    tt_out = ttnn.rms_norm_post_all_gather(
-        inp,
-        epsilon=epsilon,
-        weight=gamma,
-        program_config=ln_sharded_progcfg,
-        stats=tt_stats,
-    )
-    tt_stats.deallocate(True)
-
-    return tt_out
