@@ -15,15 +15,12 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out_no_mul = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out_mul = get_compile_time_arg_val(1);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(2) == 1;
+    constexpr auto dst_args = TensorAccessorArgs<2>();
 
     // ublocks size defined in tiles
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out_no_mul);
-    const DataFormat data_format = get_dataformat(cb_id_out_no_mul);
-
-    const InterleavedAddrGenFast<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
+    const auto s = TensorAccessor(dst_args, dst_addr, tile_bytes);
 
     uint32_t out_no_mul_curr_id = start_id + half_row_width;
     uint32_t out_mul_curr_id = start_id;
