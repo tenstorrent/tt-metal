@@ -37,7 +37,7 @@ struct IsInPreprocessingResult {
     Tensor preprocessed_test_elements_tensor;
     Shape original_elements_shape;
     Layout original_elements_layout;
-    int mask_value;
+    // int mask_value;
     uint32_t elements_size;
     uint32_t test_elements_size;
     uint32_t single_fetch_elements_number;
@@ -46,6 +46,7 @@ struct IsInPreprocessingResult {
 void validate_inputs(const Tensor& elements, const Tensor& test_elements) {
     const auto& elements_shape = elements.logical_shape();
     const auto& test_elements_shape = test_elements.logical_shape();
+    // must have same dtypes
 }
 
 uint32_t calculate_max_fetch_size(const Tensor& elements, const Tensor& test_elements) {
@@ -55,21 +56,29 @@ uint32_t calculate_max_fetch_size(const Tensor& elements, const Tensor& test_ele
     const auto test_elements_datum_size = test_elements.element_size();
     const auto output_datum_size = 4;
 
-    return l1_size_per_core * confidence_margin / (elements_datum_size + test_elements_datum_size + output_datum_size);
+    // return static_cast<uint32_t>(l1_size_per_core * confidence_margin / (elements_datum_size +
+    // test_elements_datum_size + output_datum_size));
+    return 10240;
 }
 
 IsInPreprocessingResult isin_preprocessing(
     const QueueId& queue_id, const Tensor& elements, const Tensor& test_elements) {
     IsInPreprocessingResult is_in_preprocessing_result;
-    is_in_preprocessing_result.preprocessed_elements_tensor =
-        ttnn::clone(elements, elements.dtype(), elements.memory_config(), std::nullopt);
+    is_in_preprocessing_result.preprocessed_elements_tensor = elements;
+    // is_in_preprocessing_result.preprocessed_elements_tensor =
+    //     ttnn::clone(elements, elements.dtype(), elements.memory_config(), std::nullopt);
     is_in_preprocessing_result.preprocessed_test_elements_tensor = test_elements;
-    is_in_preprocessing_result.original_elements_shape = elements.logical_shape();
-    is_in_preprocessing_result.original_elements_layout = elements.layout();
-    is_in_preprocessing_result.elements_size = elements.logical_volume();
-    is_in_preprocessing_result.test_elements_size = test_elements.logical_volume();
-    is_in_preprocessing_result.single_fetch_elements_number = calculate_max_fetch_size(elements, test_elements);
-    is_in_preprocessing_result.mask_value = static_cast<uint32_t>(-1);
+    is_in_preprocessing_result.original_elements_shape =
+        is_in_preprocessing_result.preprocessed_elements_tensor.logical_shape();
+    is_in_preprocessing_result.original_elements_layout =
+        is_in_preprocessing_result.preprocessed_elements_tensor.layout();
+    is_in_preprocessing_result.elements_size = is_in_preprocessing_result.preprocessed_elements_tensor.logical_volume();
+    is_in_preprocessing_result.test_elements_size =
+        is_in_preprocessing_result.preprocessed_test_elements_tensor.logical_volume();
+    is_in_preprocessing_result.single_fetch_elements_number = calculate_max_fetch_size(
+        is_in_preprocessing_result.preprocessed_elements_tensor,
+        is_in_preprocessing_result.preprocessed_test_elements_tensor);
+    // is_in_preprocessing_result.mask_value = static_cast<uint32_t>(-1);
 
     if (is_in_preprocessing_result.preprocessed_elements_tensor.layout() != OUTPUT_TENSOR_LAYOUT) {
         is_in_preprocessing_result.preprocessed_elements_tensor =
