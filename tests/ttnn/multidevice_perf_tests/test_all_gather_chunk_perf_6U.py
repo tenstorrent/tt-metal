@@ -10,8 +10,8 @@ import time
 import pandas as pd
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import (
-    get_max_chunks_per_sync,
+from tests.nightly.t3000.ccl.test_minimal_all_gather_async import get_max_chunks_per_sync
+from tests.nightly.tg.ccl.test_minimal_all_gather_async import (
     CONFIGS,
     CHUNKS_PER_SYNC,
     WORKERS_PER_LINK,
@@ -26,7 +26,7 @@ def total_elems(ag_output_shape):
     return math.prod(ag_output_shape)
 
 
-@pytest.mark.parametrize("arch_type", ["T3K"])
+@pytest.mark.parametrize("arch_type", ["6U"])
 @pytest.mark.models_device_performance_bare_metal
 def test_all_gather_chunk_perf(
     arch_type,
@@ -37,11 +37,8 @@ def test_all_gather_chunk_perf(
 
     subdir = "ag_perf"
     num_links = 1
-    if arch_type == "T3K":
-        file = f"pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
-        num_links = 1
-    else:
-        raise ValueError(f"Invalid arch_type: {arch_type}")
+    file = f"pytest tests/nightly/tg/ccl/test_minimal_all_gather_async.py"
+    num_links = 4
 
     base_command = file + "::test_all_gather_chunks_per_sync"
 
@@ -50,10 +47,15 @@ def test_all_gather_chunk_perf(
     topology_list = TOPOLOGY
     for topology in topology_list:
         for i, config in enumerate(CONFIGS):
-            num_devices, ag_output_shape, dim, layout, ag_input_dtype = config
+            ag_output_shape, cluster_axis, dim, layout, ag_input_dtype = config
             elements = total_elems(ag_output_shape)
             total_bytes = elements * 2
+            if cluster_axis == 0:
+                num_devices = 8
+            else:
+                num_devices = 4
             total_bytes_moved = total_bytes * ((num_devices - 1) / num_devices) / num_links
+
             data_size_bytes_gb = total_bytes / (10**9)
             data_size_bytes_mb = total_bytes / (10**6)
             data_moved_bytes_mb = total_bytes_moved / (10**6)

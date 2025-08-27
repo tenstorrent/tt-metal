@@ -672,17 +672,28 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape, num_links):
     return (total_elems // packet_elems) // (num_devices * num_links)
 
 
+CONFIGS = [
+    (8, [1, 1, 11264, 12288], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    (8, [1, 1, 12288, 4096], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    (8, [1, 1, 12288, 3072], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+]
+CONFIGS_IDS = [f"ag_output_shape{i}" for i in range(len(CONFIGS))]
+
+CHUNKS_PER_SYNC = ["MAX", 320, 160, 80, 40, 20, 10]
+CHUNKS_PER_SYNC_IDS = [f"{chunk}-chunks" for chunk in CHUNKS_PER_SYNC]
+
+WORKERS_PER_LINK = [8, 4, 2, 1]
+WORKERS_PER_LINK_IDS = [f"{worker}-workers" for worker in WORKERS_PER_LINK]
+
+TOPOLOGY = ["ring", "linear"]
+
+
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype",
-    [
-        (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 8192, 10240], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-        (8, [1, 1, 8192, 16384], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
-    ],
-    ids=["ag_output_shape0", "ag_output_shape1", "ag_output_shape2", "ag_output_shape3"],
+    CONFIGS,
+    ids=CONFIGS_IDS,
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
@@ -696,7 +707,7 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape, num_links):
 @pytest.mark.parametrize(
     "enable_trace,num_iters",
     [
-        (True, 40),
+        (True, 20),
     ],
     ids=["perf"],
 )
@@ -707,24 +718,17 @@ def get_max_chunks_per_sync(num_devices, ag_output_shape, num_links):
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
-    ids=["ring", "linear"],
+    ids=TOPOLOGY,
 )
 @pytest.mark.parametrize(
     "chunks_per_sync",
-    ["MAX", 160, 80, 40, 20, 10],
-    ids=[
-        "MAX-chunks",
-        "160-chunks",
-        "80-chunks",
-        "40-chunks",
-        "20-chunks",
-        "10-chunks",
-    ],
+    CHUNKS_PER_SYNC,
+    ids=CHUNKS_PER_SYNC_IDS,
 )
 @pytest.mark.parametrize(
     "num_workers_per_link",
-    [8, 4, 2, 1],
-    ids=["8-workers", "4-workers", "2-workers", "1-workers"],
+    WORKERS_PER_LINK,
+    ids=WORKERS_PER_LINK_IDS,
 )
 def test_all_gather_chunks_per_sync(
     t3k_mesh_device,
