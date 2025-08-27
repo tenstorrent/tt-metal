@@ -1755,10 +1755,6 @@ void DeviceProfiler::pushTracyDeviceResults(
         }
     }
 
-    // sortDeviceMarkers(device_markers_vec);
-    // merge the sorted core-risc timeseries into a single vector sorted by timestamp; use references to the original
-    // TTDeviceMarker objects
-
     // Tracy contexts must be updated in order of their first timestamps
     for (const auto& marker_ref : device_markers_vec) {
         const tracy::TTDeviceMarker& marker = marker_ref.get();
