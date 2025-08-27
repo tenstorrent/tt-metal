@@ -26,8 +26,8 @@ message FactorySystemDescriptor {
     }
 
     message Connection {
-        EndPoint ep_a = 1;
-        EndPoint ep_b = 2;
+        EndPoint endpoint_a = 1;
+        EndPoint endpoint_b = 2;
     }
 
     message EthConnections {
