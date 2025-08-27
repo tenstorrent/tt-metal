@@ -162,7 +162,7 @@ int main(int argc, char* argv[]) {
         record_stack_usage(stack_free);
         WAYPOINT("D");
 
-#ifndef NCRISC_FIRMWARE_KERNEL_SPLIT
+#if defined(ARCH_WORMHOLE)
         signal_ncrisc_completion();
 #endif
     }
