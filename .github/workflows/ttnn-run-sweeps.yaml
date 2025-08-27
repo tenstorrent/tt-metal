@@ -550,6 +550,10 @@ on:
       suite_name:
         description: "Which sweep suite to run?"
         type: string
+      upload_results:
+        description: "Upload sweep results to SFTP server?"
+        type: boolean
+        default: false
   # schedule:
   #   - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
@@ -678,3 +682,12 @@ jobs:
           name: sweeps-results
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
+      - name: Upload sweep results to SFTP server
+        if: ${{ github.event.inputs.upload_results }}
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/test_specific_file_batchfile.txt
+          username: ml-kernel-op-test-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+          path: /work
