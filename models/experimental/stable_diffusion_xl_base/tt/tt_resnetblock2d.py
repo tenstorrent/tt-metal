@@ -15,6 +15,8 @@ from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_linear_params,
 )
 
+L1FullSliceConfig = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dL1Full)
+
 
 class TtResnetBlock2D(LightweightModule):
     def __init__(
@@ -228,6 +230,7 @@ class TtResnetBlock2D(LightweightModule):
                 input_width=W,
                 conv_config=self.conv1_config,
                 compute_config=self.compute1_config,
+                slice_config=L1FullSliceConfig,
                 groups=self.groups,
                 memory_config=None,
                 return_output_dim=True,
@@ -301,6 +304,7 @@ class TtResnetBlock2D(LightweightModule):
             input_width=W,
             conv_config=self.conv2_config,
             compute_config=self.compute2_config,
+            slice_config=L1FullSliceConfig,
             groups=self.groups,
             memory_config=None,
             return_output_dim=True,

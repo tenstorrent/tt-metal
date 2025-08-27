@@ -81,35 +81,67 @@ ResultWithOptions conv2d(
     const std::optional<const Conv2dSliceConfig>& dram_slice_config_,
     bool return_output_dim,
     bool return_weights_and_bias) {
-    if (dram_slice_config_.has_value() &&
-        dram_slice_config_.value().slice_type != Conv2dSliceConfig::SliceType::L1_FULL) {
-        return result_to_result_with_options(
-            conv2d_DRAM(
-                queue_id,
-                input_tensor,
-                weight_tensor,
-                device,
-                in_channels,
-                out_channels,
-                batch_size,
-                input_height,
-                input_width,
-                kernel_size,
-                stride,
-                padding,
-                dilation,
-                groups,
-                dtype,
-                bias_tensor,
-                conv_config_,
-                compute_config_,
-                memory_config_,
-                dram_slice_config_.value()),
-            return_output_dim,
-            return_weights_and_bias);
+    if (dram_slice_config_.has_value()) {
+        if (dram_slice_config_.value().slice_type == Conv2dSliceConfig::SliceType::L1_FULL) {
+            return result_to_result_with_options(
+                conv2d_L1(
+                    queue_id,
+                    input_tensor,
+                    weight_tensor,
+                    device,
+                    in_channels,
+                    out_channels,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    kernel_size,
+                    stride,
+                    padding,
+                    dilation,
+                    groups,
+                    dtype,
+                    bias_tensor,
+                    conv_config_,
+                    compute_config_,
+                    memory_config_),
+                return_output_dim,
+                return_weights_and_bias);
+        } else {
+            return result_to_result_with_options(
+                conv2d_DRAM(
+                    queue_id,
+                    input_tensor,
+                    weight_tensor,
+                    device,
+                    in_channels,
+                    out_channels,
+                    batch_size,
+                    input_height,
+                    input_width,
+                    kernel_size,
+                    stride,
+                    padding,
+                    dilation,
+                    groups,
+                    dtype,
+                    bias_tensor,
+                    conv_config_,
+                    compute_config_,
+                    memory_config_,
+                    dram_slice_config_.value()),
+                return_output_dim,
+                return_weights_and_bias);
+        }
     } else {
         bool input_is_on_device = tt::tt_metal::is_device_tensor(input_tensor);
         if (input_is_on_device && input_tensor.memory_config().is_dram()) {
+            if (std::getenv("TTNN_CONV2D_DISABLE_AUTO_DRAM") != nullptr) {
+                TT_THROW("Automatically selected Conv2D DRAM when it's disabled");
+            }
+            log_info(
+                LogOp,
+                "Using conv dram without slice config as input tensor {} is in DRAM",
+                input_tensor.logical_shape());
             return result_to_result_with_options(
                 conv2d_DRAM(
                     queue_id,

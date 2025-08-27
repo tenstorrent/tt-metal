@@ -5,6 +5,8 @@
 import torch
 import ttnn
 
+L1FullSliceConfig = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dL1Full)
+
 
 def to_channel_last_ttnn(torch_tensor, dtype, device, memory_config, layout):
     torch_tensor = torch.permute(torch_tensor, (0, 2, 3, 1))
@@ -205,6 +207,7 @@ def split_conv2d(
                 return_output_dim=True,
                 return_weights_and_bias=True,
                 dtype=conv_dtype,
+                slice_config=L1FullSliceConfig,
             )
 
             device_weights[idx_out].append(d_w)
