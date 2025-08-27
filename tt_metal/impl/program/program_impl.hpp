@@ -197,7 +197,6 @@ public:
     void compile(IDevice* device, bool force_slow_dispatch = false);
     void invalidate_circular_buffer_allocation();
     void allocate_circular_buffers(const IDevice* device);
-    uint32_t get_cb_memory_size() const;
     bool is_finalized() const;
     void set_finalized();
     void allocate_kernel_bin_buf_on_device(IDevice* device);

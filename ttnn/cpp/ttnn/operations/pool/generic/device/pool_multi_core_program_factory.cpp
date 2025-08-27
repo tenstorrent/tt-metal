@@ -504,7 +504,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, all_cores, compute_config);
 
-    uint32_t temporary_size = program.get_cb_memory_size();
+    // Compute CB total size
+    const auto& cbs = program.circular_buffers();
+    auto temporary_size = std::accumulate(cbs.begin(), cbs.end(), uint32_t{0}, [](auto acc, const auto& cb) {
+        return acc + (cb->globally_allocated() ? 0 : cb->size());
+    });
+
     uint32_t post_allocate_size =
         input.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     uint32_t l1_usage = calculate_L1_usage(

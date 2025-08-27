@@ -122,7 +122,6 @@ public:
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     // debug/test
-    uint32_t get_cb_memory_size() const;
     detail::ProgramImpl& impl() { return *internal_; }
     const detail::ProgramImpl& impl() const { return *internal_; }
 
