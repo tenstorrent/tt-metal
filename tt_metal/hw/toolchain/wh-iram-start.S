@@ -20,10 +20,10 @@ _start:
 	.option pop
 	lw  sp, MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS( zero )
 	lw  a0, 13 * 4( sp )
-	call    _Z13kernel_launchm
+	call  kernel_launch
 	lw ra, 14 * 4(sp)
 	sw ra,  MEM_NCRISC_RESUME_ADDR_MAILBOX_ADDRESS( zero )
-	sb zero, MEM_SLAVE_RUN_MAILBOX_ADDRESS( zero )   /* Tell brisc we're done */
+	sb zero, MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS( zero )   /* Tell brisc we're done */
 
 halt:
 	/*Program flow will end here as ncrisc will go into reset*/

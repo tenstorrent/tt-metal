@@ -39,7 +39,7 @@ wh_iram_trampoline:
 	la a1, return_from_iram
 	sw a1, 14 * 4( sp )
 	sw  sp, MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS( zero )
-	sb a0, MEM_SLAVE_RUN_MAILBOX_ADDRESS( zero )   /* Tell brisc we're done */
+	sb a0, MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS( zero )   /* Tell brisc we're done */
 
 	/*Program flow will end here as ncrisc will go into reset*/
 0:	j 0b
