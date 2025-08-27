@@ -29,7 +29,7 @@ source $PYTHON_ENV_DIR/bin/activate
 detect_os
 
 
-if [ "$OS_VERSION" = "22.04" ]; then
+if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
     echo "Ubuntu 22.04 detected: force pip/setuptools/wheel versions"
     pip install --force-reinstall pip==21.2.4
     python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
