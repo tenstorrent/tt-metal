@@ -26,8 +26,7 @@ struct ToMemoryConfig {
     static Tensor invoke(
         const ttnn::Tensor& tensor,
         const ttnn::MemoryConfig& memory_config,
-        std::optional<ttnn::DataType> dtype = std::nullopt,
-        const std::optional<uint32_t>& stack_id = std::nullopt) {
+        std::optional<ttnn::DataType> dtype = std::nullopt) {
         using namespace tt::tt_metal;
         // Temporary until we see why buffer data not being populated
         const auto original_memory_config = ttnn::get_memory_config(tensor);

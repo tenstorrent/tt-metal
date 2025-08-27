@@ -43,7 +43,6 @@ struct BinaryNgDeviceOperation {
         SubtileBroadcastType subtile_broadcast_type = SubtileBroadcastType::NONE;
         bool is_sfpu = false;
         bool is_quant_op = false;
-        std::optional<uint32_t> stack_id;
 
         tt::stl::hash::hash_t to_hash() const;
         DataType get_dtype() const;
@@ -70,8 +69,7 @@ struct BinaryNgDeviceOperation {
         static cached_program_t create(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output,
-            const std::optional<uint32_t>& stack_id = std::nullopt);
+            tensor_return_value_t& output);
 
         static void override_runtime_arguments(
             cached_program_t& cached_program,
@@ -100,8 +98,7 @@ struct BinaryNgDeviceOperation {
         const std::optional<Tensor>& optional_output_tensor,
         tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations,
-        const std::optional<uint32_t>& stack_id = std::nullopt);
+        tt::stl::Span<const unary::UnaryWithParam> post_activations);
 
     // tensor-scalar invocation
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
@@ -113,8 +110,7 @@ struct BinaryNgDeviceOperation {
         const std::optional<Tensor>& optional_output_tensor,
         tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
         tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
-        tt::stl::Span<const unary::UnaryWithParam> post_activations,
-        const std::optional<uint32_t>& stack_id = std::nullopt);
+        tt::stl::Span<const unary::UnaryWithParam> post_activations);
 };
 
 }  // namespace ttnn::operations::binary_ng

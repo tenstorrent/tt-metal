@@ -134,10 +134,6 @@ public:
     detail::ProgramImpl& impl() { return *internal_; }
     const detail::ProgramImpl& impl() const { return *internal_; }
 
-    // Stack ID for debugging/tracing
-    void set_stack_id(uint32_t stack_id);
-    const std::optional<uint32_t>& get_stack_id() const;
-
 private:
     // The internal ProgramImpl may outlive the Program object if it's in-use by a command queue.
     std::shared_ptr<detail::ProgramImpl> internal_;

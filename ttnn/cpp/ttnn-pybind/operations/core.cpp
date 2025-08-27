@@ -10,107 +10,13 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/cast.h>
-#include <fstream>
-#include <sstream>
-#include <functional>
-#include <atomic>
-#include <filesystem>
 
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
 #include <tt-metalium/work_split.hpp>
 
-// Global counter for operation IDs shared across all operations
-std::atomic<uint32_t> ttnn_global_operation_id(0);
-
 namespace ttnn::operations::core {
-
-std::string get_python_call_stack() {
-    std::stringstream stack_stream;
-    try {
-        py::module traceback = py::module::import("traceback");
-        py::object stack = traceback.attr("format_stack")();
-
-        // Filter out pytest and environment frames, only show user code
-        for (py::handle frame : stack) {
-            std::string frame_str = py::str(frame).cast<std::string>();
-
-            // Skip frames that are from pytest, pybind, or other internal stuff
-            // if (frame_str.find("/pytest") != std::string::npos || frame_str.find("/pluggy/") != std::string::npos ||
-            //     frame_str.find("/python3.10/site-packages/") != std::string::npos ||
-            //     frame_str.find("ttnn/__init__.py") != std::string::npos ||
-            //     frame_str.find("decorators.py") != std::string::npos) {
-            //     continue;
-            // }
-
-            stack_stream << frame_str;
-        }
-    } catch (const std::exception& e) {
-        stack_stream << "Failed to get Python call stack: " << e.what() << std::endl;
-    }
-    return stack_stream.str();
-}
-
-// Function to write operation info to JSON file and return stack_id
-uint32_t write_operation_info_to_file(const std::string& callstack, const std::string& args_info) {
-    // Get next operation ID
-    uint32_t stack_id = ttnn_global_operation_id.fetch_add(1);
-
-    // Create directory if it doesn't exist
-    std::string dir_path = "./generated/inspector/ops";
-    std::filesystem::create_directories(dir_path);
-
-    // Create filename with full path
-    std::string filename = dir_path + "/ops.yaml";
-
-    // Check if file exists and has content
-    bool file_exists = std::filesystem::exists(filename);
-    bool is_empty = !file_exists || std::filesystem::file_size(filename) == 0;
-
-    // Helper function to escape YAML special chars
-    auto escape_yaml = [](const std::string& str) -> std::string {
-        std::string result;
-        for (char c : str) {
-            if (c == '\n') {
-                result += "\\n";
-            } else if (c == '\r') {
-                result += "\\r";
-            } else if (c == '\t') {
-                result += "\\t";
-            } else if (c == '"') {
-                result += "\\\"";
-            } else if (c == '\\') {
-                result += "\\\\";
-            } else {
-                result += c;
-            }
-        }
-        return result;
-    };
-
-    // Append to YAML file
-    std::ofstream file(filename, std::ios::app);
-    if (file.is_open()) {
-        file << "- operation_id: " << stack_id << "\n";
-        file << "  callstack: |\n";
-        // Write callstack as literal block
-        std::istringstream callstack_stream(callstack);
-        std::string line;
-        while (std::getline(callstack_stream, line)) {
-            file << "    " << line << "\n";
-        }
-        file << "  arguments: |\n";
-        // Write arguments as literal block
-        std::istringstream args_stream(args_info);
-        while (std::getline(args_stream, line)) {
-            file << "    " << line << "\n";
-        }
-        file.close();
-    }
-    std::cout << "Operation dispatched with stack_id: " << stack_id << " -> " << filename << std::endl;
-    return stack_id;
-}
 
 void py_module_types(py::module& module) {
     py::enum_<ttnn::operations::compute_throttle_utils::ThrottleLevel>(module, "ThrottleLevel", R"doc(
@@ -299,30 +205,7 @@ void py_module(py::module& module) {
             >>> tensor = ttnn.to_device(ttnn.from_torch(torch.randn((10, 64, 32), dtype=torch.bfloat16)), device)
             >>> tensor = ttnn.to_memory_config(tensor, memory_config)
         )doc",
-        ttnn::pybind_overload_t{
-            [](const std::decay_t<decltype(ttnn::to_memory_config)>& self,
-               const ttnn::Tensor& tensor,
-               const ttnn::MemoryConfig& memory_config,
-               const std::optional<ttnn::DataType>& dtype) -> ttnn::Tensor {
-                std::string callstack = get_python_call_stack();
-
-                std::stringstream args_stream;
-                args_stream << "input_tensor : shape = " << tensor.logical_shape() << " data_type = " << tensor.dtype()
-                            << " memory_config = " << tensor.memory_config() << " layout = " << tensor.layout()
-                            << std::endl;
-
-                args_stream << "target_memory_config = " << memory_config << std::endl;
-                if (dtype.has_value()) {
-                    args_stream << "dtype = " << *dtype << std::endl;
-                }
-
-                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
-
-                return self(tensor, memory_config, dtype, stack_id);
-            },
-            py::arg("tensor"),
-            py::arg("memory_config"),
-            py::arg("dtype") = std::nullopt});
+        ttnn::pybind_arguments_t{py::arg("tensor"), py::arg("memory_config"), py::arg("dtype") = std::nullopt});
 
     bind_registered_operation(
         module,

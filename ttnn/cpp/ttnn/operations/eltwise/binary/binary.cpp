@@ -408,8 +408,7 @@ inline auto invoke_binary_ng(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy,
-    const std::optional<uint32_t>& stack_id = std::nullopt) {
+    const std::optional<bool>& use_legacy) {
     if (use_legacy ? *use_legacy
                    : binary::is_legacy_only(lhs, rhs, memory_config, output, lhs_activations, rhs_activations) and
                          (not detail::is_binary_ng_only(lhs, rhs, binary_op_type))) {
@@ -466,8 +465,7 @@ inline auto invoke_binary_ng(
             output,
             lhs_activations,
             rhs_activations,
-            post_activations,
-            stack_id);
+            post_activations);
 
         // if both inputs are in row major, convert the output to row major
         // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
@@ -493,8 +491,7 @@ inline auto invoke_binary_ng(
             output_tensor,
             lhs_activations,
             rhs_activations,
-            post_activations,
-            stack_id);
+            post_activations);
 
         return typecast_out ? ttnn::typecast(result, out_dtype, mem_config, output) : result;
     }
@@ -513,8 +510,7 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy,
-    const std::optional<uint32_t>& stack_id) {
+    const std::optional<bool>& use_legacy) {
     return detail::invoke_binary_ng(
         queue_id,
         lhs,
@@ -526,8 +522,7 @@ Tensor BinaryOperation<binary_op_type>::invoke(
         post_activations,
         lhs_activations,
         rhs_activations,
-        use_legacy,
-        stack_id);
+        use_legacy);
 }
 
 template <BinaryOpType binary_op_type>
@@ -541,8 +536,7 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    const std::optional<bool>& use_legacy,
-    const std::optional<uint32_t>& stack_id) {
+    const std::optional<bool>& use_legacy) {
     return detail::invoke_binary_ng(
         queue_id,
         lhs,
@@ -554,8 +548,7 @@ Tensor BinaryOperation<binary_op_type>::invoke(
         post_activations,
         lhs_activations,
         rhs_activations,
-        use_legacy,
-        stack_id);
+        use_legacy);
 }
 
 template <BinaryOpType binary_op_type>
