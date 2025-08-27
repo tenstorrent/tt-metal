@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_linear_params
 
 
-class TtTimestepEmbedding(nn.Module):
+class TtTimestepEmbedding(LightweightModule):
     def __init__(self, device, state_dict, module_path, linear_weights_dtype=ttnn.bfloat16):
         super().__init__()
 

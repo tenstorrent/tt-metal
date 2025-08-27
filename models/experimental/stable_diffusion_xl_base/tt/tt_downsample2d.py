@@ -2,13 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import prepare_conv_params
 
 
-class TtDownsample2D(nn.Module):
+class TtDownsample2D(LightweightModule):
     def __init__(self, device, state_dict, module_path, stride, padding, dilation, groups, model_config):
         super().__init__()
 

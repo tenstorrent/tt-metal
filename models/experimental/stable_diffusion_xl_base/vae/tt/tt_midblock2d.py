@@ -2,12 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_attention import TtAttention
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import TtResnetBlock2D
 
 
-class TtUNetMidBlock2D(nn.Module):
+class TtUNetMidBlock2D(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config):
         super().__init__()
 
