@@ -26,7 +26,7 @@
 #include <tt-metalium/program.hpp>
 #include "umd/device/tt_core_coordinates.h"
 
-// Access to internal API: ProgramImpl::get_sem_base_addr
+// Access to internal API: ProgramImpl::get_sem_base_addr, ProgramImpl::get_cb_size
 #include "impl/program/program_impl.hpp"
 
 namespace tt {
@@ -58,7 +58,7 @@ bool test_cb_config_written_to_core(
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                     CoreCoord core_coord(x, y);
-                    uint32_t cb_config_buffer_size = program.get_cb_size(device, core_coord, CoreType::WORKER);
+                    uint32_t cb_config_buffer_size = program.impl().get_cb_size(device, core_coord, CoreType::WORKER);
 
                     auto sem_base_addr = program.impl().get_sem_base_addr(device, core_coord, CoreType::WORKER);
                     tt::tt_metal::detail::ReadFromDeviceL1(

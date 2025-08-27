@@ -1384,7 +1384,7 @@ void Program::generate_dispatch_commands(IDevice* device, bool use_prefetcher_ca
     auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
-        auto sub_device_id = this->determine_sub_device_ids(device).at(0);
+        auto sub_device_id = this->impl().determine_sub_device_ids(device).at(0);
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
         program_dispatch::insert_stall_cmds(program_command_sequence, sub_device_id, device);
@@ -1562,12 +1562,6 @@ CommandQueue* detail::ProgramImpl::get_last_used_command_queue() const {
     return this->last_used_command_queue_for_testing;
 }
 
-void Program::set_last_used_command_queue_for_testing(CommandQueue* queue) {
-    internal_->set_last_used_command_queue_for_testing(queue);
-}
-
-CommandQueue* Program::get_last_used_command_queue() const { return internal_->get_last_used_command_queue(); }
-
 uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
@@ -1576,20 +1570,12 @@ uint32_t detail::ProgramImpl::get_sem_size(IDevice* device, CoreCoord logical_co
     return this->program_configs_[index].sem_size;
 }
 
-uint32_t Program::get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
-    return internal_->get_sem_size(device, logical_core, core_type);
-}
-
 uint32_t detail::ProgramImpl::get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
     CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     HalProgrammableCoreType programmable_core_type = device->get_programmable_core_type(virtual_core);
     uint32_t index = MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
 
     return this->program_configs_[index].cb_size;
-}
-
-uint32_t Program::get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const {
-    return internal_->get_cb_size(device, logical_core, core_type);
 }
 
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
@@ -1699,10 +1685,6 @@ void detail::ProgramImpl::set_program_binary_status(std::size_t device_id, Progr
     this->binaries_on_device_[device_id] = status;
 }
 
-const std::vector<SubDeviceId>& Program::determine_sub_device_ids(const IDevice* device) {
-    return internal_->determine_sub_device_ids(device);
-}
-
 const ProgramTransferInfo& detail::ProgramImpl::get_program_transfer_info() const noexcept {
     return program_transfer_info;
 }
@@ -1714,8 +1696,8 @@ std::shared_ptr<Buffer> ProgramImpl::get_kernels_buffer(IDevice* device) const n
     return nullptr;
 }
 
-void Program::set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer) {
-    internal_->kernels_buffer_.insert({buffer->device()->id(), buffer});
+void detail::ProgramImpl::set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer) {
+    kernels_buffer_.insert({buffer->device()->id(), buffer});
 }
 
 std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_program_command_sequences() noexcept {

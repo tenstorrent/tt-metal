@@ -410,7 +410,7 @@ void HWCommandQueue::enqueue_write_to_core(
 
 void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     ZoneScopedN("HWCommandQueue_enqueue_program");
-    std::vector<SubDeviceId> sub_device_ids = {program.determine_sub_device_ids(device_)};
+    std::vector<SubDeviceId> sub_device_ids = {program.impl().determine_sub_device_ids(device_)};
     TT_FATAL(sub_device_ids.size() == 1, "Programs must be executed on a single sub-device");
 
     if (!this->manager_.get_bypass_mode()) {
@@ -442,7 +442,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     auto program_sizeB = program.impl().kernel_bins_sizeB;
     bool use_prefetcher_cache = program_sizeB and program_sizeB <= this->prefetcher_cache_sizeB_;
     program.generate_dispatch_commands(device_, use_prefetcher_cache);
-    program.set_last_used_command_queue_for_testing(this);
+    program.impl().set_last_used_command_queue_for_testing(this);
 
     if (this->manager_.get_bypass_mode()) {
         this->trace_nodes_.push_back(

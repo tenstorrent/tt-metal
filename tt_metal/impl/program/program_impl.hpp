@@ -220,14 +220,16 @@ public:
     std::unordered_map<uint64_t, ProgramCommandSequence>& get_trace_cached_program_command_sequences() noexcept;
 
     // debug/test
+    uint32_t get_sem_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
+    uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     void set_last_used_command_queue_for_testing(CommandQueue* queue);
     CommandQueue* get_last_used_command_queue() const;
-    void populate_dispatch_data(IDevice* device);
 
-    uint32_t get_sem_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
-    uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
+    void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
+
+    void populate_dispatch_data(IDevice* device);
 
     void finalize_offsets(IDevice* device);
 
