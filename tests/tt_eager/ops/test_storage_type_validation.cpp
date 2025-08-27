@@ -38,7 +38,7 @@ protected:
     void TearDown() override { device_owner.reset(); }
 
     std::shared_ptr<MeshDevice> device_owner;
-    MeshDevice* device;
+    MeshDevice* device{};
 };
 
 // Helper function to create host tensors and call binary operation
