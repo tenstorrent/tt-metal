@@ -82,7 +82,7 @@ public:
     size_t num_semaphores() const;
     void init_semaphores(
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
-    // XXXXX TODO: this should return a const reference
+
     std::vector<std::vector<CoreCoord>> logical_cores() const;
 
     void compile(IDevice* device, bool force_slow_dispatch = false);

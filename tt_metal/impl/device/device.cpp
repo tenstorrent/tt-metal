@@ -358,7 +358,6 @@ void Device::init_command_queue_device() {
         watcher_lock.value().unlock();
     }
 
-    // TODO: should get a const ref
     std::vector<std::vector<CoreCoord>> logical_cores = command_queue_program.logical_cores();
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
