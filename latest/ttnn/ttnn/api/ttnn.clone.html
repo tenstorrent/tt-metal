@@ -327,17 +327,25 @@
 <p>Tensor, dtype: DataType, memory_config: MemoryConfig) -&gt; Tensor</p>
 <p>Clones the input, creating a copy with the specified <cite>memory_config</cite> and converting its data type to <cite>dtype</cite>.
 This operation does not alter the tensor’s layout.
-- ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.
-- TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.
-If the input’s current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.</p>
-<p>:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">input</span></code>: The tensor to be cloned.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">dtype</span></code>: The target data type of the cloned tensor.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">memory_config</span></code>: The memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG.
-:param * <code class="xref py py-attr docutils literal notranslate"><span class="pre">compute_kernel_config</span></code>: The configuration for the compute kernel.</p>
+- ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.</p>
+<ul class="simple">
+<li><p>TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.</p></li>
+</ul>
+<p>If the input’s current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.</p>
 <dl class="field-list simple">
-<dt class="field-odd">Type<span class="colon">:</span>
+<dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
+<ul class="simple">
+<li><p><strong>input</strong> – The tensor to be cloned.</p></li>
+<li><p><strong>dtype</strong> – The target data type of the cloned tensor.</p></li>
+<li><p><strong>memory_config</strong> – The memory configuration for the clone, options include DRAM_MEMORY_CONFIG or L1_MEMORY_CONFIG.</p></li>
+<li><p><strong>compute_kernel_config</strong> – The configuration for the compute kernel.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Type<span class="colon">:</span>
+</dt>
+<dd class="field-even">
 <p>clone(input</p>
 </dd>
 </dl>
