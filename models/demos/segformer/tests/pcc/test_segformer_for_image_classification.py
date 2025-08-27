@@ -17,7 +17,6 @@ from models.demos.segformer.tests.pcc.test_segformer_model import (
 from models.demos.segformer.tests.pcc.test_segformer_model import move_to_device
 from models.demos.segformer.tt.common import get_mesh_mappers
 from models.demos.segformer.tt.ttnn_segformer_for_image_classification import TtSegformerForImageClassification
-from models.utility_functions import set_datasets_filelock
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -55,7 +54,6 @@ def create_custom_mesh_preprocessor(mesh_mapper=None, device=None):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_image_classificaton(device, model_location_generator):
-    set_datasets_filelock()
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["train"]["image"][0]
     _, weights_mesh_mapper, _ = get_mesh_mappers(device)

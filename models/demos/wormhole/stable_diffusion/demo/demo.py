@@ -26,7 +26,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition
     UNet2DConditionModel as UNet2D,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
-from models.utility_functions import enable_persistent_kernel_cache, profiler, set_datasets_filelock
+from models.utility_functions import enable_persistent_kernel_cache, profiler
 
 
 def load_inputs(input_path):
@@ -372,7 +372,6 @@ def run_demo_inference_diffusiondb(
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
 
     # 0. Load a sample prompt from the dataset
-    set_datasets_filelock()
     dataset = load_dataset("poloclub/diffusiondb", "2m_random_1k")
     data_1k = dataset["train"]
 
