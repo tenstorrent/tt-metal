@@ -8,6 +8,7 @@
 #include "tt-metalium/buffer.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
+#include "tt-metalium/work_split.hpp"
 #include "ttnn/operations/experimental/isin/device/isin_device_op.hpp"
 #include "ttnn/operations/experimental/isin/isin_cbs.hpp"
 
@@ -82,17 +83,11 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     auto* device = elements_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     // const auto worker_cores = get_worker_cores(optimal_isin_conf, compute_with_storage_grid_size);
-    const auto worker_cores = CoreCoord{0, 0};
-    const auto worker_cores_range = CoreRangeSet{worker_cores};
+    // const auto worker_cores = CoreCoord{0, 0};
+    // const auto worker_cores_range = CoreRangeSet{worker_cores};
     // const CoreRange all_cores_range{
     //     CoreCoord(0, 0), CoreCoord(compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1)};
     // const CoreRangeSet all_cores = std::set<CoreRange>({all_cores_range});
-
-    create_cb(program, elements_dtype, IsInCB::ELEMENTS, worker_cores_range, elements_subchunk_size_bytes);
-    create_cb(
-        program, test_elements_dtype, IsInCB::TEST_ELEMENTS, worker_cores_range, test_elements_subchunk_size_bytes);
-    // create_cb(program, INDEX_HINT_TENSOR_DTYPE, IsInCB::INDEX_HINT, worker_cores_range, index_hint_stick_size_bytes);
-    create_cb(program, OUTPUT_TENSOR_DATA_TYPE, IsInCB::OUTPUT, worker_cores_range, output_subchunk_size_bytes);
 
     std::vector<uint32_t> compile_time_args{
         elements_tensor_buffer_address,
@@ -104,31 +99,62 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
         elements_tensor.logical_volume(),
         test_elements_tensor.logical_volume(),
         single_fetch_subchunk_size,
-        static_cast<uint32_t>(invert),
-        1};
+        static_cast<uint32_t>(invert)};
     TensorAccessorArgs(*elements_buffer).append_to(compile_time_args);
     TensorAccessorArgs(*test_elements_buffer).append_to(compile_time_args);
     // TensorAccessorArgs(*index_hint_buffer).append_to(compile_time_args);
     TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
 
-    auto reader_kernel_id =
-        create_kernel(program, READER_KERNEL_PATH, worker_cores_range, ReaderDataMovementConfig{compile_time_args});
-    auto writer_kernel_id =
-        create_kernel(program, WRITER_KERNEL_PATH, worker_cores_range, WriterDataMovementConfig{compile_time_args});
+    const uint32_t subchunks_num =
+        (elements_tensor.logical_volume() + single_fetch_subchunk_size - 1) / single_fetch_subchunk_size;
+    // const uint32_t last_subchunk_size = elements_tensor.logical_volume() % single_fetch_subchunk_size;
+    // const uint32_t num_cores = std::max(subchunks_num, static_cast<uint32_t>(compute_with_storage_grid_size.x *
+    // compute_with_storage_grid_size.y));
+    auto core_grid = device->compute_with_storage_grid_size();
+    auto
+        [num_cores,                       // number of cores utilized
+         all_cores,                       // set of all cores used
+         core_group_1,                    // Primary core group
+         core_group_2,                    // Secondary core group
+         num_subchunks_per_core_group_1,  // Number of subchunks each core in the primary group processes
+         num_subchunks_per_core_group_2   // Number of subchunks each core in the secondary group processes
+    ] = split_work_to_cores(core_grid, subchunks_num);
+    //
+    create_cb(program, elements_dtype, IsInCB::ELEMENTS, all_cores, elements_subchunk_size_bytes);
+    create_cb(program, test_elements_dtype, IsInCB::TEST_ELEMENTS, all_cores, test_elements_subchunk_size_bytes);
+    // create_cb(program, INDEX_HINT_TENSOR_DTYPE, IsInCB::INDEX_HINT, worker_cores_range, index_hint_stick_size_bytes);
+    create_cb(program, OUTPUT_TENSOR_DATA_TYPE, IsInCB::OUTPUT, all_cores, output_subchunk_size_bytes);
 
-    const uint32_t num_cores = 1;
-    const uint32_t num_cores_y = 1;
+    auto reader_kernel_id =
+        create_kernel(program, READER_KERNEL_PATH, all_cores, ReaderDataMovementConfig{compile_time_args});
+    auto writer_kernel_id =
+        create_kernel(program, WRITER_KERNEL_PATH, all_cores, WriterDataMovementConfig{compile_time_args});
+
+    uint32_t subchunks_offset = 0;
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core{i / num_cores_y, i % num_cores_y};
+        uint32_t subchunks_per_core;
+        if (core_group_1.contains(core)) {
+            subchunks_per_core = num_subchunks_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            subchunks_per_core = num_subchunks_per_core_group_2;
+        } else {
+            TT_THROW("Core not in any predefined core range.");
+        }
+
         SetRuntimeArgs(
             program,
             reader_kernel_id,
             core,
-            {
-                elements_tensor_buffer_address,
-                test_elements_tensor_buffer_address,
-            });
-        SetRuntimeArgs(program, writer_kernel_id, core, {output_tensor_buffer_address});
+            {elements_tensor_buffer_address,
+             test_elements_tensor_buffer_address,
+             subchunks_per_core,
+             subchunks_offset});
+        SetRuntimeArgs(
+            program, writer_kernel_id, core, {output_tensor_buffer_address, subchunks_per_core, subchunks_offset});
+
+        subchunks_offset += subchunks_per_core;
     }
 
     // const uint32_t& num_cores_x = compute_with_storage_grid_size.x;
@@ -137,15 +163,6 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     // uint32_t stick_offset = 0;
     // for (uint32_t i = 0; i < num_cores; ++i) {
     // CoreCoord core{i / num_cores_y, i % num_cores_y};
-
-    //     uint32_t sticks_per_core;
-    //     if (core_group_1.contains(core)) {
-    //         sticks_per_core = num_sticks_per_core_group_1;
-    //     } else if (core_group_2.contains(core)) {
-    //         sticks_per_core = num_sticks_per_core_group_2;
-    //     } else {
-    //         TT_THROW("Core not in any predefined core range.");
-    //     }
 
     //     SetRuntimeArgs(
     //         program,
@@ -157,11 +174,12 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
     //     SetRuntimeArgs(program, writer_kernel, core, {output_buffer->address(), stick_offset, sticks_per_core,
     //     input_and_output_chunk_size});
 
-    //     stick_offset += sticks_per_core;
+    // stick_offset += sticks_per_core;
     // }
 
     // return {std::move(program), {reader_kernel, writer_kernel, worker_cores}};
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, {}}};
+    auto cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, num_cores_y);
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores}};
 }
 
 void IsInProgramFactory::override_runtime_arguments(
