@@ -81,10 +81,11 @@ static void configure_risc_settings(
         is_sender_channel_serviced.fill(true);
         is_receiver_channel_serviced.fill(true);
     } else if (arch == tt::ARCH::BLACKHOLE) {
+        // lite fabric runs on risc1. Enable context switch so those channels will be serviced
+        // ethernet base firmware runs on risc0.
         if (num_riscv_cores == 1) {
             enable_handshake = true;
-            enable_context_switch =
-                true;  // lite fabric is on risc 1. 2 eriscs not enabled yet. this router is really running on risc 1
+            enable_context_switch = true;
             enable_interrupts = false;
             is_sender_channel_serviced.fill(true);
             is_receiver_channel_serviced.fill(true);
@@ -100,7 +101,7 @@ static void configure_risc_settings(
             } else if (risc_id == 1) {
                 // ERISC1: Handle receiver channels only
                 enable_handshake = false;
-                enable_context_switch = true;  // lite fabric on risc_id 1
+                enable_context_switch = true;
                 enable_interrupts = false;
                 is_sender_channel_serviced.fill(false);
                 is_receiver_channel_serviced.fill(true);

@@ -153,52 +153,6 @@ struct HostToFabricLiteInterface {
         // Additional 16B to be used only for unaligned reads/writes
         return CHANNEL_BUFFER_SIZE - sizeof(FabricLiteHeader) - 16;
     }
-
-    // Host Only Methods below
-#if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
-    tt_cxy_pair get_mmio_eth_core() const;
-
-    uint32_t get_next_send_buffer_slot_address(uint32_t channel_address) const;
-
-    uint32_t get_next_receiver_buffer_slot_address(uint32_t channel_address) const;
-
-    void wait_for_empty_write_slot();
-
-    void wait_for_read_event(uint32_t read_event_addr);
-
-    void barrier();
-
-    void send_payload_flush_non_blocking_from_address(FabricLiteHeader& header, uint32_t channel_address);
-
-    void send_payload_without_header_non_blocking_from_address(void* data, size_t size, uint32_t channel_address);
-
-    void flush_h2d();
-
-    // Only up to max buffer size is supported
-    void write(void* mem_ptr, size_t size, uint64_t dst_noc_addr, uint8_t noc_index);
-
-    void write(uint32_t value, uint64_t dst_noc_addr, uint8_t noc_index) {
-        write(&value, sizeof(uint32_t), dst_noc_addr, noc_index);
-    }
-
-    void write_any_len(
-        void* mem_ptr, size_t size, uint64_t dst_noc_addr, uint8_t noc_index = lite_fabric::edm_to_local_chip_noc);
-
-    void read(
-        void* mem_ptr, size_t size, uint64_t src_noc_addr, uint8_t noc_index = lite_fabric::edm_to_local_chip_noc);
-
-    void read_any_len(
-        void* mem_ptr, size_t size, uint64_t src_noc_addr, uint8_t noc_index = lite_fabric::edm_to_local_chip_noc);
-
-    // Write the register of the connected ethernet core directly from the sender using the Ethernet Dataflow API.
-    // If you need to write registers to cores on the receiver chip, use write() instead
-    void write_reg(uint32_t reg_address, uint32_t reg_value);
-
-    // Wait for device to send requests. Does not guarantee that the requests have been processed by the destination
-    // core.
-    void finish();
-
-#endif
 } __attribute__((packed));
 
 struct FabricLiteMemoryMap {
@@ -222,9 +176,6 @@ struct FabricLiteMemoryMap {
 
 #if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
     // Returns a Host Interface for the tunnel starting at the MMIO core
-    static HostToFabricLiteInterface<lite_fabric::SENDER_NUM_BUFFERS_ARRAY[0], lite_fabric::CHANNEL_BUFFER_SIZE>
-    make_host_interface(const tt_cxy_pair& mmio_core);
-
     static uint32_t get_address();
     static uint32_t get_host_interface_addr();
     static uint32_t get_send_channel_addr();
