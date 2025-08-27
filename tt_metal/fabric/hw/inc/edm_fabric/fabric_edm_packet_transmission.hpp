@@ -132,6 +132,11 @@ FORCE_INLINE
     const auto& header = *packet_start;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
+    // DPRINT << "[EDM RX] ch=" << (uint32_t)rx_channel_id
+    //     << " pkt@" << (uint32_t)packet_start
+    //     << " payload_sz=" << payload_size_bytes
+    //     << " send_type=" << (uint32_t)header.noc_send_type << "\n";
+
     tt::tt_fabric::NocSendType noc_send_type = header.noc_send_type;
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();

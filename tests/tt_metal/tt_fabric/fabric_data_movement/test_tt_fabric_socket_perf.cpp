@@ -165,6 +165,13 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
                       .set_page_size(CB_ID, p.page_size);
     (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
 
+    std::cout << "[host] src_buf=0x" << std::hex << src_buf->address() << " dst_buf=0x" << dst_buf->address()
+              << " sem_addr=0x" << gsem.address() << std::dec << "\n";
+
+    std::cout << "[host] launching RX: core=(" << receiver_core.x << "," << receiver_core.y << ") expect=1\n";
+    std::cout << "[host] launching TX: pages=" << NUM_PAGES << " page_size=" << p.page_size
+              << " dst_is_dram=" << (p.use_dram_dst ? 1 : 0) << "\n";
+
     // READER kernel (DRAM->CB or L1->CB). We read from src_buf (DRAM).
     auto reader_k = tt::tt_metal::CreateKernel(
         sender_prog,
@@ -197,14 +204,41 @@ static inline void RunUnicastConnWithParams(BaseFabricFixture* fixture, const Pe
         (uint32_t)gsem.address()             // 6: receiver L1 semaphore addr
     };
 
+    auto dir_opt = get_eth_forwarding_direction(src, dst);
+
+    auto dir_to_str = [](eth_chan_directions d) {
+        switch (d) {
+            case eth_chan_directions::NORTH: return "NORTH";
+            case eth_chan_directions::SOUTH: return "SOUTH";
+            case eth_chan_directions::EAST: return "EAST";
+            case eth_chan_directions::WEST: return "WEST";
+            default: return "UNKNOWN";
+        }
+    };
+
+    if (dir_opt.has_value()) {
+        std::cout << "[host] CP forwarding dir = " << dir_to_str(*dir_opt) << "\n";
+    } else {
+        std::cout << "[host] CP forwarding dir = <none>\n";
+    }
+
+    std::cout << "[host] logical src(mesh=" << p.mesh_id << ", dev=" << p.src_chip << ") -> dst(mesh=" << p.mesh_id
+              << ", dev=" << p.dst_chip << ")\n";
+
+    std::cout << "[host] physical src=" << src_phys << " -> dst=" << dst_phys << "\n";
+
     // Append fabric connection RT args so WorkerToFabricEdmSender can open the link
+    auto links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
+    ASSERT_FALSE(links.empty());
+    uint32_t link_idx = links[0];
+    std::cout << "[host] forwarding links:";
+    for (auto li : links) {
+        std::cout << " " << li;
+    }
+    std::cout << " (using " << link_idx << ")\n";
+
     tt::tt_fabric::append_fabric_connection_rt_args(
-        tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip},
-        tt::tt_fabric::FabricNodeId{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip},
-        /*link_index=*/0,
-        sender_prog,
-        p.sender_core,
-        writer_rt);
+        src, dst, /*link_index=*/link_idx, sender_prog, p.sender_core, writer_rt);
 
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
 

@@ -4,6 +4,8 @@
 
 #include <cstdint>
 #include "dataflow_api.h"
+#include "debug/dprint.h"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
 
 // CT (compile-time) args:
 //   none
@@ -18,5 +20,21 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
 
+    const uint64_t expected_noc = safe_get_noc_addr(my_x[0], my_y[0], sem_addr);
+
+    uint32_t exp_lo = (uint32_t)(expected_noc & 0xffffffffull);
+    uint32_t exp_hi = (uint32_t)(expected_noc >> 32);
+
+    DPRINT << "[RX] wait sem=0x" << (uint32_t)sem_addr << " noc=0x" << (uint32_t)exp_hi << "_" << (uint32_t)exp_lo
+           << " expect=" << expected_value << " core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ")\n";
+
+    /* Debug spam: prove prints are flowing from this BR core */
+    for (uint32_t i = 0; i < 1000; ++i) {
+        if ((i & 0x3F) == 0) {
+            DPRINT << "[RX] alive i=" << i << "\n";
+        }
+    }
+
     noc_semaphore_wait(sem_ptr, expected_value);
+    DPRINT << "[RX] done; sem >= " << expected_value << "\n";
 }
