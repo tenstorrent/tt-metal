@@ -45,7 +45,7 @@ void kernel_main() {
     uint32_t out_row_end = out_row_start + input_shard_row_tiles;
     uint32_t out_col_end = out_col_start + input_shard_col_tiles;
 
-    constexpr auto input_tensor_args = TensorAccessorArgs<7>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<10>();
     auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_buffer_addr, page_size);
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
     auto intermediate_tensor_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr, page_size);
