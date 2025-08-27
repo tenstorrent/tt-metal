@@ -365,13 +365,55 @@ void launch_operation_with_adapter(
 }
 
 template <DeviceOperationConcept device_operation_t>
+void validate_preallocated_output(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    const typename device_operation_t::tensor_return_value_t& preallocated_output) {
+    // Framework-level validation logic
+    auto first_input_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
+
+    // Use reflection to validate each tensor in the return value
+    tt::stl::reflection::visit_object_of_type<Tensor>(
+        [&first_input_tensor](const Tensor& preallocated_tensor) {
+            // Device compatibility
+            TT_FATAL(
+                preallocated_tensor.device() == first_input_tensor.device(),
+                "Preallocated output tensor must be on the same device as input tensors");
+
+            // Memory layout compatibility
+            TT_FATAL(
+                preallocated_tensor.memory_config().memory_layout() ==
+                    first_input_tensor.memory_config().memory_layout(),
+                "Preallocated output tensor memory layout must be compatible");
+
+            // Basic allocation check
+            TT_FATAL(preallocated_tensor.is_allocated(), "Preallocated output tensor must be allocated");
+        },
+        preallocated_output);
+
+    // Additional operation-specific validation can be added here
+}
+
+template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t launch_on_device(
     QueueId cq_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    const std::optional<typename device_operation_t::tensor_return_value_t>& preallocated_output = std::nullopt) {
     ZoneScopedN("Launch Device Operation");
 
-    auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    typename device_operation_t::tensor_return_value_t tensor_return_value;
+
+    if (preallocated_output.has_value()) {
+        // Framework-level validation
+        validate_preallocated_output<device_operation_t>(
+            operation_attributes, tensor_args, preallocated_output.value());
+        tensor_return_value = preallocated_output.value();
+    } else {
+        // Original behavior - let operation create its own output
+        tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+    }
+
     if (!mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
         mesh_device_operation_utils::filter_tensor_shards(
             mesh_device_operation_utils::extract_tensor_coordinates(tensor_args), tensor_return_value);
@@ -388,7 +430,8 @@ template <DeviceOperationConcept device_operation_t>
 typename device_operation_t::tensor_return_value_t invoke(
     QueueId cq_id,
     const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    const std::optional<typename device_operation_t::tensor_return_value_t>& preallocated_output = std::nullopt) {
     ZoneScopedN("Run Device Operation");
 
     // TODO: Add GraphTracker::instance().track_device_operation to track device operations specifically?
@@ -402,10 +445,11 @@ typename device_operation_t::tensor_return_value_t invoke(
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
     const auto& storage = first_tensor.storage();
 
-    tensor_return_value_t tensor_return_value;
-
     TT_FATAL(std::holds_alternative<tt::tt_metal::DeviceStorage>(storage), "Unsupported storage type");
-    tensor_return_value = detail::launch_on_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
+
+    // Pass preallocated output to launch function
+    tensor_return_value_t tensor_return_value =
+        detail::launch_on_device<device_operation_t>(cq_id, operation_attributes, tensor_args, preallocated_output);
 
     // Should every output tensor be tracked?
     /*
@@ -417,6 +461,24 @@ typename device_operation_t::tensor_return_value_t invoke(
 
     tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
     return tensor_return_value;
+}
+
+// Convenience overloads to maintain backward compatibility
+
+// Existing API (unchanged)
+template <DeviceOperationConcept device_operation_t>
+auto invoke(QueueId cq_id, const auto& operation_attributes, const auto& tensor_args) {
+    return invoke(cq_id, operation_attributes, tensor_args, std::nullopt);
+}
+
+// New API with preallocated output
+template <DeviceOperationConcept device_operation_t>
+auto invoke(
+    QueueId cq_id,
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args,
+    const typename device_operation_t::tensor_return_value_t& preallocated_output) {
+    return invoke(cq_id, operation_attributes, tensor_args, std::optional{preallocated_output});
 }
 
 }  // namespace detail
