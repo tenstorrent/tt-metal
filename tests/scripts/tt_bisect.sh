@@ -85,12 +85,6 @@ while [[ "$found" == "false" ]]; do
     --enable-ccache \
     --configure-only || build_rc=$?
 
-  grep -R "CPM_SOURCE_CACHE" build/CMakeCache.txt | cat
-  test -d "$CPM_SOURCE_CACHE/tokenizers-cpp" && echo "CPM cache OK"
-
-  # Did the patch apply? Look for the explicit ref used by your patch
-  grep -R "(&(*handle).decode_str).len()" "$CPM_SOURCE_CACHE/tokenizers-cpp" -n || true
-
   if [ $build_rc -eq 0 ]; then
     cmake --build build --target install|| build_rc=$?
   fi
