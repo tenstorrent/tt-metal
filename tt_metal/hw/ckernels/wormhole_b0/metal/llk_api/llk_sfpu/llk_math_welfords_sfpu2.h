@@ -22,7 +22,7 @@ inline void llk_math_welfords_sfpu(
     uint32_t end_N,
     uint32_t last_run) {
     _llk_math_welfords_sfpu_params_(
-        ckernel::sfpu::_welfords_, dst_index0, dst_index1, dst_index2, start_N, end_N, last_run);
+        ckernel::sfpu::_welfords_llk_entry_, dst_index0, dst_index1, dst_index2, start_N, end_N, last_run);
 }
 
 }  // namespace ckernel
