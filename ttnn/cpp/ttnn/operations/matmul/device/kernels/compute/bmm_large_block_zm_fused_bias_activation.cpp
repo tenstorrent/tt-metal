@@ -15,6 +15,8 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
+#include "tools/profiler/kernel_profiler.hpp"
+
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
 // when making any changes to this file.
@@ -168,23 +170,24 @@ void MAIN {
 
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
-
-                    int in0_index_subblock_offset = 0;
-                    for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
-                        int in1_index_subblock_offset = 0;
-                        for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                            tile_regs_acquire();
-                            if (enable_reload) {
-                                reload_from_cb_to_dst(
-                                    in0_cb_id,
-                                    in1_cb_id,
-                                    mm_partials_cb_id,
-                                    in1_transpose_tile,
-                                    out_subblock_num_tiles,
-                                    out_subblock_w,
-                                    out_subblock_h,
-                                    in0_block_w);
-                            }
+                    {
+                        // DeviceZoneScopedN("COMPUITE");
+                        int in0_index_subblock_offset = 0;
+                        for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
+                            int in1_index_subblock_offset = 0;
+                            for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
+                                tile_regs_acquire();
+                                if (enable_reload) {
+                                    reload_from_cb_to_dst(
+                                        in0_cb_id,
+                                        in1_cb_id,
+                                        mm_partials_cb_id,
+                                        in1_transpose_tile,
+                                        out_subblock_num_tiles,
+                                        out_subblock_w,
+                                        out_subblock_h,
+                                        in0_block_w);
+                                }
 
 #ifndef SKIP_COMPUTE
                             // Compute output sub-block
@@ -277,9 +280,9 @@ void MAIN {
                             }
 
                             in1_index_subblock_offset += out_subblock_w;
-                        }
+                            }
                         in0_index_subblock_offset += in0_subblock_num_tiles;
-                    }
+                        }
 
 #ifdef PACKER_L1_ACC
 #ifdef FUSE_BIAS
@@ -309,6 +312,7 @@ void MAIN {
 
                     cb_pop_front(in0_cb_id, in0_block_num_tiles);
                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
+                    }
                 }
 
 #ifdef FUSE_BIAS

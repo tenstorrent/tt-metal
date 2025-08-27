@@ -38,11 +38,11 @@ void MAIN {
 #ifdef PACK_RELU
     PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
 #endif
-
+    DeviceZoneScopedN("COMPUTE");
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
-        cb_wait_front(cb_inp0, per_core_block_size);
-        cb_wait_front(cb_inp1, per_core_block_size);
-        cb_reserve_back(cb_out0, per_core_block_size);
+        // cb_wait_front(cb_inp0, per_core_block_size);
+        // cb_wait_front(cb_inp1, per_core_block_size);
+        // cb_reserve_back(cb_out0, per_core_block_size);
 
         tile_regs_acquire();
 
@@ -69,7 +69,6 @@ void MAIN {
 #endif
 
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
-            DeviceZoneScopedN("COMPUTE");
 #ifdef ELTWISE_DEST_REUSE_TYPE
             binary_dest_reuse_tiles<ELTWISE_OP_TYPE, ELTWISE_DEST_REUSE_TYPE>(cb_inp0, i, i);
 #else
@@ -88,9 +87,9 @@ void MAIN {
         }
         tile_regs_release();
 
-        cb_pop_front(cb_inp0, per_core_block_size);
-        cb_pop_front(cb_inp1, per_core_block_size);
-        cb_push_back(cb_out0, per_core_block_size);
+        // cb_pop_front(cb_inp0, per_core_block_size);
+        // cb_pop_front(cb_inp1, per_core_block_size);
+        // cb_push_back(cb_out0, per_core_block_size);
     }
 }
 }  // namespace NAMESPACE

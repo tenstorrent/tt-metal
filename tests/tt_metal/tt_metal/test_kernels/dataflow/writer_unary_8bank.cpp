@@ -26,16 +26,16 @@ void kernel_main() {
     const InterleavedAddrGenFast<write_to_dram> s = {
         .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
 
+    DeviceZoneScopedN("WRITER");
     for (uint32_t i = 0; i < num_tiles; i++) {
-        DeviceZoneScopedN("WRITER");
         uint64_t dst_noc_addr = get_noc_addr(i, s);
 
         cb_wait_front(cb_id_out0, onetile);
         uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
 
-        // noc_async_write_tile(i, s, l1_read_addr);
+        noc_async_write_tile(i, s, l1_read_addr);
 
-        // noc_async_write_barrier();
+        noc_async_write_barrier();
 
         cb_pop_front(cb_id_out0, onetile);
     }

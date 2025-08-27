@@ -82,7 +82,7 @@ int main(int argc, char** argv) {
             CoreCoord core = {0, 0};
 
             uint32_t single_tile_size = 2 * 1024;
-            uint32_t num_tiles = 2048;
+            uint32_t num_tiles = 512;
             uint32_t dram_buffer_size =
                 single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
             uint32_t page_size = single_tile_size;
@@ -131,21 +131,21 @@ int main(int argc, char** argv) {
                     .set_page_size(ouput_cb_index, single_tile_size);
             tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 
-            auto binary_reader_kernel = tt_metal::CreateKernel(
-                program,
-                multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp"
-                          : "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
-                core,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
+            // auto binary_reader_kernel = tt_metal::CreateKernel(
+            //     program,
+            //     multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp"
+            //               : "tt_metal/kernels/dataflow/reader_binary_diff_lengths.cpp",
+            //     core,
+            //     tt_metal::DataMovementConfig{
+            //         .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
-            auto unary_writer_kernel = tt_metal::CreateKernel(
-                program,
-                multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
-                          : "tt_metal/kernels/dataflow/writer_unary.cpp",
-                core,
-                tt_metal::DataMovementConfig{
-                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+            // auto unary_writer_kernel = tt_metal::CreateKernel(
+            //     program,
+            //     multibank ? "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp"
+            //               : "tt_metal/kernels/dataflow/writer_unary.cpp",
+            //     core,
+            //     tt_metal::DataMovementConfig{
+            //         .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
             vector<uint32_t> compute_kernel_args = {};
 
@@ -165,8 +165,8 @@ int main(int argc, char** argv) {
 
             const std::array<uint32_t, 3> writer_args = {dram_buffer_dst_addr, 0, num_tiles};
 
-            SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
-            SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
+            // SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
+            // SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
 
             distributed::AddProgramToMeshWorkload(
                 mesh_workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
