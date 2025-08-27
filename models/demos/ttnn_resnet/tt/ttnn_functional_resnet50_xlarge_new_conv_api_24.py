@@ -452,8 +452,7 @@ class resnet50:
         self.layer4_module2 = self.layer4[1]
         self.layer4_module3 = self.layer4[2]
 
-        # Store output size for adaptive pooling (global avg pool = 1x1)
-        self.avgpool_output_size = (1, 1)
+        self.avgpool = ttnn.global_avg_pool2d
         self.fc = ResnetLinear(
             in_features=512 * resnet50Bottleneck.expansion,
             out_features=1024,
@@ -786,17 +785,7 @@ class resnet50:
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
-        # Replace global_avg_pool2d hack with proper TTNN adaptive average pooling
-        batch, c, h, w = x.shape
-        x = ttnn.adaptive_avg_pool2d(
-            input_tensor=x,
-            batch_size=batch,
-            input_h=h,
-            input_w=w,
-            channels=c,
-            output_size=self.avgpool_output_size,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-        )
+        x = self.avgpool(x, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
         unpadded_shape_end = [
             x.padded_shape[0] - 1,
@@ -1010,17 +999,7 @@ class resnet50:
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
-        # Replace global_avg_pool2d hack with proper TTNN adaptive average pooling
-        batch, c, h, w = x.shape
-        x = ttnn.adaptive_avg_pool2d(
-            input_tensor=x,
-            batch_size=batch,
-            input_h=h,
-            input_w=w,
-            channels=c,
-            output_size=self.avgpool_output_size,
-            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-        )
+        x = self.avgpool(x, memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG)
 
         unpadded_shape_end = [
             x.padded_shape[0] - 1,
