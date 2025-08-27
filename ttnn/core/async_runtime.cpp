@@ -66,7 +66,7 @@ void wait_for_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {
 }
 void wait_for_event(
     tt::tt_metal::distributed::MeshCommandQueue& cq, const tt::tt_metal::distributed::MeshEvent& event) {
-    tt::tt_metal::distributed::EnqueueWaitForEvent(cq, event);
+    cq.enqueue_wait_for_event(event);
 }
 
 void record_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {
@@ -75,10 +75,10 @@ void record_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     EnqueueRecordEvent(cq_worker->command_queue(cq_id), event);
 }
 tt::tt_metal::distributed::MeshEvent record_event(tt::tt_metal::distributed::MeshCommandQueue& cq) {
-    return tt::tt_metal::distributed::EnqueueRecordEvent(cq);
+    return cq.enqueue_record_event();
 }
 tt::tt_metal::distributed::MeshEvent record_event_to_host(tt::tt_metal::distributed::MeshCommandQueue& cq) {
-    return tt::tt_metal::distributed::EnqueueRecordEventToHost(cq);
+    return cq.enqueue_record_event_to_host();
 }
 
 }  // namespace ttnn
