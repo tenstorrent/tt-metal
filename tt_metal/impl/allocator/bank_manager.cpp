@@ -54,13 +54,13 @@ BankManager::BankManager(
     uint32_t alignment_bytes,
     DeviceAddr alloc_offset,
     bool disable_interleaved,
-    uint32_t num_states) :
-    num_states_(num_states) {
+    const StateDependencies& dependencies) :
+    dependencies_(dependencies) {
     // buffer_type_ and allocated_buffers_ are scalar now
-    allocators_.resize(num_states_);
+    allocators_.resize(dependencies_.num_states());
 
     // For now, mirror the same configuration across states; we assert single-state in API usage
-    for (uint32_t s = 0; s < num_states_; ++s) {
+    for (uint32_t s = 0; s < dependencies_.num_states(); ++s) {
         buffer_type_ = buffer_type;
         alignment_bytes_ = alignment_bytes;
         unsigned int bank_id = 0;
@@ -75,6 +75,8 @@ BankManager::BankManager(
     }
 }
 
+// Removed num_states-only overload
+
 BankManager::BankManager(
     const BufferType& buffer_type,
     const std::unordered_map<uint32_t, int64_t>& bank_id_to_bank_offset,
@@ -83,12 +85,12 @@ BankManager::BankManager(
     uint32_t alignment_bytes,
     DeviceAddr alloc_offset,
     bool disable_interleaved,
-    uint32_t num_states) :
-    num_states_(num_states) {
+    const StateDependencies& dependencies) :
+    dependencies_(dependencies) {
     // buffer_type_ and allocated_buffers_ are scalar now
-    allocators_.resize(num_states_);
+    allocators_.resize(dependencies_.num_states());
 
-    for (uint32_t s = 0; s < num_states_; ++s) {
+    for (uint32_t s = 0; s < dependencies_.num_states(); ++s) {
         buffer_type_ = buffer_type;
         bank_id_to_bank_offset_ = bank_id_to_bank_offset;
         interleaved_address_limit_ = interleaved_address_limit;
@@ -98,6 +100,8 @@ BankManager::BankManager(
             size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset, s);
     }
 }
+
+// Removed num_states-only overload
 
 uint32_t BankManager::num_banks(uint32_t state) const {
     this->assert_single_state(state);
@@ -130,7 +134,8 @@ void BankManager::validate_bank_id(uint32_t bank_id, uint32_t state) const {
 }
 
 void BankManager::assert_single_state(uint32_t state) const {
-    TT_FATAL(num_states_ == 1, "Multi-state is not yet supported. num_states {}", num_states_);
+    TT_FATAL(
+        dependencies_.num_states() == 1, "Multi-state is not yet supported. num_states {}", dependencies_.num_states());
     TT_FATAL(state == 0, "State index must be 0 for single-state mode. Got {}", state);
 }
 
@@ -205,7 +210,7 @@ BankManager::~BankManager() {
 }
 
 BankManager&& BankManager::operator=(BankManager&& that) noexcept {
-    num_states_ = that.num_states_;
+    dependencies_ = std::move(that.dependencies_);
     buffer_type_ = that.buffer_type_;
     allocated_buffers_ = std::move(that.allocated_buffers_);
     bank_id_to_bank_offset_ = std::move(that.bank_id_to_bank_offset_);

@@ -44,7 +44,8 @@ TEST_F(DeviceSingleCardBufferFixture, TestOverlappedBankManager) {
         const uint64_t dram_size =
             static_cast<uint64_t>(device->dram_size_per_channel()) - dram_unreserved_base - dram_trace_region_size;
 
-        // Set up BankManager for DRAM
+        // Set up BankManager for DRAM with default single-state dependencies
+        BankManager::StateDependencies deps;  // defaults to single state, no overlaps
         BankManager dram_bank_manager(
             BufferType::DRAM,
             dram_bank_descriptors,
@@ -52,7 +53,7 @@ TEST_F(DeviceSingleCardBufferFixture, TestOverlappedBankManager) {
             dram_alignment,
             /*alloc_offset=*/dram_unreserved_base,
             /*disable_interleaved=*/false,
-            /*num_states=*/1);
+            deps);
 
         // Allocate a buffer and check
         uint32_t alloc_size = 64 * 1024;

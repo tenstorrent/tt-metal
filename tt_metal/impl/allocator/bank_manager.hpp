@@ -13,6 +13,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+#include <algorithm>
 
 #include "algorithms/allocator_algorithm.hpp"
 #include "core_coord.hpp"
@@ -30,6 +31,29 @@ class BankManager {
 public:
     BankManager() = default;
 
+    struct StateDependencies {
+        std::vector<std::vector<uint32_t>> adjacency{};
+
+        StateDependencies() : adjacency(1) {}
+
+        explicit StateDependencies(const std::unordered_map<uint32_t, std::vector<uint32_t>>& deps) {
+            uint32_t max_index = 0;
+            for (const auto& kv : deps) {
+                max_index = std::max(max_index, kv.first);
+                for (uint32_t d : kv.second) {
+                    max_index = std::max(max_index, d);
+                }
+            }
+            adjacency.clear();
+            adjacency.resize(max_index + 1);
+            for (const auto& kv : deps) {
+                adjacency[kv.first] = kv.second;
+            }
+        }
+
+        uint32_t num_states() const { return static_cast<uint32_t>(adjacency.size()); }
+    };
+
     BankManager(
         const BufferType& buffer_type,
         const std::vector<int64_t>& bank_descriptors,
@@ -37,7 +61,8 @@ public:
         uint32_t alignment_bytes,
         DeviceAddr alloc_offset = 0,
         bool disable_interleaved = false,
-        uint32_t num_states = 1);
+        const StateDependencies& dependencies = StateDependencies());
+    // Removed num_states-only ctor; use StateDependencies instead
     BankManager(
         const BufferType& buffer_type,
         const std::unordered_map<uint32_t, int64_t>& bank_id_to_descriptor,
@@ -46,7 +71,8 @@ public:
         uint32_t alignment_bytes,
         DeviceAddr alloc_offset = 0,
         bool disable_interleaved = false,
-        uint32_t num_states = 1);
+        const StateDependencies& dependencies = StateDependencies());
+    // Removed num_states-only ctor; use StateDependencies instead
     BankManager&& operator=(BankManager&& that) noexcept;
     ~BankManager();
     uint32_t num_banks(uint32_t state = 0) const;
@@ -82,8 +108,8 @@ public:
 private:
     void deallocate_buffer_(DeviceAddr address);
 
-    // Number of independent states tracked by this manager
-    uint32_t num_states_{};
+    // Dependencies between states (also encodes number of states)
+    StateDependencies dependencies_{};
 
     // Type of buffers allocated in the banks (same across states)
     BufferType buffer_type_{};
