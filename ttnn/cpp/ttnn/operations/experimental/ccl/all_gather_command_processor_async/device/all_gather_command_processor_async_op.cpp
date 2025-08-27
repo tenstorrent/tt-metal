@@ -314,7 +314,7 @@ std::vector<Tensor> all_gather_command_processor_async(
             topology,
             cluster_axis,
             sub_device_id,
-            ttnn::ccl::get_active_physical_devices(input_tensors[i])));
+            ttnn::ccl::get_active_physical_devices(input_tensors)));
     }
     return output_tensors;
 }
