@@ -1,4 +1,4 @@
-name: "(T3K) T3000 profiler tests"
+name: "Galaxy profiler tests"
 
 on:
   workflow_dispatch:
@@ -24,4 +24,4 @@ jobs:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
-      topology: config-t3000
+      topology: topology-6u
