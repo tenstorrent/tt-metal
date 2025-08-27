@@ -132,14 +132,6 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
 }
 
 std::vector<ttnn::Tensor> SplitOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const SmallVector<int64_t>& split_sizes,
-    const int64_t dim = 0,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
-    return SplitOperation::invoke(DefaultQueueId, input_tensor, split_sizes, dim, memory_config_arg);
-}
-
-std::vector<ttnn::Tensor> SplitOperation::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const int64_t split_size,
@@ -152,14 +144,6 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
 
     const ttnn::SmallVector<int64_t> split_sizes(num_chunks, split_size);
     return SplitOperation::invoke(queue_id, input_tensor, split_sizes, dim, memory_config);
-}
-
-std::vector<ttnn::Tensor> SplitOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const int64_t split_size,
-    const int64_t dim = 0,
-    const std::optional<MemoryConfig>& memory_config_arg = std::nullopt) {
-    return SplitOperation::invoke(DefaultQueueId, input_tensor, split_size, dim, memory_config_arg);
 }
 
 }  // namespace ttnn::operations::data_movement

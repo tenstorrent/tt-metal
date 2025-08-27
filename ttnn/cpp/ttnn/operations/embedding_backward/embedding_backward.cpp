@@ -40,21 +40,4 @@ Tensor EmbeddingBackwardOperation::invoke(
     return input_gradient;
 }
 
-Tensor EmbeddingBackwardOperation::invoke(
-    const Tensor& input_tensor_arg,
-    const Tensor& weight_tensor_arg,
-    const Tensor& output_gradient_tensor_arg,
-    const std::optional<const DataType> dtype,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    return invoke(
-        ttnn::DefaultQueueId,
-        input_tensor_arg,
-        weight_tensor_arg,
-        output_gradient_tensor_arg,
-        dtype,
-        memory_config,
-        std::move(optional_output_tensor));
-}
-
 }  // namespace ttnn::operations::embedding_backward

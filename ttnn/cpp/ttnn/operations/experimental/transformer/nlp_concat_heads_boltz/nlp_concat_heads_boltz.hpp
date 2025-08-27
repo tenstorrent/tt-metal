@@ -14,11 +14,6 @@ struct NLPConcatHeadsBoltzOperation {
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 }  // namespace operations::experimental::transformer
 

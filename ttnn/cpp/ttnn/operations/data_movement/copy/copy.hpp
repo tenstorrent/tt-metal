@@ -13,8 +13,6 @@ namespace operations::data_movement {
 
 struct CopyOperation {
     static ttnn::Tensor invoke(QueueId queue_id, const Tensor& src_tensor, const Tensor& dst_tensor);
-
-    static ttnn::Tensor invoke(const Tensor& src_tensor, const Tensor& dst_tensor);
 };
 
 struct AssignOperation {
@@ -31,8 +29,6 @@ struct AssignOperation {
         std::optional<const DataType> output_dtype = std::nullopt);
 
     static ttnn::Tensor invoke(QueueId queue_id, const Tensor& input_a, const Tensor& input_b);
-
-    static ttnn::Tensor invoke(const Tensor& input_a, const Tensor& input_b);
 };
 
 }  // namespace operations::data_movement

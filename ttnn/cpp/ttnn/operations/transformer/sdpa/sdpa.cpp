@@ -49,29 +49,6 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
         .at(0);
 }
 
-ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
-    const std::optional<ttnn::Tensor>& attn_mask,
-    bool is_causal,
-    std::optional<float> scale,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        std::move(attn_mask),
-        is_causal,
-        scale,
-        memory_config,
-        std::move(program_config),
-        compute_kernel_config);
-}
-
 ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
@@ -106,29 +83,6 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
         .at(0);
 }
 
-ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& page_table_tensor,
-    int64_t chunk_start_idx,
-    std::optional<float> scale,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        page_table_tensor,
-        chunk_start_idx,
-        scale,
-        memory_config,
-        std::move(program_config),
-        compute_kernel_config);
-}
-
 std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
@@ -161,31 +115,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
         queue_id);
 
     return {results.at(0), results.at(1)};
-}
-
-std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& joint_tensor_q,
-    const ttnn::Tensor& joint_tensor_k,
-    const ttnn::Tensor& joint_tensor_v,
-    const std::string& joint_strategy,
-    SDPAProgramConfig program_config,
-    std::optional<float> scale,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_q,
-        input_tensor_k,
-        input_tensor_v,
-        joint_tensor_q,
-        joint_tensor_k,
-        joint_tensor_v,
-        joint_strategy,
-        std::move(program_config),
-        scale,
-        compute_kernel_config);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::invoke(
@@ -313,29 +242,6 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
         .at(0);
 }
 
-ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const uint32_t head_dim_v,
-    const std::optional<ttnn::Tensor>& attn_mask,
-    bool is_causal,
-    std::optional<float> scale,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_q,
-        input_tensor_k,
-        head_dim_v,
-        std::move(attn_mask),
-        is_causal,
-        scale,
-        memory_config,
-        std::move(program_config),
-        compute_kernel_config);
-}
-
 ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
     QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
@@ -369,29 +275,6 @@ ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
                {},
                queue_id)
         .at(0);
-}
-
-ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const uint32_t head_dim_v,
-    const ttnn::Tensor& page_table_tensor,
-    int64_t chunk_start_idx,
-    std::optional<float> scale,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor_q,
-        input_tensor_k,
-        head_dim_v,
-        page_table_tensor,
-        chunk_start_idx,
-        scale,
-        memory_config,
-        std::move(program_config),
-        compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::transformer
