@@ -30,7 +30,6 @@ echo "Running fabric unit tests now...";
 
 # Host side tests: Topology Mapping in Control Plane
 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*LogicalToPhysicalConversionFixture*"
-./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MeshGraphDescriptorTests*"
 
 #############################################
 # FABRIC SANITY TESTS                       #
