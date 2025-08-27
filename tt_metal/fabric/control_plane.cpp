@@ -345,6 +345,7 @@ LocalMeshBinding ControlPlane::initialize_local_mesh_binding() {
     // If TT_MESH_ID is unset, assume this host is the only host in the system and owns all Meshes in
     // the MeshGraphDescriptor. Single Host Multi-Mesh is only used for testing purposes.
     const char* mesh_id_str = std::getenv("TT_MESH_ID");
+    std::cout << "Using Mesh ID: " << stoi(mesh_id_str);
     if (mesh_id_str == nullptr) {
         auto& ctx = tt::tt_metal::MetalContext::instance().global_distributed_context();
         TT_FATAL(
@@ -471,6 +472,7 @@ void ControlPlane::init_control_plane(
 }
 
 ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
+    std::cout << "Using MGD: " << mesh_graph_desc_file << std::endl;
     init_control_plane(mesh_graph_desc_file, std::nullopt);
 }
 
@@ -2240,7 +2242,7 @@ void ControlPlane::assign_intermesh_link_directions_to_remote_host(const FabricN
             }
         }
         if (intermesh_routing_direction != RoutingDirection::NONE) {
-            auto& direction_to_channel_map = router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
+            auto& = router_port_directions_to_physical_eth_chan_map_.at(fabric_node_id);
             direction_to_channel_map[intermesh_routing_direction].push_back(eth_chan);
         }
     }
