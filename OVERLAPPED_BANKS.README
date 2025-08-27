@@ -1,0 +1,68 @@
+Title: OVERLAPPED_BANKS – Augment BankManager to manage N overlapped allocator states
+
+Context
+This prompt describes the current `BankManager` implementation in `tt_metal/impl/allocator` and how it integrates with the `FreeListOpt` allocator, then specifies an augmentation to support multiple overlapped states (N>1) managed by a single `BankManager`. The design must remain fully backward compatible when N==1.
+
+How BankManager is implemented today
+- Responsibility: `BankManager` encapsulates allocation policy for a set of banks (L1 or DRAM). It tracks bank IDs to per-bank offsets and exposes allocation/deallocation and inspection APIs.
+- Bank metadata: A mapping `bank_id -> bank_offset` defines how logical bank IDs map to absolute address offsets. For banks sharing a core/node, non-zero offsets allow access via a single bank_id namespace.
+- Interleaving constraints: For non-sharded L1 buffers, an `interleaved_address_limit` bounds addresses to ensure compatibility with the interleaved addressing scheme and hardware modulo constraints.
+- Allocation granularity: For multi-bank allocations, total size is divided across banks using `detail::SizeBytesPerBank(size, page_size, num_banks, alignment)`, ensuring per-bank alignment requirements are respected.
+- Underlying allocator: A single `allocator::FreeListOpt` instance is used to manage a contiguous address range. It is configured via `init_allocator(size_bytes, offset, alignment)`, using `SearchPolicy::FIRST` (first-fit). The allocator returns the base address for the allocation; the effective per-bank absolute addresses are computed by adding the per-bank `bank_offset` as needed when reporting/inspecting addresses.
+- Tracking: `allocated_buffers_` records base addresses returned by the allocator so `deallocate_all` can release them on destruction.
+
+How BankManager uses FreeListOpt (free list opt allocator)
+- Construction: On creation, `BankManager` validates the number of banks with interleaving rules and initializes a `FreeListOpt` allocator with: total size, allocation base offset, and alignment derived from HAL (`MetalContext::instance().hal().get_alignment(HalMemType::DRAM)`).
+- Allocation path: `allocate_buffer(size, page_size, bottom_up, compute_grid, num_shards)` computes per-bank size and, if not sharded and buffer type is L1, applies `interleaved_address_limit`. It then calls `FreeListOpt::allocate(size_per_bank, bottom_up, address_limit)`. On success, the base address is recorded into `allocated_buffers_`.
+- Deallocation and maintenance: `deallocate_buffer(addr)`, `deallocate_all()`, `clear()`, `shrink_size()`, `reset_size()`, `get_statistics()`, `dump_blocks()`, and `get_memory_block_table()` are direct pass-throughs to the underlying `FreeListOpt` instance.
+
+Goal: Support N overlapped states (multi-context allocation)
+- Requirement: Augment `BankManager` so it can manage N independent allocation “states”. Each state has its own allocator state and bank metadata. `BankManager` will later mediate dependencies between states (e.g., reservation windows, ordering, and visibility), but for now we only introduce the state plumbing with strict single-state enforcement.
+
+Compatibility and behavior for now
+- Backward compatibility: All public APIs gain an optional `state` parameter that defaults to 0. Existing call sites compile and behave the same when N==1.
+- Single-state guard (current): All APIs assert that only a single state is supported (N==1) and that `state==0`. This preserves existing behavior while paving the way for multi-state.
+- Internal storage: All stateful members become vectors indexed by `state`.
+
+API changes (done)
+- Constructors add `uint32_t num_states = 1`.
+- All public methods add an optional trailing `uint32_t state = 0` parameter, including informational and mutating APIs.
+- Methods use the correct state-indexed member and call `assert_single_state(state)` for now.
+
+Key internal refactor (done)
+- `num_states_`: total number of states tracked.
+- `buffer_types_`: was `buffer_type_`. Now `std::vector<BufferType>`.
+- `allocated_buffers_`: was a single `std::unordered_set<DeviceAddr>`. Now a vector of sets, one per state.
+- `bank_id_to_bank_offset_`: was a single map. Now `std::vector<std::unordered_map<uint32_t, int64_t>>`.
+- `allocators_`: was a single `std::unique_ptr<allocator::Algorithm>`. Now `std::vector<std::unique_ptr<allocator::Algorithm>>`, each state owning its own `FreeListOpt`.
+- `interleaved_address_limit_`: was a scalar. Now `std::vector<DeviceAddr>`.
+- `alignment_bytes_`: was a scalar. Now `std::vector<uint32_t>`.
+- `assert_single_state(state)`: asserts `num_states_ == 1` and `state == 0` (temporary hard guard).
+- `init_allocator(size, alignment, offset, state)`: initializes `allocators_[state]` with `FreeListOpt` configured with `SearchPolicy::FIRST` and the given parameters.
+
+Constructor behavior (current)
+- Constructors accept `num_states` but mirror the same configuration across all states during initialization for now. APIs enforce single-state usage with `assert_single_state` until true multi-state semantics are implemented.
+
+Notes for future multi-state enablement
+- Remove `assert_single_state` and allow `state` to select the active state.
+- Allow different per-state configurations: alignment, offsets, bank mappings, address limits, allocator search policies.
+- Introduce dependency rules: define how allocations in one state interact with others (e.g., resource reservations, non-overlap constraints, soft/hard fences).
+- Add cross-state statistics, visibility controls, and introspection APIs.
+- Extend tests to cover multi-state allocation, deallocation, fragmentation behavior, and interleaving rules.
+
+Acceptance criteria for this stage
+- All APIs accept an optional `state` with default 0.
+- All internal state is vectorized by `state`.
+- All API logic accesses the correct state index.
+- All APIs assert single-state usage (`num_states == 1` and `state == 0`).
+- Build/run remains backward compatible for existing single-state users.
+
+Where to look in the code
+- `tt_metal/impl/allocator/bank_manager.hpp` – public API, internal members (now vectorized), and state parameters.
+- `tt_metal/impl/allocator/bank_manager.cpp` – constructor logic, allocator initialization, API implementations, and `assert_single_state` checks.
+- `tt_metal/impl/allocator/algorithms/free_list_opt.hpp` – underlying allocator.
+
+Testing guidance (short-term)
+- Rebuild and run existing allocator tests (single-state). All should pass unchanged.
+- Exercise representative API calls without specifying `state` to validate default behavior.
+- Optionally instantiate with `num_states > 1` and call an API; expect assertion failures indicating single-state enforcement (by design at this stage).
