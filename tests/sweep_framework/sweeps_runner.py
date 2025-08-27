@@ -159,10 +159,11 @@ def sanitize_inputs(test_vectors):
 
 
 def get_devices(test_module):
-    try:
-        return test_module.mesh_device_fixture()
-    except:
-        return default_device()
+    return default_device()
+    # try:
+    #     return test_module.mesh_device_fixture()
+    # except:
+    #     return default_device()
 
 
 def gather_single_test_perf(device, test_passed):
