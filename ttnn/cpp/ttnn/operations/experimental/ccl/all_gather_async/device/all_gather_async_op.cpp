@@ -133,16 +133,6 @@ void AllGatherAsync::validate_with_output_tensors(
                 "We don't support input DRAM block sharding");
         }
     }
-
-    // Only the default_minimal implementation requires 2 semaphores.
-    // llama_sharded only requires 1, but we're planning on porting that to a
-    // separate op,
-    const auto num_expected_semaphores = 2;
-    TT_FATAL(
-        semaphore.size() == num_expected_semaphores,
-        "Error, semaphore size should be {} but has {}",
-        num_expected_semaphores,
-        semaphore.size());
 }
 
 std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
