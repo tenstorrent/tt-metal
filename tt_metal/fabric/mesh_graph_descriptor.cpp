@@ -49,8 +49,6 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) {
 MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path) :
     MeshGraphDescriptor(read_file_to_string(text_proto_file_path.string())) {}
 
-MeshGraphDescriptor::~MeshGraphDescriptor() {
-    // TODO Implement this
-}
+MeshGraphDescriptor::~MeshGraphDescriptor() = default;
 
 }  // namespace tt::tt_fabric
