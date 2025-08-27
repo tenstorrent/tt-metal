@@ -888,17 +888,6 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
 
 void Program::invalidate_circular_buffer_allocation() { internal_->invalidate_circular_buffer_allocation(); }
 
-uint32_t Program::get_cb_memory_size() const { return internal_->get_cb_memory_size(); }
-uint32_t detail::ProgramImpl::get_cb_memory_size() const {
-    uint32_t total_cb_size = 0;
-    for (const auto& circular_buffer : this->circular_buffers_) {
-        if (circular_buffer->globally_allocated()) {
-            continue;
-        }
-        total_cb_size += circular_buffer->size();
-    }
-    return total_cb_size;
-}
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     //ZoneScoped;
     if (not this->local_circular_buffer_allocation_needed_) {
