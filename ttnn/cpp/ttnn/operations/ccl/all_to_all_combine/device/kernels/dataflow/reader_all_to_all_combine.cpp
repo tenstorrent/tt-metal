@@ -21,22 +21,23 @@ inline uint32_t get_data_page_idx(const uint32_t e, const uint32_t token) {
     }
 }
 
-template <uint32_t DeviceIdx, uint32_t NumMappingPages, uint32_t MappingPageSizeBytes>
+template <typename TensorAccessorType>
 void get_device_expert_indices(
-    const TensorAccessor& mapping_addrgen,
+    const TensorAccessorType& mapping_addrgen,
+    const uint32_t device_idx,
+    const uint32_t num_mapping_pages,
     const uint32_t mapping_l1_buffer_addr,
     const uint32_t mapping_page_size,
     volatile tt_l1_ptr uint16_t* output_ptr) {
     auto mapping_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(mapping_l1_buffer_addr);
 
-    for (uint32_t expert_idx = 0; expert_idx < NumMappingPages; ++expert_idx) {
+    for (uint32_t expert_idx = 0; expert_idx < num_mapping_pages; ++expert_idx) {
         const uint64_t map_page_noc_addr = get_noc_addr(expert_idx, mapping_addrgen);
-        noc_async_read(map_page_noc_addr, mapping_l1_buffer_addr,MappingPageSizeBytes);
+        noc_async_read(map_page_noc_addr, mapping_l1_buffer_addr, mapping_page_size);
         noc_async_read_barrier();
 
-        if (mapping_ptr[DeviceIdx] == 1u) {
-            *(output_ptr++)=expert_idx;
-
+        if (mapping_ptr[device_idx] == 1u) {
+            *(output_ptr++) = expert_idx;
         }
     }
 }
@@ -84,8 +85,13 @@ void kernel_main() {
     uint32_t mapping_buffer_addr = get_write_ptr(mapping_cb_id);
     cb_push_back(mapping_cb_id, 1);
 
-    detail::get_device_expert_indices<linearized_mesh_coord, num_mapping_pages, mapping_page_size_bytes>(
-        mapping_addrgen, mapping_buffer_addr, mapping_page_size_bytes, local_experts_ptr);
+    detail::get_device_expert_indices(
+        mapping_addrgen,
+        linearized_mesh_coord,
+        num_mapping_pages,
+        mapping_buffer_addr,
+        mapping_page_size_bytes,
+        local_experts_ptr);
     cb_push_back(local_experts_cb_id,1);
     for (uint32_t token = token_start_idx; token < token_end_idx; ++token) {
         cb_reserve_back(metadata_cb_id,1);
