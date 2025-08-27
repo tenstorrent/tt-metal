@@ -35,7 +35,7 @@ if [ "$OS_ID" = "ubuntu" ] && [ "$OS_VERSION" = "22.04" ]; then
     python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
     python3 -m pip install setuptools wheel==0.45.1
 else
-    echo "Ubuntu $OS_VERSION detected: updating wheel and setuptools to latest"
+    echo "$OS_ID $OS_VERSION detected: updating wheel and setuptools to latest"
     python3 -m pip install --upgrade wheel setuptools
 fi
 
