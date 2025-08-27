@@ -10,15 +10,15 @@
 
 namespace ckernel {
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, bool FAST_APPROX>
 inline void llk_math_eltwise_unary_sfpu_log1p_init() {
-    llk_math_eltwise_unary_sfpu_init<SfpuType::log1p, APPROXIMATE>(sfpu::log1p_init<APPROXIMATE>);
+    llk_math_eltwise_unary_sfpu_init<SfpuType::log1p, APPROXIMATE>(sfpu::log1p_init<APPROXIMATE, FAST_APPROX>);
 }
 
-template <bool APPROXIMATE>
+template <bool APPROXIMATE, bool FAST_APPROX>
 inline void llk_math_eltwise_unary_sfpu_log1p(uint dst_index, int vector_mode = (int)VectorMode::RC) {
     _llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(
-        ckernel::sfpu::calculate_log1p<APPROXIMATE>, dst_index, vector_mode);
+        ckernel::sfpu::calculate_log1p<APPROXIMATE, FAST_APPROX>, dst_index, vector_mode);
 }
 
 }  // namespace ckernel

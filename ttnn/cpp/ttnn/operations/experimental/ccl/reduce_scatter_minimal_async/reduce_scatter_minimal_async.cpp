@@ -25,7 +25,7 @@ bool use_composite_reduce_scatter(
 
     uint32_t num_devices;
     if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.mesh_device();
+        auto mesh_device = input_tensor.device();
         const auto& mesh_view = mesh_device->get_view();
         num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
     } else {

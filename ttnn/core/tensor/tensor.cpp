@@ -615,7 +615,7 @@ void memcpy(
 
 void memcpy(void* dst, const Tensor& src, const std::optional<BufferRegion>& region, bool blocking) {
     ZoneScoped;
-    if (auto mesh_device = src.mesh_device()) {
+    if (auto mesh_device = src.device()) {
         memcpy(mesh_device->mesh_command_queue(), dst, src, region, blocking);
     } else {
         memcpy(src.device()->command_queue(), dst, src, region, blocking);
@@ -653,7 +653,7 @@ void memcpy(
 
 void memcpy(Tensor& dst, const void* src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
-    if (auto mesh_device = dst.mesh_device()) {
+    if (auto mesh_device = dst.device()) {
         memcpy(mesh_device->mesh_command_queue(), dst, src, region);
     } else {
         memcpy(dst.device()->command_queue(), dst, src, region);
@@ -701,13 +701,13 @@ void memcpy(
 void memcpy(Tensor& dst, const Tensor& src, const std::optional<BufferRegion>& region) {
     ZoneScoped;
     if (is_cpu_tensor(dst) && is_device_tensor(src)) {
-        if (auto mesh_device = src.mesh_device()) {
+        if (auto mesh_device = src.device()) {
             memcpy(mesh_device->mesh_command_queue(), dst, src, region);
         } else {
             memcpy(src.device()->command_queue(), dst, src, region);
         }
     } else if (is_device_tensor(dst) && is_cpu_tensor(src)) {
-        if (auto mesh_device = dst.mesh_device()) {
+        if (auto mesh_device = dst.device()) {
             memcpy(mesh_device->mesh_command_queue(), dst, src, region);
         } else {
             memcpy(dst.device()->command_queue(), dst, src, region);
@@ -730,14 +730,19 @@ Tensor allocate_tensor_on_device(const TensorSpec& tensor_spec, distributed::Mes
 }
 
 Tensor allocate_tensor_on_host(const TensorSpec& tensor_spec, distributed::MeshDevice* device) {
-    auto distributed_host_buffer = DistributedHostBuffer::create(device->shape());
+    auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
+
+    std::vector<distributed::MeshCoordinate> coords;
+    coords.reserve(device->shape().mesh_size());
     for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
-        distributed_host_buffer.emplace_shard(coord, []() { return HostBuffer(); });
+        coords.push_back(coord);
     }
 
-    distributed_host_buffer = distributed_host_buffer.transform(
-        [&](const HostBuffer&) { return tensor_impl::allocate_host_buffer(tensor_spec); },
+    distributed_host_buffer.emplace_shards(
+        coords,
+        [&](const auto&) { return tensor_impl::allocate_host_buffer(tensor_spec); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+
     // TODO (#25340): Implement correct logic and add test for this
     return Tensor(HostStorage(std::move(distributed_host_buffer)), tensor_spec, ReplicateTensor{}, TensorTopology{});
 }

@@ -79,7 +79,9 @@ template <
     uint32_t in_cb_ntiles,
     uint32_t in_nbytes_c,
     bool is_large_kernel,
-    bool last_tile_is_partial>
+    bool last_tile_is_partial,
+    uint32_t dilation_h,
+    uint32_t dilation_w>
 ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     // average pool with large kernels requires fp32 accumulation so we can only reduce 4 tiles at a time,
@@ -104,7 +106,7 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
         cb_reserve_back(in_cb_id, 1);
         for (uint32_t h = 0; h < window_h; ++h) {
             auto process_h = [&](uint32_t w_offset, uint32_t w_multiple) __attribute__((always_inline)) {
-                const uint32_t stick_offset = ind + w_offset + h * in_w_padded;
+                const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
                 noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
@@ -146,18 +148,19 @@ ALWI void read_window_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
             // tile is partial we have to read the smaller stick width. Therefore we need to write out the next stick
             // right bellow the previous one and this is when increment of the write pointer and the read stick size is
             // not compliant.
-            bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c;
+            bool use_contiguous_read = !wide_reduction && in_nbytes_leftover == in_nbytes_c &&
+                                       dilation_w == 1;  // read entire row as one chunk (only if no width dilation)
             if constexpr (is_large_kernel) {
                 bool whole_row_remaining =
                     window_w <= max_sticks_for_reduction - (processed_sticks % max_sticks_for_reduction);
                 use_contiguous_read &= whole_row_remaining;
             }
 
-            if (use_contiguous_read) {  // read entire row as one chunk
+            if (use_contiguous_read) {
                 process_h(0, window_w);
-            } else {  // read rows stick by stick
+            } else {  // read rows stick by stick with dilation
                 for (uint32_t w = 0; w < window_w; ++w) {
-                    process_h(w, 1);
+                    process_h(w * dilation_w, 1);
                 }
             }
         }
@@ -242,6 +245,8 @@ void kernel_main() {
     constexpr uint32_t in_nbytes_padded_c = get_compile_time_arg_val(26);
     constexpr uint32_t multi_buffering_factor = get_compile_time_arg_val(27);
     constexpr uint32_t stride_w = get_compile_time_arg_val(28);
+    constexpr uint32_t dilation_h = get_compile_time_arg_val(29);
+    constexpr uint32_t dilation_w = get_compile_time_arg_val(30);
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0 && in_c % TILE_WIDTH <= FACE_WIDTH;
 
     if constexpr (last_tile_is_partial) {
@@ -362,7 +367,9 @@ void kernel_main() {
                 in_cb_ntiles,
                 in_nbytes_padded_c,
                 is_large_kernel,
-                last_tile_is_partial>(ind, in_l1_read_base_addr);
+                last_tile_is_partial,
+                dilation_h,
+                dilation_w>(ind, in_l1_read_base_addr);
             if (split_reader && ind == end) {
                 first_row_value = false;
             }
@@ -390,6 +397,8 @@ void kernel_main() {
             in_cb_ntiles,
             in_nbytes_padded_c,
             is_large_kernel,
-            last_tile_is_partial>(0, in_l1_read_base_addr);
+            last_tile_is_partial,
+            dilation_h,
+            dilation_w>(0, in_l1_read_base_addr);
     }
 }  // kernel_main()

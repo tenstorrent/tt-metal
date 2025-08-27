@@ -143,6 +143,9 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
     const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
     auto eth_links = cluster.get_ethernet_cores_grouped_by_connected_chips(chip_id);
     bool is_ubb = cluster.get_board_type(chip_id) == BoardType::UBB;
+
+    auto mmio_chip_ids = cluster.mmio_chip_ids();
+
     std::vector<chip_id_t> adjacent_chips;
 
     for (const auto& [connected_chip_id, eth_ports] : eth_links) {
@@ -150,7 +153,21 @@ std::vector<chip_id_t> get_adjacent_chips_from_ethernet_connections(
         if (is_ubb && cluster.is_external_cable(chip_id, eth_ports[0])) {
             continue;
         }
-        if (eth_ports.size() >= num_ports_per_side) {
+        if (eth_ports.size() > 0) {
+            // Special case for TG not to include MMIO devices in adjacency map because they are control chips
+            if (cluster.get_cluster_type() == tt::tt_metal::ClusterType::TG && mmio_chip_ids.contains(connected_chip_id)) {
+                continue;
+            }
+
+            if (eth_ports.size() < num_ports_per_side) {
+                log_warning(
+                    tt::LogFabric,
+                    "Ethernet between chip {} and chip {} have {} expected ethernet ports, but only {} present",
+                    chip_id,
+                    connected_chip_id,
+                    num_ports_per_side,
+                    eth_ports.size());
+            }
             adjacent_chips.push_back(connected_chip_id);
         }
     }
@@ -544,7 +561,11 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     std::optional<chip_id_t> nw_corner_chip_id) const {
     // Convert the coordinate range to a set of chip IDs using MeshContainer iterator
     const auto& user_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
-    TT_ASSERT(user_chip_ids.size() >= mesh_container.size());
+    TT_FATAL(
+        user_chip_ids.size() >= mesh_container.size(),
+        "Number of chips visible ({}) is less than number of chips specified in mesh graph descriptor ({})",
+        user_chip_ids.size(),
+        mesh_container.size());
 
     // Special case for 1x1 mesh
     if (mesh_container.shape() == tt::tt_metal::distributed::MeshShape(1, 1)) {
@@ -2324,7 +2345,6 @@ void ControlPlane::populate_fabric_connection_info(
     connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
     connection_info.edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel];
     connection_info.num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel];
-    connection_info.edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel];
     connection_info.edm_connection_handshake_addr =
         edm_config.sender_channels_connection_semaphore_address[sender_channel];
     connection_info.edm_worker_location_info_addr =
@@ -2350,8 +2370,6 @@ void ControlPlane::populate_fabric_connection_info(
         tensix_connection_info.edm_buffer_base_addr = tensix_config.get_channels_base_address(risc_id, sender_channel);
         tensix_connection_info.num_buffers_per_channel = tensix_config.get_num_buffers_per_channel();
         tensix_connection_info.buffer_size_bytes = tensix_config.get_buffer_size_bytes_full_size_channel();
-        tensix_connection_info.edm_l1_sem_addr =
-            tensix_config.get_local_flow_control_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
         tensix_connection_info.edm_connection_handshake_addr =
             tensix_config.get_connection_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
         tensix_connection_info.edm_worker_location_info_addr =
