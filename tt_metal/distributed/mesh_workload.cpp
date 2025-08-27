@@ -100,7 +100,7 @@ void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, 
     auto& program = programs_.at(device_range);
     program.compile(mesh_device);
     program.allocate_circular_buffers(mesh_device);
-    tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device);
+    program.impl().validate_circular_buffer_region(mesh_device);
 }
 
 void MeshWorkloadImpl::compile(MeshDevice* mesh_device) {

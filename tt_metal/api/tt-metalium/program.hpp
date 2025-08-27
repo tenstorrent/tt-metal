@@ -4,11 +4,13 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
+#include <variant>
+#include <vector>
+#include <unordered_map>
 
-#include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/semaphore.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
 namespace tt {
@@ -17,12 +19,11 @@ namespace tt_metal {
 
 // Fwd declares
 
-class Buffer;
 class Kernel;
-class CircularBuffer;
 class IDevice;
 class Program;
 class CircularBufferConfig;
+class Semaphore;
 
 namespace experimental {
 class GlobalCircularBuffer;
@@ -42,8 +43,6 @@ uint32_t program_base_addr_on_core(
 
 namespace detail {
 class ProgramImpl;
-
-void ValidateCircularBufferRegion(const Program& program, const IDevice* device);
 }  // namespace detail
 
 // Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
@@ -108,9 +107,6 @@ public:
 private:
     // The internal ProgramImpl may outlive the Program object if it's in-use by a command queue.
     std::shared_ptr<detail::ProgramImpl> internal_;
-
-    // This function violates const requirments if exposed via impl, needs further investigation.
-    friend void detail::ValidateCircularBufferRegion(const Program& program, const IDevice* device);
 };
 
 }  // namespace tt_metal

@@ -842,7 +842,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     auto device_id = device->id();
 
     program.allocate_circular_buffers(device);
-    detail::ValidateCircularBufferRegion(program, device);
+    program.impl().validate_circular_buffer_region(device);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
     const auto& hal = MetalContext::instance().hal();

@@ -267,7 +267,7 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     IDevice* device = cq.device();
     detail::CompileProgram(device, program);
     program.allocate_circular_buffers(device);
-    detail::ValidateCircularBufferRegion(program, device);
+    program.impl().validate_circular_buffer_region(device);
     cq.enqueue_program(program, blocking);
     // Program relinquishes ownership of all global buffers its using, once its been enqueued. Avoid mem
     // leaks on device.
