@@ -77,14 +77,12 @@ const std::vector<AsicChannel>& Board::get_port_channels(PortType port_type, uin
     return port_it->second;
 }
 
-uint32_t Board::get_num_asics() const { return asic_indices_.size(); }
-
-uint32_t Board::get_num_ports(PortType port_type) const {
-    auto port_type_it = ports_.find(port_type);
-    if (port_type_it == ports_.end()) {
-        throw std::runtime_error("Port type not found");
+const Port& Board::get_port_for_asic_channel(const AsicChannel& asic_channel) const {
+    auto it = asic_to_port_map_.find(asic_channel);
+    if (it == asic_to_port_map_.end()) {
+        throw std::runtime_error("Asic channel not found");
     }
-    return port_type_it->second.size();
+    return it->second;
 }
 
 void Board::mark_port_used(PortType port_type, uint32_t port_id) {
@@ -153,22 +151,58 @@ private:
         // QSFP ports
         auto& qsfp_ports = ports[PortType::QSFP];
         qsfp_ports = {
-            {1, {{1, 6}, {1, 7}}},  // ASIC 1, channels 6,7
-            {2, {{1, 0}, {1, 1}}},  // ASIC 1, channels 0,1
+            {1, {{5, 4}, {5, 5}, {5, 6}, {5, 7}}},  // ASIC 5, channels 4,5,6,7
+            {2, {{1, 4}, {1, 5}, {1, 6}, {1, 7}}},  // ASIC 1, channels 4,5,6,7
+            {3, {{1, 0}, {1, 1}, {1, 2}, {1, 3}}},  // ASIC 1, channels 0,1,2,3
+            {4, {{2, 0}, {2, 1}, {2, 2}, {2, 3}}},  // ASIC 2, channels 0,1,2,3
+            {5, {{3, 0}, {3, 1}, {3, 2}, {3, 3}}},  // ASIC 3, channels 0,1,2,3
+            {6, {{4, 0}, {4, 1}, {4, 2}, {4, 3}}},  // ASIC 4, channels 0,1,2,3
         };
 
-        // WARP100 ports
-        auto& warp100_ports = ports[PortType::WARP100];
-        warp100_ports = {
-            {1, {{1, 14}, {1, 15}}},  // ASIC 1, channels 14,15
-            {2, {{2, 6}, {2, 7}}},    // ASIC 2, channels 6,7
+        // LINKING_BOARD_1 ports
+        auto& linking_board_1_ports = ports[PortType::LINKING_BOARD_1];
+        linking_board_1_ports = {
+            {1, {{5, 12}, {5, 13}, {5, 14}, {5, 15}}},  // ASIC 5, channels 12,13,14,15
+            {2, {{6, 12}, {6, 13}, {6, 14}, {6, 15}}},  // ASIC 6, channels 12,13,14,15
+        };
+
+        // LINKING_BOARD_2 ports
+        auto& linking_board_2_ports = ports[PortType::LINKING_BOARD_2];
+        linking_board_2_ports = {
+            {1, {{7, 12}, {7, 13}, {7, 14}, {7, 15}}},  // ASIC 7, channels 12,13,14,15
+            {2, {{8, 12}, {8, 13}, {8, 14}, {8, 15}}},  // ASIC 8, channels 12,13,14,15
+        };
+
+        // LINKING_BOARD_3 ports
+        auto& linking_board_3_ports = ports[PortType::LINKING_BOARD_3];
+        linking_board_3_ports = {
+            {1, {{8, 8}, {8, 9}, {8, 10}, {8, 11}}},  // ASIC 8, channels 8,9,10,11
+            {2, {{4, 8}, {4, 9}, {4, 10}, {4, 11}}},  // ASIC 4, channels 8,9,10,11
         };
 
         // TRACE ports
         auto& trace_ports = ports[PortType::TRACE];
         trace_ports = {
-            {1, {{1, 8}, {1, 9}}},  // ASIC 1, channels 8,9
-            {2, {{2, 0}, {2, 1}}},  // ASIC 2, channels 0,1
+            {1, {{5, 0}, {5, 1}, {5, 2}, {5, 3}}},       // ASIC 5, channels 0,1,2,3
+            {2, {{1, 12}, {1, 13}, {1, 14}, {1, 15}}},   // ASIC 1, channels 12,13,14,15
+            {3, {{5, 8}, {5, 9}, {5, 10}, {5, 11}}},     // ASIC 5, channels 8,9,10,11
+            {4, {{6, 4}, {6, 5}, {6, 6}, {6, 7}}},       // ASIC 6, channels 4,5,6,7
+            {5, {{1, 8}, {1, 9}, {1, 10}, {1, 11}}},     // ASIC 1, channels 8,9,10,11
+            {6, {{2, 4}, {2, 5}, {2, 6}, {2, 7}}},       // ASIC 2, channels 4,5,6,7
+            {7, {{6, 0}, {6, 1}, {6, 2}, {6, 3}}},       // ASIC 6, channels 0,1,2,3
+            {8, {{2, 12}, {2, 13}, {2, 14}, {2, 15}}},   // ASIC 2, channels 12,13,14,15
+            {9, {{6, 8}, {6, 9}, {6, 10}, {6, 11}}},     // ASIC 6, channels 8,9,10,11
+            {10, {{7, 4}, {7, 5}, {7, 6}, {7, 7}}},      // ASIC 7, channels 4,5,6,7
+            {11, {{2, 8}, {2, 9}, {2, 10}, {2, 11}}},    // ASIC 2, channels 8,9,10,11
+            {12, {{3, 4}, {3, 5}, {3, 6}, {3, 7}}},      // ASIC 3, channels 4,5,6,7
+            {13, {{7, 0}, {7, 1}, {7, 2}, {7, 3}}},      // ASIC 7, channels 0,1,2,3
+            {14, {{3, 12}, {3, 13}, {3, 14}, {3, 15}}},  // ASIC 3, channels 12,13,14,15
+            {15, {{7, 8}, {7, 9}, {7, 10}, {7, 11}}},    // ASIC 7, channels 8,9,10,11
+            {16, {{8, 4}, {8, 5}, {8, 6}, {8, 7}}},      // ASIC 8, channels 4,5,6,7
+            {17, {{3, 8}, {3, 9}, {3, 10}, {3, 11}}},    // ASIC 3, channels 8,9,10,11
+            {18, {{4, 4}, {4, 5}, {4, 6}, {4, 7}}},      // ASIC 4, channels 4,5,6,7
+            {19, {{8, 0}, {8, 1}, {8, 2}, {8, 3}}},      // ASIC 8, channels 0,1,2,3
+            {20, {{4, 12}, {4, 13}, {4, 14}, {4, 15}}},  // ASIC 4, channels 12,13,14,15
         };
 
         return ports;
@@ -177,7 +211,18 @@ private:
     static std::unordered_map<PortType, std::vector<std::pair<uint32_t, uint32_t>>>
     create_wh_ubb_internal_connections() {
         std::unordered_map<PortType, std::vector<std::pair<uint32_t, uint32_t>>> internal_connections;
-        internal_connections[PortType::TRACE] = {{1, 2}};  // TRACE connection between ports 1 and 2
+        internal_connections[PortType::TRACE] = {
+            {1, 2},    // TRACE connection between ports 1 and 2
+            {3, 4},    // TRACE connection between ports 3 and 4
+            {5, 6},    // TRACE connection between ports 5 and 6
+            {7, 8},    // TRACE connection between ports 7 and 8
+            {9, 10},   // TRACE connection between ports 9 and 10
+            {11, 12},  // TRACE connection between ports 11 and 12
+            {13, 14},  // TRACE connection between ports 13 and 14
+            {15, 16},  // TRACE connection between ports 15 and 16
+            {17, 18},  // TRACE connection between ports 17 and 18
+            {19, 20},  // TRACE connection between ports 19 and 20
+        };
         return internal_connections;
     }
 };
