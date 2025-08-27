@@ -135,7 +135,7 @@ Tests:
       routing_type: Dynamic
     parametrization_params:
       size: [512]
-      num_packets: [50]
+      num_packets: [50, 100]
       ntype: [unicast_write]
     defaults:
       ftype: unicast
