@@ -20,6 +20,7 @@
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
 #include "layernorm_compute_utils.hpp"
 #include "compute_kernel_api/transpose_wh.h"
+#include "compute_kernel_api/transpose_wh_dest.h"
 
 namespace NAMESPACE {
 
@@ -107,23 +108,31 @@ void MAIN {
                         // Welford's needs transposed input tile,
                         // and transpose_wh_dest is currently buggy,
                         // so we need to use the interm CB
-                        tile_regs_commit();
-                        pack_tile(dst0, cb_interm_pre_add);
-                        cb_push_back(cb_interm_pre_add, onetile);
-                        cb_wait_front(cb_interm_pre_add, j + 1);
-                        tile_regs_release();
-                        tile_regs_acquire();
-                        tile_regs_wait();
+
+                        // ===== Uncomment this to use CB tranpose ===== //
+                        // tile_regs_commit();
+                        // pack_tile(dst0, cb_interm_pre_add);
+                        // cb_push_back(cb_interm_pre_add, onetile);
+                        // cb_wait_front(cb_interm_pre_add, j + 1);
+                        // tile_regs_release();
+                        // tile_regs_acquire();
+                        // tile_regs_wait();
+                        // ============================================= //
                     }
 
-                    // Transpose
-                    // Note: The init_short should be sufficient here,
-                    // but there seems to be a bug with it, so we use the full init
-                    constexpr auto cb_result_or_input = fuse_pre_add ? cb_interm_pre_add : cb_in;
-                    reconfig_data_format_srca(cb_result_or_input);
-                    transpose_wh_init(cb_result_or_input, cb_result_or_input);
+                    // To use CB transpose:
+
+                    // ===== Comment this  ==== //
+                    transpose_wh_dest_init_short();
+                    transpose_wh_dest(dst0);
+                    // ======================== //
+
+                    // ==== Uncomment this ==== //
+                    // constexpr auto cb_result_or_input = fuse_pre_add ? cb_interm_pre_add : cb_in;
+                    // reconfig_data_format(cb_result_or_input, cb_result_or_input);
                     // transpose_wh_init_short(cb_result_or_input);
-                    transpose_wh_tile(cb_result_or_input, j, dst0);
+                    // transpose_wh_tile(cb_result_or_input, j, dst0);
+                    // ======================== //
 
                     // Accumulate mean and variance
                     welford_init();
