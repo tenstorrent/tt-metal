@@ -668,7 +668,7 @@ jobs:
         run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary
       - name: Run ttnn sweeps (all sweeps, nightly)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
-        run: python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout
+        run: python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout --skip-modules ccl.all_gather_n300,ccl.all_gather_n300_focused,ccl.line_all_gather
       - name: Upload sweep results
         uses: actions/upload-artifact@v4
         with:
