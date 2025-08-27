@@ -547,6 +547,10 @@ on:
           - data_movement.view.view_pytorch2
           - data_movement.view.view_tt_torch
           - data_movement.interleaved_to_sharded.interleaved_to_sharded_e2e
+      suite_name:
+        description: "Which sweep suite to run?"
+        default: "nightly"
+        type: string
   # schedule:
   #   - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
@@ -665,7 +669,7 @@ jobs:
           path: /work/tests/sweep_framework/vectors_export/
       - name: Run ttnn sweeps (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
-        run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary
+        run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --suite-name ${{ github.event.inputs.suite_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary
       - name: Run ttnn sweeps (all sweeps, nightly)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
         run: python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout --skip-modules ccl.all_gather_n300,ccl.all_gather_n300_focused,ccl.line_all_gather
