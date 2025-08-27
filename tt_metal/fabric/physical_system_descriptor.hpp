@@ -27,15 +27,15 @@ using AisleID = tt::stl::StrongType<uint32_t, struct AisleIDTag>;
 struct ASICDescriptor {
     TrayID tray_id;
     NID n_id;
-    BoardType board_type;
+    BoardType board_type = BoardType::UNKNOWN;
     AsicID unique_id;
     std::string host_name;
 };
 
 // Specify an ethernet connection between two ASICs
 struct EthConnection {
-    uint8_t src_chan;
-    uint8_t dst_chan;
+    uint8_t src_chan = 0;
+    uint8_t dst_chan = 0;
     bool is_local = false;
 
     bool operator==(const EthConnection& other) const {
