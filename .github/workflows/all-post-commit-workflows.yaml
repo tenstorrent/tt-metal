@@ -71,7 +71,7 @@ jobs:
 
   # Slow Dispatch Unit Tests
   sd-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, cpp-unit-tests]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -89,7 +89,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, cpp-unit-tests]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -106,7 +106,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # Fabric Unit Tests
   fabric-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, cpp-unit-tests]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -123,7 +123,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, cpp-unit-tests]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -142,7 +142,7 @@ jobs:
 
   # FD Model Tests
   models-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, cpp-unit-tests]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -176,7 +176,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   tt-train-cpp-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, cpp-unit-tests]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -193,7 +193,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
-    needs: build-artifact
+    needs: [build-artifact, cpp-unit-tests]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -211,7 +211,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
 
   run-profiler-regression:
-    needs: [build-artifact-profiler]
+    needs: [build-artifact-profiler, cpp-unit-tests]
     strategy:
       fail-fast: false
       matrix:
@@ -229,7 +229,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   t3000-fast-tests:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
-    needs: build-artifact
+    needs: [build-artifact, cpp-unit-tests]
     secrets: inherit
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
@@ -238,7 +238,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   tg-demo-apc-tests:
     if: ${{ github.event.pull_request.head.repo.fork == false }}
-    needs: build-artifact
+    needs: [build-artifact, cpp-unit-tests]
     secrets: inherit
     strategy:
       fail-fast: false
@@ -262,7 +262,7 @@ jobs:
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   test-ttnn-tutorials:
-    needs: build-artifact
+    needs: [build-artifact, cpp-unit-tests]
     secrets: inherit
     uses: ./.github/workflows/ttnn-tutorials-post-commit.yaml
     strategy:
