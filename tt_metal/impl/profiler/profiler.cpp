@@ -1387,6 +1387,15 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
     DispatchMetaData current_dispatch_meta_data;
     std::stack<std::set<tracy::TTDeviceMarker>::iterator> start_marker_stack;
 
+    auto UpdateDeviceMarker = [&](const tracy::TTDeviceMarker& updated_marker,
+                                  const std::set<tracy::TTDeviceMarker>::iterator& original_marker_it)
+        -> std::pair<std::set<tracy::TTDeviceMarker>::iterator, std::set<tracy::TTDeviceMarker>::iterator> {
+        const auto& next_device_marker_it = device_markers.erase(original_marker_it);
+        const auto& [device_marker_it, _] = device_markers.insert(updated_marker);
+        TT_ASSERT(std::next(device_marker_it) == next_device_marker_it);
+        return {device_marker_it, next_device_marker_it};
+    };
+
     auto device_marker_it = device_markers.begin();
     while (device_marker_it != device_markers.end()) {
         tracy::TTDeviceMarker marker = *device_marker_it;
@@ -1406,10 +1415,10 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                         tracy::MarkerDetails::MarkerNameKeyword::TRISC_FW)] ||
                     marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
                         tracy::MarkerDetails::MarkerNameKeyword::ERISC_FW)]) {
-                    next_device_marker_it = device_markers.erase(device_marker_it);
                     marker.marker_name = "TRACE-FW";
-                    const auto& ret = device_markers.insert(marker);
-                    TT_ASSERT(std::next(ret.first) == next_device_marker_it);
+                    const auto& ret = UpdateDeviceMarker(marker, device_marker_it);
+                    device_marker_it = ret.first;
+                    next_device_marker_it = ret.second;
                 }
                 if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
                         tracy::MarkerDetails::MarkerNameKeyword::BRISC_KERNEL)] ||
@@ -1419,10 +1428,10 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                         tracy::MarkerDetails::MarkerNameKeyword::TRISC_KERNEL)] ||
                     marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
                         tracy::MarkerDetails::MarkerNameKeyword::ERISC_KERNEL)]) {
-                    next_device_marker_it = device_markers.erase(device_marker_it);
                     marker.marker_name = "TRACE-KERNEL";
-                    const auto& ret = device_markers.insert(marker);
-                    TT_ASSERT(std::next(ret.first) == next_device_marker_it);
+                    const auto& ret = UpdateDeviceMarker(marker, device_marker_it);
+                    device_marker_it = ret.first;
+                    next_device_marker_it = ret.second;
                 }
             }
 
@@ -1447,10 +1456,10 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                         marker.marker_id & 0xFFFF);
 
                     if (start_marker_it->marker_name != marker.marker_name) {
-                        next_device_marker_it = device_markers.erase(device_marker_it);
                         marker.marker_name = start_marker_it->marker_name;
-                        const auto& ret = device_markers.insert(marker);
-                        TT_ASSERT(std::next(ret.first) == next_device_marker_it);
+                        const auto& ret = UpdateDeviceMarker(marker, device_marker_it);
+                        device_marker_it = ret.first;
+                        next_device_marker_it = ret.second;
                     }
                 } else {
                     TT_FATAL(
@@ -1473,7 +1482,6 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                 if ((tracy::riscName[marker.risc] == "BRISC" || tracy::riscName[marker.risc] == "NCRISC") &&
                     curr_zone_start_marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
                         tracy::MarkerDetails::MarkerNameKeyword::DISPATCH)]) {
-                    next_device_marker_it = device_markers.erase(device_marker_it);
                     if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
                             tracy::MarkerDetails::MarkerNameKeyword::PROCESS_CMD)]) {
                         current_dispatch_meta_data.cmd_type =
@@ -1498,11 +1506,6 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                         marker.meta_data["dispatch_command_subtype"] = current_dispatch_meta_data.cmd_subtype;
                     }
 
-                    // log_info(tt::LogMetal, "CMD SUBTYPE: {}", this->current_dispatch_meta_data.cmd_subtype);
-                    // log_info(tt::LogMetal, "CMD TYPE: {}", this->current_dispatch_meta_data.cmd_type);
-                    // log_info(tt::LogMetal, "WORKER RUNTIME ID: {}",
-                    // this->current_dispatch_meta_data.worker_runtime_id);
-
                     std::string new_marker_name = current_dispatch_meta_data.cmd_type;
                     if (tracy::riscName[marker.risc] == "BRISC") {
                         if (current_dispatch_meta_data.cmd_subtype != "") {
@@ -1517,20 +1520,17 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                                 current_dispatch_meta_data.cmd_type);
                         }
                     }
-                    // new_marker.marker_name = new_marker_name;
 
-                    // log_info(tt::LogMetal, "NEW MARKER NAME: {}", new_marker_name);
-
-                    const auto& ret = device_markers.insert(marker);
-                    TT_ASSERT(std::next(ret.first) == next_device_marker_it);
+                    const auto& marker_ret = UpdateDeviceMarker(marker, device_marker_it);
+                    device_marker_it = marker_ret.first;
+                    next_device_marker_it = marker_ret.second;
 
                     tracy::TTDeviceMarker curr_zone_start_marker = *curr_zone_start_marker_it;
                     curr_zone_start_marker.runtime_host_id = current_dispatch_meta_data.worker_runtime_id;
                     curr_zone_start_marker.marker_name = curr_zone_start_marker.marker_name + ":" + new_marker_name;
-                    const auto& curr_zone_start_marker_next_it = device_markers.erase(curr_zone_start_marker_it);
-                    const auto& curr_zone_start_ret = device_markers.insert(curr_zone_start_marker);
-                    curr_zone_start_marker_it = curr_zone_start_ret.first;
-                    TT_ASSERT(std::next(curr_zone_start_marker_it) == curr_zone_start_marker_next_it);
+                    const auto& curr_zone_start_marker_ret =
+                        UpdateDeviceMarker(curr_zone_start_marker, curr_zone_start_marker_it);
+                    curr_zone_start_marker_it = curr_zone_start_marker_ret.first;
 
                     start_marker_stack.pop();
                     start_marker_stack.push(curr_zone_start_marker_it);
@@ -1540,6 +1540,11 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
         device_marker_it = next_device_marker_it;
     }
+
+    TT_FATAL(
+        start_marker_stack.empty(),
+        "{} start markers detected without corresponding end markers",
+        start_marker_stack.size());
 }
 
 void DeviceProfiler::setLastFDReadAsNotDone() { this->is_last_fd_read_done = false; }
@@ -1629,13 +1634,6 @@ void DeviceProfiler::readResults(
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
-
-    log_info(
-        tt::LogMetal,
-        "readResults device id: {} state: {}, data source: {}",
-        device->id(),
-        enchantum::to_string(state),
-        enchantum::to_string(data_source));
 
     const std::string zone_name = fmt::format(
         "{}-{}-{}-{}", "readResults", device_id, enchantum::to_string(state), enchantum::to_string(data_source));

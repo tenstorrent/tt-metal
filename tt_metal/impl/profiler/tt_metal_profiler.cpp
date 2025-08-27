@@ -858,11 +858,6 @@ void ReadDeviceProfilerResults(
     ZoneScoped;
 
     if (getDeviceProfilerState()) {
-        log_info(
-            tt::LogMetal,
-            "ReadDeviceProfilerResults device id: {} state: {}",
-            device->id(),
-            enchantum::to_string(state));
         TT_ASSERT(device->is_initialized());
 
         auto profiler_it = tt_metal_device_profiler_map.find(device->id());
