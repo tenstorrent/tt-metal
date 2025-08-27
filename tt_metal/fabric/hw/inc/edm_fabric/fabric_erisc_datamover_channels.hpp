@@ -56,7 +56,9 @@ public:
                 reinterpret_cast<volatile uint32_t*>(this->buffer_addresses[i])[j] = 0;
             }
         }
-        set_cached_next_buffer_slot_addr(this->buffer_addresses[0]);
+        if constexpr (NUM_BUFFERS) {
+            set_cached_next_buffer_slot_addr(this->buffer_addresses[0]);
+        }
     }
 
     EthChannelBuffer(
