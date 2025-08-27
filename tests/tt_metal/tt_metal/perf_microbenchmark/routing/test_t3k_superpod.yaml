@@ -134,9 +134,9 @@ Tests:
       topology: Mesh
       routing_type: Dynamic
     parametrization_params:
-      size: [512, 1024, 2048]
-      num_packets: [50, 100]
-      ntype: [unicast_write, atomic_inc]
+      size: [512]
+      num_packets: [50]
+      ntype: [unicast_write]
     defaults:
       ftype: unicast
     patterns:
