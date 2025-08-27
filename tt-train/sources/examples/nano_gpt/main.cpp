@@ -944,7 +944,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = get_model_parameters(model);
-                if (!device_config.enable_tp && !config.enable_mpi) {
+                if (device_config.enable_ddp && !config.enable_mpi) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
 
