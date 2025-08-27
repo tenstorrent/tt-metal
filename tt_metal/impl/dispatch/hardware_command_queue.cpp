@@ -454,11 +454,11 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     const auto sub_device_index = *sub_device_id;
 
     uint32_t num_additional_workers = 0;
-    if (program.runs_on_noc_multicast_only_cores()) {
+    if (program.impl().runs_on_noc_multicast_only_cores()) {
         num_additional_workers +=
             calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::TENSIX);
     }
-    if (program.runs_on_noc_unicast_only_cores()) {
+    if (program.impl().runs_on_noc_unicast_only_cores()) {
         num_additional_workers +=
             calculate_expected_workers_to_finish(device_, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
     }
@@ -525,10 +525,10 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
         sub_device_id,
         dispatch_metadata);
     // Update wptrs for tensix and eth launch message in the device class
-    if (program.runs_on_noc_multicast_only_cores()) {
+    if (program.impl().runs_on_noc_multicast_only_cores()) {
         worker_launch_message_buffer_state.inc_mcast_wptr(1);
     }
-    if (program.runs_on_noc_unicast_only_cores()) {
+    if (program.impl().runs_on_noc_unicast_only_cores()) {
         worker_launch_message_buffer_state.inc_unicast_wptr(1);
     }
     this->enqueue_command(command, blocking, sub_device_ids);
