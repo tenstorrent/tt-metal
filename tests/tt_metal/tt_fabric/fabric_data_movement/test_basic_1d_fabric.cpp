@@ -2178,8 +2178,10 @@ void FabricUnicastCommon(
         receiver_virtual_core.x,
         receiver_virtual_core.y,
     };
+    std::unordered_map<eth_chan_directions, std::pair<uint8_t, uint8_t>> hops_per_dir;
     for (auto [dir, num_hops] : dir_configs) {
         sender_runtime_args.push_back(num_hops);
+        hops_per_dir[control_plane.routing_direction_to_eth_direction(dir)] = std::make_pair(num_hops, 0);
     }
 
     std::vector<tt::tt_fabric::FabricNodeId> next_hop_nodes;
@@ -2189,7 +2191,13 @@ void FabricUnicastCommon(
     }
 
     append_routing_plane_connection_manager_rt_args(
-        src_fabric_node_id, next_hop_nodes, sender_program, sender_kernel, {sender_logical_core}, sender_runtime_args);
+        src_fabric_node_id,
+        next_hop_nodes,
+        sender_program,
+        sender_kernel,
+        {sender_logical_core},
+        hops_per_dir,
+        sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
@@ -2334,9 +2342,11 @@ void FabricMulticastCommon(
         receiver_virtual_core.x,
         receiver_virtual_core.y,
     };
+    std::unordered_map<eth_chan_directions, std::pair<uint8_t, uint8_t>> hops_per_dir;
     for (auto [dir, start_distance, range] : dir_configs) {
         sender_runtime_args.push_back(start_distance);
         sender_runtime_args.push_back(range);
+        hops_per_dir[control_plane.routing_direction_to_eth_direction(dir)] = std::make_pair(start_distance, range);
     }
 
     auto sender_program = tt_metal::CreateProgram();
@@ -2358,7 +2368,13 @@ void FabricMulticastCommon(
     }
 
     append_routing_plane_connection_manager_rt_args(
-        src_fabric_node_id, next_hop_nodes, sender_program, sender_kernel, {sender_logical_core}, sender_runtime_args);
+        src_fabric_node_id,
+        next_hop_nodes,
+        sender_program,
+        sender_kernel,
+        {sender_logical_core},
+        hops_per_dir,
+        sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 

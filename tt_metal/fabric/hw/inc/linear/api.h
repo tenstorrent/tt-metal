@@ -219,17 +219,47 @@ static FORCE_INLINE void fabric_set_unicast_route(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     tt::tt_fabric::RoutingPlaneConnectionManager::ConnectionSlot slot,
     volatile PACKET_HEADER_TYPE* packet_header) {
-#ifdef FABRIC_2D
+#if defined(FABRIC_2D)
+    // 2D unicast
     fabric_set_unicast_route(
-#if defined(DYNAMIC_ROUTING_ENABLED)
-        (MeshPacketHeader*)packet_header,
+        packet_header, connection_manager.my_chip_id, slot.dst_dev_id, slot.dst_mesh_id, connection_manager.ew_dim);
 #else
-        (LowLatencyMeshPacketHeader*)packet_header,
+    // 1D unicast, nop
 #endif
-        connection_manager.my_dev_id,
-        slot.dst_dev_id,
-        slot.dst_mesh_id,
-        connection_manager.ew_dim);
+}
+
+static FORCE_INLINE void fabric_set_mcast_route(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    // tt::tt_fabric::RoutingPlaneConnectionManager::ConnectionSlot slot,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t i) {
+    // volatile PACKET_HEADER_TYPE* packet_header) {
+    const auto& slot = connection_manager.get(i);
+#if defined(FABRIC_2D)
+    // 2D multicast
+    if (slot.range != 0) {
+        switch (slot.tag) {
+            case 0: {
+                fabric_set_mcast_route(
+                    packet_header, connection_manager.my_chip_id, connection_manager.my_mesh_id, slot.range, 0, 0, 0);
+            } break;
+            case 1: {
+                fabric_set_mcast_route(
+                    packet_header, connection_manager.my_chip_id, connection_manager.my_mesh_id, 0, slot.range, 0, 0);
+            } break;
+            case 2: {
+                fabric_set_mcast_route(
+                    packet_header, connection_manager.my_chip_id, connection_manager.my_mesh_id, 0, 0, slot.range, 0);
+            } break;
+            case 3: {
+                fabric_set_mcast_route(
+                    packet_header, connection_manager.my_chip_id, connection_manager.my_mesh_id, 0, 0, 0, slot.range);
+            } break;
+            default: ASSERT(FALSE);
+        }
+    }
+#else
+    // 1D multicast, nop
 #endif
 }
 
@@ -1152,7 +1182,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write(
     uint8_t* range) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
-        fabric_set_unicast_route(connection_manager, slot, packet_header);
+        fabric_set_mcast_route(connection_manager, packet_header, i);
         fabric_multicast_noc_unicast_write(
             &slot.sender, packet_header, src_addr, size, noc_unicast_command_header, start_distance[i], range[i]);
     });
@@ -1268,7 +1298,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_write_set_state(
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_unicast_route(connection_manager, connection_manager.get(i), packet_header);
+        fabric_set_mcast_route(connection_manager, packet_header, i);
         fabric_multicast_noc_unicast_write_set_state<UpdateMask>(
             packet_header, start_distance[i], range[i], command_header, packet_size_bytes);
     });
@@ -1324,7 +1354,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc(
     uint8_t* range) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
-        fabric_set_unicast_route(connection_manager, slot, packet_header);
+        fabric_set_mcast_route(connection_manager, packet_header, i);
         fabric_multicast_noc_unicast_atomic_inc(
             &slot.sender, packet_header, noc_unicast_atomic_inc_command_header, start_distance[i], range[i]);
     });
@@ -1431,7 +1461,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
     uint8_t* range,
     CommandHeaderT command_header = nullptr) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_unicast_route(connection_manager, connection_manager.get(i), packet_header);
+        fabric_set_mcast_route(connection_manager, packet_header, i);
         fabric_multicast_noc_unicast_atomic_inc_set_state<UpdateMask>(
             packet_header, start_distance[i], range[i], command_header);
     });
@@ -1496,7 +1526,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     uint8_t* range) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
-        fabric_set_unicast_route(connection_manager, slot, packet_header);
+        fabric_set_mcast_route(connection_manager, packet_header, i);
         fabric_multicast_noc_scatter_write(
             &slot.sender,
             packet_header,
@@ -1620,7 +1650,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_unicast_route(connection_manager, connection_manager.get(i), packet_header);
+        fabric_set_mcast_route(connection_manager, packet_header, i);
         fabric_multicast_noc_scatter_write_set_state<UpdateMask>(
             packet_header, start_distance[i], range[i], command_header, packet_size_bytes);
     });
@@ -1676,7 +1706,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write(
     uint8_t* range) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
-        fabric_set_unicast_route(connection_manager, slot, packet_header);
+        fabric_set_mcast_route(connection_manager, packet_header, i);
         fabric_multicast_noc_unicast_inline_write(
             &slot.sender, packet_header, noc_unicast_inline_write_command_header, start_distance[i], range[i]);
     });
@@ -1776,7 +1806,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_inline_write_set_state(
     uint8_t* range,
     CommandHeaderT command_header) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_unicast_route(connection_manager, connection_manager.get(i), packet_header);
+        fabric_set_mcast_route(connection_manager, packet_header, i);
         fabric_multicast_noc_unicast_inline_write_set_state<UpdateMask>(
             packet_header, start_distance[i], range[i], command_header);
     });
@@ -1841,7 +1871,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
     uint8_t* range) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
-        fabric_set_unicast_route(connection_manager, slot, packet_header);
+        fabric_set_mcast_route(connection_manager, packet_header, i);
         fabric_multicast_noc_fused_unicast_with_atomic_inc(
             &slot.sender,
             packet_header,
@@ -1964,7 +1994,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
     CommandHeaderT command_header = nullptr,
     uint16_t packet_size_bytes = 0) {
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
-        fabric_set_unicast_route(connection_manager, connection_manager.get(i), packet_header);
+        fabric_set_mcast_route(connection_manager, packet_header, i);
         fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state<UpdateMask>(
             packet_header, start_distance[i], range[i], command_header, packet_size_bytes);
     });
