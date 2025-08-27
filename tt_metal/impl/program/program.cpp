@@ -1546,11 +1546,10 @@ uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*log
                            .sem_offset;
 }
 
-uint32_t Program::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
-    HalProgrammableCoreType programmable_core_type = ::tt::tt_metal::detail::hal_programmable_core_type_from_core_type(core_type);
-    uint32_t base_addr = program_dispatch::program_base_addr_on_core(impl(), device, programmable_core_type);
-    return base_addr + impl()
-                           .get_program_config(
+uint32_t detail::ProgramImpl::get_cb_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
+    HalProgrammableCoreType programmable_core_type = hal_programmable_core_type_from_core_type(core_type);
+    uint32_t base_addr = program_dispatch::program_base_addr_on_core(*this, device, programmable_core_type);
+    return base_addr + this->get_program_config(
                                MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type))
                            .cb_offset;
 }

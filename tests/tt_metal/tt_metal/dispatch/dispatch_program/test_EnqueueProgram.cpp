@@ -57,6 +57,9 @@
 #include "umd/device/types/arch.h"
 #include "umd/device/types/xy_pair.h"
 
+// Access to internal API: ProgramImpl::get_cb_base_addr
+#include "impl/program/program_impl.hpp"
+
 namespace tt {
 namespace tt_metal {
 class CommandQueue;
@@ -1187,12 +1190,9 @@ TEST_F(UnitMeshCQFixture, TensixTestMultiCBSharedAddressSpaceSentSingleCore) {
 
         vector<uint32_t> cb_config_vector;
 
+        auto address = program_.impl().get_cb_base_addr(device->get_devices()[0], core_coord, CoreType::WORKER);
         tt::tt_metal::detail::ReadFromDeviceL1(
-            device->get_devices()[0],
-            core_coord,
-            program_.get_cb_base_addr(device->get_devices()[0], core_coord, CoreType::WORKER),
-            cb_config_buffer_size,
-            cb_config_vector);
+            device->get_devices()[0], core_coord, address, cb_config_buffer_size, cb_config_vector);
         uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
