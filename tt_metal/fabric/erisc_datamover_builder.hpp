@@ -601,8 +601,6 @@ public:
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
         downstream_edm_vcs_buffer_base_address = {};
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
-        downstream_edm_vcs_semaphore_address = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
         downstream_edm_vcs_worker_registration_address = {};
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
         downstream_edm_vcs_worker_location_info_address = {};
