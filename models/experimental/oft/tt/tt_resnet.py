@@ -1,6 +1,12 @@
 import ttnn
-import torch.nn as nn
-from models.experimental.oft.tt.common import Conv, GroupNorm
+from models.experimental.oft.tt.common import Conv, GroupNorm, GroupNormDRAM
+
+try:
+    from tracy import signpost
+
+    use_signpost = True
+except ModuleNotFoundError:
+    use_signpost = False
 
 
 class DownsampleBasicBlock:
@@ -58,52 +64,64 @@ class TTBasicBlock:
         # super().__init__()
         # print("------------BOJANJE TTBasicBlock------------")
         # print(f"TTBasicBlock: {parameters=},\n {conv_pt=},\n {inplanes=},\n {planes=},\n {channels=},\n {cell_size=},\n {grid_height=},\n {stride=}")
-        # chanell_slice
+        # chanell_slice)
+        self.is_sliced = is_sliced
+        print(f"TTBasicBlock: {inplanes=},\n {planes=},\n {stride=},\n {is_sliced=}")
         self.conv1 = Conv(
             parameters.conv1, conv_pt.conv1, stride=stride, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced
         )
-        self.bn1 = GroupNorm(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b)
-
-        self.conv2 = Conv(parameters.conv2, conv_pt.conv2, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced)
-        self.bn2 = GroupNorm(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b)
-        if stride != 1 or inplanes != planes:
-            self.downsample = True
-            self.downsample_conv = Conv(
-                parameters.downsample[0],
-                conv_pt.downsample[0],
-                stride=stride,
-                padding=0,
-                output_layout=ttnn.ROW_MAJOR_LAYOUT,
-                is_sliced=is_sliced,
-            )
-            self.downsample_bn = GroupNorm(
-                parameters.downsample[1], num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b
-            )
+        if not is_sliced:
+            self.bn1 = GroupNorm(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b)
         else:
-            self.downsample = None
+            self.bn1 = GroupNormDRAM(parameters.bn1, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b)
+        self.conv2 = Conv(parameters.conv2, conv_pt.conv2, output_layout=ttnn.ROW_MAJOR_LAYOUT, is_sliced=is_sliced)
+        if not is_sliced:
+            self.bn2 = GroupNorm(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b)
+        else:
+            self.bn2 = GroupNormDRAM(parameters.bn2, num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b)
+        self.downsample = None
+        if not is_sliced:
+            if stride != 1 or inplanes != planes:
+                self.downsample = True
+                self.downsample_conv = Conv(
+                    parameters.downsample[0],
+                    conv_pt.downsample[0],
+                    stride=stride,
+                    padding=0,
+                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                    is_sliced=is_sliced,
+                )
+                self.downsample_bn = GroupNorm(
+                    parameters.downsample[1], num_groups=16, channels=planes, eps=1e-5, dtype=ttnn.bfloat8_b
+                )
 
-    def forward(self, device, x, gn_shard="HS"):
+    def forward(self, device, x, gn_shard="HS", num_splits=1):
         # identity = x
         # x1 = x
         # print("TTBasicBlock forward")
+        if use_signpost:
+            signpost(header="TTBasicBlock forward started")
         out, out_h, out_w = self.conv1(device, x)
         print(f"FORWARD X Input shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout}")
         # print(f"Conv1 output shape: {out.shape}, out_h: {out_h}, out_w: {out_w}")
         # print(f"conv1 output dtype: {out.dtype} layout: {out.layout} shard layout: {out.memory_config}")
         out = ttnn.move(out)
         # print(f"SSHARDING {gn_shard=}")
-        out = self.bn1(device, out, out_h, out_w, shard=gn_shard)
+        out = self.bn1(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
         print(f"BN1 output shape: {out.shape}")
-        out = ttnn.relu(out)
-        # ttnn.deallocate(out)
-        # ttnn.move(out1)
+        # if not self.is_sliced:
+        out1 = ttnn.relu(out)
+        ttnn.deallocate(out)  # added for tracy pass
+        out = ttnn.move(out1)  # added for tracy pass
         # print(f"ReLU output shape: {out.shape}, dtype: {out.dtype}")
+        # out=ttnn.move(out) # added for tracy, dont pass without this
         out, out_h, out_w = self.conv2(device, out)
 
         print(f"Conv2 output shape: {out.shape}")
         # print(f"conv2 output dtype: {out.dtype} layout: {out.layout} shard layout: {out.memory_config}")
+        # if not self.is_sliced:
         out = ttnn.move(out)
-        out = self.bn2(device, out, out_h, out_w, shard=gn_shard)
+        out = self.bn2(device, out, out_h, out_w, shard=gn_shard, num_splits=num_splits)
         print(f"BN2 output shape: {out.shape}")
 
         if self.downsample is not None:
@@ -183,6 +201,8 @@ class TTBasicBlock:
         # print(f"Add output shape: {out.shape}")
         # print(f"Add output dtype: {out.dtype} layout: {out.layout} shard layout: {out.memory_config}")
         out = ttnn.relu(out)
+        if use_signpost:
+            signpost(header="TTBasicBlock forward finished")
         return out
 
 
@@ -195,9 +215,10 @@ class TTResNetFeatures:
         #     f.write(f"TTResNetFeatures: {parameters=},\n {conv_pt=},\n {block=},\n {layers=}\n")
         self.conv1 = Conv(parameters.conv1, conv_pt.conv1, stride=2, padding=3)
         # self.bn1 = GroupNorm(parameters.bn1, num_groups=16, channels=64, eps=1e-5)
-        self.gn1 = nn.GroupNorm(16, 64)
-        self.gn1.weight = nn.Parameter(parameters.bn1.weight)
-        self.gn1.bias = nn.Parameter(parameters.bn1.bias)
+        # self.gn1 = nn.GroupNorm(16, 64)
+        self.bn1 = GroupNormDRAM(parameters.bn1, num_groups=16, channels=64, eps=1e-5, dtype=ttnn.bfloat8_b)
+        # self.gn1.weight = nn.Parameter(parameters.bn1.weight)
+        # self.gn1.bias = nn.Parameter(parameters.bn1.bias)
 
         self.layer1 = self._make_layer(device, parameters.layer1, conv_pt.layer1, block, 64, layers[0])
         # print(f"Layer1: {len(self.layer1)} blocks")
@@ -261,22 +282,27 @@ class TTResNetFeatures:
 
     def forward(self, device, x):
         # print(f"Input shape: {x.shape}, dtype: {x.dtype}, layout: {x.layout}")
+        if use_signpost:
+            signpost(header="ResNet module started")
         conv1, out_h, out_w = self.conv1(device, x)
         # print(f"Conv1 output shape: {conv1.shape}, out_h: {out_h}, out_w: {out_w}")
         # print(f"Conv1 output shape: {conv1.shape}, out_h: {out_h}, out_w: {out_w}")
         # conv1 = ttnn.untilize(conv1, memory_config=ttnn.DRAM_MEMORY_CONFIG,  use_multicore=True)
         conv1 = ttnn.to_layout(conv1, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        conv1 = self.bn1(device, conv1, out_h, out_w, num_splits=8)
         # conv1 = self.bn1(device, conv1, out_h, out_w, shard="HS") #this is for later
-        conv1 = ttnn.to_torch(conv1).reshape(conv1.shape[0], out_h, out_w, conv1.shape[-1]).permute((0, 3, 1, 2))
+        #
+        # conv1 = ttnn.to_torch(conv1).reshape(conv1.shape[0], out_h, out_w, conv1.shape[-1]).permute((0, 3, 1, 2))
 
-        conv1 = self.gn1(conv1)
+        # conv1 = self.gn1(conv1)
 
         # print(f"Conv1 output shape after GN: {conv1.shape}, dtype: {conv1.dtype}, layout: {conv1.layout}")
-        N, C, H, W = conv1.shape
-        conv1 = conv1.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # [1, 1, N*H*W, C]
-        conv1 = ttnn.from_torch(
-            conv1, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
-        )
+        # N, C, H, W = conv1.shape
+        # conv1 = conv1.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # [1, 1, N*H*W, C]
+        # conv1 = ttnn.from_torch(
+        #    conv1, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b
+        # )
+
         # print(f"Conv1 output shape after GN: {conv1.shape}, dtype: {conv1.dtype}, layout: {conv1.layout}")
         # memory_config = ttnn.MemoryConfig(
         #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -346,4 +372,6 @@ class TTResNetFeatures:
 
         # print(f"Feats4 output shape: {feats4.shape}, dtype: {feats4.dtype}, layout: {feats4.layout}")
         # print(f"Feats8 output shape: {feats8.shape}, dtype: {feats8.dtype}, layout: {feats8.layout}")
+        if use_signpost:
+            signpost(header="ResNet module finished")
         return feats8_interleaved, feats16_interleaved, feats32_interleaved
