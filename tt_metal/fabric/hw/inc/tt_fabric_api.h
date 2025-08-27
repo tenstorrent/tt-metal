@@ -173,47 +173,6 @@ void fabric_set_unicast_route(
     }
 }
 
-void fabric_set_unicast_route_deprecated(
-    volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
-    eth_chan_directions outgoing_direction,
-    uint16_t my_dev_id,
-    uint16_t dst_dev_id,
-    uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
-    uint16_t ew_dim) {
-    if (outgoing_direction == eth_chan_directions::EAST || outgoing_direction == eth_chan_directions::WEST) {
-        uint32_t ew_hops = my_dev_id < dst_dev_id ? dst_dev_id - my_dev_id : my_dev_id - dst_dev_id;
-        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ew_hops, true);
-    } else {
-        // First hop is north/south. Calculate the number of required hops before turning east/west
-        uint32_t ns_hops = 0;
-        uint32_t target_dev = dst_dev_id;
-        uint32_t target_col = 0;
-
-        while (target_dev >= ew_dim) {
-            target_dev -= ew_dim;
-            target_col++;
-        }
-        uint32_t my_col = 0;
-        uint32_t my_dev = my_dev_id;
-        while (my_dev >= ew_dim) {
-            my_dev -= ew_dim;
-            my_col++;
-        }
-        ns_hops = target_col > my_col ? target_col - my_col : my_col - target_col;
-        // determine the east/west hops
-        uint32_t turn_direction = my_dev < target_dev ? eth_chan_directions::EAST : eth_chan_directions::WEST;
-        uint32_t ew_hops = (my_dev < target_dev) ? target_dev - my_dev : my_dev - target_dev;
-        if (ew_hops) {
-            ns_hops--;
-            ew_hops++;
-        }
-        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ns_hops, ew_hops == 0);
-        if (ew_hops) {
-            fabric_set_route(packet_header, (eth_chan_directions)turn_direction, 0, ns_hops, ew_hops, true);
-        }
-    }
-}
-
 void fabric_set_mcast_route(
     volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
     uint16_t dst_dev_id,   // Ignore this, since Low Latency Mesh Fabric does not support arbitrary 2D Mcasts yet
