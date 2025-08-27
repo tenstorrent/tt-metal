@@ -187,13 +187,18 @@ def run_falcon_demo_kv(
     profiler = BenchmarkProfiler()
     profiler.start("run")
 
+    # Set up warmup iterations and targets dicts for saving benchmark data
+    N_warmup_iter = {}
+    perf_targets = {}
     if perf_mode:
         logger.info("Running in performance measurement mode (invalid outputs)!")
 
-        # Set up warmup iterations and targets dicts for saving benchmark data
         N_warmup_iter = {"inference_prefill": 5, "inference_decode": 5}
-    else:
-        N_warmup_iter = {}
+        perf_targets = {
+            "prefill_t/s": None,
+            "decode_t/s": 11.9 * batch_size,
+            "decode_t/s/u": 11.9,
+        }
 
     configuration = FalconConfig(**model_config_entries)
 
@@ -592,7 +597,7 @@ def run_falcon_demo_kv(
     )
 
     # Save benchmark data (will only save if running in CI environment)
-    benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets={})
+    benchmark_data = create_benchmark_data(profiler, measurements, N_warmup_iter, targets=perf_targets)
     run_type = f"demo_{'perf' if perf_mode else 'generate'}_{mesh_device.get_num_devices()}chip"
     benchmark_data.save_partial_run_json(
         profiler,
