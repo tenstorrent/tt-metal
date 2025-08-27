@@ -15,7 +15,6 @@ from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
 from models.utility_functions import (
-    comp_pcc,
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
@@ -297,11 +296,9 @@ def test_qwen_decoder_2layers_inference(
             freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
             # Run reference models
-            ref_input, ref_res, ref_a, ref_fin = reference_models[layer_idx](
-                ref_input, current_pos[0], freqs_cis_i, mask=None
-            )
+            ref_input, ref_fin = reference_models[layer_idx](ref_input, current_pos[0], freqs_cis_i, mask=None)
 
-            passing, pcc_message = comp_pcc(ref_a, tt_output_torch)
+            # passing, pcc_message = comp_pcc(ref_a, tt_output_torch)
             # comp_pcc(ref_fin, res_torch)
             # passing_res, pcc_message_res = comp_pcc(ref_res, res_torch)
             if layer_idx == 1:

@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
+import torch
 from models.demos.llama3_70b_galaxy.tt.llama_attention import TtLlamaAttention
 from models.demos.llama3_70b_galaxy.tt.llama_mlp import TtLlamaMLP
 from models.common.rmsnorm import RMSNorm
@@ -172,10 +173,21 @@ class TtTransformerBlock(LightweightModule):
             ff_in_sharded, _ = self.ff_norm(h, None, mode)
 
         if mode == "decode":
+            attn_torch = ttnn.to_torch(
+                attn_out,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4)),
+            )[:, :1, :, :]
+            torch.save(attn_torch, "attn_out.pt")
+            h_torch = ttnn.to_torch(
+                h,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=(8, 4)),
+            )[:, :1, :, :]
+            torch.save(h_torch, "h.pt")
+
             ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
             # temp = ttnn.add(attn_out, h, memory_config=skip_mem_cfg)
             # ff_in_sharded, _ = self.ff_norm(temp, None, mode)
-            # attn_out.deallocate(True)
+            attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
