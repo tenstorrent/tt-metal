@@ -114,8 +114,7 @@ void kernel_main() {
 #else
     constexpr auto intermediate_tensor_args = TensorAccessorArgs<ct_idx>();
     constexpr uint32_t ct_offset = intermediate_tensor_args.num_compile_time_args();
-    auto intermediate_tensor_addrgen =
-        TensorAccessor(intermediate_tensor_args, intermediate_address, intermediate_page_size);
+    auto intermediate_addrgen = TensorAccessor(intermediate_tensor_args, intermediate_address, intermediate_page_size);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -138,7 +137,7 @@ void kernel_main() {
     arg_idx += output_rt_increment;
 #else
     constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
-    auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_address, intermediate_page_size);
+    auto output_addrgen = TensorAccessor(output_tensor_args, output_address, intermediate_page_size);
 #endif
 
     auto mux_connection_handle = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
