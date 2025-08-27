@@ -136,7 +136,7 @@ Tests:
     parametrization_params:
       size: [512, 1024, 2048]
       num_packets: [50, 100]
-      ntype: [unicast_write]
+      ntype: [unicast_write, atomic_inc]
     defaults:
       ftype: unicast
     patterns:
