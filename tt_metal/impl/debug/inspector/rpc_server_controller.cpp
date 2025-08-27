@@ -52,10 +52,16 @@ void RpcServerController::run_server() {
 
         // Keep server running until stopped
         auto& waitScope = rpc_server->getWaitScope();
+        auto last_events = std::chrono::high_resolution_clock::now();
 
         while (!should_stop) {
-            waitScope.poll();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            auto count = waitScope.poll();
+            if (count > 0) {
+                last_events = std::chrono::high_resolution_clock::now();
+            }
+            else if (std::chrono::high_resolution_clock::now() - last_events > std::chrono::milliseconds(10)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
         }
     } catch (const std::exception& e) {
         log_error(tt::LogInspector, "Inspector RPC server error: {}", e.what());
