@@ -10,7 +10,7 @@
 #include "tt_metal/api/tt-metalium/edm_fabric_counters.hpp"
 #include "tt_metal/api/tt-metalium/fabric_edm_types.hpp"
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_eriscs_router_ct_args.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_handshake.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_edm_packet_header_validate.hpp"
@@ -266,7 +266,7 @@ using PerfTelemetryRecorder = std::conditional_t<
     std::conditional_t<PERF_TELEMETRY_DISABLED, bool, std::nullptr_t>>;
 
 // Defined here because sender_channel_0_free_slots_stream_id does not come from
-// 1d_fabric_constants.hpp
+// fabric_erisc_router_ct_args.hpp
 static constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_free_slots_stream_ids = {
     WorkerToFabricEdmSenderImpl<0>::sender_channel_0_free_slots_stream_id,
     sender_channel_1_free_slots_stream_id,
@@ -2126,11 +2126,19 @@ void kernel_main() {
     const auto& local_sender_buffer_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
-                local_sender_0_channel_address, local_sender_1_channel_address, local_sender_2_channel_address, local_sender_3_channel_address, local_sender_4_channel_address});
+                local_sender_0_channel_address,
+                local_sender_1_channel_address,
+                local_sender_2_channel_address,
+                local_sender_3_channel_address,
+                local_sender_4_channel_address});
     const auto& remote_sender_buffer_addresses =
         take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_SENDER_CHANNELS>{
-                remote_sender_0_channel_address, remote_sender_1_channel_address, remote_sender_2_channel_address, remote_sender_3_channel_address, remote_sender_4_channel_address});
+                remote_sender_0_channel_address,
+                remote_sender_1_channel_address,
+                remote_sender_2_channel_address,
+                remote_sender_3_channel_address,
+                remote_sender_4_channel_address});
     const auto& local_receiver_buffer_addresses =
         take_first_n_elements<NUM_RECEIVER_CHANNELS, MAX_NUM_RECEIVER_CHANNELS, size_t>(
             std::array<size_t, MAX_NUM_RECEIVER_CHANNELS>{
