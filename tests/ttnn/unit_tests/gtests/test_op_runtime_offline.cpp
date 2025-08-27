@@ -226,6 +226,8 @@ INSTANTIATE_TEST_SUITE_P(
         TestExpOpQueryOpRuntime::m_interleaved_32_512_512_0_tiled,
         TestExpOpQueryOpRuntime::m_interleaved_2048_2048_0_0_tiled));
 
+#endif //BUILD_MLP_OP_PERF
+
 TEST(TypeNameUtils, GetTypeNameForOps) {
     // Test get_type_name for several ttnn op types
     std::string exp_type = std::string(ttsl::get_type_name<decltype(ttnn::exp)>());
@@ -258,6 +260,5 @@ TEST(TypeNameUtils, GetTypeNameForOps) {
     EXPECT_NE(matmul_type.find("matmul"), std::string::npos);
     EXPECT_NE(transpose_type.find("transpose"), std::string::npos);
 }
-#endif  // BUILD_MLP_OP_PERF
 
 }  // namespace ttnn::operations::binary::test
