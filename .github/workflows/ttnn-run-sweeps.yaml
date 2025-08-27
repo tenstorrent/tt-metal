@@ -549,7 +549,6 @@ on:
           - data_movement.interleaved_to_sharded.interleaved_to_sharded_e2e
       suite_name:
         description: "Which sweep suite to run?"
-        default: "nightly"
         type: string
   # schedule:
   #   - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
