@@ -619,7 +619,7 @@ jobs:
               name: "Wormhole N150 Sweeps",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-              tt-smi-cmd: "tt-smi-metal -r 0"
+              tt-smi-cmd: "tt-smi -r"
             },
             # {
             #   name: "Wormhole N300 Sweeps",
