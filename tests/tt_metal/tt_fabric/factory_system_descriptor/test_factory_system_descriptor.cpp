@@ -219,7 +219,7 @@ public:
         // Add internal connections within each board
         for (const auto& board_item : pod_descriptor.boards().board()) {
             int32_t board_id = board_item.tray_id();
-            std::string board_type = board_item.board_type();
+            const std::string& board_type = board_item.board_type();
             auto [board, board_connections] = build_board_connections(board_type, host_id, board_id);
             pod.boards.emplace(board_id, std::move(board));
             chip_connections.insert(chip_connections.end(), board_connections.begin(), board_connections.end());
@@ -410,10 +410,10 @@ private:
         std::unordered_map<uint32_t, Board>& boards,
         std::vector<LogicalChipConnectionPair>& chip_connections,
         uint32_t host_id) {
-        uint32_t board_0_id = connection.p_a().tray_id();
-        uint32_t port_0_id = connection.p_a().port_id();
-        uint32_t board_1_id = connection.p_b().tray_id();
-        uint32_t port_1_id = connection.p_b().port_id();
+        uint32_t board_0_id = connection.port_a().tray_id();
+        uint32_t port_0_id = connection.port_a().port_id();
+        uint32_t board_1_id = connection.port_b().tray_id();
+        uint32_t port_1_id = connection.port_b().port_id();
 
         Board& board_0 = boards.at(board_0_id);
         Board& board_1 = boards.at(board_1_id);
@@ -448,12 +448,12 @@ private:
         std::unordered_map<uint32_t, Pod>& pods,
         std::vector<LogicalChipConnectionPair>& chip_connections,
         const std::map<uint32_t, uint32_t>& host_ids_map) {
-        uint32_t pod_0_id = connection.p_a().pod_id();
-        uint32_t board_0_id = connection.p_a().tray_id();
-        uint32_t port_0_id = connection.p_a().port_id();
-        uint32_t pod_1_id = connection.p_b().pod_id();
-        uint32_t board_1_id = connection.p_b().tray_id();
-        uint32_t port_1_id = connection.p_b().port_id();
+        uint32_t pod_0_id = connection.port_a().pod_id();
+        uint32_t board_0_id = connection.port_a().tray_id();
+        uint32_t port_0_id = connection.port_a().port_id();
+        uint32_t pod_1_id = connection.port_b().pod_id();
+        uint32_t board_1_id = connection.port_b().tray_id();
+        uint32_t port_1_id = connection.port_b().port_id();
 
         // Get host IDs for both pods
         uint32_t host_0_id = host_ids_map.at(pod_0_id);
@@ -494,14 +494,14 @@ private:
         std::unordered_map<uint32_t, Superpod>& superpods,
         std::vector<LogicalChipConnectionPair>& chip_connections,
         const std::map<uint32_t, std::map<uint32_t, uint32_t>>& host_ids_map) {
-        uint32_t superpod_0_id = connection.p_a().superpod_id();
-        uint32_t pod_0_id = connection.p_a().pod_id();
-        uint32_t board_0_id = connection.p_a().tray_id();
-        uint32_t port_0_id = connection.p_a().port_id();
-        uint32_t superpod_1_id = connection.p_b().superpod_id();
-        uint32_t pod_1_id = connection.p_b().pod_id();
-        uint32_t board_1_id = connection.p_b().tray_id();
-        uint32_t port_1_id = connection.p_b().port_id();
+        uint32_t superpod_0_id = connection.port_a().superpod_id();
+        uint32_t pod_0_id = connection.port_a().pod_id();
+        uint32_t board_0_id = connection.port_a().tray_id();
+        uint32_t port_0_id = connection.port_a().port_id();
+        uint32_t superpod_1_id = connection.port_b().superpod_id();
+        uint32_t pod_1_id = connection.port_b().pod_id();
+        uint32_t board_1_id = connection.port_b().tray_id();
+        uint32_t port_1_id = connection.port_b().port_id();
 
         // Get host IDs for both superpod/pod combinations
         uint32_t host_0_id = host_ids_map.at(superpod_0_id).at(pod_0_id);
@@ -554,46 +554,7 @@ public:
 
         return descriptor;
     }
-
-private:
-    // Helper function to create a board from a pod descriptor
-    static Board create_board_from_descriptor(const tt::fsd::proto::PodDescriptor& pod_descriptor, uint32_t board_id) {
-        for (const auto& board : pod_descriptor.boards().board()) {
-            if (board.tray_id() == board_id) {
-                return create_board(board.board_type());
-            }
-        }
-        throw std::runtime_error("Board " + std::to_string(board_id) + " not found in pod descriptor");
-    }
-
-    // Helper function to get pod type from pod ID in superpod descriptor
-    static std::string get_pod_type_from_id(
-        const tt::fsd::proto::SuperPodDescriptor& superpod_descriptor, uint32_t pod_id) {
-        for (const auto& pod : superpod_descriptor.pods().pod()) {
-            if (pod.pod_id() == pod_id) {
-                return pod.pod_type();
-            }
-        }
-        throw std::runtime_error("Pod " + std::to_string(pod_id) + " not found in superpod descriptor");
-    }
-
-    // Helper function to get superpod type from superpod ID in cluster descriptor
-    static std::string get_superpod_type_from_id(
-        const tt::fsd::proto::ClusterDescriptor& cluster_descriptor, uint32_t superpod_id) {
-        for (const auto& superpod : cluster_descriptor.superpods().superpod()) {
-            if (superpod.superpod_id() == superpod_id) {
-                return superpod.superpod_type();
-            }
-        }
-        throw std::runtime_error("Superpod " + std::to_string(superpod_id) + " not found in cluster descriptor");
-    }
 };
-
-// Helper function to load deployment descriptor from textproto file
-tt::deployment::DeploymentDescriptor load_deployment_descriptor(const std::string& filename) {
-    return tt::tt_fabric::fsd_tests::HierarchicalSystemBuilder::load_descriptor_from_textproto<
-        tt::deployment::DeploymentDescriptor>(filename);
-}
 
 // SystemDescriptorEmitter class for generating factory system descriptors
 class SystemDescriptorEmitter {
@@ -622,17 +583,17 @@ public:
         for (const auto& [start, end] : chip_connections) {
             auto* connection = fsd.mutable_eth_connections()->add_connection();
 
-            auto* ep_a = connection->mutable_ep_a();
-            ep_a->set_host_id(start.host_id);
-            ep_a->set_tray_id(start.tray_id);
-            ep_a->set_asic_index(start.asic_channel.asic_index);
-            ep_a->set_chan_id(start.asic_channel.channel_id);
+            auto* endpoint_a = connection->mutable_endpoint_a();
+            endpoint_a->set_host_id(start.host_id);
+            endpoint_a->set_tray_id(start.tray_id);
+            endpoint_a->set_asic_index(start.asic_channel.asic_index);
+            endpoint_a->set_chan_id(start.asic_channel.channel_id);
 
-            auto* ep_b = connection->mutable_ep_b();
-            ep_b->set_host_id(end.host_id);
-            ep_b->set_tray_id(end.tray_id);
-            ep_b->set_asic_index(end.asic_channel.asic_index);
-            ep_b->set_chan_id(end.asic_channel.channel_id);
+            auto* endpoint_b = connection->mutable_endpoint_b();
+            endpoint_b->set_host_id(end.host_id);
+            endpoint_b->set_tray_id(end.tray_id);
+            endpoint_b->set_asic_index(end.asic_channel.asic_index);
+            endpoint_b->set_chan_id(end.asic_channel.channel_id);
         }
 
         // Write the protobuf message to textproto format
@@ -791,18 +752,18 @@ void validate_fsd_against_gsd(
     std::set<std::pair<PhysicalChannelConnection, PhysicalChannelConnection>> duplicate_generated_connections;
 
     for (const auto& connection : generated_fsd.eth_connections().connection()) {
-        const auto& ep_a = connection.ep_a();
-        const auto& ep_b = connection.ep_b();
+        const auto& endpoint_a = connection.endpoint_a();
+        const auto& endpoint_b = connection.endpoint_b();
 
-        uint32_t host_id_1 = ep_a.host_id();
-        uint32_t tray_id_1 = ep_a.tray_id();
-        uint32_t asic_index_1 = ep_a.asic_index();
-        uint32_t chan_id_1 = ep_a.chan_id();
+        uint32_t host_id_1 = endpoint_a.host_id();
+        uint32_t tray_id_1 = endpoint_a.tray_id();
+        uint32_t asic_index_1 = endpoint_a.asic_index();
+        uint32_t chan_id_1 = endpoint_a.chan_id();
 
-        uint32_t host_id_2 = ep_b.host_id();
-        uint32_t tray_id_2 = ep_b.tray_id();
-        uint32_t asic_index_2 = ep_b.asic_index();
-        uint32_t chan_id_2 = ep_b.chan_id();
+        uint32_t host_id_2 = endpoint_b.host_id();
+        uint32_t tray_id_2 = endpoint_b.tray_id();
+        uint32_t asic_index_2 = endpoint_b.asic_index();
+        uint32_t chan_id_2 = endpoint_b.chan_id();
 
         const std::string& hostname_1 = hosts[host_id_1].host();
         const std::string& hostname_2 = hosts[host_id_2].host();
@@ -1069,8 +1030,10 @@ void validate_fsd_against_gsd(
 }
 
 TEST(Cluster, TestFactorySystemDescriptor) {
-    auto deployment_descriptor = load_deployment_descriptor(
+    auto deployment_descriptor = tt::tt_fabric::fsd_tests::HierarchicalSystemBuilder::load_descriptor_from_textproto<
+        tt::deployment::DeploymentDescriptor>(
         "tests/tt_metal/tt_fabric/factory_system_descriptor/deployment/16_lb_deployment.textproto");
+    std::unordered_map<uint64_t, Board> board_map;
 
     // Indexed by superpod, the pod
     std::map<uint32_t, std::map<uint32_t, uint32_t>> host_ids_map = {
@@ -1232,7 +1195,8 @@ TEST(Cluster, TestFactorySystemDescriptor) {
 
 TEST(Cluster, TestFactorySystemDescriptor5LB) {
     // Load deployment descriptor for enhanced port information
-    auto deployment_descriptor = load_deployment_descriptor(
+    auto deployment_descriptor = tt::tt_fabric::fsd_tests::HierarchicalSystemBuilder::load_descriptor_from_textproto<
+        tt::deployment::DeploymentDescriptor>(
         "tests/tt_metal/tt_fabric/factory_system_descriptor/deployment/5_lb_deployment.textproto");
 
     // Indexed by superpod, the pod
@@ -1283,13 +1247,14 @@ TEST(Cluster, TestFactorySystemDescriptor5LB) {
     // Validate the FSD against the discovered GSD using the common utility function
     validate_fsd_against_gsd(
         "fsd/factory_system_descriptor_5lb.textproto",
-        "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/5_t3k_physical_desc.yaml",
+        "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/5_lb_physical_desc.yaml",
         deployment_descriptor);
 }
 
 TEST(Cluster, TestFactorySystemDescriptor5WHGalaxyYTorusSuperpod) {
     // Load deployment descriptor
-    auto deployment_descriptor = load_deployment_descriptor(
+    auto deployment_descriptor = tt::tt_fabric::fsd_tests::HierarchicalSystemBuilder::load_descriptor_from_textproto<
+        tt::deployment::DeploymentDescriptor>(
         "tests/tt_metal/tt_fabric/factory_system_descriptor/deployment/5_wh_galaxy_y_torus_deployment.textproto");
 
     // Indexed by superpod, the pod
@@ -1345,7 +1310,7 @@ TEST(Cluster, TestFactorySystemDescriptor5WHGalaxyYTorusSuperpod) {
     validate_fsd_against_gsd(
         "fsd/factory_system_descriptor_5_wh_galaxy_y_torus.textproto",
         "tests/tt_metal/tt_fabric/factory_system_descriptor/global_system_descriptors/"
-        "5_6u_physical_system_descriptor.yaml",
+        "5_wh_galaxy_y_torus_physical_desc.yaml",
         deployment_descriptor);
 }
 
