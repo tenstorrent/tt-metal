@@ -103,10 +103,12 @@ while [[ "$found" == "false" ]]; do
   while [ $attempt -le $max_retries ]; do
     echo "Attempt $attempt on $(git rev-parse HEAD)"
     echo "Run: $test"
-    if timeout -k 10s "$timeout_duration_iteration" $test; then
+    output_file="bisect_test_output.log"
+    if timeout -k 10s "$timeout_duration_iteration" $test >"$output_file" 2>&1; then
       timeout_rc=0
       break
     else
+      cat "$output_file"
       timeout_rc=$?
       echo "Test failed (code $timeout_rc), retrying…"
       attempt=$((attempt+1))
