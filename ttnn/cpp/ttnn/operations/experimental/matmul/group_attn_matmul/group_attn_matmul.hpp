@@ -22,15 +22,6 @@ struct GroupAttnMatmulOperation {
         std::optional<const DataType> output_dtype = std::nullopt,
         std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const CoreCoord& compute_with_storage_grid_size,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<const DataType> output_dtype = std::nullopt,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
 };
 
 }  // namespace operations::experimental::matmul
