@@ -84,14 +84,11 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
 
-    // interleaved addrgen
-    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    auto intermediate_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = intermediate_buffer_addr,
-        .page_size = tensor0_page_size,
-        .data_format = get_dataformat(cb0_id)};
-    auto output_tensor_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = output_buffer_addr, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<14>();
+    auto intermediate_tensor_addrgen =
+        TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr, tensor0_page_size);
+    constexpr auto output_tensor_args = TensorAccessorArgs<intermediate_tensor_args.next_compile_time_args_offset()>();
+    auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_buffer_addr, tensor0_page_size);
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open_finish();
