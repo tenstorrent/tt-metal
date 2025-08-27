@@ -37,3 +37,5 @@ echo "Running fabric unit tests now...";
 echo "Running fabric sanity tests now...";
 
 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
+
+./build/test/tt_metal/tt_fabric/fabric_elastic_channels_host_test 8 2 16 4352 1 4096 10000 4 4
