@@ -40,7 +40,7 @@ def test_all_gather_chunk_perf(
     output_shapes = [[1, 1, 352, 5120], [1, 1, 1024, 5120], [1, 1, 8192, 10240], [1, 1, 8192, 16384]]
     chunks_per_sync_list = ["MAX", 160, 80, 40, 20, 10]
     num_workers_per_link_list = [8, 4, 2, 1]
-    topology_list = ["ring"]
+    topology_list = ["linear"]
     for topology in topology_list:
         for i, ag_output_shape in enumerate(output_shapes):
             elements = total_elems(ag_output_shape)
@@ -150,6 +150,13 @@ def test_all_gather_chunk_perf(
                         f"{op_name}-{final_chunks_per_sync}-chunk-{num_workers_per_link}-workers-{topology}-std",
                         measured_std,
                     )
+            curr_time = time.strftime("%Y_%m_%d_%H%M%S")
+            csv_path = f"AllGatherPerformance_{curr_time}_{ag_output_shape}_{topology}.csv"
+            logger.info(f"Saving performance table to {csv_path}")
+            if len(rows) > 0:
+                df = pd.DataFrame(rows)
+                df.to_csv(csv_path, index=False)
+                logger.info(f"Saved performance table for {ag_output_shape} to {csv_path}")
 
             # After iterating over all chunks per sync, report best bandwidth for this shape
             if best_chunks_per_sync is not None:
