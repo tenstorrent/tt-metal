@@ -263,4 +263,3 @@ def test_all_gather_chunks_per_sync(
         chunks_per_sync=chunks_per_sync,
         num_workers_per_link=num_workers_per_link,
     )
-    ttnn.ReadDeviceProfiler(submesh_device)
