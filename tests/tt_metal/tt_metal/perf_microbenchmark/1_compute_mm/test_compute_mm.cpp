@@ -1684,7 +1684,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_and_transfer_data_
 
     // Write data to the mesh buffer
     auto& mesh_cq = device->mesh_command_queue();
-    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(mesh_cq, input_buffer, activations, true);
+    tt::tt_metal::mesh_cq.enqueue_write_mesh_buffer(input_buffer, activations.data(), true);
 
     return input_buffer;
 }
@@ -1715,7 +1715,7 @@ std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> create_and_transfer_data_
 
     // Write data to the mesh buffer
     auto& mesh_cq = device->mesh_command_queue();
-    tt::tt_metal::distributed::EnqueueWriteMeshBuffer(mesh_cq, input_buffer, activations, true);
+    tt::tt_metal::mesh_cq.enqueue_write_mesh_buffer(input_buffer, activations.data(), true);
 
     return input_buffer;
 }

@@ -194,10 +194,8 @@ TEST_F(MeshTraceTest2x4, EltwiseBinaryMeshTrace) {
     // Write inputs for all cores across the Mesh
     for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
         for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-            EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src0_bufs[col_idx * worker_grid_size.y + row_idx], src0_vec);
-            EnqueueWriteMeshBuffer(
-                mesh_device_->mesh_command_queue(), src1_bufs[col_idx * worker_grid_size.y + row_idx], src1_vec);
+            mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(src0_bufs[col_idx * worker_grid_size.y + row_idx], src0_vec.data(), true);
+            mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(src1_bufs[col_idx * worker_grid_size.y + row_idx], src1_vec.data(), true);
         }
     }
     // Compile workloads
@@ -481,7 +479,7 @@ TEST_F(MeshTraceTestSuite, DataCopyOnSubDevicesTrace) {
         // program goes through an independent path (UMD) and can go out of order wrt the
         // buffer data
         mesh_device_->set_sub_device_stall_group({{SubDeviceId{2}}});
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
+        mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(input_buf, src_vec.data(), true);
 
         for (auto device : mesh_device_->get_devices()) {
             tt::tt_metal::MetalContext::instance().get_cluster().write_core(

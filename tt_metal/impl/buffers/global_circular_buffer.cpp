@@ -133,8 +133,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         }
     }
     if (auto mesh_buffer = cb_config_buffer_.get_mesh_buffer()) {
-        distributed::EnqueueWriteMeshBuffer(
-            mesh_buffer->device()->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);
+        mesh_buffer->device()->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, cb_config_host_buffer.data(), false);
     } else {
         if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             detail::WriteToBuffer(*cb_config_buffer_.get_buffer(), cb_config_host_buffer);

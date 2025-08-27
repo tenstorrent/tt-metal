@@ -194,9 +194,9 @@ TEST_F(BigMeshDualRankTest2x4, SimpleShardedBufferTest) {
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
     // Write and read back
-    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src_vec);
+    mesh_device_->mesh_command_queue().enqueue_write_mesh_buffer(mesh_buffer, src_vec.data(), true);
     std::vector<uint32_t> dst_vec;
-    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer);
+    mesh_device_->mesh_command_queue().enqueue_read_mesh_buffer(dst_vec.data(), mesh_buffer, true);
 
     // The expectation is that EnqueueWriteMeshBuffer/EnqueueReadMeshBuffer
     // should handle sharding/unsharding transparently, so dst should equal src

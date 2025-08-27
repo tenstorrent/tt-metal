@@ -88,7 +88,7 @@ static void BM_write(
         mesh_device.get());
 
     for (auto _ : state) {
-        EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), device_buffer, host_buffer, true);
+        mesh_device->mesh_command_queue().enqueue_write_mesh_buffer(device_buffer, host_buffer.data(), true);
     }
 
     state.SetBytesProcessed(transfer_size * state.iterations());

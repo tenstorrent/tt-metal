@@ -251,7 +251,7 @@ int main(int argc, char** argv) {
         //                      Copy Input To DRAM or L1
         ////////////////////////////////////////////////////////////////////////////
         if (access_type == 0) {
-            tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, input_vec, false);
+            tt_metal::device->mesh_command_queue().enqueue_write_mesh_buffer(input_buffer, input_vec.data(), false);
             device->mesh_command_queue().finish();
         } else {
             uint64_t input_offset = 0;

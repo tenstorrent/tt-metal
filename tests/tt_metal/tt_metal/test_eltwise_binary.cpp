@@ -189,7 +189,7 @@ int main(int argc, char** argv) {
             ////////////////////////////////////////////////////////////////////////////
             std::vector<uint32_t> src0_vec = create_random_vector_of_bfloat16(
                 dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-            distributed::EnqueueWriteMeshBuffer(cq, src0_dram_buffer, src0_vec, false);
+            cq.enqueue_write_mesh_buffer(src0_dram_buffer, src0_vec.data(), false);
 
             std::vector<uint32_t> src1_vec;
             if (eltwise_op == EltwiseOp::MUL) {
@@ -199,7 +199,7 @@ int main(int argc, char** argv) {
             } else {
                 src1_vec = create_constant_vector_of_bfloat16(dram_buffer_size, 0.0f);
             }
-            distributed::EnqueueWriteMeshBuffer(cq, src1_dram_buffer, src1_vec, false);
+            cq.enqueue_write_mesh_buffer(src1_dram_buffer, src1_vec.data(), false);
 
             distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             std::vector<uint32_t> result_vec;

@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
             // Execute application
             if (!skip_write) {
                 auto t_begin = std::chrono::steady_clock::now();
-                tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), buffer, src_vec, false);
+                tt_metal::device->mesh_command_queue().enqueue_write_mesh_buffer(buffer, src_vec.data(), false);
                 device->mesh_command_queue().finish();
                 auto t_end = std::chrono::steady_clock::now();
                 auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();

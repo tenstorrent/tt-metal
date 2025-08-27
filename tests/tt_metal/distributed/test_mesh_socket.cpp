@@ -1556,7 +1556,7 @@ void test_multi_connection_multi_device_data_copy(
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
-    EnqueueWriteMeshBuffer(sender_mesh->mesh_command_queue(), sender_data_buffer, src_vec);
+    sender_mesh->mesh_command_queue().enqueue_write_mesh_buffer(sender_data_buffer, src_vec.data(), true);
 
     auto sender_mesh_workload = CreateMeshWorkload();
     auto recv_mesh_workload = CreateMeshWorkload();

@@ -123,7 +123,7 @@ int main(int argc, char** argv) {
             */
             std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
                 dram_buffer_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-            distributed::EnqueueWriteMeshBuffer(cq, input_dram_buffer, input_vec, false);
+            cq.enqueue_write_mesh_buffer(input_dram_buffer, input_vec.data(), false);
 
             const std::array<uint32_t, 8> runtime_args = {
                 l1_buffer->address(),
