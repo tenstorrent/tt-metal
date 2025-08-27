@@ -86,9 +86,6 @@ enum CBIndex : std::uint8_t;
 namespace tt_metal {
 class CommandQueue;
 class EnqueueProgramCommand;
-namespace detail {
-class Internal_;
-}  // namespace detail
 namespace experimental {
 class GlobalCircularBuffer;
 }  // namespace experimental
@@ -223,15 +220,6 @@ void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
 
 void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }
 
-class Internal_ {
-   public:
-       using map_type = decltype(detail::ProgramImpl::circular_buffer_by_id_);
-
-       static const map_type& get_circular_buffers_by_id(const Program& program) noexcept {
-           return program.internal_->circular_buffer_by_id_;
-       }
-};
-
 }  // namespace detail
 
 std::atomic<uint64_t> detail::ProgramImpl::program_counter = 0;
@@ -275,7 +263,7 @@ Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shar
 
     for (size_t i = 0; i < descriptor.semaphores.size(); i++) {
         auto& semaphore_descriptor = descriptor.semaphores[i];
-        add_semaphore(
+        internal_->add_semaphore(
             semaphore_descriptor.core_ranges, i, semaphore_descriptor.initial_value, semaphore_descriptor.core_type);
     }
 
@@ -975,10 +963,6 @@ void detail::ProgramImpl::add_semaphore(
     semaphores_.emplace_back(Semaphore(crs, semaphore_id, init_value, core_type));
 }
 
-void Program::add_semaphore(const CoreRangeSet &crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type) {
-    internal_->add_semaphore(crs, semaphore_id, init_value, core_type);
-}
-
 std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
     std::vector<std::vector<CoreCoord>> cores_in_program;
     std::vector<std::set<CoreCoord>> unique_cores;
@@ -1351,7 +1335,7 @@ void Program::generate_dispatch_commands(IDevice* device, bool use_prefetcher_ca
             "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate "
             "virtualization is enabled (only enabled on Wormhole and above).");
     }
-    auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
+    auto& cached_program_command_sequences = this->impl().get_cached_program_command_sequences();
     if (!cached_program_command_sequences.contains(command_hash)) {
         // Programs currently only support spanning a single sub-device
         auto sub_device_id = this->impl().determine_sub_device_ids(device).at(0);
@@ -1557,8 +1541,6 @@ bool detail::ProgramImpl::runs_on_noc_unicast_only_cores() {
                 .empty());
 }
 
-bool Program::runs_on_noc_unicast_only_cores() { return internal_->runs_on_noc_unicast_only_cores(); }
-
 // TODO: Too low level for program.cpp. Move this to HAL, once we have support.
 bool detail::ProgramImpl::runs_on_noc_multicast_only_cores() {
     return (
@@ -1568,8 +1550,6 @@ bool detail::ProgramImpl::runs_on_noc_multicast_only_cores() {
                 .empty());
 }
 
-bool Program::runs_on_noc_multicast_only_cores() { return internal_->runs_on_noc_multicast_only_cores(); }
-
 bool detail::ProgramImpl::kernel_binary_always_stored_in_ringbuffer() {
     // Active ethernet cores use a fixed address for the kernel binary, because they don't have enough memory to have
     // that big of a ringbuffer.
@@ -1578,10 +1558,6 @@ bool detail::ProgramImpl::kernel_binary_always_stored_in_ringbuffer() {
         not this->get_kernel_groups(MetalContext::instance().hal().get_programmable_core_type_index(
                                         HalProgrammableCoreType::ACTIVE_ETH))
                 .empty());
-}
-
-bool Program::kernel_binary_always_stored_in_ringbuffer() {
-    return internal_->kernel_binary_always_stored_in_ringbuffer();
 }
 
 Program::Program(Program &&other) noexcept = default;
@@ -1670,8 +1646,9 @@ void detail::ProgramImpl::set_kernels_bin_buffer(const std::shared_ptr<Buffer>& 
     kernels_buffer_.insert({buffer->device()->id(), buffer});
 }
 
-std::unordered_map<uint64_t, ProgramCommandSequence> &Program::get_cached_program_command_sequences() noexcept {
-    return internal_->cached_program_command_sequences_;
+std::unordered_map<uint64_t, ProgramCommandSequence>&
+detail::ProgramImpl::get_cached_program_command_sequences() noexcept {
+    return cached_program_command_sequences_;
 }
 
 void detail::ProgramImpl::set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state) {

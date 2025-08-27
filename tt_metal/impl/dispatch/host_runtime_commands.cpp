@@ -114,10 +114,10 @@ EnqueueProgramCommand::EnqueueProgramCommand(
 void EnqueueProgramCommand::process() {
     // Compute the total number of workers this program uses
     uint32_t num_workers = 0;
-    if (program.runs_on_noc_multicast_only_cores()) {
+    if (program.impl().runs_on_noc_multicast_only_cores()) {
         num_workers += calculate_expected_workers_to_finish(device, sub_device_id, HalProgrammableCoreType::TENSIX);
     }
-    if (program.runs_on_noc_unicast_only_cores()) {
+    if (program.impl().runs_on_noc_unicast_only_cores()) {
         num_workers += calculate_expected_workers_to_finish(device, sub_device_id, HalProgrammableCoreType::ACTIVE_ETH);
     }
     // Reserve space for this program in the kernel config ring buffer
@@ -133,7 +133,7 @@ void EnqueueProgramCommand::process() {
 
     // Access the program dispatch-command cache
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
-    auto& cached_program_command_sequence = program.get_cached_program_command_sequences().at(command_hash);
+    auto& cached_program_command_sequence = program.impl().get_cached_program_command_sequences().at(command_hash);
     // Update the generated dispatch commands based on the state of the CQ and the ring buffer
     program_dispatch::update_program_dispatch_commands(
         program.impl(),

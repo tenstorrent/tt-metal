@@ -257,6 +257,16 @@ public:
 
     KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
 
+    void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
+
+    // Should be const?
+    bool runs_on_noc_unicast_only_cores();
+    bool runs_on_noc_multicast_only_cores();
+
+    std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
+
+    bool kernel_binary_always_stored_in_ringbuffer();
+
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -337,12 +347,9 @@ private:
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
     std::unordered_map<uint64_t, ProgramCommandSequence> trace_cached_program_command_sequences_;
 
-    friend std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHandle id);
     friend void ValidateCircularBufferRegion(const Program& program, const IDevice* device);
 
     CBHandle add_circular_buffer_(const std::shared_ptr<CircularBuffer>& circular_buffer);
-
-    void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 
     void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
 
@@ -356,9 +363,6 @@ private:
 
     void set_launch_msg_sem_offsets();
 
-    bool runs_on_noc_unicast_only_cores();
-    bool runs_on_noc_multicast_only_cores();
-    bool kernel_binary_always_stored_in_ringbuffer();
     void set_program_offsets_and_sizes(uint32_t index, const ProgramOffsetsState& state);
     void set_program_attrs_across_core_types(IDevice* device);
 
@@ -375,7 +379,6 @@ private:
     friend HWCommandQueue;
     friend EnqueueProgramCommand;
     friend Program;
-    friend Internal_;
     friend distributed::MeshWorkload;
     friend distributed::MeshWorkloadImpl;
 };

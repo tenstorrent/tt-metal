@@ -1254,7 +1254,7 @@ uint32_t CreateSemaphore(
     }
     TT_FATAL(semaphore_id.has_value(), "Unable to initialize Semaphore!");
 
-    program.add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
+    program.impl().add_semaphore(crs, semaphore_id.value(), initial_value, core_type);
 
     return semaphore_id.value();
 }

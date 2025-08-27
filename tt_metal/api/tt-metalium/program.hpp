@@ -60,9 +60,6 @@ class ProgramImpl;
 
 void ValidateCircularBufferRegion(const Program& program, const IDevice* device);
 std::shared_ptr<Kernel> GetKernel(const Program& program, KernelHandle kernel_id);
-std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHandle id);
-
-class Internal_;
 }  // namespace detail
 
 // Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
@@ -130,27 +127,6 @@ private:
 
     // Stay
     friend void detail::ValidateCircularBufferRegion(const Program& program, const IDevice* device);
-
-    friend std::shared_ptr<Kernel> detail::GetKernel(const Program& program, KernelHandle kernel_id);
-
-    friend uint32_t CreateSemaphore(
-        Program& program,
-        const std::variant<CoreRange, CoreRangeSet>& core_spec,
-        uint32_t initial_value,
-        CoreType core_type);
-
-    void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
-
-    bool runs_on_noc_unicast_only_cores();
-    bool runs_on_noc_multicast_only_cores();
-    std::unordered_map<uint64_t, ProgramCommandSequence>& get_cached_program_command_sequences() noexcept;
-    bool kernel_binary_always_stored_in_ringbuffer();
-
-    friend HWCommandQueue;
-    friend EnqueueProgramCommand;
-    friend distributed::MeshWorkload;
-    friend distributed::MeshWorkloadImpl;
-    friend detail::Internal_;
 };
 
 }  // namespace tt_metal

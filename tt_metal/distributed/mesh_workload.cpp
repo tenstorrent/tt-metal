@@ -228,7 +228,7 @@ bool MeshWorkloadImpl::runs_on_noc_multicast_only_cores() {
     // that can be multicasted to
     bool ret = false;
     for (auto& [device_range, program] : programs_) {
-        ret = ret || (program.runs_on_noc_multicast_only_cores());
+        ret = ret || (program.impl().runs_on_noc_multicast_only_cores());
     }
     return ret;
 }
@@ -239,7 +239,7 @@ bool MeshWorkloadImpl::runs_on_noc_unicast_only_cores() {
     // that can only be unicasted to
     bool ret = false;
     for (auto& [device_range, program] : programs_) {
-        ret = ret || (program.runs_on_noc_unicast_only_cores());
+        ret = ret || (program.impl().runs_on_noc_unicast_only_cores());
     }
     return ret;
 }
@@ -250,7 +250,7 @@ bool MeshWorkloadImpl::kernel_binary_always_stored_in_ringbuffer() {
     // any program in the MeshWorkload
     bool stored_in_ring_buf = true;
     for (auto& [device_range, program] : programs_) {
-        stored_in_ring_buf &= program.kernel_binary_always_stored_in_ringbuffer();
+        stored_in_ring_buf &= program.impl().kernel_binary_always_stored_in_ringbuffer();
     }
     return stored_in_ring_buf;
 }
@@ -337,7 +337,7 @@ std::unordered_set<SubDeviceId> MeshWorkloadImpl::determine_sub_device_ids(MeshD
 ProgramCommandSequence& MeshWorkloadImpl::get_dispatch_cmds_for_program(Program& program, uint64_t command_hash) {
     ZoneScoped;
     // Get the dispatch commands associated with this program
-    return program.get_cached_program_command_sequences().at(command_hash);
+    return program.impl().get_cached_program_command_sequences().at(command_hash);
 }
 
 // The functions below are for testing purposes only
