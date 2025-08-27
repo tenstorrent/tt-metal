@@ -3,6 +3,7 @@
 
 import pytest
 
+from helpers.format_arg_mapping import Transpose
 from helpers.format_config import DataFormat
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import (
@@ -35,8 +36,8 @@ def report_fixture():
     formats=input_output_formats(
         [DataFormat.Bfp8_b, DataFormat.Float16, DataFormat.Int32],
     ),
-    unpack_transpose_faces=[False, True],
-    unpack_transpose_within_face=[False, True],
+    unpack_transpose_faces=[Transpose.No, Transpose.Yes],
+    unpack_transpose_within_face=[Transpose.No, Transpose.Yes],
 )
 def test_perf_unpack_transpose(
     report_fixture,
@@ -46,10 +47,16 @@ def test_perf_unpack_transpose(
     unpack_transpose_within_face,
 ):
 
-    if formats.input == DataFormat.Int32 and unpack_transpose_within_face:
+    if (
+        formats.input == DataFormat.Int32
+        and unpack_transpose_within_face == Transpose.Yes
+    ):
         pytest.skip("Unpack within face not supported for Int32")
 
-    if not unpack_transpose_faces and not unpack_transpose_within_face:
+    if (
+        unpack_transpose_faces == Transpose.No
+        and unpack_transpose_within_face == Transpose.No
+    ):
         pytest.skip(
             "Skipping test for unpack_transpose_faces=False and unpack_transpose_within_face=False"
         )

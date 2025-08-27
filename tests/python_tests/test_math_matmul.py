@@ -136,8 +136,8 @@ def test_math_matmul(
         "rt_dim": matmul_dims["rt_dim"],
         "ct_dim": matmul_dims["ct_dim"],
         "kt_dim": matmul_dims["kt_dim"],
-        "unpack_transpose_faces": transpose.value,
-        "unpack_transpose_within_face": transpose.value,  # matmul transposes both faces and within faces, there is no option for one or the other
+        "unpack_transpose_faces": transpose,
+        "unpack_transpose_within_face": transpose,  # matmul transposes both faces and within faces, there is no option for one or the other
         "throttle": throttle,
     }
 
