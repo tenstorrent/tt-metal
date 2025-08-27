@@ -372,26 +372,15 @@ void validate_preallocated_output(
     // Framework-level validation logic
     auto first_input_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
 
-    // Use reflection to validate each tensor in the return value
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&first_input_tensor](const Tensor& preallocated_tensor) {
-            // Device compatibility
             TT_FATAL(
                 preallocated_tensor.device() == first_input_tensor.device(),
                 "Preallocated output tensor must be on the same device as input tensors");
 
-            // Memory layout compatibility
-            TT_FATAL(
-                preallocated_tensor.memory_config().memory_layout() ==
-                    first_input_tensor.memory_config().memory_layout(),
-                "Preallocated output tensor memory layout must be compatible");
-
-            // Basic allocation check
             TT_FATAL(preallocated_tensor.is_allocated(), "Preallocated output tensor must be allocated");
         },
         preallocated_output);
-
-    // Additional operation-specific validation can be added here
 }
 
 template <DeviceOperationConcept device_operation_t>
@@ -405,12 +394,10 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
     typename device_operation_t::tensor_return_value_t tensor_return_value;
 
     if (preallocated_output.has_value()) {
-        // Framework-level validation
         validate_preallocated_output<device_operation_t>(
             operation_attributes, tensor_args, preallocated_output.value());
         tensor_return_value = preallocated_output.value();
     } else {
-        // Original behavior - let operation create its own output
         tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     }
 
@@ -447,7 +434,6 @@ typename device_operation_t::tensor_return_value_t invoke(
 
     TT_FATAL(std::holds_alternative<tt::tt_metal::DeviceStorage>(storage), "Unsupported storage type");
 
-    // Pass preallocated output to launch function
     tensor_return_value_t tensor_return_value =
         detail::launch_on_device<device_operation_t>(cq_id, operation_attributes, tensor_args, preallocated_output);
 
@@ -461,24 +447,6 @@ typename device_operation_t::tensor_return_value_t invoke(
 
     tt::tt_metal::GraphTracker::instance().track_function_end(tensor_return_value);
     return tensor_return_value;
-}
-
-// Convenience overloads to maintain backward compatibility
-
-// Existing API (unchanged)
-template <DeviceOperationConcept device_operation_t>
-auto invoke(QueueId cq_id, const auto& operation_attributes, const auto& tensor_args) {
-    return invoke(cq_id, operation_attributes, tensor_args, std::nullopt);
-}
-
-// New API with preallocated output
-template <DeviceOperationConcept device_operation_t>
-auto invoke(
-    QueueId cq_id,
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args,
-    const typename device_operation_t::tensor_return_value_t& preallocated_output) {
-    return invoke(cq_id, operation_attributes, tensor_args, std::optional{preallocated_output});
 }
 
 }  // namespace detail
