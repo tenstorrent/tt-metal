@@ -401,16 +401,6 @@ BinaryDeviceOperation::invoke(
             "If both output dtype and output tensor provided dtype should match");
     }
 
-    TT_FATAL(
-        input_tensor_a.storage_type() == StorageType::DEVICE,
-        "Input tensor A must be on device, got storage type: {}",
-        input_tensor_a.storage_type());
-
-    TT_FATAL(
-        input_tensor_b.storage_type() == StorageType::DEVICE,
-        "Input tensor B must be on device, got storage type: {}",
-        input_tensor_b.storage_type());
-
     CoreRangeSet worker_grid;
     // We assert all shard specs are the same if sharded, so only need to check the first shard spec
     // This will create the worker grid based on the used sub-devices when sharded
