@@ -206,7 +206,7 @@ ttnn::Tensor ExecutePermute::invoke(
 
 ttnn::Tensor ExecutePermute::invoke(
     const ttnn::Tensor& input_tensor, const ttnn::SmallVector<int64_t>& dims, const std::optional<float>& pad_value) {
-    return invoke(input_tensor, dims, std::nullopt, pad_value);
+    return invoke(DefaultQueueId, input_tensor, dims, std::nullopt, pad_value);
 }
 
 }  // namespace ttnn::operations::data_movement
