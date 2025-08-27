@@ -65,14 +65,14 @@ graph_descriptors {
   name: "G0" type: "POD"
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-  graph_topology: ALL_TO_ALL
+  graph_topology: { layout_type: ALL_TO_ALL }
   channels: { count: 2 policy: STRICT }
 }
 graph_descriptors {
   name: "G1" type: "CLUSTER"
   instances { graph { graph_descriptor: "G0" graph_id: 0 } }
   instances { graph { graph_descriptor: "G0" graph_id: 1 } }
-  graph_topology: ALL_TO_ALL
+  graph_topology: { layout_type: ALL_TO_ALL }
   channels: { count: 2 policy: RELAXED }
 }
 top_level_instance { graph { graph_descriptor: "G1" graph_id: 0 } }
@@ -100,7 +100,7 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "M0" id: 1 } }
   instances { mesh { mesh_descriptor: "M0" id: 2 } }
   instances { mesh { mesh_descriptor: "M0" id: 3 } }
-  topology: ALL-TO-ALL
+  topology: { layout_type: ALL-TO-ALL }
   channels { count: 2 policy: STRICT }
 }
 
@@ -111,7 +111,7 @@ graph_descriptors {
   instances { graph { graph_descriptor: "G0" id: 1 } }
   instances { graph { graph_descriptor: "G0" id: 2 } }
   instances { graph { graph_descriptor: "G0" id: 3 } }
-  topology: ALL-TO-ALL
+  topology: { layout_type: ALL-TO-ALL }
   channels { count: 2 policy: STRICT }
 }
 

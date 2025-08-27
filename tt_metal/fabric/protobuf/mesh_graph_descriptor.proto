@@ -33,11 +33,13 @@ message MeshGraphDescriptor {
     // Required fields inside each MeshDescriptor: name, arch, device_topology.dims,
     // channels.count, and host_topology.dims.
     repeated MeshDescriptor mesh_descriptors = 1;
+
     // Optional logical groupings and connectivity across meshes/graphs.
     // Each GraphDescriptor groups instances (all meshes OR all graphs) and defines
     // connectivity either via shorthand graph_topology (+ usually channels) or via
     // explicit connections.
     repeated GraphDescriptor graph_descriptors = 2;
+
     // Single root NodeRef to instantiate (mesh or graph instance).
     // Exactly one root should be provided.
     NodeRef top_level_instance = 3;
@@ -65,28 +67,34 @@ message MeshGraphDescriptor {
 // - If device_topology.types is shorter than dims, unspecified entries default to LINE.
 // - Device indices for express links are linearized (row-major convention).
 message MeshDescriptor {
-  // Logical identifier used in MeshRef.mesh_descriptor (e.g., "M0").
-  string name = 1;
-  // Target device architecture for this mesh. Valid values: WORMHOLE_B0, BLACKHOLE.
-  Architecture arch = 2;
-  // Device grid shape. `dims` required; `types` optional per dimension (LINE/RING).
-  // When `types` is omitted or shorter than `dims`, treat missing entries as LINE.
-  TorusTopology device_topology = 3;
-  // Required per-neighbor link count; optional Policy controls enforcement.
-  // If policy is omitted, treat as STRICT unless your control plane overrides this default.
-  Channels channels = 4;
-  // Host layout shape spanning this mesh (dims only).
-  MeshTopology host_topology = 5;
-  message ExpressConnection {
-    // Explicit intra-mesh express link from device `src` to device `dst`.
-    // `src`/`dst` are device indices in this mesh (linearized, row-major convention).
-    int32 src = 1;
-    int32 dst = 2;
-  }
-  // Optional list of explicit intra-mesh express links.
-  repeated ExpressConnection express_connections = 7;
-}
+    // Logical identifier used in MeshRef.mesh_descriptor (e.g., "M0").
+    string name = 1;
 
+    // Target device architecture for this mesh. Valid values: WORMHOLE_B0, BLACKHOLE.
+    Architecture arch = 2;
+
+    // Device grid shape. `dims` required; `types` optional per dimension (LINE/RING).
+    // When `types` is omitted or shorter than `dims`, treat missing entries as LINE.
+    TorusTopology device_topology = 3;
+
+    // Required per-neighbor link count; optional Policy controls enforcement.
+    // If policy is omitted, treat as STRICT unless your control plane overrides this default.
+    Channels channels = 4;
+
+    // Host layout shape spanning this mesh (dims only).
+    MeshTopology host_topology = 5;
+
+    message ExpressConnection {
+        // Explicit intra-mesh express link from device `src` to device `dst`.
+        // `src`/`dst` are device indices in this mesh (linearized, row-major convention).
+        int32 src = 1;
+
+        int32 dst = 2;
+    }
+
+    // Optional list of explicit intra-mesh express links.
+    repeated ExpressConnection express_connections = 7;
+}
 
 // -----------------------------------------------------------------------------
 // GraphDescriptor
@@ -128,18 +136,23 @@ message MeshDescriptor {
 // - If `instances` are GraphRefs, their referenced GraphDescriptors should share the
 //   same grouping `type` value as this GraphDescriptor to preserve uniformity.
 message GraphDescriptor {
-  // Logical identifier used in GraphRef.graph_descriptor (e.g., "G0").
-  string name = 1;
-  // Freeform grouping label (e.g., "POD", "SUPERPOD", "CLUSTER").
-  string type = 2;
-  // Members of this graph. All entries must be the same NodeRef kind (mesh OR graph).
-  repeated NodeRef instances = 3;
-  // Default per-edge channels when using graph_topology; optional otherwise.
-  optional Channels channels = 4;
-  // Shorthand connectivity pattern (e.g., ALL_TO_ALL, RING). Use with `channels`.
-  optional GraphTopology graph_topology = 5;
-  // Explicit connections as an alternative to `graph_topology`.
-  repeated Connection connections = 6;
+    // Logical identifier used in GraphRef.graph_descriptor (e.g., "G0").
+    string name = 1;
+
+    // Freeform grouping label (e.g., "POD", "SUPERPOD", "CLUSTER").
+    string type = 2;
+
+    // Members of this graph. All entries must be the same NodeRef kind (mesh OR graph).
+    repeated NodeRef instances = 3;
+
+    // Default per-edge channels when using graph_topology; optional otherwise.
+    optional Channels channels = 4;
+
+    // Shorthand connectivity pattern (e.g., ALL_TO_ALL, RING). Use with `channels`.
+    optional GraphTopology graph_topology = 5;
+
+    // Explicit connections as an alternative to `graph_topology`.
+    repeated Connection connections = 6;
 }
 
 // -----------------------------------------------------------------------------
@@ -197,47 +210,54 @@ message GraphDescriptor {
 //   }
 //
 // Common pitfalls:
-// - Don’t confuse descriptor identifiers: use MeshDescriptor.name/GraphDescriptor.name
+// - Don't confuse descriptor identifiers: use MeshDescriptor.name/GraphDescriptor.name
 //   in references via mesh_descriptor/graph_descriptor; instance ids go in mesh_id/graph_id.
 // - Do not mix MeshRef and GraphRef types within a single GraphDescriptor.instances list.
 // - Only set device_id on MeshRef; not on GraphRef.
 // - Ensure dims and channels.count are positive; ensure device_id is within range.
 message NodeRef {
-  oneof node_ref {
-    MeshRef mesh = 1;
-    GraphRef graph = 2;
-  }
+    oneof node_ref {
+        MeshRef mesh = 1;
+
+        GraphRef graph = 2;
+    }
 }
 
 message GraphRef {
-  // Name of target GraphDescriptor (must match `GraphDescriptor.name`).
-  string graph_descriptor = 1;
-  // Instance index of the referenced graph.
-  int32 graph_id = 2;
+    // Name of target GraphDescriptor (must match `GraphDescriptor.name`).
+    string graph_descriptor = 1;
 
-  oneof sub_ref {
-    // Optional nested reference to a sub-mesh (and optionally device) within this graph.
-    MeshRef mesh = 3;
-    // Optional nested reference to a sub-graph within this graph.
-    GraphRef graph = 4;
-  }
+    // Instance index of the referenced graph.
+    int32 graph_id = 2;
 
+    oneof sub_ref {
+        // Optional nested reference to a sub-mesh (and optionally device) within this graph.
+        MeshRef mesh = 3;
+
+        // Optional nested reference to a sub-graph within this graph.
+        GraphRef graph = 4;
+    }
 }
 
 message MeshRef {
-  // Name of target MeshDescriptor (must match `MeshDescriptor.name`).
-  string mesh_descriptor = 1;
-  // Instance index of the referenced mesh.
-  int32 mesh_id = 2;
-  // Optional device index within the mesh (linearized).
-  optional int32 device_id = 3;
+    // Name of target MeshDescriptor (must match `MeshDescriptor.name`).
+    string mesh_descriptor = 1;
+
+    // Instance index of the referenced mesh.
+    int32 mesh_id = 2;
+
+    // Optional device index within the mesh (linearized).
+    optional int32 device_id = 3;
 }
 
+// MeshTopology describes the host layout that spans this mesh.
+// - dims: required list of positive integers giving the size along each dimension.
+// Example: dims: [1, 2] indicates two host partitions arranged in a 1x2 layout.
 message MeshTopology {
-  // Required mesh dimensions (positive integers). Represents the host layout that spans
-  // this mesh (no per-dimension type). Example: dims: [1, 2] indicates two host
-  // partitions arranged in a 1x2 layout.
-  repeated int32 dims = 1;  // required
+    // Required mesh dimensions (positive integers). Represents the host layout that spans
+    // this mesh (no per-dimension type). Example: dims: [1, 2] indicates two host
+    // partitions arranged in a 1x2 layout.
+    repeated int32 dims = 1;  // required
 }
 
 // TorusTopology describes the device grid and per-dimension wrap behavior.
@@ -248,18 +268,20 @@ message MeshTopology {
 // - LINE: endpoints are not connected across the boundary (no wrap-around link).
 // - RING: endpoints wrap and connect, forming a torus in that dimension.
 // Examples:
-//   device_topology { dims: [ 8, 4 ] types: [ LINE, RING ] }
+//   device_topology { dims: [ 8, 4 ] dim_types: [ LINE, RING ] }
 //   device_topology { dims: [ 2, 3, 2 ] }  // all LINE implicitly
 message TorusTopology {
-  enum Type {
-    INVALID_TYPE = 0;
-    LINE = 1;
-    RING = 2;
-  }
-  // Required device dimensions.
-  repeated int32 dims = 3;  // required
-  // Optional per-dimension types; align by index with `dims`. Missing entries imply LINE.
-  repeated Type types = 4;
+    enum Type {
+        INVALID_TYPE = 0;
+        LINE = 1;
+        RING = 2;
+    }
+
+    // Required device dimensions.
+    repeated int32 dims = 3;  // required
+
+    // Optional per-dimension types; align by index with `dims`. Missing entries imply LINE.
+    repeated Type dim_types = 4;
 }
 
 // GraphTopology is a shorthand to generate connections among instances.
@@ -269,18 +291,23 @@ message TorusTopology {
 // Usage:
 // - Provide `channels` alongside `graph_topology` on GraphDescriptor to set edge lanes/policy.
 // - Use explicit `connections` instead when you need fine-grained or partial connectivity.
-enum GraphTopology {
-  INVALID_TOPOLOGY = 0;
-  ALL_TO_ALL = 1;
-  RING = 2;
+message GraphTopology {
+    enum Type {
+        INVALID_TYPE = 0;
+        ALL_TO_ALL = 1;
+        RING = 2;
+    }
+
+    // Required graph topology type.
+    Type layout_type = 1;
 }
 
 // Architecture selects the target device family for a mesh.
 // Use exact spellings as defined here. The control plane may validate compatibility.
 enum Architecture {
-  INVALID_ARCHITECTURE = 0;
-  WORMHOLE_B0 = 1;
-  BLACKHOLE = 2;
+    INVALID_ARCHITECTURE = 0;
+    WORMHOLE_B0 = 1;
+    BLACKHOLE = 2;
 }
 
 // Channels specify the per-connection lane count and enforcement policy.
@@ -293,10 +320,11 @@ enum Architecture {
 //   channels { count: 2 policy: STRICT }
 //   channels { count: 4 }  // policy omitted → treat as STRICT by default
 message Channels {
-  // Required per-connection lane count.
-  int32 count = 1;
-  // Optional enforcement policy (STRICT/RELAXED).
-  optional Policy policy = 2;
+    // Required per-connection lane count.
+    int32 count = 1;
+
+    // Optional enforcement policy (STRICT/RELAXED).
+    optional Policy policy = 2;
 }
 
 // Policy determines whether link-lane requirements must be strictly met.
@@ -307,9 +335,9 @@ message Channels {
 // - If Channels.policy is omitted in textproto, treat as STRICT unless the control
 //   plane overrides this default.
 enum Policy {
-  INVALID_POLICY = 0;
-  STRICT = 1;
-  RELAXED = 2;
+    INVALID_POLICY = 0;
+    STRICT = 1;
+    RELAXED = 2;
 }
 
 // Connection defines an explicit edge between NodeRefs.
@@ -334,11 +362,13 @@ enum Policy {
 //     directional: false
 //   }
 message Connection {
-  // Typically two NodeRefs; multi-endpoint not recommended unless explicitly supported.
-  repeated NodeRef nodes = 1;
-  // Required channels for this edge.
-  Channels channels = 2;
-  // Optional directionality; defaults to false (undirected) when absent.
-  optional bool directional = 3;
+    // Typically two NodeRefs; multi-endpoint not recommended unless explicitly supported.
+    repeated NodeRef nodes = 1;
+
+    // Required channels for this edge.
+    Channels channels = 2;
+
+    // Optional directionality; defaults to false (undirected) when absent.
+    optional bool directional = 3;
 }
 

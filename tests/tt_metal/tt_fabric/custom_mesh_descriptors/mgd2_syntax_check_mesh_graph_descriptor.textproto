@@ -5,7 +5,7 @@ mesh_descriptors {
   arch: WORMHOLE_B0
   device_topology {
     dims: [ 8, 4 ]
-    types: [ LINE, RING ]
+    dim_types: [ LINE, RING ]
   }
   host_topology   { dims: [1, 1] }
   channels {
@@ -93,7 +93,7 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "M2" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M3" mesh_id: 0 } }
   instances { mesh { mesh_descriptor: "M4" mesh_id: 0 } }
-  graph_topology: ALL_TO_ALL
+  graph_topology: { layout_type: ALL_TO_ALL }
 }
 
 graph_descriptors {
@@ -102,7 +102,7 @@ graph_descriptors {
   channels { count: 2 policy: RELAXED }
   instances { graph { graph_descriptor: "G1" graph_id: 0 } }
   instances { graph { graph_descriptor: "G0" graph_id: 0 } }
-  graph_topology: ALL_TO_ALL
+  graph_topology: { layout_type: ALL_TO_ALL }
 }
 
 # --- Instantiation ----------------------------------------------------------
