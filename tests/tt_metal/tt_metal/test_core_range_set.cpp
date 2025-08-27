@@ -41,7 +41,7 @@
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
 
-// Access to internal API: ProgramImpl::get_sem_base_addr
+// Access to internal API: ProgramImpl::get_sem_base_addr, ProgramImpl::get_sem_size
 #include "impl/program/program_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -94,7 +94,7 @@ void check_semaphores_are_initialized(
                     device,
                     logical_core,
                     sem_base_addr,
-                    program.get_sem_size(device, logical_core, CoreType::WORKER),
+                    program.impl().get_sem_size(device, logical_core, CoreType::WORKER),
                     res);
                 std::vector<uint32_t> filtered_res;
                 static uint32_t num_u32_to_skip =
