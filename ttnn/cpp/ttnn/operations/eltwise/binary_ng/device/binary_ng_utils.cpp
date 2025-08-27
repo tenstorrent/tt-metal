@@ -4,6 +4,7 @@
 
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/assert.hpp>
 
 #include <fmt/core.h>
@@ -532,7 +533,8 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const
     if (dtype == DataType::UINT32) {
         return std::bit_cast<uint32_t>(scalar);
     }
-    return pack_two_bfloat16_into_uint32({scalar, scalar});
+    uint16_t bf16_bits = (*reinterpret_cast<const uint32_t*>(&scalar)) >> 16;
+    return pack_two_bfloat16_into_uint32({bf16_bits, bf16_bits});
 }
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);
