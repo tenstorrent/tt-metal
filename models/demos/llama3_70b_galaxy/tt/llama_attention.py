@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import math
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
@@ -23,6 +22,8 @@ class TtLlamaAttention(LightweightModule):
         use_paged_kv_cache=False,
         prefetcher_setup=None,
         tt_ccl=None,
+        scaling_tensor_q=None,
+        scaling_tensor_k=None,
     ):
         super().__init__()
 
@@ -508,10 +509,6 @@ class TtLlamaAttention(LightweightModule):
             )
 
             breakpoint()
-
-            # Deallocate scaling tensors
-            ttnn.deallocate(scaling_tensor_q)
-            ttnn.deallocate(scaling_tensor_k)
 
         # print("done create qkv heads")
         ttnn.deallocate(xqkv_fused_sharded)
