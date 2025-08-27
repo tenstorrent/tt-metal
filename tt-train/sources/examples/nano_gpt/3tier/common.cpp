@@ -40,11 +40,13 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
-    // support for gpt2 only
-    if (config.model_type != "gpt2") {
-        throw std::runtime_error("Unsupported model type: " + config.model_type);
+    if (config.model_type == "gpt2") {
+        config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
+    } else if (config.model_type == "llama") {
+        config.transformer_config = ttml::models::llama::read_config(training_config["transformer_config"]);
+    } else {
+        throw std::runtime_error("Unknown model type: " + config.model_type);
     }
-    config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
 
     auto multihost_config = yaml_config["multihost_config"];
     config.enable_mpi = multihost_config["enabled"].as<bool>(config.enable_mpi);
@@ -77,7 +79,16 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
     } else {
         text_or_tokens = ttml::datasets::load_tokens_from_space_separated_file(config.data_path);
     }
-    auto sequence_length = config.transformer_config.max_sequence_length;
+    auto sequence_length = std::visit(
+        [&](auto &&arg) {
+            if constexpr (requires { arg.max_sequence_length; }) {
+                return arg.max_sequence_length;
+            } else {
+                throw std::runtime_error(
+                    "Unsupported transformer configuration type: " + std::string(typeid(arg).name()));
+            }
+        },
+        config.transformer_config);
 
     auto create_dataset_and_tokenizer =
         [](const auto &text, const auto sequence_length, const auto &tokenizer_path, const auto &tokenizer_type) {
