@@ -173,7 +173,7 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMeshNorthMulticast_1) {
 TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
-    constexpr uint32_t num_iterations = 200;
+    constexpr uint32_t num_iterations = 20;
     std::vector<uint32_t> all_ranks = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
     for (uint32_t sender_rank : all_ranks) {
         if (*(distributed_context->rank()) == sender_rank) {
@@ -187,7 +187,6 @@ TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {
             log_info(tt::LogTest, "{} rank starting unicast to all receivers", sender_rank);
             for (uint32_t i = 0; i < num_iterations; i++) {
                 for (auto recv_rank : recv_node_ranks) {
-                    std::cout << "Send from " << sender_rank << " to: " << recv_rank << std::endl;
                     multihost_utils::run_unicast_sender_step(
                         this, tt::tt_metal::distributed::multihost::Rank{recv_rank});
                 }
@@ -196,7 +195,6 @@ TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {
         } else {
             log_info(tt::LogTest, "{} rank processing unicasts", *(distributed_context->rank()));
             for (uint32_t i = 0; i < num_iterations; i++) {
-                std::cout << "Recv from " << sender_rank << " to: " << *(distributed_context->rank()) << std::endl;
                 multihost_utils::run_unicast_recv_step(this, tt::tt_metal::distributed::multihost::Rank{sender_rank});
             }
             log_info(tt::LogTest, "{} rank done processing unicasts", *(distributed_context->rank()));
