@@ -278,7 +278,7 @@ void append_routing_plane_connection_manager_rt_args(
 
     // 2) Append additional info for 2D Mesh
     if (fabric_context.is_2D_routing_enabled()) {
-        auto kernel = tt::tt_metal::detail::GetKernel(worker_program, kernel_id);
+        auto kernel = worker_program.get_kernel(kernel_id);
         kernel->add_defines({{"FABRIC_2D", "1"}});
         if (fabric_context.is_dynamic_routing_enabled()) {
             kernel->add_defines({{"FABRIC_2D_DYNAMIC", "1"}});

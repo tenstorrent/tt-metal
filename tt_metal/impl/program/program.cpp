@@ -207,10 +207,6 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
 }  // namespace
 namespace detail {
 
-std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id) {
-    return program.get_kernel(kernel_id);
-}
-
 // Checks that circular buffers do not grow into L1 buffer space
 void ValidateCircularBufferRegion(const Program &program, const IDevice* device) {
     program.internal_->validate_circular_buffer_region(device);

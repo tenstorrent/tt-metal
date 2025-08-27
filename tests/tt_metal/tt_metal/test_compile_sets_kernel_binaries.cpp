@@ -176,12 +176,9 @@ int main(int argc, char** argv) {
                     kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].has_value() and
                     kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].has_value(),
                 "Error");
-            auto compute_kernel =
-                tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-            auto riscv0_kernel =
-                tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-            auto riscv1_kernel =
-                tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+            auto compute_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
+            auto riscv0_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
+            auto riscv1_kernel = program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
 
             // Run iteration to get golden
             uint32_t mask =
@@ -234,12 +231,12 @@ int main(int argc, char** argv) {
                                 tt_metal::HalProgrammableCoreType::TENSIX);
                         const tt_metal::KernelGroup* kernel_group =
                             program.impl().kernels_on_core(core, programmable_core_index);
-                        auto compute_kernel = tt_metal::detail::GetKernel(
-                            program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
-                        auto riscv0_kernel = tt_metal::detail::GetKernel(
-                            program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
-                        auto riscv1_kernel = tt_metal::detail::GetKernel(
-                            program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
+                        auto compute_kernel =
+                            program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_COMPUTE].value());
+                        auto riscv0_kernel =
+                            program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM0].value());
+                        auto riscv1_kernel =
+                            program.get_kernel(kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
                         TT_FATAL(
                             tt_metal::KernelImpl::from(*compute_kernel).binaries(mask) == compute_binaries.at(mask),
                             "Error");

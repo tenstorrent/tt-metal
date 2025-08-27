@@ -10,6 +10,7 @@
 
 namespace tt::tt_metal::distributed {
 
+class MeshWorkload;
 class MeshWorkloadImpl;
 
 class MeshCommandQueue;

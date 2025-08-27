@@ -286,9 +286,9 @@ bool flatten_stress(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32
             src_dram_buffer.get(), (uint32_t)0, num_tiles_r, num_tiles_c, num_bytes_per_tensor_row};
         *writer_runtime_args = {dst_dram_buffer.get(), (uint32_t)0, num_tiles * 32};
 
-        SetRuntimeArgs(device, tt_metal::detail::GetKernel(program_, flatten_kernel), core, compute_runtime_args);
+        SetRuntimeArgs(device, program_.get_kernel(flatten_kernel), core, compute_runtime_args);
 
-        SetRuntimeArgs(device, tt_metal::detail::GetKernel(program_, unary_writer_kernel), core, writer_runtime_args);
+        SetRuntimeArgs(device, program_.get_kernel(unary_writer_kernel), core, writer_runtime_args);
         // Async write input
         EnqueueWriteBuffer(device->command_queue(), src_dram_buffer, src_vec, false);
         // Share ownership of buffer with program

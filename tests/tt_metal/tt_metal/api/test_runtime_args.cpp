@@ -237,7 +237,7 @@ void verify_results(
     auto device = mesh_device->get_devices()[0];
 
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        const auto kernel = tt_metal::detail::GetKernel(program, kernel_id);
+        const auto kernel = program.get_kernel(kernel_id);
         auto rt_args_base_addr = get_runtime_arg_addr(
             device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1),
             kernel->get_kernel_processor_class(),
