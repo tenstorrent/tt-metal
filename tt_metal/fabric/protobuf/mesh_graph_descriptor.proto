@@ -39,7 +39,7 @@ message MeshDescriptor {
 message GraphDescriptor {
   // Logical identifier used in GraphRef.graph_descriptor (e.g., "G0").
   string name = 1;
-  // Freeform grouping label (e.g., "FABRIC", "POD", "CLUSTER").
+  // Freeform grouping label (e.g., "POD", "SUPERPOD", "CLUSTER").
   string type = 2;
   // Members of this graph. All entries must be the same NodeRef kind (mesh OR graph).
   repeated NodeRef instances = 3;

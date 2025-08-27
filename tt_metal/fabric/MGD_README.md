@@ -1,38 +1,33 @@
-## Mesh Graph Descriptor (MGD) 2.0 — Quick Use Guide
+# Mesh Graph Descriptor (MGD) 2.0 — Quick Use Guide
 
-This guide explains how to define and load a Mesh Graph Descriptor (MGD) 2.0 for TT‑Fabric using the up‑to‑date schema in `tt_metal/fabric/protobuf/mesh_graph_descriptor.proto`. It focuses on how to write a valid textproto, how node references work, and which fields are required.
+This guide explains how to define and load a Mesh Graph Descriptor (MGD) 2.0 for TT‑Fabric using the up‑to‑date schema in [tt_metal/fabric/protobuf/mesh_graph_descriptor.proto](protobuf/mesh_graph_descriptor.proto). It focuses on how to write a valid textproto, how node references work, and which fields are required.
+
+A Mesh Graph Descriptor is the input to the Fabric Control Plane to specify a partition and topology of a device that a user would like to initialize fabric for.
+
+---
 
 ### Where to look
 - Schema: `tt_metal/fabric/protobuf/mesh_graph_descriptor.proto`
 - Example textproto: `tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto`
 - C++ API: `tt_metal/api/tt-metalium/mesh_graph_descriptor.hpp`
 
----
+## Background
+
+A Mesh Graph Descriptor (MGD) specifies the logical topology that a user specifies for running their workload on an multi-host Exabox cluster.
+
+This descriptor will capture information about how to compose a “big-mesh” (intra-mesh) across multiple host systems and how to connect meshes together (inter-mesh) in some user-topology. The MGD represents the minimum hardware allocation requirements for a workload to multi-host Exabox cluster.
+
+Read more about Text proto at [Mesh Graph Descriptor 2.0](https://docs.google.com/document/d/1291H1Wl_pSkIGHP9B_L6oikaD3MflAGXg3Lox1O8S0c/edit?usp=sharing)
+
 
 ## Minimal workflow
+> This is currently TBD
 1) Write an MGD 2.0 textproto
-2) Parse it with the C++ API
-3) Provide the parsed descriptor to control‑plane logic (STM/FCP) for mapping/initialization
+2) Provide Control Plane with the Mesh graph descriptor via `TT_MESH_GRAPH_DESC_PATH`
+3) Run metal workload using fabric
 
-```cpp
-#include <tt-metalium/mesh_graph_descriptor.hpp>
-
-// From a string
-const std::string mgd_text = R"proto(
-  mesh_descriptors: {
-    name: "M0"
-    arch: WORMHOLE_B0
-    device_topology: { dims: [ 2, 4 ] }
-    host_topology:   { dims: [ 1, 1 ] }
-    channels:        { count: 2 }
-  }
-  top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-)proto";
-tt::tt_fabric::MeshGraphDescriptor mgd_from_string(mgd_text);
-
-// From a file
-tt::tt_fabric::MeshGraphDescriptor mgd_from_file(
-  std::filesystem::path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto"));
+```bash
+TT_MESH_GRAPH_DESC_PATH="/home/my_custom_desc.textproto" ./your_fabric_script
 ```
 
 Notes:
@@ -58,7 +53,8 @@ Required fields:
 - `host_topology` (MeshTopology): `dims` list is required.
 
 Optional fields:
-- `express_connections` (list of `src`, `dst` device indices within this mesh).
+- `express_connections` (list of `src`, `dst` device indices within this mesh)
+  - Device indicies are assigned using row-major indexing.
 
 Schema (from code):
 ```proto
@@ -75,6 +71,7 @@ message MeshDescriptor {
 
 Torus vs Mesh topology:
 - `device_topology` uses `TorusTopology` with two parallel arrays: `dims` and `types` (LINE or RING) per dimension. If `types` is omitted or shorter than `dims`, treat unspecified dimensions as LINE.
+  - LINE or RING topology specify if the dimension is connected as a torus in that direction
 - `host_topology` uses `MeshTopology` and only accepts `dims` (no per‑dimension type).
 
 Example:
@@ -90,12 +87,14 @@ mesh_descriptors {
 ```
 
 ### 2) Graph descriptors
-Groups meshes or graphs of a single kind and defines their connectivity.
+Groups meshes or graphs of a single kind and defines their connectivity. A graph is comprised of instances of meshes and graphs of the same type group name
 
 Required fields:
 - `name` (string): logical identifier (e.g., "G0").
 - `type` (string): freeform grouping label (e.g., "FABRIC", "POD", "CLUSTER").
 - `instances` (list of `NodeRef`): all entries must be either meshes or graphs (do not mix types).
+  - The instance ID can be specified as any unique uint32
+  - NOTE: All instances must be mesh descriptors or graph descriptors of the same `type`
 
 Connectivity (choose one style):
 - Shorthand `graph_topology` (e.g., `ALL_TO_ALL`, `RING`), typically paired with `channels` to define edge multiplicity.
@@ -119,10 +118,10 @@ graph_descriptors {
   name: "G0"
   type: "POD"
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-  instances { mesh { mesh_descriptor: "M1" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M1" mesh_id: 0 device_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 device_id: 0 } }
     channels { count: 2 policy: RELAXED }
     directional: false
   }
@@ -160,6 +159,8 @@ top_level_instance { graph { graph_descriptor: "G1" graph_id: 0 } }
 ## Node references (NodeRef) explained
 Node references identify a mesh, a graph, or drill down to a specific device inside a mesh. They can be nested when referencing down through graphs to meshes.
 
+You must provide the name of the descriptor type, as well as assign an instance id (any uint32) to each reference.
+
 Types:
 - Mesh reference:
   ```proto
@@ -183,11 +184,26 @@ Types:
 
 From schema:
 ```proto
-message NodeRef { oneof node_ref { MeshRef mesh = 1; GraphRef graph = 2; } }
-message MeshRef { string mesh_descriptor = 1; int32 mesh_id = 2; optional int32 device_id = 3; }
+message NodeRef {
+  oneof node_ref {
+    MeshRef mesh = 1;
+    GraphRef graph = 2;
+  }
+}
+
+message MeshRef {
+  string mesh_descriptor = 1;
+  int32 mesh_id = 2;
+  optional int32 device_id = 3;
+}
+
 message GraphRef {
-  string graph_descriptor = 1; int32 graph_id = 2;
-  oneof sub_ref { MeshRef mesh = 3; GraphRef graph = 4; }
+  string graph_descriptor = 1;
+  int32 graph_id = 2;
+  oneof sub_ref {
+    MeshRef mesh = 3;
+    GraphRef graph = 4;
+  }
 }
 ```
 
@@ -208,13 +224,17 @@ Enums (use exact spellings):
 - `GraphTopology`: `ALL_TO_ALL`, `RING`.
 - `Policy`: `STRICT`, `RELAXED`.
 
-Channels:
+
+## Other types to underwstand
+### Channels:
 ```proto
 message Channels { int32 count = 1; optional Policy policy = 2; }
 ```
+`policy` specifies if the device can be initialized if less links than specified in `count` is discovered on the cluster. There must be a link between the connection even if set to RELAXED.
+
 If `policy` is omitted, treat as STRICT unless your control plane overrides this default.
 
-Connection:
+### Connection:
 ```proto
 message Connection {
   repeated NodeRef nodes = 1;     // typically exactly two nodes
@@ -236,7 +256,7 @@ message Connection {
 
 ## Additional examples
 
-Single mesh (no graphs):
+### Single mesh (no graphs):
 ```proto
 mesh_descriptors {
   name: "M0"
@@ -248,7 +268,7 @@ mesh_descriptors {
 top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 ```
 
-All‑to‑all between two graphs:
+### All‑to‑all between two graphs:
 ```proto
 graph_descriptors {
   name: "G0" type: "POD"
@@ -265,6 +285,48 @@ graph_descriptors {
   channels: { count: 2 policy: RELAXED }
 }
 top_level_instance { graph { graph_descriptor: "G1" graph_id: 0 } }
+```
+
+### 16 LoudBox Cluster
+![16 lb cluster](https://vscode-remote%2Bssh-002dremote-002b7b22686f73744e616d65223a22673134676c7830332e74656e73746f7272656e742e6e6574227d.vscode-resource.vscode-cdn.net/home/rsong/dev/tt-metal/docs/source/common/images/16LB_Cluster.png?version%3D1756304398678)
+
+```proto
+# --- Mesh Descriptors ------------------------------------------------------
+
+mesh_descriptors {
+  id: "M0"
+  arch: WORMHOLE_B0
+  device_topology { dims: [2, 4] }
+  channels { count: 2 policy: STRICT }
+}
+
+# --- Graph Descriptors -----------------------------------------------------
+
+graph_descriptors {
+  id: "G0"
+  type: "SUPERPOD"
+  instances { mesh { mesh_descriptor: "M0" id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" id: 1 } }
+  instances { mesh { mesh_descriptor: "M0" id: 2 } }
+  instances { mesh { mesh_descriptor: "M0" id: 3 } }
+  topology: ALL-TO-ALL
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  id: "G1"
+  type: "CLUSTER"
+  instances { graph { graph_descriptor: "G0" id: 0 } }
+  instances { graph { graph_descriptor: "G0" id: 1 } }
+  instances { graph { graph_descriptor: "G0" id: 2 } }
+  instances { graph { graph_descriptor: "G0" id: 3 } }
+  topology: ALL-TO-ALL
+  channels { count: 2 policy: STRICT }
+}
+
+# --- Instantiations --------------------------------------------------------
+
+top_level_instance { graph { graph_descriptor: "G1" id: 0 } }
 ```
 
 ---
