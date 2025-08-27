@@ -148,10 +148,8 @@ void kernel_main() {
     constexpr auto reader_mapping_args = TensorAccessorArgs<reader_indices_args.next_compile_time_args_offset()>();
     constexpr auto reader_metadata_args = TensorAccessorArgs<reader_mapping_args.next_compile_time_args_offset()>();
 
-    // Writer's output tensor comes after all reader tensors
     constexpr auto output_tensor_args = TensorAccessorArgs<reader_metadata_args.next_compile_time_args_offset()>();
     auto output_addr_gen = TensorAccessor(output_tensor_args, output_tensor_address, output_page_size);
-    // Writer reuses the reader's metadata tensor
     auto metadata_addr_gen = TensorAccessor(reader_metadata_args, metadata_tensor_address, metadata_page_size);
 
     uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
