@@ -10,14 +10,15 @@
 ### High-level idea
 - Keep allocators fundamentally per-device. Introduce a thin coordination layer, `SubmeshAllocator`, that orchestrates the existing per-device allocators to provide a lock-step allocation across the devices in a submesh.
 - Overlap semantics “just work” because overlapping submeshes reference the same underlying device allocators on the overlapping devices. Non-overlapping submeshes operate on disjoint device allocators and can reuse offsets freely.
+ - To avoid duplicating overlap logic at every call site (tensors, CBs, etc.), centralize overlap enforcement inside the core `Allocator` via an optional "overlap domain" overlay. Higher layers keep using the same allocate/free APIs; when a domain is active, the `Allocator` chooses a candidate common offset that does not conflict with other domains on that device.
 
 ### Where to implement
-- Implement in the distributed layer next to `tt_metal/distributed::MeshDevice` and `tt_metal/distributed::MeshBuffer`.
-- Do not modify `tt_metal/impl/allocator` or `tt_metal/impl/buffers/Buffer`.
-- Integration points:
-  - `MeshDevice` exposes/owns submesh-scoped allocators: `mesh_device->submesh_allocator(desc)`.
-  - `tensor_impl::allocate_device_buffer(mesh_device, spec)` consults `SubmeshAllocator` to reserve a common offset and then calls `MeshBuffer::create(..., address)` to instantiate buffers at that address.
-  - `MeshBuffer::create(..., address)` already delegates to per-device `Buffer::create(device, address, ...)`, so allocator internals remain untouched.
+- Distributed layer: `tt_metal/distributed::SubmeshAllocator` orchestrates lock-step reservations across devices in a submesh.
+- Core allocator layer: add an optional, feature-gated overlap overlay to `tt_metal::Allocator` so all allocator consumers (including runtime L1 CircularBuffers) inherit overlap semantics transparently.
+- Minimal additions to low-level abstractions to avoid manual scans at higher levels:
+  - `BankManager`: expose read-only candidate enumeration and exact-address commit helpers.
+  - `allocator::Algorithm` (`FreeListOpt`): reuse existing `available_addresses` and `allocate_at_address`; optionally add `is_free_at` convenience.
+- No policy change inside `FreeListOpt`; `BankManager` remains policy-agnostic and validates alignment/interleaving.
 
 ### Core objects (sketch)
 - `SubmeshDescriptor`
@@ -28,6 +29,10 @@
   - Provides lock-step `allocate(size, alignment, tag)` and `free(handle)`.
 - `SubmeshAllocation`
   - Logical handle with a single `offset` (identical on all devices in the submesh) plus size/alignment/tag.
+
+- `Allocator` overlap overlay (per device)
+  - Optional mode activated by setting the current `OverlapDomainId` (e.g., via RAII guard). When active, all allocations through the allocator must select offsets that do not conflict with existing ranges owned by other active domains on that device.
+  - Maintains an interval index per `BufferType` that tracks reserved ranges; segments are split/merged to preserve the union-at-address semantics (if two domains allocate at the same start with different sizes, the tracked unavailability equals the maximum size at that start).
 
 ### Public API sketch
 ```cpp
@@ -43,23 +48,48 @@ bool try_reserve(size_t size, size_t alignment);
 AllocatorStats stats() const;
 ```
 
+#### Core allocator additions (expert APIs; feature-gated)
+```cpp
+// Allocator (public)
+class Allocator {
+    // Activate overlap enforcement for the current scope
+    void set_overlap_domain(OverlapDomainId domain);
+    struct WithOverlapDomain { /* RAII guard */ };
+    // Existing allocate_buffer() remains the default path.
+};
+
+// BankManager (pass-through; no policy)
+std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size_per_bank) const;
+std::optional<DeviceAddr> allocate_at_address(DeviceAddr start, DeviceAddr size_per_bank);
+
+// allocator::Algorithm (FreeListOpt)
+std::vector<std::pair<DeviceAddr, DeviceAddr>> available_addresses(DeviceAddr size) const; // existing
+std::optional<DeviceAddr> allocate_at_address(DeviceAddr start, DeviceAddr size);          // existing
+```
+
 ### Internal behavior
 - **Per-device state sharing**
   - Each device keeps using its existing `Allocator`.
-  - If two submeshes overlap on device `d`, they reference the exact same `Allocator(d)`; therefore they share state automatically. If they don’t overlap, they touch different allocators and can reuse offsets.
+  - If two submeshes overlap on device `d`, they reference the same `Allocator(d)`; therefore they share overlap state automatically through the allocator’s domain-aware overlay. If they don’t overlap, they use different allocators and can reuse offsets freely.
 
-- **Lock-step offset selection**
+- **Lock-step offset selection (submesh)**
   - Policy: identical `offset` across all devices in the submesh.
   - Two-phase protocol:
-    1) Find-candidate: choose a candidate offset (e.g., from the first device), probe exact availability on the others, or intersect free-lists by aligned scans.
-    2) Atomic reservation: reserve on all devices; on any failure, roll back and try the next candidate.
+    1) Find-candidate: pick candidates from one device using `available_addresses(size_per_bank)` (via `BankManager`).
+    2) Probe & commit: for each candidate `start`, submesh coordinator calls `allocate_at_address(start, size_per_bank)` across devices. Devices with an active overlap domain will only succeed if the candidate does not conflict with other domains. On any failure, roll back and try the next candidate.
+
+- **Allocator overlap overlay (single device)**
+  - When a domain is set, `allocate_buffer()` enumerates aligned candidates via `BankManager::available_addresses` and picks the first non-conflicting one according to the allocator’s interval index, then commits with `allocate_at_address`.
+  - Deallocation clears the reserved range in the interval index and calls the underlying `deallocate`.
+  - Interval index uses segment splitting/merging to maintain exact unavailability and match "max-at-same-address" semantics across domains.
 
 - **Free**
-  - Forward deallocation to each device allocator with the same `offset/size`.
+  - Submesh-level free forwards to each device allocator using the common `offset/size`.
 
 - **Concurrency**
-  - Light mutex per `SubmeshAllocator` for ordering; per-device allocators already have internal mutex protection.
-  - Two-phase commit prevents partial reservations.
+  - Submesh coordination uses a light mutex to serialize reservation steps across devices.
+  - `Allocator` maintains its own mutex; candidate enumeration and exact-address commit remain serialized per device.
+  - Two-phase commit at submesh-level prevents partial reservations across devices.
 
 ### Execution semantics and scheduler expectations
 - **Allocator semantics**: determined solely by per-device allocator state and the coordinator’s lock-step reservation. Non-overlapping submeshes may allocate concurrently (different devices); overlapping submeshes serialize on shared allocators when they touch the same device(s).
@@ -67,6 +97,56 @@ AllocatorStats stats() const;
   - Submeshes that are non-overlapping may execute simultaneously.
   - Submeshes that overlap must execute sequentially or be scheduled to avoid hazards if they share device resources.
   - Submeshes should only consume/produce tensors on their own submesh.
+  - CircularBuffers (CBs) in L1 use two paths:
+    - Static/local CBs: placed by the Program starting at `allocator()->get_base_allocator_addr(L1)` (i.e., just above the kernel/program region) without calling `Allocator::allocate_buffer`. The Program validates these addresses against the allocator’s lowest occupied L1 to avoid overlap.
+    - Global/dynamic CBs: backed by an actual L1 `Buffer` and allocated via `Allocator::allocate_buffer`; these inherently respect overlap domains.
+
+### How CircularBuffers use the allocator (static vs global)
+
+- **L1 layout boundary**: The allocator-managed L1 region begins at `l1_unreserved_base`. This is the base for CB data.
+- **Static/local CBs (Program-owned)**:
+  - Address chosen by Program per core-range, starting at `l1_unreserved_base`, aligned, and laid out sequentially across intersecting ranges so they share the same address.
+  - No call to the allocator for these CBs; instead, the Program checks for clashes with allocator-managed L1 buffers using the device’s `lowest_occupied_compute_l1_address(...)`. If overlap is detected, it throws.
+- **Global/dynamic CBs**:
+  - Implemented on top of an L1 `Buffer` (or sharded buffers for distributed), so they allocate through `Allocator::allocate_buffer` just like other L1 buffers. The CB then uses the buffer’s address.
+- **Kernel/program region**:
+  - Kernel config, semaphores, CB metadata, and kernel text ring buffer reside below `l1_unreserved_base` and do not use the allocator.
+
+Key code touchpoints (citations)
+
+```908:941:tt_metal/impl/program/program.cpp
+uint64_t base_cb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+...
+computed_addr = align(computed_addr, device->allocator()->get_alignment(BufferType::DRAM));
+...
+cb_allocator.mark_address(computed_addr, circular_buffer->size(), base_cb_address);
+...
+circular_buffer->set_locally_allocated_address(computed_addr);
+```
+
+```946:975:tt_metal/impl/program/program.cpp
+std::optional<DeviceAddr> lowest_address = device->lowest_occupied_compute_l1_address(this->determine_sub_device_ids(device));
+...
+if (lowest_address.has_value() and lowest_address.value() < cb_region_end) {
+    TT_THROW("... clash with L1 buffers ...");
+}
+```
+
+```261:269:tt_metal/impl/allocator/allocator.cpp
+DeviceAddr Allocator::get_base_allocator_addr(const HalMemType& mem_type) const {
+    ... case HalMemType::L1: return config_.l1_unreserved_base;
+}
+```
+
+```165:175:tt_metal/impl/buffers/circular_buffer.cpp
+void CircularBuffer::assign_global_address() { globally_allocated_address_ = config_.shadow_global_buffer->address(); }
+```
+
+```144:177:tt_metal/impl/sub_device/sub_device_manager_tracker.cpp
+auto found_addr = global_allocator->get_lowest_occupied_l1_address(global_bank_id);
+...
+found_addr = allocator->get_lowest_occupied_l1_address(bank_id);
+```
 
 ### Example: A, B, C
 - Submesh A = {0, 1, 4, 5}
@@ -75,7 +155,7 @@ AllocatorStats stats() const;
 
 Behavior:
 - A and B do not overlap; they can allocate different tensors at the same offsets on their respective devices.
-- C overlaps each of A and B; C must select offsets free across {0,1,2,3}. The coordinator ensures the chosen offset is simultaneously free on all of C’s devices, naturally respecting A’s/B’s in-use regions where they overlap.
+- C overlaps each of A and B; C must select offsets free across {0,1,2,3}. The submesh coordinator ensures the chosen offset is simultaneously free on all of C’s devices. On each overlapping device, the `Allocator` domain overlay rejects candidates that intersect A or B’s reserved ranges; if A and B reserved different sizes at the same address, C observes an exclusion equal to the larger (via segment splitting/merging in the interval index).
 
 ### Fragmentation/policy knobs
 - Fit strategy: first-fit (default), best-fit, next-fit pluggable.
@@ -91,6 +171,20 @@ Behavior:
 - Return OOM if no common offset exists.
 - `stats()` aggregates per-device allocator stats and common-offset success/fail counters.
 - Trace hooks for allocation timelines per device and per submesh.
+ - Add counters for overlap-domain candidate scans, exact-address commit attempts, rollbacks, and per-BufferType coverage in the overlap interval index.
+
+### Backward compatibility and performance
+- With no overlap domain active, all allocations go through the current fast path (`allocate()`); there are no behavior or performance changes.
+- With overlap enabled, per-allocation overhead is limited to candidate enumeration and an interval-index check before an exact-address commit. Candidate windows are already computed by the allocator algorithm and respect alignment/interleaving, so higher layers never "guess" addresses.
+
+### Test plan (high level)
+- Unit tests for the allocator overlap overlay (single device):
+  - Reserve at address S with size L in domain A; ensure domain B cannot allocate overlapping ranges; free/unblock; unequal sizes at same S produce max-at-address exclusion.
+  - Concurrency: interleaved allocations across domains serialize correctly.
+- Submesh tests across devices:
+  - A/B non-overlapping submeshes reuse offsets independently; C overlapping devices sees exclusions and allocates around them; freeing A or B unblocks C as expected.
+- CB tests:
+  - Program factories creating CBs in L1 with overlap domain active; confirm dynamic CB allocation respects domain exclusions.
 
 ## Call stack: creating a device tensor and writing data
 
