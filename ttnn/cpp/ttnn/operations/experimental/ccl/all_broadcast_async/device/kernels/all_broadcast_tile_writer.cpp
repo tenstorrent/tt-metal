@@ -12,6 +12,7 @@
 #include <utility>
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
@@ -28,10 +29,12 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(8);
-constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
-constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
-constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
+constexpr ccl_routing_utils::line_multicast_route_info_t forward_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<8>();
+constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<8 + ccl_routing_utils::num_line_multicast_args>();
+
+inline constexpr uint32_t sharded_args_start_idx = 8 + 2 * ccl_routing_utils::num_line_multicast_args;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -60,13 +63,12 @@ void kernel_main() {
 
 #ifdef SHARDED
     typedef ShardedInfo<
-        get_compile_time_arg_val(9),
-        get_compile_time_arg_val(10),
-        get_compile_time_arg_val(11),
-        get_compile_time_arg_val(12),
-        get_compile_time_arg_val(13),
-        get_compile_time_arg_val(14),
-        get_compile_time_arg_val(15)>
+        get_compile_time_arg_val(sharded_args_start_idx),
+        get_compile_time_arg_val(sharded_args_start_idx + 1),
+        get_compile_time_arg_val(sharded_args_start_idx + 2),
+        get_compile_time_arg_val(sharded_args_start_idx + 3),
+        get_compile_time_arg_val(sharded_args_start_idx + 4),
+        get_compile_time_arg_val(sharded_args_start_idx + 5)>
         tensor_shard_info;
     // Sharded addrgen
     const auto [mapping_table, rt_increment] =
@@ -102,10 +104,8 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
 
-    pkt_hdr_forward->to_chip_multicast(
-        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-    pkt_hdr_backward->to_chip_multicast(
-        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_forward, forward_multicast_route_info);
+    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_backward, backward_multicast_route_info);
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open();
@@ -121,14 +121,12 @@ void kernel_main() {
 
     if (num_targets_forward_direction) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        pkt_hdr_seminc->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, forward_multicast_route_info);
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     if (num_targets_backward_direction) {
-        pkt_hdr_seminc->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, backward_multicast_route_info);
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
@@ -154,12 +152,6 @@ void kernel_main() {
                 fabric_connection,
                 l1_read_addr,
                 tensor0_page_size);
-            if constexpr (dynamic_alternate) {
-                std::swap(
-                    pkt_hdr_forward->routing_fields.value,
-                    pkt_hdr_backward->routing_fields
-                        .value);  // alternate the packet header distance for better balancing
-            }
             tile_id++;
         }
 
@@ -176,15 +168,13 @@ void kernel_main() {
     // Write the mcast packet (forward)
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        pkt_hdr_seminc->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_forward)});
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, forward_multicast_route_info);
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // Write the mcast packet (backward)
     if (fabric_connection.has_backward_connection()) {
-        pkt_hdr_seminc->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, backward_multicast_route_info);
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));

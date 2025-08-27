@@ -10,7 +10,7 @@
 #include <tt-metalium/mesh_graph.hpp>                   // FabricType
 #include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 #include <llrt/tt_cluster.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "erisc_datamover_builder.hpp"
 #include <set>
 #include <vector>
 #include <unordered_map>

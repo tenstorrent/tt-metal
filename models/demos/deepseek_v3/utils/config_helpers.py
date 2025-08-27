@@ -517,6 +517,11 @@ def dequantize_state_dict(state_dict, hf_config, dtype=torch.bfloat16):
     return dequantized_state_dict
 
 
+def dequantize_state_dicts(state_dict_list: list[dict[str, torch.Tensor] | None], hf_config):
+    dequant_state_dicts = [dequantize_state_dict(sd, hf_config) if sd is not None else None for sd in state_dict_list]
+    return dequant_state_dicts
+
+
 def get_state_dicts(
     dicts: Sequence[dict[str, torch.Tensor] | None],
     key: Any,

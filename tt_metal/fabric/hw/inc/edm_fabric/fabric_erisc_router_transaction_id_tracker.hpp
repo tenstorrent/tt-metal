@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 
 #include "risc_attribs.h"  // for FORCE_INLINE
 #include "utils/utils.h"   // for is_power_of_2
@@ -15,6 +15,10 @@
 
 template <uint8_t MAX_TRANSACTION_IDS>
 struct TransactionIdCounter {
+    explicit TransactionIdCounter() = default;
+
+    FORCE_INLINE void init() { this->next_trid = 0; }
+
     FORCE_INLINE void increment() {
         this->next_trid = tt::tt_fabric::wrap_increment<MAX_TRANSACTION_IDS>(this->next_trid);
     }
@@ -22,7 +26,7 @@ struct TransactionIdCounter {
     FORCE_INLINE uint8_t get() const { return this->next_trid; }
 
 private:
-    uint8_t next_trid = 0;
+    uint8_t next_trid;
 };
 
 template <
@@ -44,7 +48,10 @@ struct WriteTransactionIdTracker {
     static constexpr bool BOTH_PARAMS_ARE_EQUAL = NUM_CHANNELS_PARAM == MAX_TRANSACTION_IDS_PARAM;
     static_assert(OFFSET_PARAM + MAX_TRANSACTION_IDS - 1 <= NOC_MAX_TRANSACTION_ID, "Invalid transaction ID");
 
-    WriteTransactionIdTracker() {
+    explicit WriteTransactionIdTracker() = default;
+
+    FORCE_INLINE void init() {
+        this->trid_counter.init();
         if constexpr (!(BOTH_PARAMS_ARE_EQUAL || BOTH_PARAMS_ARE_POW2)) {
             for (size_t i = 0; i < NUM_CHANNELS_PARAM; i++) {
                 this->buffer_slot_trids[i] = INVALID_TRID;
