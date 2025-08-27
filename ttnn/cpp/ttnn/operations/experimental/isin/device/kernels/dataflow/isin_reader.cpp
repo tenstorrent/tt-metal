@@ -105,7 +105,7 @@ namespace {
 //     apply_inverse_tagged(elements_chunk_begin_ptr, subchunk_size, index_hint_chunk_begin_ptr);
 // }
 
-template <typename elements_number_type>
+// template <typename elements_number_type>
 FORCE_INLINE void isin_subchunks(
     const uint32_t& elements_l1_read_addr,
     const uint32_t& test_elements_l1_read_addr,
@@ -122,11 +122,15 @@ FORCE_INLINE void isin_subchunks(
         for (uint32_t test_elements_index = 0; test_elements_index < test_elements_subchunk_size;
              ++test_elements_index) {
             if (elements_subchunk_ptr[elements_index] == test_elements_subchunk_ptr[test_elements_index]) {
-                output_subchunk_ptr[elements_index] = 0x1;
+                output_subchunk_ptr[elements_index] = 0xFFFFFFFF;
                 break;
             }
         }
     }
+
+    // for (uint32_t i = 0; i < elements_subchunk_size; ++i) {
+    //     DPRINT << elements_subchunk_ptr[i] << " ";
+    // }
 }
 
 // FORCE_INLINE void recover_ordering(
@@ -164,52 +168,99 @@ void kernel_main() {
 
     const uint32_t elements_buffer_address = get_arg_val<uint32_t>(0);
     const uint32_t test_elements_buffer_address = get_arg_val<uint32_t>(1);
-
-    constexpr auto elements_dataformat = get_dataformat(ctas.elements_cb);
-    using elements_number_type = std_type_t<elements_dataformat>;
+    const uint32_t subchunks_per_core = get_arg_val<uint32_t>(2);
+    const uint32_t subchunks_offset = get_arg_val<uint32_t>(3);
 
     const auto elements_addr_gtor =
-        TensorAccessor{ctas.elements_accessor_args, elements_buffer_address, ctas.elements_size};
+        TensorAccessor{ctas.elements_accessor_args, elements_buffer_address, ctas.elements_size * 4};
     const auto test_elements_addr_gtor =
-        TensorAccessor{ctas.test_elements_accessor_args, test_elements_buffer_address, ctas.test_elements_size};
+        TensorAccessor{ctas.test_elements_accessor_args, test_elements_buffer_address, ctas.test_elements_size * 4};
 
-    constexpr uint32_t elements_start_subchunk_id = 0;
-    constexpr uint32_t test_elements_start_subchunk_id = 0;
+    // if (ctas.test_elements_size <= ctas.singke_fetch_subchunk_size) {
+    //     load_to_cb(
+    //         ctas.test_elements_cb, test_elements_addr_gtor, test_elements_offset, ctas.single_fetch_subchunk_size);
+    //     cb_wait_front(ctas.test_elements_cb, ONE_PAGE);
+    //     for (uint32_t elements_subchunk_id = subchunks_offset,
+    //                 elements_offset = subchunks_offset * ctas.single_fetch_subchunk_size;
+    //         elements_subchunk_id < subchunks_offset + subchunks_per_core;
+    //         ++elements_subchunk_id, elements_offset += ctas.single_fetch_subchunk_size) {
+    //         const uint32_t elements_subchunk_size =
+    //             std::min(ctas.elements_size - elements_offset, ctas.single_fetch_subchunk_size);
+    //         load_to_cb(ctas.elements_cb, elements_addr_gtor, elements_offset, elements_subchunk_size);
+    //         cb_wait_front(ctas.elements_cb, ONE_PAGE);
+    //         cb_reserve_back(ctas.output_cb, ONE_PAGE);
+    //         const uint32_t elements_l1_read_addr = get_read_ptr(ctas.elements_cb);
+    //         const uint32_t output_l1_write_addr = get_write_ptr(ctas.output_cb);
+    //         prefill_output(output_l1_write_addr, elements_subchunk_size);
 
-    for (uint32_t elements_subchunk_id = elements_start_subchunk_id, elements_offset = 0;
-         elements_offset < ctas.elements_size;
+    //         // if (ctas.test_elements_size > ctas.single_fetch_subchunk_size) {
+    //         //     for (uint32_t test_elements_subchunk_id = 0, test_elements_offset = 0;
+    //         //         test_elements_offset < ctas.test_elements_size;
+    //         //         ++test_elements_subchunk_id, test_elements_offset += ctas.single_fetch_subchunk_size) {
+    //         //         const uint32_t test_elements_subchunk_size =
+    //         //             std::min(ctas.test_elements_size - test_elements_offset, ctas.single_fetch_subchunk_size);
+    //         //         load_to_cb(
+    //         //             ctas.test_elements_cb, test_elements_addr_gtor, test_elements_offset,
+    //         test_elements_subchunk_size);
+    //         //         cb_wait_front(ctas.test_elements_cb, ONE_PAGE);
+    //         //         const uint32_t test_elements_l1_read_addr = get_read_ptr(ctas.test_elements_cb);
+
+    //         //         isin_subchunks(
+    //         //             elements_l1_read_addr,
+    //         //             test_elements_l1_read_addr,
+    //         //             output_l1_write_addr,
+    //         //             elements_subchunk_size,
+    //         //             test_elements_subchunk_size);
+
+    //         //         cb_pop_front(ctas.test_elements_cb, ONE_PAGE);
+    //         //     }
+    //         // }
+
+    //         cb_push_back(ctas.output_cb, ONE_PAGE);
+    //         cb_pop_front(ctas.elements_cb, ONE_PAGE);
+    //     }
+    // } else {
+    for (uint32_t elements_subchunk_id = subchunks_offset,
+                  elements_offset = subchunks_offset * ctas.single_fetch_subchunk_size;
+         elements_subchunk_id < subchunks_offset + subchunks_per_core;
          ++elements_subchunk_id, elements_offset += ctas.single_fetch_subchunk_size) {
         const uint32_t elements_subchunk_size =
             std::min(ctas.elements_size - elements_offset, ctas.single_fetch_subchunk_size);
-        load_to_cb<elements_number_type, decltype(elements_addr_gtor)>(
-            ctas.elements_cb, elements_addr_gtor, elements_subchunk_id, elements_subchunk_size);
+        load_to_cb(ctas.elements_cb, elements_addr_gtor, elements_offset, elements_subchunk_size);
         cb_wait_front(ctas.elements_cb, ONE_PAGE);
         cb_reserve_back(ctas.output_cb, ONE_PAGE);
         const uint32_t elements_l1_read_addr = get_read_ptr(ctas.elements_cb);
         const uint32_t output_l1_write_addr = get_write_ptr(ctas.output_cb);
         prefill_output(output_l1_write_addr, elements_subchunk_size);
 
-        for (uint32_t test_elements_subchunk_id = test_elements_start_subchunk_id, test_elements_offset = 0;
+        // if (ctas.test_elements_size > ctas.single_fetch_subchunk_size) {
+        for (uint32_t test_elements_subchunk_id = 0, test_elements_offset = 0;
              test_elements_offset < ctas.test_elements_size;
              ++test_elements_subchunk_id, test_elements_offset += ctas.single_fetch_subchunk_size) {
             const uint32_t test_elements_subchunk_size =
                 std::min(ctas.test_elements_size - test_elements_offset, ctas.single_fetch_subchunk_size);
-            load_to_cb<elements_number_type, decltype(test_elements_addr_gtor)>(
+            load_to_cb(
                 ctas.test_elements_cb, test_elements_addr_gtor, test_elements_offset, test_elements_subchunk_size);
             cb_wait_front(ctas.test_elements_cb, ONE_PAGE);
             const uint32_t test_elements_l1_read_addr = get_read_ptr(ctas.test_elements_cb);
+            // DPRINT << "AAAAAAAAAAAAAAAA" << ENDL();
 
-            isin_subchunks<elements_number_type>(
+            isin_subchunks(
                 elements_l1_read_addr,
                 test_elements_l1_read_addr,
                 output_l1_write_addr,
                 elements_subchunk_size,
                 test_elements_subchunk_size);
 
+            // if (new_test_elements_iteration) {
+
+            // }
             cb_pop_front(ctas.test_elements_cb, ONE_PAGE);
         }
+        // }
 
         cb_push_back(ctas.output_cb, ONE_PAGE);
         cb_pop_front(ctas.elements_cb, ONE_PAGE);
     }
+    // }
 }
