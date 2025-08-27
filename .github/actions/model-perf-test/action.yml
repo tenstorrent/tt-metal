@@ -1,0 +1,15 @@
+inputs:
+  run_args:
+    required: true
+    description: "Run arguments"
+runs:
+  using: "composite"
+  steps:
+    - uses: ./.github/actions/docker-run
+      with:
+        docker_image: ${{ env.DOCKER_IMAGE }}
+        docker_password: ${{ env.DOCKER_PASSWORD }}
+        docker_opts: ${{ env.DOCKER_OPTS }}
+        install_wheel: true
+        run_args: |
+          ${{ inputs.run_args }}

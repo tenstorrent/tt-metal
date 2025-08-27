@@ -90,6 +90,8 @@ jobs:
         shell: bash
     runs-on: ${{ matrix.test-info.runs-on }}
     env:
+      DOCKER_IMAGE: ${{ inputs.docker-image }}
+      DOCKER_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
       DOCKER_OPTS: |
         -v /mnt/MLPerf:/mnt/MLPerf:ro
         -e TT_METAL_HOME=${{ github.workspace }}
@@ -118,14 +120,14 @@ jobs:
         run: sudo cpupower frequency-set -g performance
       - name: Run performance regressions
         timeout-minutes: ${{ matrix.model-group.timeout }}
-        uses: ./.github/actions/docker-run
+        uses: ./.github/actions/model-perf-test
         env:
           LOGURU_LEVEL: INFO
         with:
-          docker_image: ${{ inputs.docker-image }}
-          docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: ${{ env.DOCKER_OPTS }}
-          install_wheel: true
+          # docker_image: ${{ inputs.docker-image }}
+          # docker_password: ${{ secrets.GITHUB_TOKEN }}
+          # docker_opts: ${{ env.DOCKER_OPTS }}
+          # install_wheel: true
           run_args: |
             if [[ "${{ matrix.model-group.name }}" == "other" ]]; then
               echo "No environment variable engineering needed for other models"
