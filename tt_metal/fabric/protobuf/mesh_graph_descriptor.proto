@@ -371,4 +371,3 @@ message Connection {
     // Optional directionality; defaults to false (undirected) when absent.
     optional bool directional = 3;
 }
-
