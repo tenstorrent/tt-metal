@@ -93,7 +93,7 @@ DataMovementConfigStatus CheckDataMovementConfig(
         .riscv0_in_use = false, .riscv1_in_use = false, .noc0_in_use = false, .noc1_in_use = false};
 
     auto set_global_and_local_noc_usage = [&](KernelHandle kernel_id, bool& local_noc0_usage, bool& local_noc1_usage) {
-        const auto kernel = detail::GetKernel(program, kernel_id);
+        const auto kernel = program.get_kernel(kernel_id);
         int noc_value;
         switch (programmable_core) {
             case HalProgrammableCoreType::TENSIX:
@@ -166,7 +166,7 @@ void ConfigureKernelGroup(
     for (auto& optional_id : kernel_group->kernel_ids) {
         if (optional_id) {
             // Need the individual offsets of each bin
-            detail::GetKernel(program, optional_id.value())
+            program.get_kernel(optional_id.value())
                 ->configure(device, logical_core, kernel_config_base, kernel_group->kernel_text_offsets);
         }
     }
@@ -212,7 +212,7 @@ std::optional<uint32_t> get_semaphore_id(const Program& program, const CoreRange
 inline void SetRuntimeArgsImpl(
     const Program& program, KernelHandle kernel_id, const CoreCoord& c, stl::Span<const uint32_t> runtime_args) {
     if (runtime_args.size() != 0) {
-        detail::GetKernel(program, kernel_id)->set_runtime_args(c, runtime_args);
+        program.get_kernel(kernel_id)->set_runtime_args(c, runtime_args);
     }
 }
 
@@ -222,7 +222,7 @@ inline void SetRuntimeArgsImpl(
     const CoreRange& core_range,
     stl::Span<const uint32_t> runtime_args) {
     if (runtime_args.size() != 0) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+        auto kernel = program.get_kernel(kernel_id);
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
                 kernel->set_runtime_args(CoreCoord(x, y), runtime_args);
@@ -237,7 +237,7 @@ inline void SetRuntimeArgsImpl(
     const CoreRangeSet& core_range_set,
     stl::Span<const uint32_t> runtime_args) {
     if (runtime_args.size() != 0) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+        auto kernel = program.get_kernel(kernel_id);
         for (const auto& core_range : core_range_set.ranges()) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
                 for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
@@ -922,7 +922,7 @@ void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool force_slow
                         for (int dispatch_class = 0; dispatch_class < processor_classes; dispatch_class++) {
                             auto& optional_id = kg->kernel_ids[dispatch_class];
                             if (optional_id) {
-                                const auto& kernel = detail::GetKernel(program, optional_id.value());
+                                const auto& kernel = program.get_kernel(optional_id.value());
                                 const auto& rt_args = kernel->runtime_args(logical_core);
 
                                 if (rt_args.size() > 0) {
@@ -1349,7 +1349,7 @@ void SetRuntimeArgs(
         "Mistmatch between number of cores {} and number of runtime args {} getting updated",
         core_spec.size(),
         runtime_args.size());
-    auto k = detail::GetKernel(program, kernel);
+    auto k = program.get_kernel(kernel);
     for (size_t i = 0; i < core_spec.size(); i++) {
         k->set_runtime_args(core_spec[i], runtime_args[i]);
     }
@@ -1383,7 +1383,7 @@ void SetRuntimeArgs(
 void SetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id, stl::Span<const uint32_t> runtime_args) {
     ZoneScoped;
     if (runtime_args.size() != 0) {
-        detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);
+        program.get_kernel(kernel_id)->set_common_runtime_args(runtime_args);
     }
 }
 
@@ -1391,20 +1391,20 @@ void SetCommonRuntimeArgs(
     const Program& program, KernelHandle kernel_id, std::initializer_list<const uint32_t> runtime_args) {
     ZoneScoped;
     if (runtime_args.size() != 0) {
-        detail::GetKernel(program, kernel_id)->set_common_runtime_args(runtime_args);
+        program.get_kernel(kernel_id)->set_common_runtime_args(runtime_args);
     }
 }
 
 RuntimeArgsData& GetRuntimeArgs(const Program& program, KernelHandle kernel_id, const CoreCoord& logical_core) {
-    return detail::GetKernel(program, kernel_id)->runtime_args_data(logical_core);
+    return program.get_kernel(kernel_id)->runtime_args_data(logical_core);
 }
 
 std::vector<std::vector<RuntimeArgsData>>& GetRuntimeArgs(const Program& program, KernelHandle kernel_id) {
-    return detail::GetKernel(program, kernel_id)->runtime_args_data();
+    return program.get_kernel(kernel_id)->runtime_args_data();
 }
 
 RuntimeArgsData& GetCommonRuntimeArgs(const Program& program, KernelHandle kernel_id) {
-    return detail::GetKernel(program, kernel_id)->common_runtime_args_data();
+    return program.get_kernel(kernel_id)->common_runtime_args_data();
 }
 
 // This is nop if compile time define not set.

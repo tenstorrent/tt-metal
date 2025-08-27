@@ -940,7 +940,7 @@ bool test_increment_runtime_args_sanity(
     constexpr uint32_t unique_arg_incr_val = 10;
     constexpr uint32_t common_arg_incr_val = 100;
     for (const auto& kernel_id : configured_kernels.kernel_handles) {
-        const auto& kernel = tt::tt_metal::detail::GetKernel(workload.get_programs()[device_range], kernel_id);
+        const auto& kernel = workload.get_programs()[device_range].get_kernel(kernel_id);
 
         for (auto& core_range : kernel->logical_coreranges()) {
             for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {

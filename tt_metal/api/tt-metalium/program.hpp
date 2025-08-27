@@ -5,7 +5,6 @@
 #pragma once
 
 #include <memory>
-#include <optional>
 
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -24,9 +23,6 @@ class CircularBuffer;
 class IDevice;
 class Program;
 class CircularBufferConfig;
-class ProgramTransferInfo;
-
-struct ProgramCommandSequence;
 
 namespace experimental {
 class GlobalCircularBuffer;
@@ -44,22 +40,10 @@ uint32_t program_base_addr_on_core(
     WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType core_type);
 }  // namespace program_dispatch
 
-namespace distributed {
-class MeshWorkload;
-class MeshWorkloadImpl;
-}  // namespace distributed
-
-class JitBuildOptions;
-class EnqueueProgramCommand;
-class CommandQueue;
-// Must be removed. Only here because its a friend of a Program
-class HWCommandQueue;
-
 namespace detail {
 class ProgramImpl;
 
 void ValidateCircularBufferRegion(const Program& program, const IDevice* device);
-std::shared_ptr<Kernel> GetKernel(const Program& program, KernelHandle kernel_id);
 }  // namespace detail
 
 // Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
@@ -125,7 +109,7 @@ private:
     // The internal ProgramImpl may outlive the Program object if it's in-use by a command queue.
     std::shared_ptr<detail::ProgramImpl> internal_;
 
-    // Stay
+    // This function violates const requirments if exposed via impl, needs further investigation.
     friend void detail::ValidateCircularBufferRegion(const Program& program, const IDevice* device);
 };
 

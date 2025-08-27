@@ -57,7 +57,7 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(
     const Program& program, const std::string& kernel_root_path) {
     std::unordered_map<std::string, std::string> kernel_name_to_last_compiled_dir;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+        auto kernel = program.get_kernel(kernel_id);
         if (not std::filesystem::exists(kernel_root_path + kernel->name())) {
             continue;
         }
@@ -177,7 +177,7 @@ void assert_kernel_binary_path_exists(
     const Program& program, const std::string& kernel_root_path, const KernelCacheStatus& kernel_cache_status) {
     auto kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+        auto kernel = program.get_kernel(kernel_id);
         auto hash = kernel_name_to_hash.at(kernel->name());
         auto kernel_binary_path = kernel_root_path + kernel->name() + "/" + hash;
         TT_FATAL(std::filesystem::exists(kernel_binary_path), "Expected {} folder to exist!", kernel_binary_path);
@@ -188,7 +188,7 @@ void assert_program_cache_hit_status(
     const Program& program, bool hit_expected, const KernelCacheStatus& kernel_cache_status) {
     auto kernel_name_to_cache_hit_status = kernel_cache_status.kernel_name_to_cache_hit;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+        auto kernel = program.get_kernel(kernel_id);
         auto hit_status = kernel_name_to_cache_hit_status.at(kernel->name());
         TT_FATAL(
             hit_status == hit_expected,
@@ -272,7 +272,7 @@ void assert_hash_comparison_for_kernel_type(
     const KernelCacheStatus& kernel_cache_status) {
     auto curr_kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+        auto kernel = program.get_kernel(kernel_id);
         auto prev_hash = prev_kernel_name_to_hash.at(kernel->name());
         auto curr_hash = curr_kernel_name_to_hash.at(kernel->name());
         bool same_hash_expected = type_to_same_hash_expected.at(kernel->get_kernel_processor_class());
@@ -290,7 +290,7 @@ void assert_cache_hit_status_for_kernel_type(
     const KernelCacheStatus& kernel_cache_status) {
     auto kernel_name_to_cache_hit_status = kernel_cache_status.kernel_name_to_cache_hit;
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
-        auto kernel = detail::GetKernel(program, kernel_id);
+        auto kernel = program.get_kernel(kernel_id);
         bool hit_expected = type_to_cache_hit_status.at(kernel->get_kernel_processor_class());
         auto hit_status = kernel_name_to_cache_hit_status.at(kernel->name());
         TT_FATAL(

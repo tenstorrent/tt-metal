@@ -47,6 +47,14 @@ class CircularBufferConfig;
 class IDevice;
 class JitBuildOptions;
 
+class HWCommandQueue;
+class EnqueueProgramCommand;
+
+namespace distributed {
+class MeshWorkload;
+class MeshWorkloadImpl;
+}  // namespace distributed
+
 namespace experimental {
 class GlobalCircularBuffer;
 }
