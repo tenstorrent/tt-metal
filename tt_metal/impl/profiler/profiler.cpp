@@ -142,7 +142,7 @@ std::unordered_map<uint16_t, tracy::MarkerDetails> generateZoneSourceLocationsHa
     return hash_to_zone_src_locations;
 }
 
-void parallelMergeSortedDeviceMarkerChunks(
+void mergeSortedDeviceMarkerChunks(
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>>& device_markers,
     const std::vector<uint32_t>& device_markers_chunk_offsets) {
     ZoneScoped;
@@ -250,7 +250,7 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
 
     t.join();
 
-    parallelMergeSortedDeviceMarkerChunks(device_markers_vec, device_markers_chunk_offsets);
+    mergeSortedDeviceMarkerChunks(device_markers_vec, device_markers_chunk_offsets);
 
     return device_markers_vec;
 }
