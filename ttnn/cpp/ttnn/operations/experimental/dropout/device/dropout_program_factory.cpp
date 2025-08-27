@@ -37,7 +37,7 @@ constexpr uint32_t kNumOutputTiles = 2;
 operation_attributes_t override_per_device_seed(
     const operation_attributes_t& args, const ttnn::MeshCoordinate& mesh_coord, const ttnn::Tensor& input_tensor) {
     operation_attributes_t args_with_per_device_seed = args;
-    args_with_per_device_seed.seed += input_tensor.mesh_device()->get_device(mesh_coord)->id();
+    args_with_per_device_seed.seed += input_tensor.device()->get_device(mesh_coord)->id();
     return args_with_per_device_seed;
 }
 

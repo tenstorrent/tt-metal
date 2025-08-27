@@ -62,8 +62,8 @@ Tensor handle_zero_volume_matmul(
     DataType output_dtype = dtype.value_or(input_tensor_a.dtype());
 
     // Create a tensor filled with zeros
-    auto output_tensor = ttnn::full(
-        output_shape, 0.0f, output_dtype, input_tensor_a.layout(), *input_tensor_a.mesh_device(), memory_config);
+    auto output_tensor =
+        ttnn::full(output_shape, 0.0f, output_dtype, input_tensor_a.layout(), *input_tensor_a.device(), memory_config);
 
     // Apply bias if provided
     if (bias.has_value()) {
