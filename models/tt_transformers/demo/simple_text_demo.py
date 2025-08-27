@@ -489,7 +489,7 @@ def prepare_generator_args(
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            True,  # ci_only
+            False,  # ci_only
             1,  # data_parallel
             True,  # token_accuracy
             False,  # stress_test
@@ -568,14 +568,14 @@ def test_demo_text(
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
-    if is_ci_env and (("accuracy" in test_id) or not ci_only):
-        pytest.skip("CI only runs the CI-only tests")
+    # if is_ci_env and (("accuracy" in test_id) or not ci_only):
+    # pytest.skip("CI only runs the CI-only tests")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
         pytest.skip("TG only supports batch 1 and 32")
 
-    enable_trace = True  # Use tracing for better perf
+    enable_trace = False  # Use tracing for better perf
     print_to_file = False  # Enable this flag to print the output of all users to a file
 
     # Override parameters from command line if they are provided
