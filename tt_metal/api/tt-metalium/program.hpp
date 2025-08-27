@@ -59,7 +59,6 @@ namespace detail {
 class ProgramImpl;
 
 void ValidateCircularBufferRegion(const Program& program, const IDevice* device);
-KernelHandle AddKernel(Program& program, const std::shared_ptr<Kernel>& kernel, HalProgrammableCoreType core_type);
 std::shared_ptr<Kernel> GetKernel(const Program& program, KernelHandle kernel_id);
 std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHandle id);
 
@@ -129,20 +128,9 @@ private:
     // The internal ProgramImpl may outlive the Program object if it's in-use by a command queue.
     std::shared_ptr<detail::ProgramImpl> internal_;
 
-    friend CBHandle CreateCircularBuffer(
-        Program& program,
-        const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-        const CircularBufferConfig& config);
-    friend CBHandle experimental::CreateCircularBuffer(
-        Program& program,
-        const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-        const CircularBufferConfig& config,
-        const experimental::GlobalCircularBuffer& global_circular_buffer);
-    friend std::shared_ptr<CircularBuffer> detail::GetCircularBuffer(const Program& program, CBHandle id);
+    // Stay
     friend void detail::ValidateCircularBufferRegion(const Program& program, const IDevice* device);
 
-    friend KernelHandle detail::AddKernel(
-        Program& program, const std::shared_ptr<Kernel>& kernel, HalProgrammableCoreType core_type);
     friend std::shared_ptr<Kernel> detail::GetKernel(const Program& program, KernelHandle kernel_id);
 
     friend uint32_t CreateSemaphore(
@@ -150,12 +138,6 @@ private:
         const std::variant<CoreRange, CoreRangeSet>& core_spec,
         uint32_t initial_value,
         CoreType core_type);
-
-    CBHandle add_circular_buffer(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
-    CBHandle add_circular_buffer(
-        const CoreRangeSet& core_range_set,
-        const CircularBufferConfig& config,
-        const experimental::GlobalCircularBuffer& global_circular_buffer);
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
 

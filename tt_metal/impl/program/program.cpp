@@ -210,16 +210,8 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
 }  // namespace
 namespace detail {
 
-KernelHandle AddKernel (Program &program, const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType core_type) {
-    return program.internal_->add_kernel(std::move(kernel), core_type);
-}
-
 std::shared_ptr<Kernel> GetKernel(const Program &program, KernelHandle kernel_id) {
     return program.get_kernel(kernel_id);
-}
-
-std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program &program, CBHandle id) {
-    return program.internal_->get_circular_buffer(id);
 }
 
 // Checks that circular buffers do not grow into L1 buffer space
@@ -822,17 +814,6 @@ CBHandle detail::ProgramImpl::add_circular_buffer(
     std::shared_ptr<CircularBuffer> circular_buffer =
         std::make_shared<CircularBuffer>(core_range_set.merge_ranges(), config, global_circular_buffer);
     return add_circular_buffer_(circular_buffer);
-}
-
-CBHandle Program::add_circular_buffer(const CoreRangeSet &core_range_set, const CircularBufferConfig &config) {
-    return internal_->add_circular_buffer(core_range_set, config);
-}
-
-CBHandle Program::add_circular_buffer(
-    const CoreRangeSet& core_range_set,
-    const CircularBufferConfig& config,
-    const experimental::GlobalCircularBuffer& global_circular_buffer) {
-    return internal_->add_circular_buffer(core_range_set, config, global_circular_buffer);
 }
 
 std::shared_ptr<CircularBuffer> detail::ProgramImpl::get_circular_buffer(CBHandle cb_id) const {
