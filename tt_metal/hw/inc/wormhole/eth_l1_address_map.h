@@ -124,7 +124,5 @@ struct address_map {
     static constexpr std::uint32_t UNCORR_CW_HI_ADDR = 0x1F98;
 
     static constexpr uint32_t ETH_LINK_REMOTE_INFO_ADDR = 0x1EC0;
-    static constexpr std::uint32_t INTERMESH_ETH_LINK_CONFIG_ADDR = 0x104C;
-    static constexpr std::uint32_t INTERMESH_ETH_LINK_STATUS_ADDR = 0x1104;
 };
 }  // namespace eth_l1_mem
