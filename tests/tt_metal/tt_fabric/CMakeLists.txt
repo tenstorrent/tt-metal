@@ -35,6 +35,36 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 
+set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/physical_discovery/test_physical_system_descriptor.cpp
+)
+
+add_executable(test_physical_discovery ${UNIT_TESTS_PHYSICAL_DISCOVERY_SRC})
+
+target_link_libraries(
+    test_physical_discovery
+    PRIVATE
+        tt_metal
+        fabric
+        test_common_libs
+)
+
+target_include_directories(
+    test_physical_discovery
+    PRIVATE
+        ${UMD_HOME}
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal
+        ${CMAKE_CURRENT_SOURCE_DIR}/common
+)
+
+set_target_properties(
+    test_physical_discovery
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
+)
+
 # Fabric Elastic Channels Test
 add_executable(fabric_elastic_channels_host_test)
 
