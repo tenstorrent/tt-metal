@@ -119,8 +119,6 @@ class VisionTransformer(LightweightModule):
         cu_seqlens,
         cu_window_seqlens,
         rot_mats,
-        cu_seqlens,
-        cu_window_seqlens,
         profiler=None,
     ):
         """
@@ -234,6 +232,7 @@ class DropInVisionTransformer(torch.nn.Module):
             seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
 
             # 2. Use preprocessing function from reference/functional to get indices and embeddings
+            logger.info(f"DropInVisionTransformer: Preprocessing...")
             cu_seqlens, cu_window_seqlens, position_embeddings, window_index = qwen2_5_vision_transformer_preprocess(
                 seq_len=unpadded_seq_len,
                 grid_thw=grid_thw,
@@ -242,11 +241,15 @@ class DropInVisionTransformer(torch.nn.Module):
                 window_size=self.model_args.hf_config.vision_config.window_size,
                 patch_size=self.model_args.hf_config.vision_config.patch_size,
             )
-
+            logger.info(
+                f"DropInVisionTransformer: Preprocessing done cu_seqlens: {cu_seqlens.shape}, cu_window_seqlens: {cu_window_seqlens.shape}, cos, sin: {position_embeddings[0].shape, position_embeddings[1].shape}, window_index: {window_index.shape}"
+            )
             # 3. Use reference model's patch embedding
+            logger.info(f"DropInVisionTransformer: Patch embedding...")
             patch_input = self.reference_model.patch_embed(pixel_values)
-
+            logger.info(f"DropInVisionTransformer: Patch embedding done patch_input: {patch_input.shape}")
             # 4. Prepare rotational embeddings (cos, sin) -> pad -> convert to TT tensors
+            logger.info(f"DropInVisionTransformer: Preparing rotational embeddings...")
             cos_orig, sin_orig = position_embeddings
             cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
             # pad sequence length with cos = 1, sin = 0 (identity rotation)
@@ -280,17 +283,21 @@ class DropInVisionTransformer(torch.nn.Module):
                 mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
             )
             rot_mats = [cos, sin]
-
+            logger.info(
+                f"DropInVisionTransformer: Preparing rotational embeddings done cos: {cos.shape}, sin: {sin.shape}"
+            )
             # 5. Prepare input tensor for the TT model using window_index
-            tt_input = self.tt_model.prepare_input(patch_input, window_index, target_seq_len)
-
+            logger.info(f"DropInVisionTransformer: Preparing input tensor...")
+            tt_input = self.tt_model.prepare_input(patch_input, window_index, seq_len)
+            logger.info(f"DropInVisionTransformer: Preparing input tensor done tt_input: {tt_input.shape}")
             # --- TT Model Execution ---
+            logger.info(f"DropInVisionTransformer: Executing TT model...")
             tt_out = self.tt_model(
                 tt_input,
                 unpadded_seq_len=unpadded_seq_len,
-                cu_seqlens=cu_seqlens,
-                cu_window_seqlens=cu_window_seqlens,
-                rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
+                # cu_seqlens=cu_seqlens,
+                # cu_window_seqlens=cu_window_seqlens,
+                # rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
                 cu_seqlens=ttnn.from_torch(
                     cu_seqlens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.model_args.mesh_device
                 ),
@@ -300,9 +307,9 @@ class DropInVisionTransformer(torch.nn.Module):
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=self.model_args.mesh_device,
                 ),
-                profiler=profiler,
+                rot_mats=rot_mats,
             )
-
+            logger.info(f"DropInVisionTransformer: Executing TT model done tt_out: {tt_out.shape}")
             # deallocate device tensors that are not needed by decode
             ttnn.deallocate(tt_input)
             ttnn.deallocate(cos)
@@ -312,10 +319,13 @@ class DropInVisionTransformer(torch.nn.Module):
 
             # --- Postprocessing ---
             # 1. Convert TT output back to torch tensor
+            logger.info(f"DropInVisionTransformer: Converting TT output to torch tensor...")
             tt_output_torch = ttnn.to_torch(
                 tt_out, mesh_composer=ttnn.ConcatMeshToTensor(self.model_args.mesh_device, dim=1)
             )
-
+            logger.info(
+                f"DropInVisionTransformer: Converting TT output to torch tensor done tt_output_torch: {tt_output_torch.shape}"
+            )
             # deallocate TT output
             ttnn.deallocate(tt_out)
 
@@ -323,37 +333,41 @@ class DropInVisionTransformer(torch.nn.Module):
             out_hidden_size = self.model_args.hf_config.vision_config.out_hidden_size
             # Output shape from TT is [1, B=1, S, H_out_padded], slice H and squeeze B, batch dims
             tt_output_torch = tt_output_torch[:, 0:1, :, :out_hidden_size].squeeze(0).squeeze(0)
-
+            logger.info(
+                f"DropInVisionTransformer: Extracting relevant output part done tt_output_torch: {tt_output_torch.shape}"
+            )
             # 3. Apply reverse window indexing to match reference model output order
+            logger.info(f"DropInVisionTransformer: Applying reverse window indexing...")
             reverse_indices = torch.argsort(window_index)
             final_output = tt_output_torch[reverse_indices, :]
-
+            logger.info(
+                f"DropInVisionTransformer: Applying reverse window indexing done final_output: {final_output.shape}"
+            )
             if self.debug:
                 logger.info(f"DropInVisionTransformer: Debug enabled, running reference model...")
                 reference_output = self.reference_model.forward(pixel_values, grid_thw)
                 _, pcc = comp_pcc(reference_output, final_output)
                 logger.info(f"DropInVisionTransformer: PCC to reference model: {pcc}")
-
             final_outputs.append(final_output)
+            logger.info(f"DropInVisionTransformer: Forward pass done")
+            # if profiler is not None:
+            #     profiler.end(f"vision_model_loop_postprocess", iteration=num_iters)
+            #     num_iters += 1
 
-            if profiler is not None:
-                profiler.end(f"vision_model_loop_postprocess", iteration=num_iters)
-                num_iters += 1
+        # signpost("dropin_vision_transformer_forward", "end")
 
-        signpost("dropin_vision_transformer_forward", "end")
-
-        if profiler is not None:
-            # print the total time for each iteration
-            for i in range(num_iters):
-                logger.info(
-                    f"vision_model_loop_preprocess at {i}: {profiler.get_duration('vision_model_loop_preprocess', iteration=i)}"
-                )
-                logger.info(
-                    f"vision_model_loop_tt_model at {i}: {profiler.get_duration('vision_model_loop_tt_model', iteration=i)}"
-                )
-                logger.info(
-                    f"vision_model_loop_postprocess at {i}: {profiler.get_duration('vision_model_loop_postprocess', iteration=i)}"
-                )
+        # if profiler is not None:
+        #     # print the total time for each iteration
+        #     for i in range(num_iters):
+        #         logger.info(
+        #             f"vision_model_loop_preprocess at {i}: {profiler.get_duration('vision_model_loop_preprocess', iteration=i)}"
+        #         )
+        #         logger.info(
+        #             f"vision_model_loop_tt_model at {i}: {profiler.get_duration('vision_model_loop_tt_model', iteration=i)}"
+        #         )
+        #         logger.info(
+        #             f"vision_model_loop_postprocess at {i}: {profiler.get_duration('vision_model_loop_postprocess', iteration=i)}"
+        #         )
 
         # concatenate all the outputs
         return torch.cat(final_outputs, dim=0)
