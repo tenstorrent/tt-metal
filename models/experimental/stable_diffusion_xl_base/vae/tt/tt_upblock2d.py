@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-import torch.nn as nn
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_resnetblock2d import TtResnetBlock2D
 from models.experimental.stable_diffusion_xl_base.vae.tt.tt_upsample2d import TtUpsample2D
 
 
-class TtUpDecoderBlock2D(nn.Module):
+class TtUpDecoderBlock2D(LightweightModule):
     def __init__(self, device, state_dict, module_path, model_config, has_upsample=False, conv_shortcut=False):
         super().__init__()
 
