@@ -80,6 +80,8 @@ protected:
     // All port to channel mappings
     std::unordered_map<PortType, std::unordered_map<uint32_t, std::vector<AsicChannel>>> ports_;
     // Internal connections between ports
+    // Note: Internal connections currently just use dummy trace ports
+    // Could switch to just direct channel mapping in the future
     std::unordered_map<PortType, std::vector<std::pair<uint32_t, uint32_t>>> internal_connections_;
     // Map from asic_channel to port
     std::unordered_map<AsicChannel, Port> asic_to_port_map_;

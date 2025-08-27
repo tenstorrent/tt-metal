@@ -18,8 +18,8 @@ message PodDescriptor {
     }
 
     message Connection {
-        Port p_a = 1;
-        Port p_b = 2;
+        Port port_a = 1;
+        Port port_b = 2;
     }
 
     message PortConnections {
