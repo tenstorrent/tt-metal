@@ -42,6 +42,9 @@ class OftNet(nn.Module):
         lat8 = F.relu(self.bn8(self.lat8(feats8)))
         lat16 = F.relu(self.bn16(self.lat16(feats16)))
         lat32 = F.relu(self.bn32(self.lat32(feats32)))
+        # torch.save(lat8, 'lat8_torch.pt')
+        # torch.save(lat16, 'lat16_torch.pt')
+        # torch.save(lat32, 'lat32_torch.pt')
         print("middle block finished")
         # return lat8, lat16, lat32
         print("OFT started")
@@ -53,10 +56,18 @@ class OftNet(nn.Module):
         print("OFT finished")
         print("Topdown started")
         topdown = self.topdown(ortho)
-        return topdown
+        print(f"TORCH::::Topdown output shape: {topdown.shape}, dtype: {topdown.dtype}")
+        # return topdown
         print("Topdown finished")
         batch, _, depth, width = topdown.size()
-        outputs = self.head(topdown).view(batch, -1, 9, depth, width)
+        outputs1 = self.head(topdown)
+        print(f"TORCH::::Head output shape: {outputs1.shape}, dtype: {outputs1.dtype}")
+        outputs = outputs1.view(batch, -1, 9, depth, width)
+        # return outputs
+        print(f"TORCH::::Outputs reshaped shape: {outputs.shape}, dtype: {outputs.dtype}")
         scores, pos_offsets, dim_offsets, ang_offsets = torch.split(outputs, [1, 3, 3, 2], dim=2)
-
+        print(f"TORCH::::Scores shape: {scores.shape}, dtype: {scores.dtype}")
+        print(f"TORCH::::Pos offsets shape: {pos_offsets.shape}, dtype: {pos_offsets.dtype}")
+        print(f"TORCH::::Dim offsets shape: {dim_offsets.shape}, dtype: {dim_offsets.dtype}")
+        print(f"TORCH::::Ang offsets shape: {ang_offsets.shape}, dtype: {ang_offsets.dtype}")
         return scores.squeeze(2), pos_offsets, dim_offsets, ang_offsets

@@ -1,4 +1,13 @@
 import ttnn
+import math
+
+
+def _nearest_32_per_core(x, core):
+    return math.ceil(x / core / 32) * 32 * core
+
+
+def _nearest_32(x):
+    return math.ceil(x / 32) * 32
 
 
 class Conv:
@@ -118,16 +127,36 @@ class GroupNorm:
         self.eps = eps
         self.dtype = dtype
         self.is_sliced = is_sliced
-        # if is_sliced:
+        self.num_splited_groups = num_groups
+        self.num_splited_channels = channels
 
-    def __call__(self, device, input_tensor, H, W, shard="HS"):
+    def __call__(self, device, input_tensor, H, W, shard="HS", num_splits=1):
         compute_grid = device.compute_with_storage_grid_size()
         grid_size = ttnn.CoreGrid(y=compute_grid.y, x=compute_grid.x)
         grid_y = grid_size.y
         grid_x = grid_size.x
-        if shard == "HS":
+        print(f"{grid_x=}, {grid_y=}, {shard=}, {num_splits=} {self.is_sliced=}")
+        # spliting tensor into multiple splits for very large tensors
+
+        if shard == "HS" and not self.is_sliced:
             grid_x *= grid_y
             grid_y = 1
+
+        if num_splits > 1:
+            unpadded_shape = input_tensor.shape
+            print(f"Input tensor shape before tilize: {input_tensor.shape}, dtype: {input_tensor.dtype}")
+            out_shape = [
+                unpadded_shape[0],
+                unpadded_shape[1],
+                _nearest_32_per_core(unpadded_shape[2], grid_x),
+                # _nearest_32_per_core(unpadded_shape[3], grid_y),
+                _nearest_32_per_core(unpadded_shape[3], grid_y),
+            ]
+            print(f"Output tensor shape after tilize: {out_shape}")
+            # input_tensor = ttnn.tilize_with_val_padding(
+            #    input_tensor, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
+            # )
+            print(f"Input tensor shape after tilize: {input_tensor.shape}, dtype: {input_tensor.dtype}")
         # Generate input mask
         input_mask_tensor = ttnn.create_group_norm_input_mask(self.channels, self.num_groups, grid_y)
         input_mask_tensor = ttnn.from_torch(
@@ -175,18 +204,112 @@ class GroupNorm:
         # print(
         #     f"input tensor shape: {input_tensor.shape}, layout: {input_tensor.layout} memory config: {input_tensor.memory_config}"
         # )
-        input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+        if not num_splits > 1:
+            input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+            tt_output_tensor = ttnn.group_norm(
+                input_tensor,
+                num_groups=self.num_groups,
+                input_mask=input_mask_tensor,
+                weight=gamma_t,
+                bias=beta_t,
+                memory_config=sharded_mem_config,
+                core_grid=grid_size,
+                epsilon=1e-5,
+                # inplace=False,
+            )
+        else:
+            print(f"SLICED GN {input_tensor.shape=}, {input_tensor.memory_config()=}")
+            tt_output_tensor = ttnn.group_norm(
+                input_tensor,
+                num_groups=self.num_groups,
+                input_mask=input_mask_tensor,
+                weight=gamma_t,
+                bias=beta_t,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                output_layout=ttnn.TILE_LAYOUT,
+                core_grid=grid_size,
+                inplace=False,
+                num_out_blocks=num_splits,
+                epsilon=1e-5,
+            )
+            # ttnn.synchronize_device(device)
 
-        out = ttnn.group_norm(
-            input_tensor,
+        return tt_output_tensor
+
+
+class GroupNormDRAM:
+    def __init__(self, parameters, num_groups, channels, eps=1e-5, dtype=ttnn.bfloat8_b, is_sliced=False):
+        self.weight = parameters.weight
+        self.bias = parameters.bias
+        self.num_groups = num_groups
+        self.channels = channels
+        self.eps = eps
+        self.dtype = dtype
+        self.is_sliced = is_sliced
+        self.num_splited_groups = num_groups
+        self.num_splited_channels = channels
+
+    def __call__(self, device, input_tensor, H, W, shard="HS", num_splits=1):
+        compute_grid = device.compute_with_storage_grid_size()
+        grid_x, grid_y = compute_grid.x, compute_grid.y
+        if num_splits > 4:
+            grid_y = 2
+        grid_size = ttnn.CoreGrid(y=grid_y, x=grid_x)
+
+        # torch input tensor
+        unpadded_shape = input_tensor.shape
+        out_shape = [
+            unpadded_shape[0],
+            unpadded_shape[1],
+            _nearest_32_per_core(unpadded_shape[2], grid_x),
+            _nearest_32_per_core(unpadded_shape[3], grid_y),
+        ]
+        print(f"unpadded_shape: {unpadded_shape} out_shape: {out_shape}")
+        input_tensor_tilized = ttnn.tilize_with_val_padding(
+            input_tensor, output_tensor_shape=out_shape, pad_value=0, use_multicore=True
+        )
+        print(
+            f"input_tensor_tilized shape: {input_tensor_tilized.shape} padded shape: {input_tensor_tilized.padded_shape}"
+        )
+        input_mask_tensor = ttnn.create_group_norm_input_mask(self.channels, self.num_groups, grid_size.y)
+        input_mask_tensor = ttnn.from_torch(
+            input_mask_tensor,
+            dtype=ttnn.DataType.BFLOAT8_B,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # gamma/beta
+        gamma = ttnn.create_group_norm_weight_bias_rm(self.weight, self.channels, grid_size.y)
+        beta = ttnn.create_group_norm_weight_bias_rm(self.bias, self.channels, grid_size.y)
+        gamma_t = ttnn.from_torch(
+            gamma,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        beta_t = ttnn.from_torch(
+            beta,
+            dtype=ttnn.DataType.BFLOAT16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # groupnorm
+        output_tensor = ttnn.group_norm(
+            input_tensor_tilized,
             num_groups=self.num_groups,
             input_mask=input_mask_tensor,
             weight=gamma_t,
             bias=beta_t,
-            memory_config=sharded_mem_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_layout=ttnn.TILE_LAYOUT,
             core_grid=grid_size,
+            inplace=False,
+            num_out_blocks=num_splits,
             epsilon=1e-5,
-            # inplace=False,
         )
 
-        return out
+        # ttnn.synchronize_device(device)
+        return output_tensor

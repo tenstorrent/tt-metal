@@ -26,9 +26,11 @@ def custom_preprocessor(model, name):
             bias = model.bias.reshape((1, 1, 1, -1))
             parameters["bias"] = ttnn.from_torch(bias, dtype=ttnn.float32)
     if isinstance(model, torch.nn.Linear):
-        parameters[f"weight"] = model.weight  # preprocess_linear_weight(model.weight, dtype=ttnn.bfloat16)
+        parameters[f"weight"] = preprocess_linear_weight(model.weight, dtype=ttnn.bfloat16)
+        # parameters["weight"] = model.weight
         if model.bias is not None:
-            parameters[f"bias"] = model.bias  # preprocess_linear_bias(model.bias, dtype=ttnn.bfloat16)
+            parameters[f"bias"] = preprocess_linear_bias(model.bias, dtype=ttnn.bfloat16)
+            # parameters["bias"] = model.bias
     if isinstance(model, nn.GroupNorm):
         parameters["weight"] = model.weight
         if model.bias is not None:
@@ -81,12 +83,12 @@ def create_OFT_model_parameters(model: OftNet, input_tensors: tuple[torch.Tensor
         custom_preprocessor=custom_preprocessor,
         device=None,
     )
-    # parameters.oft8.conv3d.weight = ttnn.to_device(parameters.oft8.conv3d.weight, device=device)
-    # parameters.oft8.conv3d.bias = ttnn.to_device(parameters.oft8.conv3d.bias, device=device)
-    # parameters.oft16.conv3d.weight = ttnn.to_device(parameters.oft16.conv3d.weight, device=device)
-    # parameters.oft16.conv3d.bias = ttnn.to_device(parameters.oft16.conv3d.bias, device=device)
-    # parameters.oft32.conv3d.weight = ttnn.to_device(parameters.oft32.conv3d.weight, device=device)
-    # parameters.oft32.conv3d.bias = ttnn.to_device(parameters.oft32.conv3d.bias, device=device)
+    parameters.oft8.conv3d.weight = ttnn.to_device(parameters.oft8.conv3d.weight, device=device)
+    parameters.oft8.conv3d.bias = ttnn.to_device(parameters.oft8.conv3d.bias, device=device)
+    parameters.oft16.conv3d.weight = ttnn.to_device(parameters.oft16.conv3d.weight, device=device)
+    parameters.oft16.conv3d.bias = ttnn.to_device(parameters.oft16.conv3d.bias, device=device)
+    parameters.oft32.conv3d.weight = ttnn.to_device(parameters.oft32.conv3d.weight, device=device)
+    parameters.oft32.conv3d.bias = ttnn.to_device(parameters.oft32.conv3d.bias, device=device)
 
     input1, input2, input3 = input_tensors
     # print(f"Input1 shape: {input1.shape}, Input2 shape: {input2.shape}, Input3 shape: {input3.shape}")
