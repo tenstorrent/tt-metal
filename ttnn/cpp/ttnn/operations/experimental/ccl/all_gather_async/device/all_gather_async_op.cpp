@@ -153,6 +153,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     if (this->use_all_gather_async_llama_sharded) {
         return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
     } else {
+        TT_FATAL(this->semaphore.size() == 2, "Default implementation requires 2 semaphores")
         return AllGatherAsyncVersion::MINIMAL_DEFAULT;
     }
 }
