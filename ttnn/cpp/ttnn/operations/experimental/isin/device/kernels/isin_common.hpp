@@ -4,7 +4,7 @@
 
 #pragma once
 
-using output_number_type = uint8_t;
+using output_number_type = uint32_t;
 
 // choose the right C++ POD type at compile-time
 template <DataFormat df>
