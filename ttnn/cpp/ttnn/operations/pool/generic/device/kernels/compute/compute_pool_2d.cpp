@@ -168,23 +168,19 @@ void MAIN {
                     // Finalize temp CB and perform tilization to output CB
                     PACK((pack_untilize_uninit(tmp_cb_id)));
 
-#if DEBUG_PRINT == 1
-                    DPRINT << "=== BEFORE TILIZATION ===" << ENDL();
-                    PACK(tt::compute::common::print_full_tile(tmp_cb_id, 0));
-#endif
+                    tensix_sync();
                     unary_op_init_common(tmp_cb_id, out_cb_id);
+                    tensix_sync();
 
                     tilize_init(tmp_cb_id, in_ntiles_c, out_cb_id);
                     tilize_block(tmp_cb_id, in_ntiles_c, out_cb_id);
 
-#if DEBUG_PRINT == 1
-                    DPRINT << "=== AFTER TILIZATION ===" << ENDL();
-                    PACK(tt::compute::common::print_full_tile(out_cb_id, 0, true));
-#endif
-
                     cb_push_back(out_cb_id, in_ntiles_c);
                     tilize_uninit(tmp_cb_id, out_cb_id);
+
+                    tensix_sync();
                     unary_op_init_common(in_cb_id_0, tmp_cb_id);
+                    tensix_sync();
 
                     // Reinitialize unpack when tilization disrupts hardware state
                     // This happens with wide reductions or certain tensor configurations

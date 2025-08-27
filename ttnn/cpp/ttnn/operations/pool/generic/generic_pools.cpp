@@ -111,8 +111,7 @@ static Tensor pool2d_invoke(
                 ShardOrientation::ROW_MAJOR,
                 false,
                 is_out_tiled,
-                is_in_tiled,  // if input is tiled we need to choose num_cores_c to make the shard width to be a tile
-                              // multiple, it cannot be 16
+                is_in_tiled || is_out_tiled,
                 0);
         } else {  // auto-sharding
             std::optional<sliding_window::ParallelConfig> sw_parallel_config =
@@ -185,7 +184,8 @@ static Tensor pool2d_invoke(
         tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
     uint32_t output_c = channels;
-    uint32_t output_c_padded = tt::round_up(output_c, tt::constants::TILE_WIDTH / 2);
+    uint32_t output_c_padded = tt::round_up(
+        output_c, num_cores_c * (is_out_tiled ? tt::constants::TILE_WIDTH : tt::constants::TILE_WIDTH / 2));
     uint32_t output_shard_width_padded = output_c_padded / num_cores_c;
     log_debug(
         tt::LogOp,
