@@ -209,6 +209,12 @@ public:
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
 
+    bool using_slow_dispatch() const override;
+    bool using_fast_dispatch() const override;
+    
+    // Synchronize all or specific command queues
+    void synchronize(std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+
     // Initialization APIs
     bool initialize(
         uint8_t num_hw_cqs,

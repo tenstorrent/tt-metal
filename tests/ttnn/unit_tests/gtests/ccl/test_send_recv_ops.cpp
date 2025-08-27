@@ -72,8 +72,8 @@ void test_send_recv_async_(
         md1.get());
     ttnn::experimental::send_async(md0_input_tensor, forward_send_socket);
     ttnn::experimental::recv_async(md1_input_tensor, forward_recv_socket);
-    distributed::Synchronize(md0.get(), std::nullopt);
-    distributed::Synchronize(md1.get(), std::nullopt);
+    md0.get()->synchronize(std::nullopt);
+    md1.get()->synchronize(std::nullopt);
     auto md0_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*md0, /*dim=*/0);
     auto md1_composer = ttnn::distributed::concat_mesh_to_tensor_composer(*md1, /*dim=*/0);
     auto md0_input_data = ttnn::distributed::aggregate_tensor(md0_input_tensor, *md0_composer).to_vector<T>();
@@ -85,8 +85,8 @@ void test_send_recv_async_(
         md0.get());
     ttnn::experimental::send_async(md1_inc_output_tensor, backward_send_socket);
     ttnn::experimental::recv_async(md0_inc_output_tensor, backward_recv_socket);
-    distributed::Synchronize(md1.get(), std::nullopt);
-    distributed::Synchronize(md0.get(), std::nullopt);
+    md1.get()->synchronize(std::nullopt);
+    md0.get()->synchronize(std::nullopt);
     auto md0_inc_output_data = ttnn::distributed::aggregate_tensor(md0_inc_output_tensor, *md0_composer).to_vector<T>();
     auto md1_inc_output_data = ttnn::distributed::aggregate_tensor(md1_inc_output_tensor, *md1_composer).to_vector<T>();
     EXPECT_EQ(md0_inc_output_data, md1_inc_output_data);

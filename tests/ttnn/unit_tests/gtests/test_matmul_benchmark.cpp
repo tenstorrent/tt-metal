@@ -309,7 +309,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
             input_tensor_1,
             /*bias=*/std::nullopt,
             /*parameters=*/matmul_params);
-        Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
+    device_->synchronize(std::nullopt, std::vector<SubDeviceId>());
         output_tensor.deallocate();
     }
 
@@ -334,7 +334,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
         {
             ZoneScopedN("Matmul trace iterations");
             ttnn::operations::trace::execute_trace(device_, tid, ttnn::DefaultQueueId, false);
-            Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
+    device_->synchronize(std::nullopt, std::vector<SubDeviceId>());
         }
 
         auto end_time = std::chrono::high_resolution_clock::now();
@@ -351,7 +351,7 @@ TEST_P(Matmul2DHostPerfTestFixture, Matmul2DHostPerfTest) {
                     input_tensor_1,
                     /*bias=*/std::nullopt,
                     /*parameters=*/matmul_params);
-                Synchronize(device_, std::nullopt, std::vector<SubDeviceId>());
+    device_->synchronize(std::nullopt, std::vector<SubDeviceId>());
                 auto end_time = std::chrono::high_resolution_clock::now();
                 total_time += end_time - start_time;
                 output_tensor.deallocate();

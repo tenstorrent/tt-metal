@@ -287,7 +287,7 @@ void EnqueueRecordEvent(
 void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         // Slow dispatch conservatively flushes all work since there's no cq.
-        Synchronize(event->device);
+        event->device->synchronize();
         return;
     }
     detail::DispatchStateCheck(true);
@@ -306,7 +306,7 @@ void EnqueueWaitForEvent(CommandQueue& cq, const std::shared_ptr<Event>& event) 
 void EventSynchronize(const std::shared_ptr<Event>& event) {
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
         // Slow dispatch conservatively flushes all work since there's no cq.
-        Synchronize(event->device);
+        event->device->synchronize();
         return;
     }
     detail::DispatchStateCheck(true);

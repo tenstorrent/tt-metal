@@ -1985,7 +1985,7 @@ static void launch_kernels_and_wait_for_completion(
 
     TT_FATAL(device_programs.size() > 0, "No devices found");
     for (const auto& [device, program] : device_programs) {
-        tt_metal::Synchronize(device);
+        device->synchronize();
     }
     for (const auto& [device, program] : device_programs) {
         tt_metal::detail::ReadDeviceProfilerResults(device);

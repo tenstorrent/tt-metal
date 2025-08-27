@@ -64,7 +64,7 @@ void BM_where_experimental_bf16_ttt(benchmark::State& state) {
 
     for (auto _ : state) {
         auto out = ttnn::operations::experimental::ternary::where(cond_tensor, true_value_tensor, false_value_tensor);
-        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        dev_ptr->synchronize(std::nullopt);
         benchmark::DoNotOptimize(out);
         benchmark::ClobberMemory();
     }
@@ -94,7 +94,7 @@ void BM_where_bf16_ttt(benchmark::State& state) {
 
     for (auto _ : state) {
         auto out = ttnn::where(cond_tensor, true_value_tensor, false_value_tensor);
-        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
+        dev_ptr->synchronize(std::nullopt);
         benchmark::DoNotOptimize(out);
         benchmark::ClobberMemory();
     }
