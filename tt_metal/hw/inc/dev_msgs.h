@@ -23,6 +23,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 
 #include "hostdevcommon/profiler_common.h"
 #include "hostdevcommon/dprint_common.h"
@@ -296,7 +297,8 @@ enum riscv_id_t {
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };
 
 struct debug_pause_msg_t {
-    volatile uint8_t flags[DebugNumUniqueRiscs];
+    volatile uint8_t flags[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint8_t pad[3];  // CODEGEN:skip
 };
 
 constexpr static int DEBUG_RING_BUFFER_ELEMENTS = 32;
@@ -314,7 +316,8 @@ struct debug_stack_usage_per_cpu_t {
 };
 
 struct debug_stack_usage_t {
-    debug_stack_usage_per_cpu_t cpu[DebugNumUniqueRiscs];
+    debug_stack_usage_per_cpu_t cpu[NUM_PROCESSORS_PER_CORE_TYPE];
+    uint8_t pad[12];  // CODEGEN:skip
 };
 
 struct debug_eth_link_t {
