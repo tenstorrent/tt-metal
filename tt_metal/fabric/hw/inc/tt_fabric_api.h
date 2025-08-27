@@ -5,13 +5,17 @@
 #pragma once
 
 #include "risc_attribs.h"
+#include <hostdevcommon/common_values.hpp>
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
-#include "tt_fabric.h"
 #include "eth_chan_noc_mapping.h"
+#include "hostdevcommon/fabric_common.h"
+#include "tt_metal/hw/inc/risc_common.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include <type_traits>
+
+using namespace tt::tt_fabric;
 
 namespace tt::tt_fabric {
 
