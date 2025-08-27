@@ -165,6 +165,31 @@ struct ExecuteChunkedFlashMLAPrefill {
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
+struct ExecuteRingDistributedScaledDotProductAttention {
+    static ttnn::Tensor invoke(
+        QueueId queue_id,
+        const ttnn::Tensor& input_tensor_q,
+        const ttnn::Tensor& input_tensor_k,
+        const ttnn::Tensor& input_tensor_v,
+        uint32_t ring_size,
+        uint32_t ring_id,
+        std::optional<float> scale = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
+    static ttnn::Tensor invoke(
+        const ttnn::Tensor& input_tensor_q,
+        const ttnn::Tensor& input_tensor_k,
+        const ttnn::Tensor& input_tensor_v,
+        uint32_t ring_size,
+        uint32_t ring_id,
+        std::optional<float> scale = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        std::optional<SDPAProgramConfig> program_config = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+};
+
 }  // namespace operations::transformer
 
 namespace transformer {
@@ -191,6 +216,10 @@ constexpr auto flash_mla_prefill = ttnn::
 constexpr auto chunked_flash_mla_prefill = ttnn::register_operation<
     "ttnn::transformer::chunked_flash_mla_prefill",
     ttnn::operations::transformer::ExecuteChunkedFlashMLAPrefill>();
+
+constexpr auto ring_distributed_scaled_dot_product_attention = ttnn::register_operation<
+    "ttnn::transformer::ring_distributed_scaled_dot_product_attention",
+    ttnn::operations::transformer::ExecuteRingDistributedScaledDotProductAttention>();
 
 }  // namespace transformer
 

@@ -1,0 +1,121 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "dataflow_api.h"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "dataflow_common.hpp"
+#include "debug/dprint.h"
+
+void kernel_main() {
+    DPRINT << "RING_WRITER: Starting kernel_main()" << ENDL();
+    // Compile-time arguments (same as regular SDPA plus ring parameters)
+    constexpr uint32_t B = get_compile_time_arg_val(0);
+    constexpr uint32_t NQH = get_compile_time_arg_val(1);
+    constexpr uint32_t NKH = get_compile_time_arg_val(2);
+    constexpr uint32_t Skt = get_compile_time_arg_val(3);
+    constexpr uint32_t DHt = get_compile_time_arg_val(4);
+    constexpr uint32_t vDHt = get_compile_time_arg_val(5);
+    constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);
+    constexpr uint32_t local_q_num_chunks = get_compile_time_arg_val(7);  // Always 2 for ring distribution
+    constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(8);
+    constexpr uint32_t k_num_chunks = get_compile_time_arg_val(9);
+    constexpr uint32_t valid_Skt = get_compile_time_arg_val(10);
+    constexpr uint32_t is_causal = get_compile_time_arg_val(11) == 1;
+    constexpr uint32_t ring_size = get_compile_time_arg_val(12);
+    constexpr uint32_t ring_id = get_compile_time_arg_val(13);
+    constexpr uint32_t first_chunk_id = get_compile_time_arg_val(14);
+    constexpr uint32_t second_chunk_id = get_compile_time_arg_val(15);
+    constexpr uint32_t global_chunk_size = get_compile_time_arg_val(16);  // In tiles
+
+    // Runtime arguments
+    const uint32_t out_addr = get_arg_val<uint32_t>(0);
+    const uint32_t core_id = get_arg_val<uint32_t>(1);
+    const uint32_t local_batch_start = get_arg_val<uint32_t>(2);
+    const uint32_t local_batch_end = get_arg_val<uint32_t>(3);
+    const uint32_t local_nh_start = get_arg_val<uint32_t>(4);
+    const uint32_t local_nh_end = get_arg_val<uint32_t>(5);
+    const uint32_t local_q_start = get_arg_val<uint32_t>(6);
+    const uint32_t local_q_end = get_arg_val<uint32_t>(7);
+
+    const uint32_t local_q_chunks_per_core = local_q_end - local_q_start;  // Should be 2
+
+    constexpr uint32_t mask_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
+    constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+
+    constexpr bool is_dram = true;
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+
+    constexpr uint32_t tile_bytes = get_tile_size(cb_out);
+    constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, is_dram>();
+
+    uint32_t barrier_count = 0;
+
+    const InterleavedAddrGenFast<is_dram> out_writer = {
+        .bank_base_address = out_addr, .page_size = tile_bytes, .data_format = get_dataformat(cb_out)};
+
+    // Calculate output tensor shape
+    const auto out_tile_shape = TensorTileShape(B, NQH, global_chunk_size * 2, vDHt);
+
+    DPRINT << "RING_WRITER: Starting main processing loops" << ENDL();
+
+    // Main processing loop: iterate over batches, heads, and local Q chunks
+    for (uint32_t nb = local_batch_start; nb < local_batch_end; nb++) {
+        DPRINT << "RING_WRITER: Processing batch " << (uint32_t)nb << ENDL();
+        for (uint32_t nq = local_nh_start; nq < local_nh_end; nq++) {
+            DPRINT << "RING_WRITER: Processing head " << (uint32_t)nq << ENDL();
+            for (uint32_t local_q_iter = local_q_start; local_q_iter < local_q_end; local_q_iter++) {
+                DPRINT << "RING_WRITER: Processing local_q_iter " << (uint32_t)local_q_iter << ENDL();
+                // Map local Q iteration to global Q chunk
+                uint32_t global_q_chunk = (local_q_iter == 0) ? first_chunk_id : second_chunk_id;
+
+                // Calculate output position (write contiguously)
+                uint32_t local_output_q_pos = local_q_iter - local_q_start;
+
+                // Generate causal masks for this Q chunk
+                if constexpr (is_causal) {
+                    // Calculate Q range for causal masking
+                    uint32_t q_low_idx = global_q_chunk * Sq_chunk_t;
+                    uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
+
+                    // Generate mask for each K chunk that this Q chunk attends to
+                    for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
+                        const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
+                        const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
+
+                        // Skip computation if Q chunk doesn't attend to this K chunk
+                        if (!(q_low_idx >= k_high_idx)) {
+                            generate_causal_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, global_q_chunk, k_chunk);
+                        }
+                    }
+                }
+
+                // Wait for compute to deliver output chunk
+                cb_wait_front(cb_out, out_chunk_tiles);
+                barrier_count = 0;
+                uint32_t l1_read_addr = get_read_ptr(cb_out);
+
+                // Write output tiles to global memory contiguously
+                // Local output position: [nb, nq, local_output_q_pos * Sq_chunk_t, 0]
+                uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, local_output_q_pos * Sq_chunk_t, 0);
+
+                for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
+                    for (uint32_t col = 0; col < vDHt; ++col) {
+                        noc_async_write_tile(out_tile_id, out_writer, l1_read_addr);
+                        ++out_tile_id;
+                        l1_read_addr += tile_bytes;
+
+                        if (++barrier_count == barrier_threshold) {
+                            noc_async_writes_flushed();
+                            barrier_count = 0;
+                        }
+                    }
+                }
+                noc_async_write_barrier();
+                cb_pop_front(cb_out, out_chunk_tiles);
+            }
+        }
+    }
+}

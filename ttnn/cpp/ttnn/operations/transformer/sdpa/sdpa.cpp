@@ -9,6 +9,7 @@
 #include "device/sdpa_op.hpp"
 #include "device/joint_sdpa_op.hpp"
 #include "device/ring_joint_sdpa_op.hpp"
+#include "device/ring_sdpa_op.hpp"
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_op.hpp"
@@ -388,6 +389,62 @@ ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
         head_dim_v,
         page_table_tensor,
         chunk_start_idx,
+        scale,
+        memory_config,
+        std::move(program_config),
+        compute_kernel_config);
+}
+
+ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    uint32_t ring_size,
+    uint32_t ring_id,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<SDPAProgramConfig> program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    [[maybe_unused]] auto arch =
+        input_tensor_q.storage_type() == StorageType::DEVICE
+            ? input_tensor_q.device()->arch()
+            : ttnn::operations::experimental::auto_format::AutoFormat::GetDefaultDevice()->arch();
+    auto kernel_config_val = init_device_compute_kernel_config(
+        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
+
+    return tt::tt_metal::operation::run(
+               RingDistributedScaledDotProductAttention{
+                   .ring_size = ring_size,
+                   .ring_id = ring_id,
+                   .scale = scale,
+                   .output_mem_config = memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
+                   .program_config = std::move(program_config),
+                   .compute_kernel_config = kernel_config_val},
+               {input_tensor_q, input_tensor_k, input_tensor_v},
+               {},
+               {},
+               queue_id)
+        .at(0);
+}
+
+ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    uint32_t ring_size,
+    uint32_t ring_id,
+    std::optional<float> scale,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<SDPAProgramConfig> program_config,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    return invoke(
+        DefaultQueueId,
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        ring_size,
+        ring_id,
         scale,
         memory_config,
         std::move(program_config),
