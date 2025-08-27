@@ -118,16 +118,16 @@ def generate_build_header(
 
     # Unpack transpose faces
     unpack_transpose_faces = test_config.get(
-        "unpack_transpose_faces", Transpose.No.value
-    )
+        "unpack_transpose_faces", Transpose.No
+    ).value
     header_content.append(
         f"constexpr bool UNPACK_TRANSPOSE_FACES = {unpack_transpose_faces};"
     )
 
     # Unpack transpose within face
-    unpack_transpose_within_face = str(
-        test_config.get("unpack_transpose_within_face", Transpose.No.value)
-    ).lower()
+    unpack_transpose_within_face = test_config.get(
+        "unpack_transpose_within_face", Transpose.No
+    ).value
     header_content.append(
         f"constexpr bool UNPACK_TRANSPOSE_WITHIN_FACE = {unpack_transpose_within_face};"
     )
@@ -137,7 +137,7 @@ def generate_build_header(
     header_content.append(f"constexpr int THROTTLE_LEVEL = {throttle};")
 
     # Math transpose faces
-    math_transpose_faces = str(test_config.get("math_transpose_faces", False)).lower()
+    math_transpose_faces = test_config.get("math_transpose_faces", Transpose.No).value
     header_content.append(
         f"constexpr bool MATH_TRANSPOSE_FACES = {math_transpose_faces};"
     )

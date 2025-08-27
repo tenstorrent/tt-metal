@@ -3,7 +3,7 @@
 
 import pytest
 
-from helpers.format_arg_mapping import DestAccumulation
+from helpers.format_arg_mapping import DestAccumulation, Transpose
 from helpers.format_config import DataFormat
 from helpers.param_config import input_output_formats, parametrize
 from helpers.perf import (
@@ -39,8 +39,8 @@ def report_fixture():
             DataFormat.Int32
         ],
     ),
-    unpack_transpose_faces=[False, True],
-    math_transpose_faces=[False, True],
+    unpack_transpose_faces=[Transpose.No, Transpose.Yes],
+    math_transpose_faces=[Transpose.No, Transpose.Yes],
 )
 def test_perf_math_transpose(
     report_fixture,
@@ -50,12 +50,15 @@ def test_perf_math_transpose(
     math_transpose_faces,
 ):
 
-    if not math_transpose_faces and not formats.input_format.is_32_bit():
+    if math_transpose_faces == Transpose.No and not formats.input_format.is_32_bit():
         pytest.skip(
             "Unsupported config transpose_of_faces = false and is_32bit = false"
         )
 
-    if unpack_transpose_faces and math_transpose_faces:
+    if (
+        unpack_transpose_faces == Transpose.Yes
+        and math_transpose_faces == Transpose.Yes
+    ):
         pytest.skip("Skip transposing faces twice")
 
     dest_acc = (

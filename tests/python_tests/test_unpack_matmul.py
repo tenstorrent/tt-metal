@@ -145,8 +145,8 @@ def test_unpack_matmul(test_name, math_fidelity, transpose, format_dest_acc_and_
         "ct_dim": matmul_dims["ct_dim"],
         "kt_dim": matmul_dims["kt_dim"],
         "stochastic_rnd": stochastic_rnd,
-        "unpack_transpose_faces": transpose.value,
-        "unpack_transpose_within_face": transpose.value,  # matmul transposes both faces and within faces, there is no option for one or the other
+        "unpack_transpose_faces": transpose,
+        "unpack_transpose_within_face": transpose,  # matmul transposes both faces and within faces, there is no option for one or the other
     }
 
     res_address = write_stimuli_to_l1(
