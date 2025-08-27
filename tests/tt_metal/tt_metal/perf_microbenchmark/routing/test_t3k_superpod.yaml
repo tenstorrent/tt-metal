@@ -141,4 +141,4 @@ Tests:
       ftype: unicast
     patterns:
       - type: full_device_random_pairing
-        iterations: 25
+        iterations: 200
