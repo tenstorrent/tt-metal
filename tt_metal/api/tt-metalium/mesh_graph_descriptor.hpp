@@ -16,8 +16,8 @@ class MeshGraphDescriptor;
 
 class MeshGraphDescriptor {
 public:
-    MeshGraphDescriptor(const std::string& text_proto);
-    MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path);
+    explicit MeshGraphDescriptor(const std::string& text_proto);
+    explicit MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path);
     ~MeshGraphDescriptor();
 
 private:
