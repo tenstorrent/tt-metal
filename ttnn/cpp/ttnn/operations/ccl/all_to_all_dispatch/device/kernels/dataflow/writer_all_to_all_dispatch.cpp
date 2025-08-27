@@ -143,11 +143,16 @@ void kernel_main() {
     constexpr uint32_t device_stride = 1;
 #endif
 
-    constexpr auto output_tensor_args = TensorAccessorArgs<37>();  // Same offset as input in reader
+    constexpr auto reader_input_args = TensorAccessorArgs<37>();
+    constexpr auto reader_indices_args = TensorAccessorArgs<reader_input_args.next_compile_time_args_offset()>();
+    constexpr auto reader_mapping_args = TensorAccessorArgs<reader_indices_args.next_compile_time_args_offset()>();
+    constexpr auto reader_metadata_args = TensorAccessorArgs<reader_mapping_args.next_compile_time_args_offset()>();
+
+    // Writer's output tensor comes after all reader tensors
+    constexpr auto output_tensor_args = TensorAccessorArgs<reader_metadata_args.next_compile_time_args_offset()>();
     auto output_addr_gen = TensorAccessor(output_tensor_args, output_tensor_address, output_page_size);
-    // metadata is at the end after all 4 buffers from reader + output buffer from writer
-    constexpr auto metadata_tensor_args = TensorAccessorArgs<output_tensor_args.next_compile_time_args_offset()>();
-    auto metadata_addr_gen = TensorAccessor(metadata_tensor_args, metadata_tensor_address, metadata_page_size);
+    // Writer reuses the reader's metadata tensor
+    auto metadata_addr_gen = TensorAccessor(reader_metadata_args, metadata_tensor_address, metadata_page_size);
 
     uint32_t packet_header_buffer_address = get_read_ptr(packet_header_cb_id);
     auto* unicast_packet_header = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_address);
