@@ -16,17 +16,18 @@ from ...utils.padding import PaddingConfig
 
 
 @pytest.mark.parametrize(
-    "mesh_device, sp_axis, tp_axis",
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links",
     [
-        [(1, 1), 0, 1],
-        [(1, 2), 0, 1],
-        [(1, 2), 1, 0],
-        [(2, 1), 0, 1],
-        [(2, 1), 1, 0],
-        [(2, 2), 0, 1],
-        [(2, 2), 1, 0],
-        [(2, 4), 0, 1],  # fails because we don't have padded heads yet
-        [(2, 4), 1, 0],
+        [(2, 4), (1, 1), 0, 1, 1],
+        [(2, 4), (1, 2), 0, 1, 1],
+        [(2, 4), (1, 2), 1, 0, 1],
+        [(2, 4), (2, 1), 0, 1, 1],
+        [(2, 4), (2, 1), 1, 0, 1],
+        [(2, 4), (2, 2), 0, 1, 1],
+        [(2, 4), (2, 2), 1, 0, 1],
+        [(2, 4), (2, 4), 0, 1, 1],  # fails because we don't have padded heads yet
+        [(2, 4), (2, 4), 1, 0, 1],
+        [(4, 8), (4, 4), 0, 1, 4],
     ],
     ids=[
         "1x1sp0tp1",
@@ -38,6 +39,7 @@ from ...utils.padding import PaddingConfig
         "2x2sp1tp0",
         "2x4sp0tp1",
         "2x4sp1tp0",
+        "4x4sp0tp1",
     ],
     indirect=["mesh_device"],
 )
@@ -52,8 +54,10 @@ from ...utils.padding import PaddingConfig
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_sd35_joint_attention(
     mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple[int, int],
     sp_axis: int,
     tp_axis: int,
+    num_links: int,
     B: int,
     spatial_seq_len: int,
     prompt_seq_len: int,
@@ -61,6 +65,8 @@ def test_sd35_joint_attention(
 ) -> None:
     torch_dtype = torch.bfloat16
 
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
     sp_factor = tuple(mesh_device.shape)[sp_axis]
     tp_factor = tuple(mesh_device.shape)[tp_axis]
 
@@ -82,7 +88,7 @@ def test_sd35_joint_attention(
     # Create CCL manager
     ccl_manager = CCLManager(
         mesh_device=mesh_device,
-        num_links=1,
+        num_links=num_links,
         topology=ttnn.Topology.Linear,
     )
 
