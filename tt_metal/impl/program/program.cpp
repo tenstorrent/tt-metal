@@ -207,11 +207,6 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
 }  // namespace
 namespace detail {
 
-// Checks that circular buffers do not grow into L1 buffer space
-void ValidateCircularBufferRegion(Program& program, const IDevice* device) {
-    program.impl().validate_circular_buffer_region(device);
-}
-
 void EnablePersistentKernelCache() { enable_persistent_kernel_cache = true; }
 
 void DisablePersistentKernelCache() { enable_persistent_kernel_cache = false; }

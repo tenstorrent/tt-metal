@@ -355,8 +355,6 @@ private:
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;
     std::unordered_map<uint64_t, ProgramCommandSequence> trace_cached_program_command_sequences_;
 
-    friend void ValidateCircularBufferRegion(const Program& program, const IDevice* device);
-
     CBHandle add_circular_buffer_(const std::shared_ptr<CircularBuffer>& circular_buffer);
 
     void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
