@@ -89,6 +89,14 @@ jobs:
       run:
         shell: bash
     runs-on: ${{ matrix.test-info.runs-on }}
+    env:
+      DOCKER_OPTS: |
+        -v /mnt/MLPerf:/mnt/MLPerf:ro
+        -e TT_METAL_HOME=${{ github.workspace }}
+        -e ARCH_NAME=${{ matrix.test-info.arch }}
+        -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
+        -e GTEST_OUTPUT=xml:generated/test_reports/
+        -e GITHUB_ACTIONS=true
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -116,13 +124,7 @@ jobs:
         with:
           docker_image: ${{ inputs.docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
-          docker_opts: |
-            -v /mnt/MLPerf:/mnt/MLPerf:ro
-            -e TT_METAL_HOME=${{ github.workspace }}
-            -e ARCH_NAME=${{ matrix.test-info.arch }}
-            -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
-            -e GTEST_OUTPUT=xml:generated/test_reports/
-            -e GITHUB_ACTIONS=true
+          docker_opts: ${{ env.DOCKER_OPTS }}
           install_wheel: true
           run_args: |
             if [[ "${{ matrix.model-group.name }}" == "other" ]]; then
