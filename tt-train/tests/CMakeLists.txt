@@ -52,6 +52,7 @@ set(SOURCES
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
     ops/silu_op_test.cpp
+    ops/swiglu_op_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})

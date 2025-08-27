@@ -11,6 +11,7 @@
 #include "ops/rmsnorm_fw/rmsnorm_fw.hpp"
 #include "ops/silu_bw/silu_bw.hpp"
 #include "ops/softmax/softmax.hpp"
+#include "ops/swiglu_fw/swiglu_fw.hpp"
 
 namespace ttml::metal {
 
@@ -36,5 +37,8 @@ constexpr auto profiler_no_op =
 
 constexpr auto silu_bw =
     ttnn::register_operation<"ttml::metal::silu_bw", ttml::metal::ops::silu_bw::SiLUBackwardOperation>();
+
+constexpr auto swiglu_fw =
+    ttnn::register_operation<"ttml::metal::swiglu_fw", ttml::metal::ops::swiglu_fw::SwiGLUForwardOperation>();
 
 }  // namespace ttml::metal
