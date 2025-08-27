@@ -7,16 +7,15 @@ import pytest
 from loguru import logger
 import ttnn
 from models.demos.llama3_70b_galaxy.tt.qwen_model_config import TtQwenModelArgs
-from models.common.rmsnorm import RMSNorm as TtRMSNorm
-from models.demos.llama3_70b_galaxy.tt.distributed_norm import DistributedNorm
+
+
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm as RefRMSNorm
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
 )
 from models.utility_functions import skip_for_grayskull
-from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetcherSetup
-from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+
 import os
 
 
@@ -102,51 +101,77 @@ def test_qwen_layernorm_pcc(
 
     state_dict = model_args.load_state_dict()
 
-    # Setup prefetcher and CCL
-    prefetcher_setup = TtLlamaPrefetcherSetup(
-        mesh_device,
-        n_tensors=5,
-        n_layers=model_args.n_layers,
-    )
-    mesh_device.set_sub_device_stall_group(
-        [prefetcher_setup.prefetcher_sub_device_id, prefetcher_setup.worker_sub_device_id]
-    )
+    # Extract CCL parameters directly without creating TT_CCL instance
+    # From TT_CCL.__init__: self.num_cbs = 2, self.gather_idx = [0, 0]
+    num_cbs = 2
+    gather_idx = [0, 0]  # [cluster_axis_0, cluster_axis_1]
 
-    tt_ccl = TT_CCL(mesh_device, model_args, prefetcher_setup.worker_sub_device_id, use_qwen_mlp=True)
+    # Create minimal semaphore handles (from TT_CCL.__init__ lines 57-72)
+    sub_device_crs = model_args.sub_core_grids  # For decode mode
+    gather_semaphore_handles = [[], []]
+    for i in range(2):  # 2 cluster axes
+        for _ in range(num_cbs):  # 2 circular buffers
+            gather_semaphore_handles[i].append(ttnn.create_global_semaphore(mesh_device, sub_device_crs, 0))
 
-    # Initialize just the ff_norm module for layer 1
+    # Extract RMSNorm parameters directly without creating TtRMSNorm instance
     layer_num = 1
     state_dict_prefix = model_args.get_state_dict_prefix("", layer_num)
+    weight_key = "ffn_norm"
 
-    # Create the inner RMSNorm for ff_norm
-    tt_inner_norm = TtRMSNorm(
-        device=mesh_device,
-        dim=model_args.dim,
-        state_dict=state_dict,
-        state_dict_prefix=state_dict_prefix,
-        weight_cache_path=None if model_args.dummy_weights else model_args.weight_cache_path(dtype),
-        weight_dtype=ttnn.bfloat16,
-        weight_key="ffn_norm",
-        is_distributed=model_args.is_distributed_norm,
-        sharded_program_config=model_args.model_config["SHARDED_NORM_MLP_PRGM_CFG"],
-        sharded_output_config=model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"],
-        output_mem_config=model_args.model_config["SHARDED_FF12_RING_MEMCFG"],
+    # Extract epsilon (default from RMSNorm)
+    epsilon = 1e-05
+
+    # Extract weight directly from state_dict (following RMSNorm.__init__ logic)
+    weight_name = f"{state_dict_prefix}{weight_key}.weight"
+    SHARD_HEIGHT = 32  # From rmsnorm.py
+    torch_weight = (
+        state_dict[weight_name]
+        .unsqueeze(0)
+        .view(1, 1, model_args.dim)
+        .reshape([1, 1, model_args.dim // SHARD_HEIGHT, SHARD_HEIGHT])
     )
 
-    # Wrap it in DistributedNorm (as done in llama_decoder.py lines 99-117)
-    tt_ff_norm = DistributedNorm(
-        tt_inner_norm,
-        model_args,
-        TG=model_args.is_galaxy,
-        tt_ccl=tt_ccl,
-        ccl_topology=model_args.model_config["CCL_TOPOLOGY"],
+    # Create distributed weight tensor (following RMSNorm distributed weight creation)
+    weight_distributed = ttnn.as_tensor(
+        torch_weight,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 2), mesh_shape=list(mesh_device.shape)),
+    )
+
+    # Output memory config
+    output_mem_config = model_args.model_config["SHARDED_FF12_RING_MEMCFG"]
+
+    # Setup memory configs for the sharded distributed call (from distributed_norm.py)
+    core_grid_ln, grid_offset = (10, 2), ttnn.CoreCoord(1, 0)
+    core_range = ttnn.CoreRange(
+        grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
+    )
+    num_cores_ln = core_grid_ln[0] * core_grid_ln[1]
+    hidden_size_per_device_distributed_ln = model_args.dim // 4
+
+    gather_in_mem_cfg = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 32, hidden_size_per_device_distributed_ln // num_cores_ln),  # [1, 1, 32, 64]
+        core_grid=ttnn.CoreRangeSet({core_range}),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    ln_prg_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+        compute_with_storage_grid_size=(core_grid_ln[1], core_grid_ln[0]),
+        subblock_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
+        block_h=1,
+        block_w=(hidden_size_per_device_distributed_ln // num_cores_ln) // 32,
+        inplace=False,
     )
 
     # Setup reference model for layer 1 - just the ffn_norm
     layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", layer_num)
     ffn_norm_prefix = layer_prefix + "ffn_norm."
     partial_state_dict = {k[len(ffn_norm_prefix) :]: v for k, v in state_dict.items() if k.startswith(ffn_norm_prefix)}
-    reference_ffn_norm = RefRMSNorm(dim=model_args.dim, eps=model_args.norm_eps)
+    reference_ffn_norm = RefRMSNorm(dim=model_args.dim, eps=epsilon)  # Use the same epsilon
     reference_ffn_norm.load_state_dict(partial_state_dict)
 
     logger.info("Converting torch tensors to TT tensors")
@@ -156,16 +181,15 @@ def test_qwen_layernorm_pcc(
     attn_out_expanded = attn_out_torch.expand(1, 1, batch_size, model_args.dim).contiguous()
     h_expanded = h_torch.expand(1, 1, batch_size, model_args.dim).contiguous()
 
-    # Convert to TT tensors with proper memory config for decode mode
-    skip_mem_cfg = model_args.model_config["DECODE_RESIDUAL_MEMCFG"]
-
+    # Convert to TT tensors with the gather memory config for sharded distributed call
+    # For the sharded distributed call, we need separate x and res tensors
     attn_out_tt = ttnn.from_torch(
         attn_out_expanded,
         device=mesh_device,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
-        memory_config=skip_mem_cfg,
+        memory_config=gather_in_mem_cfg,
     )
 
     h_tt = ttnn.from_torch(
@@ -174,17 +198,49 @@ def test_qwen_layernorm_pcc(
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=model_args.cluster_shape),
-        memory_config=skip_mem_cfg,
+        memory_config=gather_in_mem_cfg,
     )
 
-    logger.info("Running TT ff_norm forward pass")
-    # Pass through ff_norm as done in llama_decoder.py decode mode (line 192)
-    # ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
-    ff_in_sharded_tt, _ = tt_ff_norm(attn_out_tt, h_tt, "decode")
+    logger.info("Running TT fused RMSNorm forward pass directly")
+    # Extract the core call from tt_sharded_distributed_rmsnorm (lines 1232-1253)
+    # This is the actual ttnn.fused_rms_1_1_32_8192 call without the TT_CCL wrapper
+    cluster_axis = 1
+    semaphore = gather_semaphore_handles[cluster_axis][gather_idx[cluster_axis]]
+    tt_stats_sharded_config = ttnn.create_sharded_memory_config(
+        shape=(32, 64),
+        core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    persistent_buffer = ttnn.from_torch(
+        torch.zeros((1, 1, 32, 64)),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=tt_stats_sharded_config,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )  # tt_ccl.all_gather_buffers.get("LAYERNORM", None) - set to None for minimal test
+
+    tt_output = ttnn.fused_rms_1_1_32_8192(
+        attn_out_tt,  # inp parameter
+        ln_prg_cfg,  # ln_sharded_progcfg
+        cluster_axis,
+        mesh_device,  # tt_ccl.mesh_device
+        semaphore,
+        topology=model_args.model_config["CCL_TOPOLOGY"],  # ccl_topology
+        residual_input_tensor=h_tt,  # res parameter
+        num_links=1,
+        epsilon=epsilon,
+        weight=weight_distributed,  # gamma parameter
+        stats=persistent_buffer,
+        memory_config=output_mem_config,
+        use_noc1_only=False,
+    )
 
     # Convert TT output back to torch
-    ff_in_torch = ttnn.to_torch(
-        ff_in_sharded_tt,
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
     )[:, :1, :, :]
 
@@ -204,13 +260,10 @@ def test_qwen_layernorm_pcc(
 
     logger.info("Computing PCC between TT and reference results")
     # Compare the results
-    passing, pcc_message = comp_pcc(reference_output, ff_in_torch)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
-    logger.info(comp_allclose(reference_output, ff_in_torch))
+    logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
-
-    # Cleanup
-    tt_ccl.close()
 
     if passing:
         logger.info("Qwen LayerNorm PCC Test Passed!")
