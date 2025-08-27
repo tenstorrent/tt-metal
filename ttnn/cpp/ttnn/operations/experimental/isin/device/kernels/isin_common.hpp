@@ -4,6 +4,7 @@
 
 #pragma once
 
+using elements_number_type = uint32_t;
 using output_number_type = uint32_t;
 
 // choose the right C++ POD type at compile-time
@@ -63,14 +64,13 @@ struct IsInCTAs {
     const uint32_t test_elements_size;
     const uint32_t single_fetch_subchunk_size;
     const bool invert;
-    const uint32_t num_cores;
     const elements_accessor_args_type elements_accessor_args;
     const test_elements_accessor_args_type test_elements_accessor_args;
     const output_accessor_args_type output_accessor_args;
 };
 
 FORCE_INLINE constexpr auto get_ctas() {
-    constexpr auto elements_args = TensorAccessorArgs<11>();
+    constexpr auto elements_args = TensorAccessorArgs<10>();
     constexpr auto test_elements_args = TensorAccessorArgs<elements_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<test_elements_args.next_compile_time_args_offset()>();
     return IsInCTAs<decltype(elements_args), decltype(test_elements_args), decltype(output_args)>{
@@ -84,34 +84,35 @@ FORCE_INLINE constexpr auto get_ctas() {
         get_compile_time_arg_val(7),
         get_compile_time_arg_val(8),
         get_compile_time_arg_val(9) != 0,
-        get_compile_time_arg_val(10),
         elements_args,
         test_elements_args,
         output_args};
 }
 
-template <typename elements_number_type, typename addr_gen_type>
+template <typename addr_gen_type>
 FORCE_INLINE void load_to_cb(
-    const uint32_t& cb, const addr_gen_type& addr_gtor, const uint32_t& offset_bytes, const uint32_t& subchunk_size) {
+    const uint32_t& cb, const addr_gen_type& addr_gtor, const uint32_t& offset, const uint32_t& subchunk_size) {
     cb_reserve_back(cb, ONE_PAGE);
 
     const uint64_t source_noc_address = get_noc_addr(FIRST_STICK, addr_gtor);
     const uint32_t l1_write_address = get_write_ptr(cb);
-    const uint32_t subchunk_size_bytes = subchunk_size * sizeof(elements_number_type);
+    const uint32_t subchunk_size_bytes = subchunk_size * 4;
+    const uint32_t offset_bytes = offset * 4;
     noc_async_read(source_noc_address + offset_bytes, l1_write_address, subchunk_size_bytes);
     noc_async_read_barrier();
 
     cb_push_back(cb, ONE_PAGE);
 }
 
-template <typename elements_number_type, typename addr_gen_type>
+template <typename addr_gen_type>
 FORCE_INLINE void write_to_dram(
-    const uint32_t& cb, const addr_gen_type& addr_gtor, const uint32_t& offset_bytes, const uint32_t& subchunk_size) {
+    const uint32_t& cb, const addr_gen_type& addr_gtor, const uint32_t& offset, const uint32_t& subchunk_size) {
     cb_wait_front(cb, ONE_PAGE);
 
     const uint64_t destination_noc_address = get_noc_addr(FIRST_STICK, addr_gtor);
     const uint32_t l1_read_address = get_read_ptr(cb);
-    const uint32_t subchunk_size_bytes = subchunk_size * sizeof(elements_number_type);
+    const uint32_t subchunk_size_bytes = subchunk_size * 4;
+    const uint32_t offset_bytes = offset * 4;
     noc_async_write(l1_read_address, destination_noc_address + offset_bytes, subchunk_size_bytes);
     noc_async_write_barrier();
 
