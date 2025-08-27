@@ -9,7 +9,7 @@ import ttnn
 from ...utils.check import assert_quality
 from ...models.vae import vae_sd35
 from ...parallel.manager import CCLManager
-from ...parallel.config import create_vae_parallel_manager
+from ...parallel.config import vae_all_gather, VAEParallelConfig, ParallelFactor
 from time import time
 from loguru import logger
 
@@ -336,13 +336,11 @@ def test_sd35_vae_resnet_block(
     torch_model = ResnetBlock2D(in_channels=in_channels, out_channels=out_channels, groups=groups)
     torch_model.eval()
 
-    # breakpoint()  # Commented out for normal test execution
-    vae_parallel_manager = create_vae_parallel_manager(
-        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear)
-    )
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
     tt_model = vae_sd35.ResnetBlock.from_torch(
-        torch_ref=torch_model, mesh_device=mesh_device, mesh_axis=1, parallel_manager=vae_parallel_manager
+        torch_ref=torch_model, mesh_device=mesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
     )
 
     torch_input = torch.randn(batch, in_channels, height, width)
@@ -360,7 +358,7 @@ def test_sd35_vae_resnet_block(
 
     tt_out = tt_model(tt_input_tensor)
 
-    tt_out = vae_parallel_manager.vae_all_gather(tt_out)
+    tt_out = vae_all_gather(ccl_manager, tt_out)
 
     tt_final_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_final_out_torch, pcc=0.999_500)
@@ -395,12 +393,11 @@ def test_sd35_vae_up_decoder_block(
     )
     torch_model.eval()
 
-    vae_parallel_manager = create_vae_parallel_manager(
-        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear)
-    )
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
     tt_model = vae_sd35.UpDecoderBlock2D.from_torch(
-        torch_ref=torch_model, mesh_device=mesh_device, mesh_axis=1, parallel_manager=vae_parallel_manager
+        torch_ref=torch_model, mesh_device=mesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
     )
 
     torch_input = torch.randn(batch, in_channels, height, width)
@@ -419,7 +416,7 @@ def test_sd35_vae_up_decoder_block(
 
     tt_out = tt_model(tt_input_tensor)
 
-    tt_out = vae_parallel_manager.vae_all_gather(tt_out)
+    tt_out = vae_all_gather(ccl_manager, tt_out)
 
     tt_final_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_final_out_torch, pcc=0.999_500)
@@ -448,12 +445,11 @@ def test_sd35_vae_attention(
     )
     torch_model.eval()
 
-    vae_parallel_manager = create_vae_parallel_manager(
-        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear)
-    )
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
     tt_model = vae_sd35.Attention.from_torch(
-        torch_ref=torch_model, mesh_device=mesh_device, mesh_axis=1, parallel_manager=vae_parallel_manager
+        torch_ref=torch_model, mesh_device=mesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
     )
 
     torch_input = torch.randn(batch, in_channels, height, width)
@@ -471,7 +467,7 @@ def test_sd35_vae_attention(
 
     tt_out = tt_model(tt_input_tensor)
 
-    tt_out = vae_parallel_manager.vae_all_gather(tt_out)
+    tt_out = vae_all_gather(ccl_manager, tt_out)
 
     tt_final_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_final_out_torch, pcc=0.999_500)
@@ -499,12 +495,11 @@ def test_sd35_vae_unet_mid_block2d(
     )
     torch_model.eval()
 
-    vae_parallel_manager = create_vae_parallel_manager(
-        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear)
-    )
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
     tt_model = vae_sd35.UnetMidBlock2D.from_torch(
-        torch_ref=torch_model, mesh_device=mesh_device, mesh_axis=1, parallel_manager=vae_parallel_manager
+        torch_ref=torch_model, mesh_device=mesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
     )
 
     torch_input = torch.randn(batch, in_channels, height, width)
@@ -522,7 +517,7 @@ def test_sd35_vae_unet_mid_block2d(
 
     tt_out = tt_model(tt_input_tensor)
 
-    tt_out = vae_parallel_manager.vae_all_gather(tt_out)
+    tt_out = vae_all_gather(ccl_manager, tt_out)
 
     tt_final_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_final_out_torch, pcc=0.999_000)
@@ -565,12 +560,11 @@ def test_sd35_vae_vae_decoder(
     )
     torch_model.eval()
 
-    vae_parallel_manager = create_vae_parallel_manager(
-        mesh_device, CCLManager(mesh_device, topology=ttnn.Topology.Linear)
-    )
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
+    vae_parallel_config = VAEParallelConfig(tensor_parallel=ParallelFactor(factor=4, mesh_axis=1))
 
     tt_model = vae_sd35.VAEDecoder.from_torch(
-        torch_ref=torch_model, mesh_device=mesh_device, mesh_axis=1, parallel_manager=vae_parallel_manager
+        torch_ref=torch_model, mesh_device=mesh_device, parallel_config=vae_parallel_config, ccl_manager=ccl_manager
     )
 
     torch_input = torch.randn(batch, in_channels, height, width)
@@ -586,7 +580,6 @@ def test_sd35_vae_vae_decoder(
         torch_output = torch_model(torch_input)
 
     tt_out = tt_model(tt_input_tensor)
-    # tt_out = vae_parallel_manager.vae_all_gather(tt_out)
 
     tt_final_out_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).permute(0, 3, 1, 2)
     assert_quality(torch_output, tt_final_out_torch, pcc=0.99_000)

@@ -235,7 +235,9 @@ class T5DenseGatedActDense:
                     hidden_states.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
@@ -392,7 +394,9 @@ class T5Attention:
                     attn_output.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
@@ -407,7 +411,9 @@ class T5Attention:
                     dense_out.shape, 3, self.parallel_config.tensor_parallel.mesh_axis
                 ),
                 dim=3,
-                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+                multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(
+                    self.parallel_config.tensor_parallel.mesh_axis
+                ),
                 num_links=self.ccl_manager.num_links,
                 topology=self.ccl_manager.topology,
                 cluster_axis=self.parallel_config.tensor_parallel.mesh_axis,
