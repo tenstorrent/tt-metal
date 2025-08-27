@@ -2,22 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
-import datasets.builder
-import datasets.utils.file_utils
 import pytest
 import torch
 import transformers
 from datasets import load_dataset
-from datasets.utils.filelock import SoftFileLock
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
 from models.demos.vit.common import load_torch_model
 from models.demos.vit.tt import ttnn_optimized_sharded_vit_wh as ttnn_optimized_sharded_vit
-from models.utility_functions import torch_random
+from models.utility_functions import set_datasets_filelock, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -90,11 +85,7 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
     model = load_torch_model(model_location_generator, embedding=True)
 
-    if os.getenv("CI") == "true" or True:
-        # UnixFileLock throws error while creating FileLock in read-only system
-        datasets.builder.FileLock = SoftFileLock
-        datasets.utils.file_utils.FileLock = SoftFileLock
-
+    set_datasets_filelock()
     dataset = load_dataset("huggingface/cats-image", revision="ccdec0af347ae11c5315146402c3e16c8bbf4149")
     image = dataset["test"]["image"][0]
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")
@@ -387,11 +378,7 @@ def test_vit(device, model_name, batch_size, image_size, image_channels, sequenc
     config = model.config
     config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size)
 
-    if os.getenv("CI") == "true" or True:
-        # UnixFileLock throws error while creating FileLock in read-only system
-        datasets.builder.FileLock = SoftFileLock
-        datasets.utils.file_utils.FileLock = SoftFileLock
-
+    set_datasets_filelock()
     dataset = load_dataset("huggingface/cats-image", revision="ccdec0af347ae11c5315146402c3e16c8bbf4149")
     image = dataset["test"]["image"][0]
     image_processor = AutoImageProcessor.from_pretrained("google/vit-base-patch16-224")

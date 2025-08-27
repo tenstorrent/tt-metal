@@ -5,13 +5,10 @@
 import json
 import os
 
-import datasets.builder
-import datasets.utils.file_utils
 import numpy as np
 import pytest
 import torch
 from datasets import load_dataset
-from datasets.utils.filelock import SoftFileLock
 from diffusers import AutoencoderKL, UNet2DConditionModel
 from loguru import logger
 from PIL import Image
@@ -29,7 +26,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_unet_2d_condition
     UNet2DConditionModel as UNet2D,
 )
 from models.demos.wormhole.stable_diffusion.tt.vae.ttnn_vae import Vae
-from models.utility_functions import enable_persistent_kernel_cache, profiler
+from models.utility_functions import enable_persistent_kernel_cache, profiler, set_datasets_filelock
 
 
 def load_inputs(input_path):
@@ -374,12 +371,8 @@ def run_demo_inference_diffusiondb(
         num_inference_steps >= 4
     ), f"PNDMScheduler only supports num_inference_steps >= 4. Found num_inference_steps={num_inference_steps}"
 
-    if os.getenv("CI") == "true" or True:
-        # UnixFileLock throws error while creating FileLock in read-only system
-        datasets.builder.FileLock = SoftFileLock
-        datasets.utils.file_utils.FileLock = SoftFileLock
-
     # 0. Load a sample prompt from the dataset
+    set_datasets_filelock()
     dataset = load_dataset("poloclub/diffusiondb", "2m_random_1k")
     data_1k = dataset["train"]
 

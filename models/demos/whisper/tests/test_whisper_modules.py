@@ -2,15 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-
-import datasets.builder
-import datasets.utils.file_utils
 import pytest
 import torch
 import transformers
 from datasets import load_dataset
-from datasets.utils.filelock import SoftFileLock
 from loguru import logger
 from transformers import AutoFeatureExtractor, EncoderDecoderCache, WhisperConfig, WhisperModel
 from ttnn.model_preprocessing import preprocess_model_parameters
@@ -18,7 +13,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 import ttnn
 from models.demos.whisper.tt import ttnn_optimized_functional_whisper
 from models.demos.whisper.tt.ttnn_optimized_functional_whisper import WHISPER_L1_SMALL_SIZE, init_kv_cache
-from models.utility_functions import is_blackhole, torch_random
+from models.utility_functions import is_blackhole, set_datasets_filelock, torch_random
 from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 
 # MODEL_NAME = "openai/whisper-base"
@@ -399,11 +394,7 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model, model_name, decoder_sequence
     config = WhisperConfig.from_pretrained(model_name)
     feature_extractor = AutoFeatureExtractor.from_pretrained(model_name)
 
-    if os.getenv("CI") == "true" or True:
-        # UnixFileLock throws error while creating FileLock in read-only system
-        datasets.builder.FileLock = SoftFileLock
-        datasets.utils.file_utils.FileLock = SoftFileLock
-
+    set_datasets_filelock()
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
     inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features

@@ -8,9 +8,11 @@ import struct
 import time
 from typing import Union
 
+import datasets
 import numpy as np
 import pytest
 import torch
+from datasets.utils.filelock import BaseFileLock
 from loguru import logger
 from ttnn.device import Arch
 from typing_extensions import deprecated
@@ -1105,3 +1107,23 @@ def get_debug_tensor(num_pages_width, num_pages_height, dtype, page_width=32, pa
             torch_tensor = torch.cat((torch_tensor, tile_row), 2)
 
     return torch_tensor
+
+
+class DummyFileLock(BaseFileLock):
+    """Not a FileLock, just immitates it and made not to throw errors."""
+
+    def _acquire(self):
+        # needs to be not None
+        self._lock_file_fd = 42
+
+    def _release(self):
+        self._lock_file_fd = None
+
+
+def set_datasets_filelock(force=False):
+    """Monkey patching for FileLock in read-only storage cache which is used by datasets.load_dataset.
+    Be careful using this function especially while downloading datasets."""
+
+    if os.getenv("CI") == "true" or force:
+        datasets.builder.FileLock = DummyFileLock
+        datasets.utils.file_utils.FileLock = DummyFileLock
