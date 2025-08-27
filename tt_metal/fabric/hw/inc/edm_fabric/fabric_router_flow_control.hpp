@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 #include "tt_metal/hw/inc/ethernet/tt_eth_api.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 

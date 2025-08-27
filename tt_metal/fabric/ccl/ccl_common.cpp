@@ -60,7 +60,7 @@ tt::tt_metal::KernelHandle generate_edm_kernel(
         program,
         device,
         edm_builder,
-        "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
+        "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
         eth_core,
         risc_id,
         noc_id,

@@ -8,7 +8,7 @@
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "edm_fabric_worker_adapters.hpp"
 #include "fabric_edm_types.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 #include <cstdint>
 
 // If the hop/distance counter equals to the below value, it indicates that it has

@@ -5,7 +5,7 @@
 #pragma once
 
 // this is needed for inclusion of fabric_erisc_datamover_channels.hpp, since we are not
-// including 1d_fabric_constants.hpp here, where the constant is originally defined
+// including fabric_erisc_router_ct_args.hpp here, where the constant is originally defined
 namespace tt::tt_fabric {
 static constexpr uint8_t worker_handshake_noc = 0;
 }  // namespace tt::tt_fabric
