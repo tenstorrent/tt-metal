@@ -24,6 +24,8 @@ class TtTransformerBlock(LightweightModule):
         use_paged_kv_cache=False,
         prefetcher_setup=None,
         tt_ccl=None,
+        scaling_tensor_q=None,
+        scaling_tensor_k=None,
     ):
         super().__init__()
 
@@ -60,6 +62,8 @@ class TtTransformerBlock(LightweightModule):
             use_paged_kv_cache=use_paged_kv_cache,
             prefetcher_setup=prefetcher_setup,
             tt_ccl=tt_ccl,
+            scaling_tensor_q=scaling_tensor_q,
+            scaling_tensor_k=scaling_tensor_k,
         )
         self.feed_forward = TtLlamaMLP(
             mesh_device=mesh_device,
@@ -169,7 +173,9 @@ class TtTransformerBlock(LightweightModule):
 
         if mode == "decode":
             ff_in_sharded, _ = self.ff_norm(attn_out, h, mode)
-            attn_out.deallocate(True)
+            # temp = ttnn.add(attn_out, h, memory_config=skip_mem_cfg)
+            # ff_in_sharded, _ = self.ff_norm(temp, None, mode)
+            # attn_out.deallocate(True)
 
         # MLP takes replicated inputs and produces fractured outputs
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
@@ -177,10 +183,10 @@ class TtTransformerBlock(LightweightModule):
             if self.args.qk_norm:
                 h = ttnn.to_memory_config(h, skip_mem_cfg)
             out = ttnn.add(ff_out, h, memory_config=skip_mem_cfg)  # , dtype=ttnn.bfloat16)
-            if mode == "decode":
-                ff_out.deallocate(True)
+            # if mode == "decode":
+            #     ff_out.deallocate(True)
             if mode == "prefill":
                 h.deallocate(True)
-            return out, None
+            return out, ff_in_sharded
         else:
             return ff_out, h

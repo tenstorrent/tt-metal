@@ -75,7 +75,7 @@ def test_qwen_transformer_ttt_inference(
 
     # Load tt_transformers reference model args for reference transformer
     model_args_ref = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
-    model_args_ref.n_layers = 1  # For the unit test, just run a single layer
+    model_args_ref.n_layers = 2  # For the unit test, just run a single layer
 
     state_dict_ref = model_args_ref.load_state_dict()
     state_dict_prefix_ref = model_args_ref.get_state_dict_prefix("", None)
@@ -100,7 +100,7 @@ def test_qwen_transformer_ttt_inference(
 
     # Load Qwen3 model using TtQwenModelArgs
     model_args = TtQwenModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, dummy_weights=False)
-    model_args.n_layers = 1
+    model_args.n_layers = 2
 
     state_dict = model_args.load_state_dict()
     logger.info(f"Qwen3 Transformer Model Loaded")
