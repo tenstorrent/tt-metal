@@ -45,7 +45,6 @@ class TtTransformer(LightweightModule):
         self.enable_prefetcher_performance_mode = enable_prefetcher_performance_mode
         state_dict_prefix = args.get_state_dict_prefix("", None)
         self.allocate_prefill_buffers = allocate_prefill_buffers
-        self.paged_attention_config = paged_attention_config
 
         self.embd = TtLlamaEmbedding(
             mesh_device=mesh_device,
@@ -270,59 +269,21 @@ class TtTransformer(LightweightModule):
         transformed_device_inputs = self.transform_prefill_inputs_device(*device_inputs)
         return transformed_device_inputs
 
-    def prepare_inputs_decode(self, tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded):
+    def prepare_inputs_decode(self, *inputs):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
         Its implementation can take advantage of a few other functions which the
         model must implement.
         """
-        host_tensors = self.prepare_decode_inputs_host(
-            tokens, current_pos, page_table, is_cur_pos_sharded, is_page_table_sharded
-        )
-        shard_specs = self.prepare_decode_shard_configs(is_cur_pos_sharded, is_page_table_sharded)
-        device_inputs = copy_host_to_device(
-            host_tensors, mesh_device=self.mesh_device, shard_specs=shard_specs
-        )  # Helper function
+        host_inputs = self.prepare_decode_inputs_host(*inputs)
+        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)  # Helper function
         return device_inputs
 
-    def prepare_decode_shard_configs(self, is_cur_pos_sharded=False, is_page_table_sharded=False):
-        """
-        Prepares the sharding configuration for cur_pos and page_table tensors
-        """
-        cur_pos_memory_config = None
-        page_table_memory_config = None
-        if is_cur_pos_sharded:
-            cur_pos_shard_spec = ttnn.ShardSpec(
-                self.args.sub_core_grids,
-                (1, self.args.max_batch_size // self.mesh_device.shape[1]),
-                ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            cur_pos_memory_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
-            )
-        if is_page_table_sharded:
-            page_table_shard_spec = ttnn.ShardSpec(
-                self.args.sub_core_grids,
-                (
-                    self.args.batch_size_per_device_group,
-                    self.paged_attention_config.max_num_blocks // self.args.max_batch_size,
-                ),
-                ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            page_table_memory_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, page_table_shard_spec
-            )
-        return [None, cur_pos_memory_config, None, page_table_memory_config]
-
-    def prepare_decode_inputs_host(
-        self, tokens, current_pos, page_table=None, is_cur_pos_sharded=False, is_page_table_sharded=False
-    ):
+    def prepare_decode_inputs_host(self, tokens, current_pos, page_table=None):
         """
         Inputs are torch tensors or python types. Outputs are ttnn tensors on host.
         NOTE: Tokens and current_pos are padded to batch
-        NOTE: if is_cur_pos_sharded is True, current_pos_tt is returned as a device tensor
-        NOTE: if is_page_table_sharded is True, page_table is returned as a device tensor
         """
         B = tokens.shape[0]
         # assert current_pos.shape[0] == B, "Batch size mismatch"
@@ -341,32 +302,22 @@ class TtTransformer(LightweightModule):
             current_pos, torch.tensor(0, dtype=torch.int64)
         )  # Ensure position indices are non-negative
         rope_idxs = self.rope_setup.get_rm_rot_idxs(rot_current_pos, on_host=True)
-        cur_pos_shard_dim = 0
-        if is_cur_pos_sharded:
-            cur_pos_shard_dim = 1
-            current_pos = current_pos.repeat(self.args.sub_core_grids.num_cores(), 1)
         current_pos_tt = ttnn.from_torch(
             current_pos,
             device=None,
             dtype=ttnn.int32,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.mesh_device,
-                dims=(None, cur_pos_shard_dim) if (self.args.is_galaxy and B > 1) else (None, None),
+                dims=(None, 0) if (self.args.is_galaxy and B > 1) else (None, None),
                 mesh_shape=self.args.cluster_shape,
             ),
         )
-        if page_table is not None:
-            if is_page_table_sharded:
-                page_table_chunks = page_table.split(B // self.args.cluster_shape[1], dim=0)
-                repeated_page_table_chunks = [
-                    chunk.repeat(self.args.sub_core_grids.num_cores(), 1) for chunk in page_table_chunks
-                ]
-                page_table = torch.cat(repeated_page_table_chunks, dim=0)
 
+        if page_table is not None:
             page_table = ttnn.from_torch(
                 page_table,
                 device=None,
-                dtype=ttnn.uint16 if is_page_table_sharded else ttnn.int32,
+                dtype=ttnn.int32,
                 mesh_mapper=ttnn.ShardTensor2dMesh(
                     self.mesh_device,
                     dims=(None, -2) if (self.args.is_galaxy and B > 1) else (None, None),
@@ -509,7 +460,7 @@ class TtTransformer(LightweightModule):
 
         ttnn.plus_one(
             current_pos,
-            sub_core_grids=self.args.sub_core_grids,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
         ttnn.plus_one(
             rot_mat_idxs,

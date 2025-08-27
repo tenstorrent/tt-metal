@@ -125,30 +125,16 @@ def test_llama_attention_inference(
             model_args.batch_size_per_device_group,
             paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
         )
-        page_table = page_table.repeat(model_args.sub_core_grids.num_cores(), 1)
-        page_table_shard_spec = ttnn.ShardSpec(
-            model_args.sub_core_grids,
-            (
-                model_args.batch_size_per_device_group,
-                paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
-            ),
-            ttnn.ShardOrientation.ROW_MAJOR,
-        )
-        page_table_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, page_table_shard_spec
-        )
-
         page_table_tt = ttnn.from_torch(
             page_table,
             device=mesh_device,
-            dtype=ttnn.uint16,
+            dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 mesh_device,
                 dims=(None, None),
                 mesh_shape=model_args.cluster_shape,
             ),
-            memory_config=page_table_memory_config,
         )
 
     prefetcher_setup = TtLlamaPrefetcherSetup(
@@ -185,27 +171,16 @@ def test_llama_attention_inference(
     freqs_cis = torch.complex(cos, sin)
 
     # Initial positions
-    current_pos_dram = torch.tensor([generation_start_pos for _ in range(batch_size)])
-    is_cur_pos_sharded = True
-    cur_pos_mesh_shard_dim = 1 if is_cur_pos_sharded else 0
-    if is_cur_pos_sharded:
-        current_pos_sram = torch.tensor(
-            [[generation_start_pos for _ in range(batch_size)]] * model_args.sub_core_grids.num_cores()
-        )
-        cur_pos_shard_spec = ttnn.ShardSpec(model_args.sub_core_grids, (1, batch_size), ttnn.ShardOrientation.ROW_MAJOR)
-        cur_pos_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
-        )
+    current_pos = torch.tensor([generation_start_pos for _ in range(batch_size)])
     current_pos_tensor = ttnn.from_torch(
-        current_pos_sram if is_cur_pos_sharded else current_pos_dram,
+        current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, cur_pos_mesh_shard_dim) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
-        memory_config=cur_pos_memory_config if is_cur_pos_sharded else None,
     )
     # Explicitly allocate global CB to avoid memory fragmentation
     prefetcher_setup.create_global_cb()
@@ -223,7 +198,7 @@ def test_llama_attention_inference(
         )
 
         # Get cos/sin matrices for the current position of each user
-        rot_mats = rope_setup.get_rm_rot_mats(current_pos_dram)
+        rot_mats = rope_setup.get_rm_rot_mats(current_pos)
 
         ttnn.dram_prefetcher(
             prefetcher_setup.get_input_tensors(),
@@ -247,25 +222,33 @@ def test_llama_attention_inference(
         tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
 
         # In this test all users have the same position (if using batch > 1)
-        freqs_cis_i = freqs_cis[current_pos_dram[0], :].unsqueeze(0)
+        freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
-        reference_output = reference_model(pt_attention_input, current_pos_dram[0], freqs_cis_i, mask=None)
+        reference_output = reference_model(pt_attention_input, current_pos[0], freqs_cis_i, mask=None)
 
         passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
         logger.info(comp_allclose(reference_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
         if passing:
-            logger.info(f"[pos={current_pos_dram[0]}] Llama_Attention Passed!")
+            logger.info(f"[pos={current_pos[0]}] Llama_Attention Passed!")
         else:
-            logger.warning(f"[pos={current_pos_dram[0]}] Llama_Attention Failed!")
+            logger.warning(f"[pos={current_pos[0]}] Llama_Attention Failed!")
             all_tests_pass = False
 
         # Increment position
-        ttnn.plus_one(
-            current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids,
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
+        current_pos_tensor = ttnn.from_torch(
+            current_pos,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
         )
+
         check_kv_cache = True
         if check_kv_cache:
             # PyTorch output --------------------------------------------------------------------
