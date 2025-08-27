@@ -191,7 +191,7 @@ TestConfig parse_cli_config(int argc, char** argv) {
         throw std::runtime_error("Invalid number of command line arguments");
     }
 
-    TestConfig config;
+    TestConfig config{};
     size_t arg_idx = 1;
     config.n_chunks = std::stoi(argv[arg_idx++]);
     config.chunk_n_pkts = std::stoi(argv[arg_idx++]);
@@ -358,13 +358,13 @@ TimingStats read_timing_stats(tt_metal::IDevice* device, CoreCoord core, uint32_
     // Read timing stats from L1 memory - use same address as calculated in host
     uint32_t timing_stats_addr = handshake_addr + 0x800;
 
-    std::vector<uint32_t> timing_data;
+    std::vector<uint32_t> timing_data{};
     timing_data.resize(sizeof(TimingStats) / sizeof(uint32_t));
     tt_metal::detail::ReadFromDeviceL1(
         device, core, timing_stats_addr, sizeof(TimingStats), timing_data, CoreType::ETH);
 
     constexpr size_t num_words = sizeof(TimingStats) / sizeof(uint32_t);
-    std::array<uint32_t, num_words> arr;
+    std::array<uint32_t, num_words> arr{};
     std::memcpy(arr.data(), timing_data.data(), sizeof(arr));
     stats = std::bit_cast<TimingStats>(arr);
 
@@ -374,13 +374,13 @@ TimingStats read_timing_stats(tt_metal::IDevice* device, CoreCoord core, uint32_
 WorkerTimingStats read_worker_timing_stats(tt_metal::IDevice* device, CoreCoord core, uint32_t timing_stats_addr) {
     WorkerTimingStats stats{};
 
-    std::vector<uint32_t> timing_data;
+    std::vector<uint32_t> timing_data{};
     timing_data.resize(sizeof(WorkerTimingStats) / sizeof(uint32_t));
     tt_metal::detail::ReadFromDeviceL1(
         device, core, timing_stats_addr, sizeof(WorkerTimingStats), timing_data, CoreType::WORKER);
 
     constexpr size_t num_words = sizeof(WorkerTimingStats) / sizeof(uint32_t);
-    std::array<uint32_t, num_words> arr;
+    std::array<uint32_t, num_words> arr{};
     std::memcpy(arr.data(), timing_data.data(), sizeof(arr));
     stats = std::bit_cast<WorkerTimingStats>(arr);
 
@@ -805,7 +805,7 @@ int main(int argc, char** argv) {
 
     } else {
         // Traditional CLI mode: single test from command line arguments
-        TestConfig config;
+        TestConfig config{};
         try {
             config = parse_cli_config(argc, argv);
 
