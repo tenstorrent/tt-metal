@@ -75,8 +75,8 @@ bool MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& prot
         uint32_t max_num_dims = get_max_dimensions_for_architecture(mesh.arch());
         uint32_t num_dims = std::min(static_cast<uint32_t>(mesh.device_topology().dims_size()), max_num_dims);
 
-        if (mesh.device_topology().types_size() > 0) {
-            if (mesh.device_topology().dims_size() != mesh.device_topology().types_size()) {
+        if (mesh.device_topology().dim_types_size() > 0) {
+            if (mesh.device_topology().dims_size() != mesh.device_topology().dim_types_size()) {
                 log_error(LogFabric, "MeshGraphDescriptor: Device topology dimensions and types must be the same size");
                 success = false;
             }
