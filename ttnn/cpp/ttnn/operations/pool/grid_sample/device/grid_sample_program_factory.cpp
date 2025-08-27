@@ -210,8 +210,18 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    std::string reader_kernel_path =
-        "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/reader_grid_sample_interleaved_start_id.cpp";
+    // Select appropriate reader kernel based on input tensor memory layout
+    std::string reader_kernel_path;
+    if (input_tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
+        reader_kernel_path =
+            "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/"
+            "reader_grid_sample_height_sharded_start_id.cpp";
+    } else {
+        reader_kernel_path =
+            "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/"
+            "reader_grid_sample_interleaved_start_id.cpp";
+    }
+
     std::string writer_kernel_path =
         "ttnn/cpp/ttnn/operations/pool/grid_sample/device/kernels/dataflow/writer_grid_sample_interleaved.cpp";
 

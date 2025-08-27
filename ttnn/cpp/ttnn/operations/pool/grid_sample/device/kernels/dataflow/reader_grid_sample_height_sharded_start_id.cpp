@@ -124,35 +124,83 @@ void kernel_main() {
         cb_reserve_back(input_cb_index, 1);
         uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
-        uint64_t dram_read_addr = 0;
-
         {
-            DeviceZoneScopedN("Read input sticks");
-            if (h0_valid && w0_valid) {
-                uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
-                dram_read_addr = s1.get_noc_addr(north_west_stick_index);
-                noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-            }
-            l1_write_input_addr += input_stick_nbytes;
+            DeviceZoneScopedN("Read input sticks with shard optimization");
 
-            if (h0_valid && w1_valid) {
-                uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
-                dram_read_addr = s1.get_noc_addr(north_east_stick_index);
-                noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-            }
-            l1_write_input_addr += input_stick_nbytes;
+            // Calculate stick indices for all 4 corners
+            uint32_t north_west_stick_index = batch_offset + (h0 * input_width) + w0;
+            uint32_t north_east_stick_index = batch_offset + (h0 * input_width) + w1;
+            uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
+            uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
 
-            if (h1_valid && w0_valid) {
-                uint32_t south_west_stick_index = batch_offset + (h1 * input_width) + w0;
-                dram_read_addr = s1.get_noc_addr(south_west_stick_index);
-                noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
-            }
-            l1_write_input_addr += input_stick_nbytes;
+            // Check if h0w0 and h0w1 are on the same shard (north row)
+            bool north_same_shard = false;
+            bool south_same_shard = false;
 
-            if (h1_valid && w1_valid) {
-                uint32_t south_east_stick_index = batch_offset + (h1 * input_width) + w1;
-                dram_read_addr = s1.get_noc_addr(south_east_stick_index);
-                noc_async_read(dram_read_addr, l1_write_input_addr, input_stick_nbytes);
+            if (h0_valid && w0_valid && w1_valid) {
+                auto mapping_nw = s1.get_bank_and_offset(north_west_stick_index);
+                auto mapping_ne = s1.get_bank_and_offset(north_east_stick_index);
+                north_same_shard = (mapping_nw.bank_id == mapping_ne.bank_id);
+            }
+
+            if (h1_valid && w0_valid && w1_valid) {
+                auto mapping_sw = s1.get_bank_and_offset(south_west_stick_index);
+                auto mapping_se = s1.get_bank_and_offset(south_east_stick_index);
+                south_same_shard = (mapping_sw.bank_id == mapping_se.bank_id);
+            }
+
+            // Optimized reading for north row (h0w0 and h0w1)
+            if (north_same_shard && h0_valid && w0_valid && w1_valid) {
+                // Both north corners are on same shard - check if they're contiguous
+                uint64_t nw_addr = s1.get_noc_addr(north_west_stick_index);
+                uint64_t ne_addr = s1.get_noc_addr(north_east_stick_index);
+
+                if (ne_addr == nw_addr + input_stick_nbytes) {
+                    // Contiguous - read both in one transaction
+                    noc_async_read(nw_addr, l1_write_input_addr, input_stick_nbytes * 2);
+                } else {
+                    // Same shard but not contiguous - separate reads
+                    noc_async_read(nw_addr, l1_write_input_addr, input_stick_nbytes);
+                    noc_async_read(ne_addr, l1_write_input_addr + input_stick_nbytes, input_stick_nbytes);
+                }
+            } else {
+                // Different shards or invalid - individual reads
+                if (h0_valid && w0_valid) {
+                    uint64_t nw_addr = s1.get_noc_addr(north_west_stick_index);
+                    noc_async_read(nw_addr, l1_write_input_addr, input_stick_nbytes);
+                }
+                if (h0_valid && w1_valid) {
+                    uint64_t ne_addr = s1.get_noc_addr(north_east_stick_index);
+                    noc_async_read(ne_addr, l1_write_input_addr + input_stick_nbytes, input_stick_nbytes);
+                }
+            }
+
+            l1_write_input_addr += input_stick_nbytes * 2;
+
+            // Optimized reading for south row (h1w0 and h1w1)
+            if (south_same_shard && h1_valid && w0_valid && w1_valid) {
+                // Both south corners are on same shard - check if they're contiguous
+                uint64_t sw_addr = s1.get_noc_addr(south_west_stick_index);
+                uint64_t se_addr = s1.get_noc_addr(south_east_stick_index);
+
+                if (se_addr == sw_addr + input_stick_nbytes) {
+                    // Contiguous - read both in one transaction
+                    noc_async_read(sw_addr, l1_write_input_addr, input_stick_nbytes * 2);
+                } else {
+                    // Same shard but not contiguous - separate reads
+                    noc_async_read(sw_addr, l1_write_input_addr, input_stick_nbytes);
+                    noc_async_read(se_addr, l1_write_input_addr + input_stick_nbytes, input_stick_nbytes);
+                }
+            } else {
+                // Different shards or invalid - individual reads
+                if (h1_valid && w0_valid) {
+                    uint64_t sw_addr = s1.get_noc_addr(south_west_stick_index);
+                    noc_async_read(sw_addr, l1_write_input_addr, input_stick_nbytes);
+                }
+                if (h1_valid && w1_valid) {
+                    uint64_t se_addr = s1.get_noc_addr(south_east_stick_index);
+                    noc_async_read(se_addr, l1_write_input_addr + input_stick_nbytes, input_stick_nbytes);
+                }
             }
         }
 

@@ -52,8 +52,9 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
 
     // Memory layout validation - for now only support interleaved
     TT_FATAL(
-        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
-        "Only interleaved memory layout is currently supported for input tensor");
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED ||
+            input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
+        "Only interleaved and height sharded memory layout is currently supported for input tensor");
     TT_FATAL(
         grid_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "Only interleaved memory layout is currently supported for grid tensor");

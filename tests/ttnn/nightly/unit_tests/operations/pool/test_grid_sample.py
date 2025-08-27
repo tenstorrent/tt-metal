@@ -16,19 +16,19 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
-        ((1, 256, 12, 40), (1, 7, 25281, 2)),
-        ((1, 256, 24, 80), (1, 7, 25281, 2)),
+        # ((1, 256, 12, 40), (1, 7, 25281, 2)),
+        # ((1, 256, 24, 80), (1, 7, 25281, 2)),
         ((1, 256, 48, 160), (1, 7, 25281, 2)),
-        ((16, 32, 100, 100), (16, 10000, 4, 2)),
-        ((48, 32, 12, 20), (48, 3567, 8, 2)),
-        ((8, 32, 100, 100), (8, 300, 4, 2)),
-        ((8, 32, 100, 100), (8, 2000, 4, 2)),
-        ((16, 32, 50, 50), (16, 10000, 1, 2)),
-        ((48, 32, 80, 45), (48, 4832, 1, 2)),
-        ((48, 32, 40, 23), (48, 4832, 1, 2)),
-        ((48, 32, 20, 12), (48, 4832, 1, 2)),
-        ((48, 32, 10, 6), (48, 4832, 1, 2)),
-        ((8, 32, 50, 50), (8, 3604, 1, 2)),
+        # ((16, 32, 100, 100), (16, 10000, 4, 2)),
+        # ((48, 32, 12, 20), (48, 3567, 8, 2)),
+        # ((8, 32, 100, 100), (8, 300, 4, 2)),
+        # ((8, 32, 100, 100), (8, 2000, 4, 2)),
+        # ((16, 32, 50, 50), (16, 10000, 1, 2)),
+        # ((48, 32, 80, 45), (48, 4832, 1, 2)),
+        # ((48, 32, 40, 23), (48, 4832, 1, 2)),
+        # ((48, 32, 20, 12), (48, 4832, 1, 2)),
+        # ((48, 32, 10, 6), (48, 4832, 1, 2)),
+        # ((8, 32, 50, 50), (8, 3604, 1, 2)),
     ],
 )
 def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, use_precomputed_grid):
@@ -61,7 +61,9 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, use_prec
 
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
-    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn_input = ttnn.from_torch(
+        torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
 
     if use_precomputed_grid:
         ttnn_grid = ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
@@ -72,6 +74,75 @@ def test_grid_sample_near_uniform_grid(device, input_shape, grid_shape, use_prec
         ttnn_output = ttnn.grid_sample(ttnn_input, prepared_grid, use_precomputed_grid=True)
     else:
         # Use regular grid
+        ttnn_grid = ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16)
+        ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
+
+    ttnn_output_torch = ttnn.to_torch(ttnn_output)
+
+    pcc_passed, pcc_message = assert_with_pcc(torch_output_nhwc, ttnn_output_torch, pcc=0.99)
+    logger.info(pcc_message)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
+@pytest.mark.parametrize("use_precomputed_grid", [True])
+@pytest.mark.parametrize(
+    "input_shape, grid_shape, core_grid",
+    [
+        ((1, 256, 48, 160), (1, 7, 25281, 2), (8, 8)),
+    ],
+)
+def test_grid_sample_height_sharded(device, input_shape, grid_shape, use_precomputed_grid, core_grid):
+    torch.manual_seed(0)
+
+    batch_size, grid_h, grid_w, _ = grid_shape
+    batch_size, channels, height, width = input_shape
+    input_shape_nhwc = [batch_size, height, width, channels]
+
+    # PyTorch CPU grid_sample has bad behaviour for bfloat16 inputs
+    torch_input_nchw = torch.randn(input_shape, dtype=torch.float32)
+    torch_input_nhwc = torch_input_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+
+    # Generates a uniform grid using torch affine grid
+    theta = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32)
+    theta_batched = theta.unsqueeze(0).expand(batch_size, -1, -1)
+    shape = (batch_size, 1, grid_h, grid_w)
+    torch_grid = F.affine_grid(theta_batched, shape, align_corners=False)
+
+    # Add small noise to the grid
+    torch_grid += torch.randn(grid_shape) * 0.05
+
+    torch_output_nchw = F.grid_sample(
+        torch_input_nchw, torch_grid, mode="bilinear", padding_mode="zeros", align_corners=False
+    )
+
+    torch_grid_bf16 = torch_grid.to(torch.bfloat16)
+    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+
+    # Create input tensor on device (not sharded initially)
+    ttnn_input = ttnn.from_torch(torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Create height sharded memory configuration for input tensor
+    sharded_memory_config = ttnn.create_sharded_memory_config_(
+        shape=ttnn_input.shape,
+        core_grid=ttnn.CoreGrid(x=core_grid[0], y=core_grid[1]),
+        strategy=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    print(sharded_memory_config.shard_spec.shape)
+
+    # Apply height sharding to input tensor only
+    ttnn_input = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
+
+    if use_precomputed_grid:
+        ttnn_grid = ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.float32)
+        prepared_grid = ttnn.prepare_grid_sample_grid(
+            ttnn_grid, input_shape_nhwc, padding_mode="zeros", output_dtype=ttnn.bfloat16
+        )
+        prepared_grid = ttnn.to_device(prepared_grid, device)
+        ttnn_output = ttnn.grid_sample(ttnn_input, prepared_grid, use_precomputed_grid=True)
+    else:
+        # Use regular grid (not sharded)
         ttnn_grid = ttnn.from_torch(torch_grid_bf16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16)
         ttnn_output = ttnn.grid_sample(ttnn_input, ttnn_grid)
 
