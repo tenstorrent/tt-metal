@@ -336,8 +336,8 @@ if(BUILD_MLP_OP_PERF)
     )
 
     CPMAddPackage(
-        NAME mlp-op-perf
-        GIT_REPOSITORY git@github.com:xanderchin/mlp-op-perf.git
-        GIT_TAG 3f7e23fcbf0c6e65216862767bcd752d887445b3
+        NAME ttnn-op-runtime-predictor
+        GIT_REPOSITORY git@github.com:tenstorrent/ttnn-op-runtime-predictor.git
+        GIT_TAG 4714e00d996da2965626e1f66da65cb04357d841
     )
 endif()

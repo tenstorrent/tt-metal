@@ -15,9 +15,13 @@
 
 #ifdef BUILD_MLP_OP_PERF
 #include "interface.hpp"
-#include "tt_stl/tt_stl/small_vector.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "tt_stl/tt_stl/span.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/matmul/matmul.hpp"
+#include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #endif
 
 namespace ttnn::graph {
@@ -30,6 +34,23 @@ struct RuntimeQueryResponse {
 
 static constexpr size_t NUM_TRACE_EXECUTIONS = 20;
 static constexpr size_t WARMUP_TRACE_EXECUTIONS = 5;
+
+#ifdef BUILD_MLP_OP_PERF
+
+// helper function checking for base_name()
+// if it does, this implies Op op in query_op_runtime() is a registered operation
+template <typename T>
+concept HasBaseName = requires(const T& t) {
+    { t.base_name() } -> std::convertible_to<std::string>;
+};
+
+template <typename T>
+auto get_op_name(const T& op) -> decltype(op.base_name()) {
+    return op.base_name();
+}
+
+inline std::string get_op_name(const std::string& op) { return op; }
+#endif
 
 /**
  * @brief Extracts a trace of the operation(s) and returns the trace ID.
@@ -139,32 +160,32 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
     auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
 
 #ifdef BUILD_MLP_OP_PERF
+    if constexpr (HasBaseName<Op>) {
+        // helper lambda to make nlohmann::json objects from args
+        auto transform_to_json = [](auto&& arg) {
+            using ArgType = std::decay_t<decltype(arg)>;
+            if constexpr (std::is_same_v<ArgType, nlohmann::json>) {
+                return arg;
+            } else {
+                auto json_arg = ttsl::json::to_json(arg);
+                return json_arg;
+            }
+        };
 
-    // helper lambda to make nlohmann::json objects from args
-    auto transform_to_json = [](auto&& arg) {
-        using ArgType = std::decay_t<decltype(arg)>;
-        if constexpr (std::is_same_v<ArgType, nlohmann::json>) {
-            return arg;
-        } else {
-            auto json_arg = ttsl::json::to_json(arg);
-            return json_arg;
+        auto json_args_tuple = std::apply(
+            [&](auto&&... unpacked_args) { return std::make_tuple(transform_to_json(unpacked_args)...); },
+            transformed_args);
+
+        const auto& op_name = get_op_name(op);
+
+        uint64_t runtime = std::apply(
+            [&](auto&&... json_args) { return op_perf::get_runtime_from_model(op_name, json_args...); },
+            json_args_tuple);
+        if (runtime != 0) {
+            return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
         }
-    };
-
-    auto json_args_tuple = std::apply(
-        [&](auto&&... unpacked_args) { return std::make_tuple(transform_to_json(unpacked_args)...); },
-        transformed_args);
-
-    uint64_t runtime = std::apply(
-        [&](auto&&... json_args) { return op_perf::get_runtime_from_model(op.base_name(), json_args...); },
-        json_args_tuple);
-    if (runtime != 0) {
-        return RuntimeQueryResponse{ExecutionStatus::Success, runtime};
     }
-
 #endif
-
-    std::cout << "in trace" << std::endl;
     try {
         auto trace_id = std::apply(
             [&](auto&&... unpacked_args) {

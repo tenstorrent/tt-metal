@@ -71,51 +71,51 @@ target_link_libraries(
         TTNN::CPP
 )
 
-# Add mlp-op-perf dependency if BUILD_MLP_OP_PERF is enabled
+# Add ttnn-op-runtime-predictor dependency if BUILD_MLP_OP_PERF is enabled
 if(BUILD_MLP_OP_PERF)
     message(STATUS "BUILD_MLP_OP_PERF is enabled")
 
-    # Try multiple possible variable names for the mlp-op-perf source directory
-    set(MLP_OP_PERF_DIR "")
-    if(mlp_op_perf_SOURCE_DIR)
-        set(MLP_OP_PERF_DIR ${mlp_op_perf_SOURCE_DIR})
-        message(STATUS "Using mlp_op_perf_SOURCE_DIR: ${mlp_op_perf_SOURCE_DIR}")
-    elseif(mlp-op-perf_SOURCE_DIR)
-        set(MLP_OP_PERF_DIR ${mlp-op-perf_SOURCE_DIR})
-        message(STATUS "Using mlp-op-perf_SOURCE_DIR: ${mlp-op-perf_SOURCE_DIR}")
+    # Try multiple possible variable names for the ttnn-op-runtime-predictor source directory
+    set(TTNN_OP_RUNTIME_PREDICTOR_DIR "")
+    if(ttnn_op_runtime_predictor_SOURCE_DIR)
+        set(TTNN_OP_RUNTIME_PREDICTOR_DIR ${ttnn_op_runtime_predictor_SOURCE_DIR})
+        message(STATUS "Using ttnn_op_runtime_predictor_SOURCE_DIR: ${ttnn_op_runtime_predictor_SOURCE_DIR}")
+    elseif(ttnn-op-runtime-predictor_SOURCE_DIR)
+        set(TTNN_OP_RUNTIME_PREDICTOR_DIR ${ttnn-op-runtime-predictor_SOURCE_DIR})
+        message(STATUS "Using ttnn-op-runtime-predictor_SOURCE_DIR: ${ttnn-op-runtime-predictor_SOURCE_DIR}")
     else()
         # Fallback to CPM cache directory - find interface.hpp directly
-        file(GLOB_RECURSE INTERFACE_HPP_FILE "${CMAKE_SOURCE_DIR}/.cpmcache/mlp-op-perf/*/interface/interface.hpp")
+        file(GLOB_RECURSE INTERFACE_HPP_FILE "${CMAKE_SOURCE_DIR}/.cpmcache/ttnn-op-runtime-predictor/*/interface/interface.hpp")
         if(INTERFACE_HPP_FILE)
             list(GET INTERFACE_HPP_FILE 0 INTERFACE_FILE)
-            get_filename_component(MLP_OP_PERF_DIR ${INTERFACE_FILE} DIRECTORY)
-            get_filename_component(MLP_OP_PERF_DIR ${MLP_OP_PERF_DIR} DIRECTORY)
-            message(STATUS "Found mlp-op-perf at: ${MLP_OP_PERF_DIR}")
+            get_filename_component(TTNN_OP_RUNTIME_PREDICTOR_DIR ${INTERFACE_FILE} DIRECTORY)
+            get_filename_component(TTNN_OP_RUNTIME_PREDICTOR_DIR ${TTNN_OP_RUNTIME_PREDICTOR_DIR} DIRECTORY)
+            message(STATUS "Found ttnn-op-runtime-predictor at: ${TTNN_OP_RUNTIME_PREDICTOR_DIR}")
         else()
             message(
                 FATAL_ERROR
-                "mlp-op-perf interface.hpp not found. Make sure BUILD_MLP_OP_PERF is enabled and the package is downloaded."
+                "ttnn-op-runtime-predictor interface.hpp not found. Make sure BUILD_MLP_OP_PERF is enabled and the package is downloaded."
             )
         endif()
     endif()
 
     # Verify the interface directory exists
-    if(NOT EXISTS "${MLP_OP_PERF_DIR}/interface/interface.hpp")
-        message(FATAL_ERROR "interface.hpp not found at ${MLP_OP_PERF_DIR}/interface/interface.hpp")
+    if(NOT EXISTS "${TTNN_OP_RUNTIME_PREDICTOR_DIR}/interface/interface.hpp")
+        message(FATAL_ERROR "interface.hpp not found at ${TTNN_OP_RUNTIME_PREDICTOR_DIR}/interface/interface.hpp")
     endif()
 
-    message(STATUS "Adding include directory: ${MLP_OP_PERF_DIR}/interface")
+    message(STATUS "Adding include directory: ${TTNN_OP_RUNTIME_PREDICTOR_DIR}/interface")
 
     target_include_directories(
         unit_tests_ttnn_basic
         PRIVATE
-            ${MLP_OP_PERF_DIR}/interface
-            ${MLP_OP_PERF_DIR}/ops/include
+            ${TTNN_OP_RUNTIME_PREDICTOR_DIR}/interface
+            ${TTNN_OP_RUNTIME_PREDICTOR_DIR}/ops/include
     )
     target_compile_definitions(unit_tests_ttnn_basic PRIVATE BUILD_MLP_OP_PERF=1)
 
-    # Link the mlp-op-perf ops library
-    target_link_libraries(unit_tests_ttnn_basic PRIVATE ops_library)
+    # Link the ttnn-op-runtime-predictor ops library
+    target_link_libraries(unit_tests_ttnn_basic PRIVATE ops_library interface_library)
 endif()
 
 add_library(unit_tests_ttnn_slow OBJECT)
