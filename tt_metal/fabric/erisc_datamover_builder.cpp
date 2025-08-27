@@ -1501,8 +1501,8 @@ void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricDatamoverBuild
         [this](auto&& builder_ref) {
             auto& builder = builder_ref.get();
 
-            const auto ds_noc_x = builder.get_noc_x();
-            const auto ds_noc_y = builder.get_noc_y();
+            [[maybe_unused]] const auto ds_noc_x = builder.get_noc_x();
+            [[maybe_unused]] const auto ds_noc_y = builder.get_noc_y();
             eth_chan_directions ds_dir = builder.get_direction();
 
             log_debug(

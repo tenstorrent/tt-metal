@@ -1191,7 +1191,6 @@ uint32_t calculate_conv_dram_slice_L1_usage(
         const uint32_t output_slice_size =
             slice_rounding_value * (min_output_slice_size + ((slice_index < output_slice_rem) ? 1 : 0));
         const uint32_t output_slice_dim_end = std::min(output_sliced_dim, output_slice_dim_start + output_slice_size);
-        const uint32_t this_output_slice_dim = output_slice_dim_end - output_slice_dim_start;
 
         uint32_t output_slice_height_start, output_slice_height_end, input_slice_height_start, input_slice_height_end;
         uint32_t output_slice_width_start, output_slice_width_end, input_slice_width_start, input_slice_width_end;

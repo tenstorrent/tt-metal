@@ -108,7 +108,6 @@ size_t get_num_links(const tt::tt_metal::distributed::MeshDevice& mesh_device, s
     const auto& mesh_view = mesh_device.get_view();
     auto mesh_shape = mesh_view.shape();
     auto topology = tt::tt_fabric::get_fabric_topology();
-    bool has_wrap_around = detail::has_wrap_around(topology);
 
     constexpr std::array<std::array<tt::tt_fabric::RoutingDirection, 2>, 2> directions = {
         {{tt::tt_fabric::RoutingDirection::N, tt::tt_fabric::RoutingDirection::S},
