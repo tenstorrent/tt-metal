@@ -219,7 +219,7 @@ std::vector<TestSocketConfig> MeshSocketYamlParser::expand_all_to_all_devices_pa
         }
     }
 
-    log_info(tt::LogTest, "Generated {} sockets for all_to_all_devices pattern", sockets.size());
+    log_info(tt::LogTest, "Generated {} sockets for all_to_all_device_unicast pattern", sockets.size());
     return sockets;
 }
 
@@ -525,7 +525,7 @@ CoreCoord MeshSocketYamlParser::parse_core_coordinate(const YAML::Node& node) {
 }
 
 PatternType MeshSocketYamlParser::parse_pattern_type(const std::string& pattern_string) {
-    if (pattern_string == "all_to_all_devices") {
+    if (pattern_string == "all_to_all_device_unicast") {
         return PatternType::AllToAllDevices;
     } else if (pattern_string == "all_hosts_random_sockets") {
         return PatternType::AllHostsRandomSockets;
@@ -533,7 +533,7 @@ PatternType MeshSocketYamlParser::parse_pattern_type(const std::string& pattern_
         return PatternType::AllDeviceBroadcast;
     } else {
         TT_THROW(
-            "Invalid pattern type: '{}'. Valid types are: all_to_all_devices, all_hosts_random_sockets, "
+            "Invalid pattern type: '{}'. Valid types are: all_to_all_device_unicast, all_hosts_random_sockets, "
             "all_device_broadcast",
             pattern_string);
     }
@@ -757,7 +757,7 @@ void MeshSocketYamlParser::print_test_configuration(const MeshSocketTestConfigur
 
                 // switch if we add more patterns
                 switch (pattern.type) {
-                    case PatternType::AllToAllDevices: pattern_type = "all_to_all_devices"; break;
+                    case PatternType::AllToAllDevices: pattern_type = "all_to_all_device_unicast"; break;
                     case PatternType::AllHostsRandomSockets: pattern_type = "all_hosts_random_sockets"; break;
                     case PatternType::AllDeviceBroadcast: pattern_type = "all_device_broadcast"; break;
                     default: TT_THROW("Invalid pattern type: {}", static_cast<int>(pattern.type));

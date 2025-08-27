@@ -86,7 +86,7 @@ struct TestSocketConfig {
 };
 
 struct PatternExpansionConfig {
-    PatternType type{};    // "all_to_all_devices" or "all_hosts_random_sockets"
+    PatternType type{};
     CoreCoord core_coord;  // Core coordinate to use for connections
     std::optional<uint32_t> num_sockets;  // Optional number of random sockets to generate
 };
