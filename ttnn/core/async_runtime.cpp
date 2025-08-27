@@ -14,7 +14,7 @@ namespace ttnn {
 
 void write_buffer(
     QueueId cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<BufferRegion>& region) {
-    if (auto mesh_device = dst.mesh_device()) {
+    if (auto mesh_device = dst.device()) {
         auto& cq = mesh_device->mesh_command_queue(*cq_id);
         auto device_tensors = ttnn::distributed::get_device_tensors(dst);
         for (size_t i = 0; i < device_tensors.size(); i++) {
@@ -35,7 +35,7 @@ void read_buffer(
     size_t src_offset,
     bool blocking) {
     TT_ASSERT(src_offset == 0, "src_offset is not supported");
-    if (auto mesh_device = src.mesh_device()) {
+    if (auto mesh_device = src.device()) {
         auto& cq = mesh_device->mesh_command_queue(*cq_id);
         auto device_tensors = ttnn::distributed::get_device_tensors(src);
         for (size_t i = 0; i < device_tensors.size(); i++) {
