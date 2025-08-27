@@ -31,7 +31,6 @@ target_sources(
             hw/inc/edm_fabric/fabric_txq_setup.h
             hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
             hw/inc/fabric_routing_table_interface.h
-            fabric_edm_packet_header.hpp
     PRIVATE
         control_plane.cpp
         routing_table_generator.cpp
