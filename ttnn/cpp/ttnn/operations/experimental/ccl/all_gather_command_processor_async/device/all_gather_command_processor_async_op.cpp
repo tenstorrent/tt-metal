@@ -288,7 +288,7 @@ Tensor all_gather_command_processor_async(
 std::vector<Tensor> all_gather_command_processor_async(
     const std::vector<Tensor>& input_tensors,
     int32_t dim,
-    const GlobalSemaphore& multi_device_global_semaphore,
+    const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
@@ -297,11 +297,16 @@ std::vector<Tensor> all_gather_command_processor_async(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     std::vector<Tensor> output_tensors;
     output_tensors.reserve(input_tensors.size());
+    std::vector<GlobalSemaphore> semaphore;
+    semaphore.reserve(multi_device_global_semaphore.size());
+    for (size_t i = 0; i < multi_device_global_semaphore.size(); i++) {
+        semaphore.push_back(multi_device_global_semaphore.at(i).global_semaphores.at(i));
+    }
     for (size_t i = 0; i < input_tensors.size(); i++) {
         output_tensors.push_back(all_gather_command_processor_async_impl(
             input_tensors[i],
             dim,
-            multi_device_global_semaphore,
+            semaphore[0],
             persistent_output_buffers.has_value() ? std::make_optional(persistent_output_buffers.value().at(i))
                                                   : std::nullopt,
             num_links,

@@ -69,12 +69,13 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherCommandProcessorAsync) {
         tensors.push_back(Tensor::from_vector(std::move(data), tensor_spec).to_device(mesh_devices[dev_idx].get()));
     }
     auto semaphore = CMAKE_UNIQUE_NAMESPACE::create_global_semaphore(devices);
+    std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {semaphore};
     tt::tt_metal::distributed::Synchronize(mesh_device_.get(), std::nullopt, std::vector<SubDeviceId>());
 
     auto all_gathered = ttnn::experimental::all_gather_command_processor_async(
         tensors,
         /* dim */ 0,
-        semaphore,
+        multi_dev_semaphore,
         /* persistent_output_buffers */ std::nullopt,
         /* num_links */ 1,
         /* memory_config */ std::nullopt,

@@ -157,10 +157,12 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0) {
 
         // Enqueue the all_gather_command_processor_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.
+        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
+            multi_device_global_semaphore};
         const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
             device_tensors,
             /* dim */ 0,
-            multi_device_global_semaphore,
+            multi_dev_semaphore,
             /* persistent_output_buffers */ std::nullopt,
             /* num_links */ 1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
@@ -330,10 +332,12 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksCQ0CQ1) {
 
         // Enqueue the all_gather_command_processor_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.
+        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
+            multi_device_global_semaphore};
         const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
             device_tensors,
             /* dim */ 0,
-            multi_device_global_semaphore,
+            multi_dev_semaphore,
             /* persistent_output_buffers */ std::nullopt,
             /* num_links */ 1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
@@ -529,10 +533,12 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AsyncExecutionWorksMultithreadCQ0) {
 
         // Enqueue the all_gather_command_processor_async operation on each device.
         // It does not support command queue ID as a parameter and internally uses command queue 0.
+        std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> multi_dev_semaphore = {
+            multi_device_global_semaphore};
         const std::vector<Tensor> gathered_tensors = ttnn::experimental::all_gather_command_processor_async(
             device_tensors,
             /* dim */ 0,
-            multi_device_global_semaphore,
+            multi_dev_semaphore,
             /* persistent_output_buffers */ std::nullopt,
             /* num_links */ 1,
             operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
