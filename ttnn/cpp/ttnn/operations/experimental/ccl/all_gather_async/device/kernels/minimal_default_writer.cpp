@@ -110,7 +110,7 @@ void kernel_main() {
     arg_idx += rt_increment;
 #else
     constexpr auto output_tensor_args = TensorAccessorArgs<sharded_args_start_idx>();
-    const auto output_tensor_addrgen = TensorAccessor(output_tensor_args, output_address, output_page_size);
+    const auto output_addrgen = TensorAccessor(output_tensor_args, output_address, output_page_size);
 #endif
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;
