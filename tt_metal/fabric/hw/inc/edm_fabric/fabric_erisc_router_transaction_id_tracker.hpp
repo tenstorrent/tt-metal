@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "tt_metal/fabric/hw/inc/edm_fabric/1d_fabric_constants.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
 
 #include "risc_attribs.h"  // for FORCE_INLINE
 #include "utils/utils.h"   // for is_power_of_2
