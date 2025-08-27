@@ -31,7 +31,12 @@ def select_torch_dtype(ttnn_dtype):
     [
         (
             [i for i in range(200)],
-            [1, 2, 3],
+            [2, 3, 1, 500],
+            ttnn.int32,
+        ),
+        (
+            [i for i in range(200)],
+            [-100, 200, 300],
             ttnn.int32,
         ),
         (
@@ -40,10 +45,15 @@ def select_torch_dtype(ttnn_dtype):
             ttnn.uint16,
         ),
         (
-            [[i for i in range(10, 200)] for _ in range(5)],
+            [[i for i in range(10, 20)] for _ in range(5)],
             [11, 2, 3, 24, 20, 10, 200, 199],
-            ttnn.uint16,
+            ttnn.uint32,
         ),
+        # (
+        #     [[[i ^ j ^ k for i in range(0, 10)] for j in range(0, 10)] for k in range(0, 10)],
+        #     [28 * i for i in range(0, 20)],
+        #     ttnn.int32
+        # )
     ],
 )
 def test_isin_normal(elements, test_elements, dtype, device):
@@ -58,4 +68,4 @@ def test_isin_normal(elements, test_elements, dtype, device):
     ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn)
 
     assert torch_isin_result.shape == ttnn_isin_result.shape
-    assert torch_isin_result.sum().item() == ttnn.to_torch(ttnn_isin_result).sum().item()
+    assert torch_isin_result.count_nonzero() == ttnn.to_torch(ttnn_isin_result).count_nonzero()
