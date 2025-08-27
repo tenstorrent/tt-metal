@@ -19,6 +19,7 @@ enum class KernelName {
     ReaderNoBcastTTS,
     ReaderNoBcastTSS,
     ReaderColBcastTTT,
+    ReaderOuterBcastTTT,
     WriterNoBcastTTT,
     WriterNoBcastTST,
     WriterNoBcastTTS,

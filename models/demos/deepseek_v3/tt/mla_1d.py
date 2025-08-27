@@ -23,7 +23,9 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReshardConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
+    dequantize_state_dicts,
     even_int_div,
+    get_mesh_coords,
     get_state_dicts,
     save_and_get_path,
     sub_state_dicts,
@@ -87,6 +89,8 @@ class MLA1D(SharedStateAddOn, AbstractModule):
         v_head_dim = hf_config.v_head_dim
         q_lora_rank = hf_config.q_lora_rank
         q_head_dim = qk_nope_head_dim + qk_rope_head_dim
+
+        state_dicts = dequantize_state_dicts(state_dicts, hf_config)
 
         def convert_linear_weight(
             hf_name: str | None,
@@ -888,12 +892,12 @@ class MLA1D(SharedStateAddOn, AbstractModule):
 
         # CCL states setup (Must be in order of execution)
         get_rs_params = lambda axis: {
-            "from_remote_multi_device_global_semaphore": ccl.get_semaphore(axis=axis),
-            "to_remote_multi_device_global_semaphore": ccl.get_semaphore(axis=axis),
+            "from_remote_multi_device_global_semaphore": ccl.get_from_sem(axis=axis),
+            "to_remote_multi_device_global_semaphore": ccl.get_to_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
         get_ag_params = lambda axis: {
-            "multi_device_global_semaphore": ccl.get_semaphore(axis=axis),
+            "multi_device_global_semaphore": ccl.get_gather_sem(axis=axis),
             "num_links": ccl.get_max_links(axis=axis),
         }
         ccl_states_prefill = {
@@ -919,21 +923,6 @@ class MLA1D(SharedStateAddOn, AbstractModule):
             **ccl_states_prefill,
             **ccl_states_decode,
         }
-
-    @classmethod
-    def get_mesh_coores(cls, mesh_shape: list[int], row: int = None, col: int = None) -> set[ttnn.MeshCoordinate]:
-        """
-        Get the devices in the current row.
-        """
-        if row:
-            assert 0 <= row < mesh_shape[0], "Row index out of bounds"
-        if col:
-            assert 0 <= col < mesh_shape[1], "Column index out of bounds"
-
-        row_select = range(mesh_shape[0]) if row is None else [row]
-        col_select = range(mesh_shape[1]) if col is None else [col]
-        device_coords = {(r, c) for r in row_select for c in col_select}
-        return {ttnn.MeshCoordinate(*coord) for coord in device_coords}
 
     @classmethod
     def forward_decode(
@@ -1074,7 +1063,7 @@ class MLA1D(SharedStateAddOn, AbstractModule):
             tt_kvpe,
             update_idxs_tensor=position_idxs,
             page_table=page_table,
-            mesh_coords=cls.get_mesh_coores(mesh_shape, row_idx),
+            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
         )
 
         # FlashMLA
@@ -1225,7 +1214,7 @@ class MLA1D(SharedStateAddOn, AbstractModule):
             tt_kvpe,
             page_table=page_table,
             batch_idx=local_batch_idx,
-            mesh_coords=cls.get_mesh_coores(mesh_shape, row_idx, col_idx),
+            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx, col_idx)),
         )
 
         # FlashMLA

@@ -11,7 +11,7 @@
 #include "tt_fabric.h"
 #include "tt_fabric_interface.h"
 #include "eth_chan_noc_mapping.h"
-#include "fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include <type_traits>
 
 namespace tt::tt_fabric {
@@ -102,7 +102,7 @@ static inline
 template <typename HeaderType>
 static inline void fabric_async_write_add_header_impl(
     HeaderType packet_header,
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -130,7 +130,7 @@ static inline void fabric_async_write_add_header_impl(
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, typename ClientInterfaceType>
 inline void fabric_async_write_add_header(
     tt_l1_ptr ClientInterfaceType client_interface,
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -302,8 +302,7 @@ void fabric_set_route(
 
 void fabric_set_unicast_route(
     volatile tt_l1_ptr MeshPacketHeader* packet_header,
-    eth_chan_directions outgoing_direction,  // Ignore this: Dynamic Routing does not need outgoing_direction specified
-    uint16_t my_dev_id,                      // Ignore this: Dynamic Routing does not need src chip ID
+    uint16_t my_dev_id,  // Ignore this: Dynamic Routing does not need src chip ID
     uint16_t dst_dev_id,
     uint16_t dst_mesh_id,
     uint16_t ew_dim  // Ignore this: Dynamic Routing does not need mesh dimensions
@@ -330,6 +329,67 @@ void fabric_set_mcast_route(
 }
 
 void fabric_set_unicast_route(
+    volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
+    uint16_t my_dev_id,
+    uint16_t dst_dev_id,
+    uint16_t dst_mesh_id,  // Ignore this, since Low Latency Mesh Fabric is not used for Inter-Mesh Routing
+    uint16_t ew_dim) {
+    uint32_t ns_hops = 0;
+    uint32_t target_dev = dst_dev_id;
+    uint32_t target_col = 0;
+
+    while (target_dev >= ew_dim) {
+        target_dev -= ew_dim;
+        target_col++;
+    }
+    uint32_t my_col = 0;
+    uint32_t my_dev = my_dev_id;
+    while (my_dev >= ew_dim) {
+        my_dev -= ew_dim;
+        my_col++;
+    }
+
+    eth_chan_directions outgoing_direction;
+    uint32_t ew_hops = 0;
+    if (target_col == my_col) {
+        if (my_dev < target_dev) {
+            // My device is west of target device
+            outgoing_direction = eth_chan_directions::EAST;
+            ew_hops = target_dev - my_dev;
+        } else {
+            // My device is east of target device
+            outgoing_direction = eth_chan_directions::WEST;
+            ew_hops = my_dev - target_dev;
+        }
+        fabric_set_route(packet_header, outgoing_direction, 0, 0, ew_hops, true);
+    } else {
+        // First hop is north/south. Calculate the number of required hops before turning east/west
+        uint32_t ns_hops = 0;
+        if (target_col > my_col) {
+            // Target device is south of my device
+            ns_hops = target_col - my_col;
+            outgoing_direction = eth_chan_directions::SOUTH;
+        } else {
+            // Target device is north of my device
+            ns_hops = my_col - target_col;
+            outgoing_direction = eth_chan_directions::NORTH;
+        }
+
+        // determine the east/west hops
+        uint32_t turn_direction = my_dev < target_dev ? eth_chan_directions::EAST : eth_chan_directions::WEST;
+        uint32_t ew_hops = (my_dev < target_dev) ? target_dev - my_dev : my_dev - target_dev;
+        if (ew_hops) {
+            ns_hops--;
+            ew_hops++;
+        }
+        fabric_set_route(packet_header, (eth_chan_directions)outgoing_direction, 0, 0, ns_hops, ew_hops == 0);
+        if (ew_hops) {
+            fabric_set_route(packet_header, (eth_chan_directions)turn_direction, 0, ns_hops, ew_hops, true);
+        }
+    }
+}
+
+void fabric_set_unicast_route_deprecated(
     volatile tt_l1_ptr LowLatencyMeshPacketHeader* packet_header,
     eth_chan_directions outgoing_direction,
     uint16_t my_dev_id,
@@ -587,7 +647,7 @@ inline void fabric_async_write(
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, typename ClientInterfaceType>
 inline void fabric_async_write_multicast_add_header(
     tt_l1_ptr ClientInterfaceType client_interface,
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -632,7 +692,7 @@ inline void fabric_async_write_multicast(
     tt_l1_ptr ClientInterfaceType client_interface,
     uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
                         // and the routing plane to use when using ROUTING_TABLE
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -669,7 +729,7 @@ inline void fabric_async_write_multicast(
 template <typename HeaderType>
 static inline void fabric_atomic_inc_add_header_impl(
     HeaderType packet_header,
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -699,7 +759,7 @@ static inline void fabric_atomic_inc_add_header_impl(
 }
 
 inline void fabric_atomic_inc_add_header(
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -726,7 +786,7 @@ inline void fabric_atomic_inc(
     tt_l1_ptr ClientInterfaceType client_interface,
     uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
                         // and the routing plane to use when using ROUTING_TABLE
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_addr,
@@ -754,7 +814,7 @@ inline void fabric_atomic_inc(
 template <typename HeaderType>
 static inline void fabric_async_write_atomic_inc_add_header_impl(
     HeaderType packet_header,
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_write_addr,
@@ -790,7 +850,7 @@ static inline void fabric_async_write_atomic_inc_add_header_impl(
 template <ClientDataMode data_mode = ClientDataMode::PACKETIZED_DATA, typename ClientInterfaceType>
 inline void fabric_async_write_atomic_inc_add_header(
     tt_l1_ptr ClientInterfaceType client_interface,
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_write_addr,
@@ -824,7 +884,7 @@ inline void fabric_async_write_atomic_inc(
     tt_l1_ptr ClientInterfaceType client_interface,
     uint32_t routing,   // routing refers to the router noc xy to use when using ROUTER_XY,
                         // and the routing plane to use when using ROUTING_TABLE
-    uint32_t src_addr,  // source address in sender’s memory
+    uint32_t src_addr,  // source address in sender's memory
     uint16_t dst_mesh_id,
     uint16_t dst_dev_id,
     uint64_t dst_write_addr,
@@ -888,4 +948,9 @@ inline void fabric_endpoint_init(tt_l1_ptr ClientInterfaceType client_interface,
     }
 }
 
+uint8_t get_router_direction(uint32_t eth_channel) {
+    tt_l1_ptr tensix_fabric_connections_l1_info_t* connection_info =
+        reinterpret_cast<tt_l1_ptr tensix_fabric_connections_l1_info_t*>(MEM_TENSIX_FABRIC_CONNECTIONS_BASE);
+    return connection_info->read_only[eth_channel].edm_direction;
+}
 }  // namespace tt::tt_fabric

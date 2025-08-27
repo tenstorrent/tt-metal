@@ -7,8 +7,8 @@
 #include <stdint.h>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/device_pool.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "hostdevcommon/fabric_common.h"
+#include <tt_metal/fabric/erisc_datamover_builder.hpp>
 #include <array>
 #include <cstddef>
 #include <map>
@@ -22,7 +22,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
 #include <tt-metalium/hal.hpp>
@@ -2144,10 +2144,6 @@ void FabricUnicastCommon(
     tt_metal::Program receiver_program = tt_metal::CreateProgram();
     auto worker_mem_map = generate_worker_mem_map(sender_device, topology);
 
-    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
-        worker_mem_map.packet_payload_size_bytes = 4;
-    }
-
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
         worker_mem_map.test_results_size_bytes,
@@ -2159,9 +2155,8 @@ void FabricUnicastCommon(
         0  // is_chip_multicast = 0
     };
 
-    std::map<std::string, std::string> defines = {};
-    if (topology == Topology::Mesh) {
-        defines["FABRIC_2D"] = "";
+    if (noc_send_type == NOC_UNICAST_INLINE_WRITE) {
+        worker_mem_map.packet_payload_size_bytes = 4;
     }
 
     auto sender_kernel = tt_metal::CreateKernel(
@@ -2173,8 +2168,7 @@ void FabricUnicastCommon(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args,
-            .defines = defines});
+            .compile_args = compile_time_args});
 
     std::vector<uint32_t> sender_runtime_args = {
         worker_mem_map.source_l1_buffer_address,
@@ -2188,45 +2182,14 @@ void FabricUnicastCommon(
         sender_runtime_args.push_back(num_hops);
     }
 
-    // Append FabricConnectionManager args per manager (pair-ordered)
-    // V2 connection args: [tag, WorkerToFabricEdmSender args]
-    for (size_t i = 0; i < dir_configs.size(); ++i) {
-        auto dir = std::get<0>(dir_configs[i]);
-        sender_runtime_args.push_back(static_cast<uint32_t>(dir));  // tag (optional)
-        auto first_hop_phys_chip_id = first_hop_phys_chip_ids[i];
-        const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
-        uint32_t link_idx = 0;
-        if (topology == Topology::Mesh) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
-        }
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            dst_fabric_node_id,
-            link_idx,
-            sender_program,
-            {sender_logical_core},
-            sender_runtime_args);
+    std::vector<tt::tt_fabric::FabricNodeId> next_hop_nodes;
+    next_hop_nodes.reserve(first_hop_phys_chip_ids.size());
+    for (auto phys : first_hop_phys_chip_ids) {
+        next_hop_nodes.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(phys));
     }
 
-    // For 2D Mesh, append extra route info
-    if (topology == Topology::Mesh) {
-        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        uint32_t ew_dim = mesh_shape[1];
-        uint32_t my_dev_id = src_fabric_node_id.chip_id;
-        uint32_t dst_mesh_id = *src_fabric_node_id.mesh_id;
-        sender_runtime_args.push_back(ew_dim);
-        sender_runtime_args.push_back(my_dev_id);
-        sender_runtime_args.push_back(dst_mesh_id);
-        for (auto [dir, num_hops] : dir_configs) {
-            auto first_hop_phys_chip_id = physical_end_device_ids_by_dir[dir][0];
-            const auto dst_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
-            auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-            TT_ASSERT(dir_opt.has_value());
-            sender_runtime_args.push_back(static_cast<uint32_t>(dir_opt.value()));
-            sender_runtime_args.push_back(static_cast<uint16_t>(dst_fabric_node_id.chip_id));
-        }
-    }
+    append_routing_plane_connection_manager_rt_args(
+        src_fabric_node_id, next_hop_nodes, sender_program, sender_kernel, {sender_logical_core}, sender_runtime_args);
 
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
@@ -2239,8 +2202,7 @@ void FabricUnicastCommon(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args,
-            .defines = defines});
+            .compile_args = compile_time_args});
 
     std::vector<uint32_t> receiver_runtime_args = {
         worker_mem_map.packet_payload_size_bytes,
@@ -2378,11 +2340,6 @@ void FabricMulticastCommon(
     }
 
     auto sender_program = tt_metal::CreateProgram();
-    std::map<std::string, std::string> defines = {};
-    if (topology == Topology::Mesh) {
-        defines["FABRIC_2D"] = "";
-    }
-
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         (noc_send_type == NOC_FUSED_UNICAST_ATOMIC_INC || noc_send_type == NOC_UNICAST_ATOMIC_INC)
@@ -2392,49 +2349,17 @@ void FabricMulticastCommon(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = compile_time_args,
-            .defines = defines});
+            .compile_args = compile_time_args});
 
-    // V2 connection args for multicast: [tag, WorkerToFabricEdmSender args]
-    for (size_t i = 0; i < dir_configs.size(); ++i) {
-        auto dir = std::get<0>(dir_configs[i]);
-        sender_runtime_args.push_back(static_cast<uint32_t>(dir));  // tag (optional)
-        auto first_hop_phys_chip_id = first_hop_phys_chip_ids[i];
-        const auto dst_fabric_node_id = tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
-        uint32_t link_idx = 0;
-        if (topology == Topology::Mesh) {
-            link_idx = get_forwarding_link_indices(src_fabric_node_id, dst_fabric_node_id)[0];
-        }
-        append_fabric_connection_rt_args(
-            src_fabric_node_id,
-            dst_fabric_node_id,
-            link_idx,
-            sender_program,
-            {sender_logical_core},
-            sender_runtime_args);
+    std::vector<tt::tt_fabric::FabricNodeId> next_hop_nodes;
+    next_hop_nodes.reserve(first_hop_phys_chip_ids.size());
+    for (auto phys : first_hop_phys_chip_ids) {
+        next_hop_nodes.push_back(tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(phys));
     }
 
-    // Append 2D mesh route info only when on Mesh
-    if (topology == Topology::Mesh) {
-        auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
-        uint32_t ew_dim = mesh_shape[1];
-        uint32_t my_dev_id = src_fabric_node_id.chip_id;
-        uint32_t dst_mesh_id = *src_fabric_node_id.mesh_id;
-        sender_runtime_args.push_back(ew_dim);
-        sender_runtime_args.push_back(my_dev_id);
-        sender_runtime_args.push_back(dst_mesh_id);
-        // Append per-route outgoing eth direction followed by dst dev ids in pair order
-        for (size_t i = 0; i < dir_configs.size(); ++i) {
-            auto [dir, start_distance, range] = dir_configs[i];
-            auto first_hop_phys_chip_id = first_hop_phys_chip_ids[i];
-            const auto dst_fabric_node_id =
-                tt::tt_fabric::get_fabric_node_id_from_physical_chip_id(first_hop_phys_chip_id);
-            auto dir_opt = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
-            TT_ASSERT(dir_opt.has_value());
-            sender_runtime_args.push_back(static_cast<uint32_t>(dir_opt.value()));
-            sender_runtime_args.push_back(static_cast<uint16_t>(dst_fabric_node_id.chip_id));
-        }
-    }
+    append_routing_plane_connection_manager_rt_args(
+        src_fabric_node_id, next_hop_nodes, sender_program, sender_kernel, {sender_logical_core}, sender_runtime_args);
+
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Build and launch receiver programs for all destination devices in all configured directions
@@ -2453,8 +2378,7 @@ void FabricMulticastCommon(
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
-                    .compile_args = compile_time_args,
-                    .defines = defines});
+                    .compile_args = compile_time_args});
             tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
             fixture->RunProgramNonblocking(receiver_device, receiver_program);
             receiver_programs.emplace_back(receiver_device, std::move(receiver_program));

@@ -72,6 +72,13 @@ def run_max_pool(
         if stride == (1, 1):
             pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
 
+    if dilation_h > 1 or dilation_w > 1:
+        effective_kernel_h = dilation_h * (kernel_h - 1) + 1
+        effective_kernel_w = dilation_w * (kernel_w - 1) + 1
+        padded_input_h = in_h + pad_t + pad_b
+        padded_input_w = in_w + pad_l + pad_r
+        if effective_kernel_h > padded_input_h or effective_kernel_w > padded_input_w:
+            pytest.skip("Effective kernel size cannot exceed padded input size")
     # skips to speed up nightly test
     if nightly_skips:
         if dtype == ttnn.bfloat8_b:
@@ -82,6 +89,8 @@ def run_max_pool(
         if ceil_mode:
             if kernel_size == (3, 3) or kernel_size == (9, 9):
                 pytest.skip("Skip for kernel size (3, 3) and (9, 9) for ceil mode!")
+        if dilation != (1, 1) and stride != (1, 1):
+            pytest.skip("Skip for dilation with stride != (1, 1), also skips ceil mode for dilation!")
 
     if pad_t > kernel_h / 2 or pad_b > kernel_h / 2 or pad_l > kernel_w / 2 or pad_r > kernel_w / 2:
         pytest.skip("padding is too large for the kernel size")
@@ -93,8 +102,8 @@ def run_max_pool(
     out_c = in_c
     ceil_mode_out_shape_adj = False
     if ceil_mode:
-        out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.ceil((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        out_h = math.ceil((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.ceil((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
         if ((out_h - 1) * stride_h) >= (in_h + pad_t):
             ceil_mode_out_shape_adj = True
             out_h -= 1
@@ -102,8 +111,8 @@ def run_max_pool(
             ceil_mode_out_shape_adj = True
             out_w -= 1
     else:
-        out_h = math.floor((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.floor((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        out_h = math.floor((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
 
     torch.manual_seed(0)
     torch_input = randomize_torch_tensor(tensor_map, input_shape)
@@ -265,7 +274,13 @@ def run_max_pool(
         (2, 2),
     ),
 )
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize(
+    "dilation",
+    (
+        (1, 1),
+        (2, 2),
+    ),
+)
 @pytest.mark.parametrize(
     "dtype",
     [
@@ -328,7 +343,13 @@ def test_run_max_pool_height_shard(
     "stride",
     ((1, 1),),
 )
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize(
+    "dilation",
+    (
+        (1, 1),
+        (3, 1),
+    ),
+)
 @pytest.mark.parametrize(
     "dtype",
     [
@@ -397,7 +418,13 @@ def test_run_max_pool_width_shard(
     "stride",
     ((1, 1),),
 )
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize(
+    "dilation",
+    (
+        (1, 1),
+        (4, 3),
+    ),
+)
 @pytest.mark.parametrize(
     "dtype",
     [
@@ -490,7 +517,10 @@ def test_run_max_pool_mem_config(
     "stride",
     ((1, 1),),
 )
-@pytest.mark.parametrize("dilation", ((1, 1),))  ## default
+@pytest.mark.parametrize(
+    "dilation",
+    ((1, 1),),
+)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b])
 def test_run_max_pool_yolov4(
     input_shape,
@@ -519,7 +549,10 @@ def test_run_max_pool_yolov4(
     ((0, 0),),
 )
 @pytest.mark.parametrize("stride", ((2, 2),))
-@pytest.mark.parametrize("dilation", ((1, 1),))
+@pytest.mark.parametrize(
+    "dilation",
+    ((1, 1),),
+)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("ceil_mode", [False, True])
 def test_run_max_pool_squeeze_net_model(

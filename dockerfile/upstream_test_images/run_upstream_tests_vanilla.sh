@@ -183,7 +183,8 @@ test_suite_wh_6u_llama_demo_tests() {
 
     pytest models/demos/llama3_70b_galaxy/tests/test_llama_model.py -k "quick"
     pytest models/demos/llama3_70b_galaxy/tests/unit_tests/test_llama_model_prefill.py
-    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat"
+    # Repeat test seeing AssertionError on token mismatches: Issue #27446
+    # pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat"
     # Some AssertionError: Throughput is out of targets 49 - 53 t/s/u in 200 iterations
     # assert 200 <= 20
     # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"

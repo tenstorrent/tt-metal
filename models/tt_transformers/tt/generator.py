@@ -59,7 +59,13 @@ class Generator:
 
     # Note: This function is called by vLLM
     def prefill_forward_text(
-        self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None, empty_slots=None
+        self,
+        tokens: torch.Tensor,
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        **kwargs,
     ):
         if page_table is not None:
             assert isinstance(page_table, torch.Tensor), "page_table mush be torch.Tensor"
@@ -103,6 +109,7 @@ class Generator:
                 last_token_idx=last_token_idx,
                 kv_cache=model_kv_cache,
                 model_id=model_id,
+                **kwargs,
             )
             out_list.append(logits)
 
@@ -118,7 +125,9 @@ class Generator:
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
         return output_logits
 
-    def prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1):
+    def prefill_forward_single_user_text(
+        self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1, **kwargs
+    ):
         seq_len = tokens.shape[-1]
         use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         if use_chunked_prefill:
@@ -168,6 +177,7 @@ class Generator:
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
+                    **kwargs,
                 )
                 tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
@@ -195,6 +205,7 @@ class Generator:
             ) = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
+                **kwargs,
             )
 
             tt_logits = self.model[model_id].ttnn_prefill_forward(
