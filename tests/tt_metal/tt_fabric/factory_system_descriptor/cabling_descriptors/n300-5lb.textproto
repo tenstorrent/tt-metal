@@ -1,0 +1,75 @@
+pods {
+  pod {
+    pod_id: 1
+    pod_type: "n300_t3k_pod"
+  }
+  pod {
+    pod_id: 2
+    pod_type: "n300_t3k_pod"
+  }
+  pod {
+    pod_id: 3
+    pod_type: "n300_t3k_pod"
+  }
+  pod {
+    pod_id: 4
+    pod_type: "n300_t3k_pod"
+  }
+  pod {
+    pod_id: 5
+    pod_type: "n300_t3k_pod"
+  }
+}
+port_type_connections {
+  key: "QSFP"
+  value {
+    connections {
+      p_a {
+        pod_id: 1
+        tray_id: 4
+        port_id: 2
+      }
+      p_b {
+        pod_id: 2
+        tray_id: 1
+        port_id: 2
+      }
+    }
+    connections {
+      p_a {
+        pod_id: 1
+        tray_id: 3
+        port_id: 1
+      }
+      p_b {
+        pod_id: 4
+        tray_id: 1
+        port_id: 2
+      }
+    }
+    connections {
+      p_a {
+        pod_id: 1
+        tray_id: 2
+        port_id: 1
+      }
+      p_b {
+        pod_id: 3
+        tray_id: 1
+        port_id: 2
+      }
+    }
+    connections {
+      p_a {
+        pod_id: 1
+        tray_id: 1
+        port_id: 2
+      }
+      p_b {
+        pod_id: 5
+        tray_id: 1
+        port_id: 2
+      }
+    }
+  }
+}
