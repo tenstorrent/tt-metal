@@ -2404,7 +2404,7 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
         KernelProperties kernel_properties;
         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
         kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
-        this->create_kernel(program_, CoreType::WORKER, true);
+        this->create_kernel(program_, CoreType::ETH, true);
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 
