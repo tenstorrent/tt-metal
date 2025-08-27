@@ -114,7 +114,7 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_mesh_workload(
             tensor_coords,
             init_barrier_semaphore,
             final_barrier_semaphore);
-        workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
+        workload->add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));

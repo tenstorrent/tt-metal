@@ -218,7 +218,7 @@ bool run_sfpu_test(const std::string& sfpu_name, int tile_factor = 1, bool use_D
         tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0, num_tiles});
 
         tt::tt_metal::distributed::MeshWorkload workload;
-        workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(device->shape()), std::move(program));
+        workload->add_program(tt::tt_metal::distributed::MeshCoordinateRange(device->shape()), std::move(program));
         tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(0), workload, true);
 
         std::vector<uint32_t> result_vec;

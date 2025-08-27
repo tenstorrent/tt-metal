@@ -209,18 +209,14 @@ int main() {
         SUBTRACT_OP_ID);
     // Create MeshWorkloads and add programs to them. A MeshWorkload allows a program to target
     // multiple Physical Devices in the Virtual Mesh.
-    auto add_mesh_workload = CreateMeshWorkload();
-    auto multiply_and_subtract_mesh_workload = CreateMeshWorkload();
-    AddProgramToMeshWorkload(
-        add_mesh_workload, std::move(*add_program), all_devices);  // Addition runs on the full grid (sub_device 1)
-    AddProgramToMeshWorkload(
-        multiply_and_subtract_mesh_workload,
-        std::move(*multiply_program),
-        top_row);  // Multiplication runs on the top row (sub_device 2)
-    AddProgramToMeshWorkload(
-        multiply_and_subtract_mesh_workload,
-        std::move(*subtract_program),
-        bottom_row);  // Subtraction runs on the bottom row (sub device 2)
+    auto add_mesh_workload = MeshWorkload();
+    auto multiply_and_subtract_mesh_workload = MeshWorkload();
+    add_mesh_workload.add_program(
+        all_devices, std::move(*add_program));  // Addition runs on the full grid (sub_device 1)
+    multiply_and_subtract_mesh_workload.add_program(
+        top_row, std::move(*multiply_program));  // Multiplication runs on the top row (sub_device 2)
+    multiply_and_subtract_mesh_workload.add_program(
+        bottom_row, std::move(*subtract_program));  // Subtraction runs on the bottom row (sub device 2)
 
     // =========== Step 4: Compile and Load Workloads on the Mesh ===========
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, true);

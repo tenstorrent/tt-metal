@@ -118,7 +118,7 @@ bool eth_direct_sender_receiver_kernels(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload sender_workload;
     tt_metal::Program sender_program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(sender_workload, std::move(sender_program), device_range);
+    distributed::sender_workload->add_program( device_range, std::move( std::move(sender_program)));
     auto& sender_program_ = sender_workload.get_programs().at(device_range);
 
     auto eth_sender_kernel = tt_metal::CreateKernel(
@@ -144,7 +144,7 @@ bool eth_direct_sender_receiver_kernels(
     ////////////////////////////////////////////////////////////////////////////
     distributed::MeshWorkload receiver_workload;
     tt_metal::Program receiver_program = tt_metal::Program();
-    distributed::AddProgramToMeshWorkload(receiver_workload, std::move(receiver_program), device_range);
+    distributed::receiver_workload->add_program( device_range, std::move( std::move(receiver_program)));
     auto& receiver_program_ = receiver_workload.get_programs().at(device_range);
 
     auto eth_receiver_kernel = tt_metal::CreateKernel(

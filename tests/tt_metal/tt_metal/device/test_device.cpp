@@ -223,7 +223,7 @@ TEST_F(MeshDeviceFixture, TensixValidateKernelDoesNotTargetHarvestedCores) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = tt_metal::CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::workload->add_program( device_range, std::move( std::move(program)));
         auto& program_ = workload.get_programs().at(device_range);
 
         std::string kernel_name = "tests/tt_metal/tt_metal/test_kernels/misc/ping_legal_l1s.cpp";
@@ -288,7 +288,7 @@ TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::workload->add_program( device_range, std::move( std::move(program)));
     auto& program_ = workload.get_programs().at(device_range);
 
     EXPECT_TRUE(device->is_mmio_capable());

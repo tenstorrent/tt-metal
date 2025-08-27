@@ -888,8 +888,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<tt_metal::distributed::MeshWorkload> mesh_workloads;
         for (auto& program : programs) {
-            auto mesh_workload = tt_metal::distributed::CreateMeshWorkload();
-            tt_metal::distributed::AddProgramToMeshWorkload(
+            auto mesh_workload = tt_metal::distributed::MeshWorkload();
+            tt_metal::distributed::workload.add_program(
                 mesh_workload, std::move(program), tt::tt_metal::distributed::MeshCoordinateRange{{0, 0}, {0, 0}});
             mesh_workloads.push_back(std::move(mesh_workload));
         }

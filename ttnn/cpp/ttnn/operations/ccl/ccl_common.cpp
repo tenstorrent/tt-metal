@@ -69,7 +69,7 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks create_mesh_workload_from_pro
         for (const auto& coord : range) {
             const ttnn::MeshCoordinateRange program_range(coord, coord);
             auto program_with_callbacks = create_program(coord);
-            workload_with_callbacks.workload.add_program(program_range, std::move(program_with_callbacks.program));
+            workload_with_callbacks.workload->add_program(program_range, std::move(program_with_callbacks.program));
             if (program_with_callbacks.override_runtime_arguments_callback.has_value()) {
                 workload_with_callbacks.per_program_callbacks.emplace(
                     program_range, std::move(*program_with_callbacks.override_runtime_arguments_callback));

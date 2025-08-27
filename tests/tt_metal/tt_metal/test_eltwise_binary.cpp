@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
     auto& cq = mesh_device->mesh_command_queue();
 
     distributed::MeshWorkload mesh_workloads[] = {
-        distributed::CreateMeshWorkload(), distributed::CreateMeshWorkload(), distributed::CreateMeshWorkload()};
+        distributed::MeshWorkload(), distributed::MeshWorkload(), distributed::MeshWorkload()};
     auto ops = EltwiseOp::all();
     for (auto eltwise_op : ops) {
         log_info(LogTest, "====================================================================");
@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
             SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
             SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);
 
-            distributed::AddProgramToMeshWorkload(
+            distributed::workload.add_program(
                 mesh_workload, std::move(program), distributed::MeshCoordinateRange(mesh_device->shape()));
             ////////////////////////////////////////////////////////////////////////////
             //                      Compile Application

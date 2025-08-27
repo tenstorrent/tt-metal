@@ -145,7 +145,7 @@ public:
 
     void enqueue_program(const MeshCoordinate& mesh_coord, tt::tt_metal::Program program) {
         MeshCoordinateRange device(mesh_coord, mesh_coord);
-        tt::tt_metal::distributed::AddProgramToMeshWorkload(*mesh_workload_, std::move(program), device);
+        tt::tt_metal::distributed::mesh_workload_.add_program( device, std::move( std::move(program)));
     }
 
     void run_programs() {

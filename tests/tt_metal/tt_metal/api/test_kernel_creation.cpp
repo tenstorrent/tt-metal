@@ -36,7 +36,7 @@ TEST_F(MeshDispatchFixture, TensixCreateKernelsOnComputeCores) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::workload->add_program( device_range, std::move( std::move(program)));
         auto& program_ = workload.get_programs().at(device_range);
 
         CoreCoord compute_grid = mesh_device->compute_with_storage_grid_size();
@@ -61,7 +61,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixCreateKernelsOnStorageCores) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::workload->add_program( device_range, std::move( std::move(program)));
         auto& program_ = workload.get_programs().at(device_range);
 
         const std::set<CoreCoord>& storage_only_cores = mesh_device->storage_only_cores();
@@ -92,7 +92,7 @@ TEST_F(MeshDispatchFixture, DISABLED_TensixIdleEthCreateKernelsOnDispatchCores) 
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         tt_metal::Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::workload->add_program( device_range, std::move( std::move(program)));
         auto& program_ = workload.get_programs().at(device_range);
 
         const auto& dispatch_core_config = get_dispatch_core_config();

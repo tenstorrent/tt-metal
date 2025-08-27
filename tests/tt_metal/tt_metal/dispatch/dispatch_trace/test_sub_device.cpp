@@ -39,9 +39,9 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms) 
     distributed::MeshWorkload waiter_workload, syncer_workload, incrementer_workload;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::AddProgramToMeshWorkload(waiter_workload, std::move(waiter_program), device_range);
-    distributed::AddProgramToMeshWorkload(syncer_workload, std::move(syncer_program), device_range);
-    distributed::AddProgramToMeshWorkload(incrementer_workload, std::move(incrementer_program), device_range);
+    distributed::waiter_workload->add_program( device_range, std::move( std::move(waiter_program)));
+    distributed::syncer_workload->add_program( device_range, std::move( std::move(syncer_program)));
+    distributed::incrementer_workload->add_program( device_range, std::move( std::move(incrementer_program)));
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), waiter_workload, false);
     mesh_device->set_sub_device_stall_group({{SubDeviceId{0}}});
@@ -119,9 +119,9 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations) {
     distributed::MeshWorkload waiter_workload_1, syncer_workload_1, incrementer_workload_1;
     distributed::MeshCoordinate zero_coord = distributed::MeshCoordinate::zero_coordinate(mesh_device->shape().dims());
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
-    distributed::AddProgramToMeshWorkload(waiter_workload_1, std::move(waiter_program_1), device_range);
-    distributed::AddProgramToMeshWorkload(syncer_workload_1, std::move(syncer_program_1), device_range);
-    distributed::AddProgramToMeshWorkload(incrementer_workload_1, std::move(incrementer_program_1), device_range);
+    distributed::waiter_workload_1.add_program( device_range, std::move( std::move(waiter_program_1)));
+    distributed::syncer_workload_1.add_program( device_range, std::move( std::move(syncer_program_1)));
+    distributed::incrementer_workload_1.add_program( device_range, std::move( std::move(incrementer_program_1)));
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), waiter_workload_1, false);
     mesh_device->set_sub_device_stall_group({{SubDeviceId{0}}});
@@ -145,9 +145,9 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations) {
         create_basic_sync_program(mesh_device.get(), sub_device_2, sub_device_1);
 
     distributed::MeshWorkload waiter_workload_2, syncer_workload_2, incrementer_workload_2;
-    distributed::AddProgramToMeshWorkload(waiter_workload_2, std::move(waiter_program_2), device_range);
-    distributed::AddProgramToMeshWorkload(syncer_workload_2, std::move(syncer_program_2), device_range);
-    distributed::AddProgramToMeshWorkload(incrementer_workload_2, std::move(incrementer_program_2), device_range);
+    distributed::waiter_workload_2.add_program( device_range, std::move( std::move(waiter_program_2)));
+    distributed::syncer_workload_2.add_program( device_range, std::move( std::move(syncer_program_2)));
+    distributed::incrementer_workload_2.add_program( device_range, std::move( std::move(incrementer_program_2)));
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), waiter_workload_2, false);
     mesh_device->set_sub_device_stall_group({{SubDeviceId{0}}});

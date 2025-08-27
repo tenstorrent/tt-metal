@@ -129,7 +129,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
     uint32_t num_cols_in_workload = mesh_device_->num_cols() / 2;
-    auto mesh_workload = CreateMeshWorkload();
+    auto mesh_workload = MeshWorkload();
     MeshCoordinateRange devices_0(
         MeshCoordinate{0, 0},
         MeshCoordinate{
@@ -143,8 +143,8 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
             mesh_device_->num_cols() - 1,
         });
 
-    AddProgramToMeshWorkload(mesh_workload, std::move(*programs[0]), devices_0);
-    AddProgramToMeshWorkload(mesh_workload, std::move(*programs[1]), devices_1);
+    mesh_workload.add_program( devices_0, std::move( std::move(*programs[0])));
+    mesh_workload.add_program( devices_1, std::move( std::move(*programs[1])));
 
     for (int iter = 0; iter < num_iters; iter++) {
         std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), iter + 2);

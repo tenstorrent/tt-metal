@@ -118,7 +118,7 @@ bool test_socket_send_recv(
             const ReplicatedBufferConfig buffer_config{.size = sender_core_range_set.num_cores() * data_size};
 
             auto sender_data_buffer = MeshBuffer::create(buffer_config, sender_device_local_config, mesh_device_.get());
-            auto sender_mesh_workload = CreateMeshWorkload();
+            auto sender_mesh_workload = MeshWorkload();
             std::unordered_set<MeshCoreCoord> mesh_core_coords;
 
             for (const auto& connection : socket.get_config().socket_connection_config) {
@@ -165,7 +165,7 @@ bool test_socket_send_recv(
                     sender_fabric_node_id, recv_fabric_node_id, 0, sender_program, {sender_core}, sender_rtas);
 
                 tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_core, sender_rtas);
-                AddProgramToMeshWorkload(
+                workload.add_program(
                     sender_mesh_workload,
                     std::move(sender_program),
                     MeshCoordinateRange(connection.sender_core.device_coord));
@@ -186,7 +186,7 @@ bool test_socket_send_recv(
             const ReplicatedBufferConfig buffer_config{.size = recv_core_range_set.num_cores() * data_size};
             auto recv_data_buffer = MeshBuffer::create(buffer_config, recv_device_local_config, mesh_device_.get());
 
-            auto recv_mesh_workload = CreateMeshWorkload();
+            auto recv_mesh_workload = MeshWorkload();
             for (const auto& connection : socket.get_config().socket_connection_config) {
                 auto recv_core = connection.receiver_core.core_coord;
                 auto sender_fabric_node_id =
@@ -216,7 +216,7 @@ bool test_socket_send_recv(
                 tt_fabric::append_fabric_connection_rt_args(
                     recv_fabric_node_id, sender_fabric_node_id, 0, recv_program, {recv_core}, recv_rtas);
                 tt_metal::SetRuntimeArgs(recv_program, recv_kernel, recv_core, recv_rtas);
-                AddProgramToMeshWorkload(
+                workload.add_program(
                     recv_mesh_workload,
                     std::move(recv_program),
                     MeshCoordinateRange(connection.receiver_core.device_coord));

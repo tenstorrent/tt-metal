@@ -70,7 +70,7 @@ static void test_sems_across_core_types(
             auto zero_coord = distributed::MeshCoordinate(0, 0);
             auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
             auto program = tt::tt_metal::CreateProgram();
-            distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+            distributed::workload->add_program( device_range, std::move( std::move(program)));
             auto& program_ = workload.get_programs().at(device_range);
 
             CoreCoord eth_core = *eth_cores.begin();
@@ -136,7 +136,7 @@ TEST_F(MeshDispatchFixture, EthTestBlank) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::workload->add_program( device_range, std::move( std::move(program)));
     auto& program_ = workload.get_programs().at(device_range);
 
     // TODO: tweak when FD supports idle eth
@@ -168,7 +168,7 @@ TEST_F(MeshDispatchFixture, TensixTestInitLocalMemory) {
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     CoreCoord core = {0, 0};
     Program program;
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::workload->add_program( device_range, std::move( std::move(program)));
     auto& program_ = workload.get_programs().at(device_range);
 
     CreateKernel(
@@ -202,7 +202,7 @@ TEST_F(MeshDispatchFixture, EthTestInitLocalMemory) {
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = CreateProgram();
-    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    distributed::workload->add_program( device_range, std::move( std::move(program)));
     auto& program_ = workload.get_programs().at(device_range);
 
     // TODO: tweak when FD supports idle eth
@@ -269,7 +269,7 @@ TEST_F(MeshDispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
         Program program;
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+        distributed::workload->add_program( device_range, std::move( std::move(program)));
         auto& program_ = workload.get_programs().at(device_range);
 
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
@@ -362,7 +362,7 @@ TEST_F(MeshDispatchFixture, TensixCircularBufferInitFunction) {
                 auto zero_coord = distributed::MeshCoordinate(0, 0);
                 auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
                 Program program;
-                distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+                distributed::workload->add_program( device_range, std::move( std::move(program)));
                 auto& program_ = workload.get_programs().at(device_range);
 
                 std::map<std::string, std::string> defines;

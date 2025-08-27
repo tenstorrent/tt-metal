@@ -341,7 +341,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
     ths.reserve(sender_receivers.size());
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
-        distributed::AddProgramToMeshWorkload(
+        distributed::workload.add_program(
             workloads[device->get_devices()[0]->id()],
             std::move(programs[device->get_devices()[0]->id()]),
             device_range);
@@ -500,7 +500,7 @@ bool eth_interleaved_ring_gather_sender_receiver_kernels(
     ths.reserve(sender_receivers.size());
     for (uint32_t i = 0; i < sender_receivers.size(); ++i) {
         const auto& device = std::get<0>(sender_receivers[i]);
-        distributed::AddProgramToMeshWorkload(
+        distributed::workload.add_program(
             workloads[device->get_devices()[0]->id()],
             std::move(programs[device->get_devices()[0]->id()]),
             device_range);

@@ -419,7 +419,7 @@ ProgramExecutor create_standard_executor(
     // Create mesh workloads
     mesh_workloads.resize(programs.size());
     for (auto i = 0; i < programs.size(); i++) {
-        AddProgramToMeshWorkload(
+        workload.add_program(
             mesh_workloads[i], std::move(programs[i]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
     }
     std::function warmup_func{[&info, &mesh_cq, &mesh_workloads]() {
@@ -452,7 +452,7 @@ ProgramExecutor create_load_prefetcher_executor(
     // Create mesh workload
     mesh_workloads.resize(programs.size());
     for (auto i = 0; i < programs.size(); i++) {
-        AddProgramToMeshWorkload(
+        workload.add_program(
             mesh_workloads[i], std::move(programs[i]), MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0)));
     }
 

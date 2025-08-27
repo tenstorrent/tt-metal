@@ -138,7 +138,7 @@ int main(int argc, char** argv) {
                 core,
                 runtime_args
             );
-            distributed::AddProgramToMeshWorkload(
+            distributed::workload.add_program(
                 mesh_workload, std::move(program), distributed::MeshCoordinateRange(device->shape()));
             distributed::EnqueueMeshWorkload(cq, mesh_workload, false);
             log_info(tt::LogTest, "Started program");

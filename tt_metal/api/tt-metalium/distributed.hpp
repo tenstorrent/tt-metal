@@ -36,7 +36,7 @@ class IDevice;
 
 namespace distributed {
 
-MeshWorkload CreateMeshWorkload();
+MeshWorkload MeshWorkload();
 
 void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range);
 

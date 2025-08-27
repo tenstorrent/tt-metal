@@ -14,7 +14,7 @@
 
 namespace tt::tt_metal::distributed {
 
-MeshWorkload CreateMeshWorkload() { return MeshWorkload(); }
+MeshWorkload MeshWorkload() { return MeshWorkload(); }
 
 void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range) {
     mesh_workload.add_program(device_range, std::move(program));
