@@ -7,6 +7,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 using namespace tt::constants;
 using namespace tt;
@@ -123,7 +124,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
         num_kv_heads,
         head_tiles,
         1,  // read the first phase
-        is_dram ? 1 : 0};
+    };
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"
@@ -343,11 +345,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             process_qv,                        // read and write q and v heads
             process_k,                         // read and write k heads
             batch_offset.has_value() ? 1 : 0,  // use_batch_offset
-            batch_offset.has_value() && batch_offset->buffer()->buffer_type() == tt_metal::BufferType::DRAM
-                ? (uint32_t)1
-                : (uint32_t)0,
             batch_offset_index_stick_size,
             batch_offset_cb_index_reader};
+        tt::tt_metal::TensorAccessorArgs(batch_offset.has_value() ? batch_offset.value().buffer() : nullptr)
+            .append_to(q_reader_compile_time_args);
         auto q_reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
@@ -355,7 +356,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
             tt_metal::ReaderDataMovementConfig(q_reader_compile_time_args));
         std::vector<uint32_t> q_writer_compile_time_args = q_reader_compile_time_args;
         q_writer_compile_time_args[9] = 2;  // read the second phase
-        q_writer_compile_time_args[17] = batch_offset_cb_index_writer;
         auto q_writer_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/reader_tm_tile_layout_nlp_create_qkv_heads_decode.cpp",
@@ -620,10 +620,11 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
         process_qv,                        // read and write q and v heads
         process_k,                         // read and write k heads
         batch_offset.has_value() ? 1 : 0,  // use_batch_offset
-        batch_offset.has_value() && batch_offset->buffer()->buffer_type() == tt_metal::BufferType::DRAM ? (uint32_t)1
-                                                                                                        : (uint32_t)0,
         batch_offset_index_stick_size,
         batch_offset_cb_index_reader};
+
+    tt::tt_metal::TensorAccessorArgs(batch_offset.has_value() ? batch_offset.value().buffer() : nullptr)
+        .append_to(q_reader_compile_time_args);
 
     auto q_reader_kernel_id = tt_metal::CreateKernel(
         program,
@@ -633,6 +634,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
         tt_metal::ReaderDataMovementConfig(q_reader_compile_time_args));
     std::vector<uint32_t> q_writer_compile_time_args = q_reader_compile_time_args;
     q_writer_compile_time_args[9] = 2;  // read the second phase
+    q_writer_compile_time_args[15] = batch_offset_cb_index_writer;
     auto q_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"
@@ -657,6 +659,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_nlp_create_qkv_heads_de
 
         std::vector<uint32_t> k_writer_compile_time_args = k_reader_compile_time_args;
         k_writer_compile_time_args[9] = 2;  // read the second phase
+        k_writer_compile_time_args[15] = batch_offset_cb_index_writer;
         k_writer_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/device/kernels/"

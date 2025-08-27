@@ -57,10 +57,9 @@ void kernel_main() {
     tt_l1_ptr uint32_t* in1_mcast_sender_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(i));
     i += in1_mcast_sender_num_y;
 
-    constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
-    constexpr bool transpose_hw_bool = get_compile_time_arg_val(2) == 1;
-    constexpr bool row_major = (bool)get_compile_time_arg_val(3);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(4);
+    constexpr bool transpose_hw_bool = get_compile_time_arg_val(0) == 1;
+    constexpr bool row_major = (bool)get_compile_time_arg_val(1);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(2);
 
     constexpr uint32_t cb_id_in1 = 1;  // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
     constexpr uint32_t cb_id_in2 = 2;  // all interleaved or sharded KV heads for one user batch
@@ -70,9 +69,8 @@ void kernel_main() {
     constexpr uint32_t in0_num_blocks_w = 1;  // TODO: Must be 1; generalize to support inner dim blocking
 
 #ifndef IN1_SHARDED
-    const DataFormat in1_data_format = get_dataformat(cb_id_in1);
-    const InterleavedAddrGenFast<src1_is_dram> s1 = {
-        .bank_base_address = src1_addr, .page_size = in1_tile_bytes, .data_format = in1_data_format};
+    constexpr auto in1_args = TensorAccessorArgs<3>();
+    const auto s1 = TensorAccessor(in1_args, src1_addr, in1_tile_bytes);
 #endif
 
     // Mcast setup
