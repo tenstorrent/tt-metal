@@ -38,6 +38,12 @@ parameters = {
             # Edge cases for hybrid padding+dilation testing
             [1, 256, 64, 64, 3, 5],  # Asymmetric pooling
             [1, 64, 17, 17, 4, 3],  # Small asymmetric edge case
+            [1, 256, 80, 80, 3, 3],
+            [1, 256, 20, 20, 3, 3],
+            [1, 256, 40, 40, 3, 3],
+            [1, 256, 60, 80, 3, 3],
+            [1, 256, 30, 40, 3, 3],
+            [1, 256, 15, 20, 3, 3],
             # Failing edge cases
             # [1, 64, 37, 37, 5, 7],   # Prime dimension edge case
             # [1, 128, 50, 20, 6, 4],  # Asymmetric input with variance
