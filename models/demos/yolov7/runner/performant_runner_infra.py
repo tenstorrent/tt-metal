@@ -44,7 +44,7 @@ class YOLOv7PerformanceRunnerInfra:
         self.outputs_mesh_composer = outputs_mesh_composer
 
         self.torch_model = load_torch_model(self.model_location_generator)
-        self.torch_input_tensor = torch.randn((self.batch_size * self.num_devices, 3, 640, 640), dtype=torch.float32)
+        self.torch_input_tensor = torch.randn((self.batch_size, 3, 640, 640), dtype=torch.float32)
         self.parameters = custom_preprocessor(model=self.torch_model, mesh_mapper=self.weights_mesh_mapper)
         nx_ny = [80, 40, 20]
         grid_tensors = []
@@ -107,12 +107,9 @@ class YOLOv7PerformanceRunnerInfra:
 
     def validate(self, output_tensor=None, torch_output_tensor=None):
         if output_tensor is None:
-            # Use self.output_tensor (original behavior)
             output_tensor = self.output_tensor
         else:
-            # Handle output from pipeline (which might be a list or multi-device tensor)
             if isinstance(output_tensor, (list, tuple)):
-                # Extract the first element from the list
                 output_tensor = output_tensor[0]
 
         torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor

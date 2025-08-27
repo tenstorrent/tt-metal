@@ -46,8 +46,7 @@ class YOLOv8xPerformanceRunnerInfra:
         self.ttnn_yolov8_model = load_ttnn_model(
             device=self.device, torch_model=torch_model, weights_mesh_mapper=self.weights_mesh_mapper
         )
-
-        input_shape = (self.batch_size * self.num_devices, 3, 640, 640)
+        input_shape = (self.batch_size, 3, 640, 640)
         self.torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
         self.tt_input_tensor = ttnn.from_torch(
             self.torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper
@@ -79,7 +78,6 @@ class YOLOv8xPerformanceRunnerInfra:
         )
 
         assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
-
         tt_inputs_host = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper)
 
         return tt_inputs_host, input_mem_config

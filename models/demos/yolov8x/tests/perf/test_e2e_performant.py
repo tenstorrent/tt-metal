@@ -4,10 +4,8 @@
 
 
 import pytest
-import torch
 from loguru import logger
 
-import ttnn
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov8x.common import YOLOV8X_L1_SMALL_SIZE
 from models.demos.yolov8x.runner.performant_runner_infra import YOLOv8xPerformanceRunnerInfra
@@ -16,9 +14,7 @@ from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_confi
 from models.utility_functions import profiler, run_for_wormhole_b0
 
 
-def _run_model_pipeline(
-    device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations, num_command_queues, trace
-):
+def _run_model_pipeline(device, test_infra, num_measurement_iterations, num_command_queues, trace):
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
 
     def model_wrapper(l1_input_tensor):
@@ -61,12 +57,10 @@ def _run_model_pipeline(
     pipeline.cleanup()
 
 
-def run_trace_2cq_model_pipeline(device, tt_inputs, test_infra, num_warmup_iterations, num_measurement_iterations):
+def run_trace_2cq_model_pipeline(device, test_infra, num_measurement_iterations):
     _run_model_pipeline(
         device,
-        tt_inputs,
         test_infra,
-        num_warmup_iterations,
         num_measurement_iterations,
         num_command_queues=2,
         trace=True,
@@ -82,29 +76,19 @@ def run_perf_e2e_yolov8x(
     profiler.clear()
 
     inputs_mesh_mapper, _, output_mesh_composer = get_mesh_mappers(device)
+    num_devices = device.get_num_devices()
+    batch_size = batch_size_per_device * num_devices
 
     test_infra = YOLOv8xPerformanceRunnerInfra(
         device,
-        batch_size_per_device,
+        batch_size,
         model_location_generator=model_location_generator,
         inputs_mesh_mapper=inputs_mesh_mapper,
         outputs_mesh_composer=output_mesh_composer,
     )
 
-    num_devices = device.get_num_devices()
-    batch_size = batch_size_per_device * num_devices
-
-    input_shape = (batch_size_per_device * num_devices, 3, 640, 640)
-    torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper)
-
-    num_warmup_iterations = 5
     num_measurement_iterations = 15
-
-    run_trace_2cq_model_pipeline(
-        device, ttnn_input_tensor, test_infra, num_warmup_iterations, num_measurement_iterations
-    )
+    run_trace_2cq_model_pipeline(device, test_infra, num_measurement_iterations)
 
     first_iter_time = profiler.get("compile")
     inference_time_avg = profiler.get(f"run_model_pipeline_2cqs") / num_measurement_iterations
@@ -116,7 +100,7 @@ def run_perf_e2e_yolov8x(
         batch_size=batch_size,
         inference_and_compile_time=first_iter_time,
         inference_time=inference_time_avg,
-        expected_compile_time=1,
+        expected_compile_time=120,
         expected_inference_time=expected_inference_time,
         comments=f"640x640_batchsize{batch_size}",
         inference_time_cpu=0.0,
