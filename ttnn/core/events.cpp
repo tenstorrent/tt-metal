@@ -59,6 +59,6 @@ void wait_for_mesh_event(QueueId cq_id, const MeshEvent& event) {
     event.device()->mesh_command_queue(*cq_id).enqueue_wait_for_event(event);
 }
 
-void event_synchronize(const MeshEvent& event) { EventSynchronize(event); }
+void event_synchronize(const MeshEvent& event) { event.synchronize(); }
 
 }  // namespace ttnn::events

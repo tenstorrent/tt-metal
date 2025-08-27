@@ -64,7 +64,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEventSynchronizeSanity)
                 log_debug(
                     tt::LogTest, "j : {} Recording and Host Syncing on event for CQ ID: {}", j, cqs[i].get().id());
                 auto event = sync_events[i].emplace_back(cqs[i].get().enqueue_record_event_to_host());
-                distributed::EventSynchronize(event);
+                event.synchronize();
                 // Can check events fields after prev sync w/ async CQ.
                 EXPECT_EQ(event.mesh_cq_id(), cqs[i].get().id());
                 EXPECT_EQ(event.id(), cmds_issued_per_cq[i] + 1);
@@ -75,7 +75,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsEventSynchronizeSanity)
         // Sync on earlier events again per CQ just to show it works.
         for (uint i = 0; i < cqs.size(); i++) {
             for (size_t j = 0; j < num_events; j++) {
-                distributed::EventSynchronize(sync_events.at(i)[j]);
+                sync_events.at(i)[j].synchronize();
             }
         }
 
@@ -103,7 +103,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceEventFixture, TestEventsEventSynchronizeSanity
         for (uint i = 0; i < cqs.size(); i++) {
             log_debug(tt::LogTest, "j : {} Recording and Host Syncing on event for CQ ID: {}", j, cqs[i].get().id());
             auto event = sync_events[i].emplace_back(cqs[i].get().enqueue_record_event_to_host());
-            distributed::EventSynchronize(event);
+            event.synchronize();
             // Can check events fields after prev sync w/ async CQ.
             EXPECT_EQ(event.mesh_cq_id(), cqs[i].get().id());
             EXPECT_EQ(event.id(), cmds_issued_per_cq[i] + 1);
@@ -114,7 +114,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceEventFixture, TestEventsEventSynchronizeSanity
     // Sync on earlier events again per CQ just to show it works.
     for (uint i = 0; i < cqs.size(); i++) {
         for (size_t j = 0; j < num_events; j++) {
-            distributed::EventSynchronize(sync_events.at(i)[j]);
+            sync_events.at(i)[j].synchronize();
         }
     }
 
@@ -427,7 +427,7 @@ TEST_F(UnitMeshMultiCQMultiDeviceEventFixture, TestEventsReadWriteWithWaitForEve
                 // Basically like Finish, but use host sync on event to ensure all read cmds are finished.
                 if (use_events) {
                     auto event_done_reads = cq_read.enqueue_record_event_to_host();
-                    distributed::EventSynchronize(event_done_reads);
+                    event_done_reads.synchronize();
                 }
 
                 TT_ASSERT(write_data.size() == read_results.size());

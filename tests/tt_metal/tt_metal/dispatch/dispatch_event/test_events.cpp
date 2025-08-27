@@ -126,14 +126,14 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
 
         // Host synchronize every N number of events.
         if (i > 0 && ((i % num_events_between_sync) == 0)) {
-            EventSynchronize(event);
+            event->synchronize();
         }
     }
 
     // A bunch of bonus syncs where event_id is mod on earlier ID's.
-    EventSynchronize(sync_events.at(2));
-    EventSynchronize(sync_events.at(sync_events.size() - 2));
-    EventSynchronize(sync_events.at(5));
+    sync_events.at(2)->synchronize();
+    sync_events.at(sync_events.size() - 2)->synchronize();
+    sync_events.at(5)->synchronize();
 
     Finish(this->device_->command_queue());
 
@@ -153,7 +153,7 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang)
     future_event->event_id = 0xFFFF;   // Modify event_id to be a future event that isn't issued yet.
 
     // Launch Host Sync in an async thread, expected to hang, with timeout and kill signal.
-    auto future = std::async(std::launch::async, [this, future_event]() { return EventSynchronize(future_event); });
+    auto future = std::async(std::launch::async, [this, future_event]() { future_event->synchronize(); });
 
     bool seen_expected_hang = future.wait_for(std::chrono::seconds(1)) == std::future_status::timeout;
     MetalContext::instance().watcher_server()->set_killed_due_to_error_flag(
@@ -248,20 +248,20 @@ TEST_F(CommandQueueEventFixture, TestEventsEventsQueryBasic) {
         EnqueueRecordEvent(this->device_->command_queue(), event);
 
         if (i > 0 && ((i % num_events_between_query) == 0)) {
-            [[maybe_unused]] auto status = EventQuery(event);
+            [[maybe_unused]] auto status = event->query();
             log_trace(tt::LogTest, "EventQuery for i: {} - status: {}", i, status);
         }
     }
 
     // Wait until earlier events are finished, then ensure query says they are finished.
     auto& early_event_1 = sync_events.at(num_events - 10);
-    EventSynchronize(early_event_1);  // Block until this event is finished.
-    event_status = EventQuery(early_event_1);
+    early_event_1->synchronize();  // Block until this event is finished.
+    event_status = early_event_1->query();
     EXPECT_EQ(event_status, true);
 
     auto& early_event_2 = sync_events.at(num_events - 5);
     Finish(this->device_->command_queue());  // Block until all events finished.
-    event_status = EventQuery(early_event_2);
+    event_status = early_event_2->query();
     EXPECT_EQ(event_status, true);
 
     // Query a future event that hasn't completed and ensure it's not finished.
@@ -269,7 +269,7 @@ TEST_F(CommandQueueEventFixture, TestEventsEventsQueryBasic) {
     EnqueueRecordEvent(this->device_->command_queue(), future_event);
     future_event->wait_until_ready();  // in case async used, must block until async cq populated event.
     future_event->event_id = 0xFFFF;   // Modify event_id to be a future event that isn't issued yet.
-    event_status = EventQuery(future_event);
+    event_status = future_event->query();
     EXPECT_EQ(event_status, false);
 
     Finish(this->device_->command_queue());
@@ -305,7 +305,7 @@ TEST_F(CommandQueueEventFixture, TestEventsMixedWriteBufferRecordWaitSynchronize
         EnqueueWaitForEvent(this->device_->command_queue(), event);
 
         if (i % 10 == 0) {
-            EventSynchronize(event);
+            event->synchronize();
         }
         events_issued_per_cq += num_events_per_cq;
     }

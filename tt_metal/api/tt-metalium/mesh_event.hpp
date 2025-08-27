@@ -29,6 +29,10 @@ public:
     MeshDevice* device() const;
     uint32_t mesh_cq_id() const;
     const MeshCoordinateRange& device_range() const;
+    
+    // Method equivalents for EventSynchronize() and EventQuery() functions
+    void synchronize();
+    bool query();
 
     friend std::ostream& operator<<(std::ostream& os, const MeshEvent& event);
 

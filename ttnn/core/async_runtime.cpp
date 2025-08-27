@@ -54,9 +54,9 @@ void queue_synchronize(CommandQueue& cq) {
 }
 void queue_synchronize(tt::tt_metal::distributed::MeshCommandQueue& cq) { cq.finish(); }
 
-void event_synchronize(const std::shared_ptr<Event>& event) { EventSynchronize(event); }
+void event_synchronize(const std::shared_ptr<Event>& event) { event->synchronize(); }
 void event_synchronize(const tt::tt_metal::distributed::MeshEvent& event) {
-    tt::tt_metal::distributed::EventSynchronize(event);
+    event.synchronize();
 }
 
 void wait_for_event(CommandQueue& cq, const std::shared_ptr<Event>& event) {

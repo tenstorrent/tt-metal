@@ -101,7 +101,7 @@ TEST_F(MeshEventsTest2x4, ShardedAsyncIO) {
         if (i % 2) {
             // Test Host <-> Device synchronization
             auto write_event = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(0));
-            EventSynchronize(write_event);
+            write_event.synchronize();
         } else {
             // Test Device <-> Device synchronization
             auto write_event = EnqueueRecordEvent(mesh_device_->mesh_command_queue(0));
@@ -160,7 +160,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
         if (iter % 2) {
             // Test Host <-> Device Synchronization
             auto write_event = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(1));
-            EventSynchronize(write_event);
+            write_event.synchronize();
         } else {
             // Test Device <-> Device Synchronization
             auto write_event = EnqueueRecordEvent(mesh_device_->mesh_command_queue(1));
@@ -175,7 +175,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
         } else {
             // Test Host <-> Device Synchronization
             auto op_event = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(0));
-            EventSynchronize(op_event);
+            op_event.synchronize();
         }
 
         // Issue reads on MeshCQ 1
@@ -240,7 +240,7 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
 
         mesh_device_->mesh_command_queue(1).enqueue_write_shard_to_sub_grid(*buf, src_vec.data(), devices_1, false);
         auto event1 = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(1), {}, devices_1);
-        EventSynchronize(event1);
+        event1.synchronize();
 
         for (const auto& coord : devices_1) {
             readback_vecs.push_back({});
@@ -330,13 +330,13 @@ TEST_F(MeshEventsTestSuite, EventQuery) {
     for (auto i = 0; i < NUM_ITERS; i++) {
         auto event = EnqueueRecordEventToHost(mesh_device_->mesh_command_queue(0));
         if (i % 10 == 0) {
-            EventSynchronize(event);
-            EXPECT_TRUE(EventQuery(event));
+            event.synchronize();
+            EXPECT_TRUE(event.query());
         }
     }
     // Create a dummy event from the future that has not been issued yet.
     auto event = MeshEvent(0xffff, mesh_device_.get(), 0, MeshCoordinateRange(mesh_device_->shape()));
-    EXPECT_FALSE(EventQuery(event));  // Querying an event that has not been issued should return false.
+    EXPECT_FALSE(event.query());  // Querying an event that has not been issued should return false.
 }
 
 }  // namespace
