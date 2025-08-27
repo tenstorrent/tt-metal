@@ -96,37 +96,37 @@ while [[ "$found" == "false" ]]; do
     continue
   fi
 
-  echo "::group::Python env"
-  rm -rf "$PYTHON_ENV_DIR"
-  venv_rc=0
-  if [ -f "./create_venv.sh" ]; then
-    # shellcheck disable=SC1091
+  # echo "::group::Python env"
+  # rm -rf "$PYTHON_ENV_DIR"
+  # venv_rc=0
+  # if [ -f "./create_venv.sh" ]; then
+  #   # shellcheck disable=SC1091
 
-    set +u
-    # shellcheck disable=SC1091
-    source ./create_venv.sh || venv_rc=$?
-    set -u
+  #   set +u
+  #   # shellcheck disable=SC1091
+  #   source ./create_venv.sh || venv_rc=$?
+  #   set -u
 
-  fi
-  PYTHON_ENV_DIR="${PYTHON_ENV_DIR:-./.venv}"
-  if [ ! -d "$PYTHON_ENV_DIR" ]; then
-    python3 -m venv "$PYTHON_ENV_DIR" || venv_rc=$?
-  fi
-  # shellcheck disable=SC1091
-  source "$PYTHON_ENV_DIR/bin/activate" || venv_rc=$?
-  python -m pip install -U pip || venv_rc=$?
-  python -m pip install -r models/tt_transformers/requirements.txt || venv_rc=$?
-  python -m pip install -e . || venv_rc=$?
-  echo "::endgroup::"
+  # fi
+  # PYTHON_ENV_DIR="${PYTHON_ENV_DIR:-./.venv}"
+  # if [ ! -d "$PYTHON_ENV_DIR" ]; then
+  #   python3 -m venv "$PYTHON_ENV_DIR" || venv_rc=$?
+  # fi
+  # # shellcheck disable=SC1091
+  # source "$PYTHON_ENV_DIR/bin/activate" || venv_rc=$?
+  # python -m pip install -U pip || venv_rc=$?
+  # python -m pip install -r models/tt_transformers/requirements.txt || venv_rc=$?
+  # python -m pip install -e . || venv_rc=$?
+  # echo "::endgroup::"
 
-  export PYTHONNOUSERSITE=1
-  export LD_LIBRARY_PATH="/work/build/lib"
+  # export PYTHONNOUSERSITE=1
+  # export LD_LIBRARY_PATH="/work/build/lib"
 
-  if [ $venv_rc -ne 0 ]; then
-    echo "Python env failed; skipping this commit"
-    git bisect skip
-    continue
-  fi
+  # if [ $venv_rc -ne 0 ]; then
+  #   echo "Python env failed; skipping this commit"
+  #   git bisect skip
+  #   continue
+  # fi
 
   echo "::group::Testing $rev"
   timeout_rc=1
