@@ -47,7 +47,7 @@ def test_all_gather_chunk_perf(
 
     chunks_per_sync_list = CHUNKS_PER_SYNC
     num_workers_per_link_list = WORKERS_PER_LINK
-    topology_list = TOPOLOGY
+    topology_list = TOPOLOGY  # you may want to change this to ["linear"] or ["ring"] to run tests just for those.
     for topology in topology_list:
         for i, config in enumerate(CONFIGS):
             num_devices, ag_output_shape, dim, layout, ag_input_dtype = config
@@ -64,8 +64,8 @@ def test_all_gather_chunk_perf(
             best_bandwidth_gbps = -float("inf")
             best_chunks_per_sync = None
             best_num_workers_per_link = None
-            for chunks_per_sync in chunks_per_sync_list:
-                for num_workers_per_link in num_workers_per_link_list:
+            for j, chunks_per_sync in enumerate(chunks_per_sync_list):
+                for k, num_workers_per_link in enumerate(num_workers_per_link_list):
                     cols = ["DEVICE KERNEL"]
                     op_name = "AllGatherAsync"
                     step_name = (
@@ -75,7 +75,7 @@ def test_all_gather_chunk_perf(
                     # Filter by both chunks_per_sync and shape
                     final_command = (
                         base_command
-                        + f' -k "{CHUNKS_PER_SYNC_IDS[i]} and {CONFIGS_IDS[i]} and {WORKERS_PER_LINK_IDS[i]} and {topology}"'
+                        + f' -k "{CHUNKS_PER_SYNC_IDS[j]} and {CONFIGS_IDS[i]} and {WORKERS_PER_LINK_IDS[k]} and {topology}"'
                     )
                     results = None
                     try:
