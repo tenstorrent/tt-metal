@@ -1,10 +1,5 @@
 # Qwen2.5-VL
 
-## Platforms:
-- Qwen2.5-VL-3B: Wormhole n150 and n300
-- Qwen2.5-VL-32B: Wormhole loudbox/quietbox
-- Qwen2.5-VL-72B: Wormhole loudbox/quietbox
-
 ## Introduction
 This codebase includes the Qwen2.5 family of models and currently supports the model variants:
 - Qwen2.5-VL-3B: [Qwen/Qwen2.5-VL-3B](https://huggingface.co/Qwen/Qwen2.5-VL-3B-Instruct)
@@ -14,6 +9,11 @@ This codebase includes the Qwen2.5 family of models and currently supports the m
 ## Prerequisites
 - Cloned [tt-metal repository](https://github.com/tenstorrent/tt-metal) for source code
 - Installed: [TT-Metalium™ / TT-NN™](https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md)
+- Install additional python dependencies:
+
+```
+pip install -r models/demos/qwen25_vl/requirements.txt
+```
 
 ## How to Run
 For a single user example:
@@ -24,7 +24,9 @@ MESH_DEVICE=<device_name> HF_MODEL=<model_name> pytest models/demos/qwen25_vl/de
 **Notes:**
 - `<model_name>` is the HuggingFace model repo string, e.g. `Qwen/Qwen2.5-VL-3B-Instruct`
 - `<device_name>` is the TT device string, e.g. `N150`, `N300`, `T3K`
+- `-k` is the pytest filter; to run a specific test, use `-k <test_name>`; additional test names are listed in `models/demos/qwen25_vl/demo/demo.py`
 - different model variants are supported on different devices:
+
 | Model Variant      | `<model_name>` (HF_MODEL)                   | `<device_name>` (MESH_DEVICE) |
 |--------------------|---------------------------------------------|-------------------------------|
 | Qwen2.5-VL-3B      | Qwen/Qwen2.5-VL-3B-Instruct                 | either `N150` or `N300`       |
