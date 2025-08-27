@@ -49,9 +49,6 @@ def _get_test_coords_and_shapes(mesh_shape, tensor_shapes):
             yield (shape, (coords[0], coords[1]))
 
 
-torch.set_printoptions(threshold=10000)
-
-
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
@@ -80,22 +77,51 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
+    input_tensor2 = ttnn.from_torch(
+        input_tensor_torch * 2,
+        layout=layout,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+    )
+
+    delays = []
+    for i in range(MESH_SHAPE[0]):
+        delay_at_i = []
+        for j in range(MESH_SHAPE[1]):
+            delay_at_i.append(0)
+        delays.append(delay_at_i)
+    delays[coord1[0]][coord1[1]] = 800000
 
     compute_grid_size = mesh_device.compute_with_storage_grid_size()
     cores = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
     )
-    semaphore = ttnn.create_global_semaphore(mesh_device, cores, 0)
 
     sent_tensor = ttnn.point_to_point(
         input_tensor,
         coord1,
         coord0,
         ttnn.Topology.Linear,
-        semaphore,
+    )
+    ttnn.apply_device_delay(
+        mesh_device, delays
+    )  # tests for a potential race by having receive attempt to increment the semaphore before the send is done
+    sent_tensor2 = ttnn.point_to_point(
+        input_tensor2,
+        coord1,
+        coord0,
+        ttnn.Topology.Linear,
     )
     sent_tensor_torch = ttnn.to_torch(sent_tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :], sent_tensor_torch[idx_start1:idx_end1, :, :, :])
+    sent_tensor2_torch = ttnn.to_torch(sent_tensor2, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
+    assert_equal(input_tensor_torch[idx_start0:idx_end0, :, :, :] * 2, sent_tensor2_torch[idx_start1:idx_end1, :, :, :])
+
+    # 1 for send/receive and 1 for device delay
+    assert (
+        mesh_device.num_program_cache_entries() == 2
+    ), f"Device has {mesh_device.num_program_cache_entries()} program cache entries"
 
     # test optional output tensor
     return_tensor = ttnn.from_torch(
@@ -109,7 +135,6 @@ def test_send_receive(mesh_device, shape_coords, layout, dtype):
         coord0,
         coord1,
         ttnn.Topology.Linear,
-        semaphore,
         optional_output_tensor=return_tensor,
     )
 

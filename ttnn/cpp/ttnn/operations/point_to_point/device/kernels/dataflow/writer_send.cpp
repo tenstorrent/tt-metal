@@ -60,6 +60,9 @@ void kernel_main() {
     // wait for receiver to signal it is ready
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receive_semaphore_addr);
     noc_semaphore_wait(local_semaphore_ptr, 1);
+    // clean up semaphore – needs to be done before the sender side semaphore increment if we're re-using the semaphore
+    // in subsequent program cache hits
+    noc_semaphore_set(local_semaphore_ptr, 0);
 
     fabric_connection.open_finish();
     auto& connection_direction =
@@ -114,7 +117,4 @@ void kernel_main() {
     connection_direction.send_payload_flush_blocking_from_address((uint32_t)sem_header_ptr, packet_header_size_bytes);
 
     fabric_connection.close();
-
-    // clean up semaphore
-    noc_semaphore_set(local_semaphore_ptr, 0);
 }
