@@ -10,6 +10,7 @@
 #include "device/isin_device_op_types.hpp"
 
 #include "tt-metalium/shape.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
@@ -34,9 +35,7 @@ constexpr DataType OUTPUT_DATA_TYPE = DataType::UINT8;
 struct IsInPreprocessingResult {
     Tensor preprocessed_elements_tensor;
     Tensor preprocessed_test_elements_tensor;
-    // Tensor index_hintx_tensor;
     Shape original_elements_shape;
-    // Shape original_test_elements_shape;
     Layout original_elements_layout;
     int mask_value;
     uint32_t elements_size;
@@ -54,12 +53,10 @@ uint32_t calculate_max_fetch_size(const Tensor& elements, const Tensor& test_ele
     const auto confidence_margin = 0.8f;
     const auto elements_datum_size = elements.element_size();
     const auto test_elements_datum_size = test_elements.element_size();
-    // const auto index_hint_datum_size = 4;
-    const auto output_datum_size = 1;
+    const auto output_datum_size = 4;
 
-    // return l1_size_per_core * confidence_margin / (elements_datum_size + test_elements_datum_size +
-    // output_datum_size);
-    return 1024;
+    return l1_size_per_core * confidence_margin / (elements_datum_size + test_elements_datum_size + output_datum_size);
+    // return 1024;
 }
 
 IsInPreprocessingResult isin_preprocessing(
@@ -98,6 +95,8 @@ IsInPreprocessingResult isin_preprocessing(
 }
 
 Tensor isin_postprocessing(Tensor& output_tensor, const IsInPreprocessingResult& is_in_preprocessing_result) {
+    // output_tensor = ttnn::to_layout(output_tensor, Layout::TILE);
+    // output_tensor = ttnn::typecast(output_tensor, DataType::UINT32);
     if (is_in_preprocessing_result.original_elements_shape.rank() != OUTPUT_TENSOR_RANK) {
         output_tensor = ttnn::reshape(output_tensor, is_in_preprocessing_result.original_elements_shape);
     }
