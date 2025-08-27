@@ -179,13 +179,13 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const auto& output_tensor = tensor_args.output_tensor;
 
     // Validate storage type for input tensors
-    TT_ASSERT(
+    TT_FATAL(
         input_tensor_a.storage_type() == StorageType::DEVICE,
         "Input tensor A must be on device, got storage type: {}",
         input_tensor_a.storage_type());
 
     if (input_tensor_b.has_value()) {
-        TT_ASSERT(
+        TT_FATAL(
             input_tensor_b->storage_type() == StorageType::DEVICE,
             "Input tensor B must be on device, got storage type: {}",
             input_tensor_b->storage_type());
@@ -462,10 +462,20 @@ BinaryNgDeviceOperation::invoke(
     BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::UnaryWithParam> post_activations) {
+    TT_FATAL(
+        input_tensor_a.storage_type() == StorageType::DEVICE,
+        "Input tensor A must be on device, got storage type: {}",
+        input_tensor_a.storage_type());
+
+    TT_FATAL(
+        input_tensor_b.storage_type() == StorageType::DEVICE,
+        "Input tensor B must be on device, got storage type: {}",
+        input_tensor_b.storage_type());
+
     auto subtile_broadcast_type = get_subtile_broadcast_type(
         input_tensor_a.logical_shape()[-2],
         input_tensor_a.logical_shape()[-1],
@@ -484,16 +494,17 @@ BinaryNgDeviceOperation::invoke(
             {post_activations.begin(), post_activations.end()},
             std::nullopt,
             memory_config.value_or(
-                output_tensor.has_value() ? output_tensor->memory_config() : input_tensor_a.memory_config()),
+                optional_output_tensor.has_value() ? optional_output_tensor->memory_config()
+                                                   : input_tensor_a.memory_config()),
             input_tensor_a.dtype(),  // TODO: For mixed dtypes we need to set this value to the appropriate dtype
                                      // depending on which LLK is meant to be used.
             output_dtype,
-            get_worker_grid(input_tensor_a, &input_tensor_b, output_tensor),
+            get_worker_grid(input_tensor_a, &input_tensor_b, optional_output_tensor),
             std::nullopt,
             subtile_broadcast_type,
             is_sfpu_op,
             is_quant_op},
-        tensor_args_t{input_tensor_a, input_tensor_b, std::move(output_tensor)}};
+        tensor_args_t{input_tensor_a, input_tensor_b, std::move(optional_output_tensor)}};
 }
 
 std::tuple<BinaryNgDeviceOperation::operation_attributes_t, BinaryNgDeviceOperation::tensor_args_t>

@@ -41,6 +41,54 @@ protected:
     MeshDevice* device;
 };
 
+// Helper function to create host tensors and call binary operation
+// This should trigger our storage type validation and throw a runtime error
+void call_binary_with_host_tensors(bool use_legacy) {
+    using tt::constants::TILE_HEIGHT;
+    using tt::constants::TILE_WIDTH;
+
+    ttnn::Shape shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
+
+    // Create host tensors using the proper method (like in copy_and_move test)
+    auto random_data = ttnn::random::random(shape, DataType::BFLOAT16);
+    auto host_tensor_a = random_data.cpu();  // Move to host
+    auto host_tensor_b = random_data.cpu();  // Move to host
+
+    // Verify these are host tensors
+    TT_FATAL(
+        host_tensor_a.storage_type() == tt::tt_metal::StorageType::HOST, "Input tensor A should be HOST storage type");
+    TT_FATAL(
+        host_tensor_b.storage_type() == tt::tt_metal::StorageType::HOST, "Input tensor B should be HOST storage type");
+
+    // This should fail with storage type validation error and throw a runtime error
+    auto result = ttnn::operations::binary::BinaryOperation<ttnn::operations::binary::BinaryOpType::ADD>::invoke(
+        ttnn::DefaultQueueId,
+        host_tensor_a,
+        host_tensor_b,
+        std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        {},
+        {},
+        {},
+        use_legacy);
+
+    // If we get here, the validation failed (which is bad)
+    TT_FATAL(false, "Expected storage type validation to fail, but operation succeeded");
+}
+
+TEST_F(StorageTypeValidationTest, BinaryOperationHostTensorValidation) {
+    // Test that binary operation (use_legacy=true) throws runtime error when given host tensors
+    // This is the expected behavior - our storage type validation should throw an exception
+    EXPECT_THROW(call_binary_with_host_tensors(true), std::runtime_error);
+}
+
+TEST_F(StorageTypeValidationTest, BinaryNgOperationHostTensorValidation) {
+    // Test that binary_ng operation (use_legacy=false) throws runtime error when given host tensors
+    // This is the expected behavior - our storage type validation should throw an exception
+    EXPECT_THROW(call_binary_with_host_tensors(false), std::runtime_error);
+}
+
 TEST_F(StorageTypeValidationTest, DeviceTensorsWorkCorrectly) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;

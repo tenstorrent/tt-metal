@@ -123,13 +123,13 @@ void BinaryDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = tensor_args.input_tensor_b;
 
     // Validate storage type for input tensors
-    TT_ASSERT(
+    TT_FATAL(
         input_tensor_a.storage_type() == StorageType::DEVICE,
         "Input tensor A must be on device, got storage type: {}",
         input_tensor_a.storage_type());
 
     if (input_tensor_b.has_value()) {
-        TT_ASSERT(
+        TT_FATAL(
             input_tensor_b->storage_type() == StorageType::DEVICE,
             "Input tensor B must be on device, got storage type: {}",
             input_tensor_b->storage_type());
@@ -387,8 +387,8 @@ bool BinaryDeviceOperation::skip_launch(
 
 std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t>
 BinaryDeviceOperation::invoke(
-    const Tensor& input_tensor_a_arg,
-    const Tensor& input_tensor_b_arg,
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
     BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,
@@ -400,23 +400,34 @@ BinaryDeviceOperation::invoke(
             output_dtype.value() == optional_output_tensor.value().dtype(),
             "If both output dtype and output tensor provided dtype should match");
     }
+
+    TT_FATAL(
+        input_tensor_a.storage_type() == StorageType::DEVICE,
+        "Input tensor A must be on device, got storage type: {}",
+        input_tensor_a.storage_type());
+
+    TT_FATAL(
+        input_tensor_b.storage_type() == StorageType::DEVICE,
+        "Input tensor B must be on device, got storage type: {}",
+        input_tensor_b.storage_type());
+
     CoreRangeSet worker_grid;
     // We assert all shard specs are the same if sharded, so only need to check the first shard spec
     // This will create the worker grid based on the used sub-devices when sharded
     // Otherwise this will use all cores of the sub-devices
     // TODO #13655: Note that the current program ingfrastructure still only supports a single sub-device per program
-    if (input_tensor_a_arg.is_sharded()) {
-        const auto& input_grid = input_tensor_a_arg.shard_spec().value().grid;
-        auto device = input_tensor_a_arg.device();
+    if (input_tensor_a.is_sharded()) {
+        const auto& input_grid = input_tensor_a.shard_spec().value().grid;
+        auto device = input_tensor_a.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             if (sub_device_workers.intersects(input_grid)) {
                 worker_grid = worker_grid.merge(sub_device_workers);
             }
         }
-    } else if (input_tensor_b_arg.is_sharded()) {
-        const auto& input_grid = input_tensor_b_arg.shard_spec().value().grid;
-        auto device = input_tensor_b_arg.device();
+    } else if (input_tensor_b.is_sharded()) {
+        const auto& input_grid = input_tensor_b.shard_spec().value().grid;
+        auto device = input_tensor_b.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             if (sub_device_workers.intersects(input_grid)) {
@@ -433,7 +444,7 @@ BinaryDeviceOperation::invoke(
             }
         }
     } else {
-        auto device = input_tensor_a_arg.device();
+        auto device = input_tensor_a.device();
         for (const auto& sub_device_id : device->get_sub_device_ids()) {
             const auto& sub_device_workers = device->worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
             worker_grid = worker_grid.merge(sub_device_workers);
@@ -448,11 +459,11 @@ BinaryDeviceOperation::invoke(
             std::nullopt,
             memory_config.value_or(
                 optional_output_tensor.has_value() ? optional_output_tensor->memory_config()
-                                                   : input_tensor_a_arg.memory_config()),
-            output_dtype.value_or(input_tensor_a_arg.dtype()),
+                                                   : input_tensor_a.memory_config()),
+            output_dtype.value_or(input_tensor_a.dtype()),
             std::move(worker_grid),
             std::nullopt},
-        tensor_args_t{input_tensor_a_arg, input_tensor_b_arg, optional_output_tensor}};
+        tensor_args_t{input_tensor_a, input_tensor_b, optional_output_tensor}};
 }
 
 std::tuple<BinaryDeviceOperation::operation_attributes_t, BinaryDeviceOperation::tensor_args_t>
