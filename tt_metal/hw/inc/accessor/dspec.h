@@ -213,6 +213,31 @@ struct DistributionSpec {
         init_runtime_values();
     }
 
+    /**
+     * @brief Build a DistributionSpec from the provided arguments. This function allows for both static and dynamic
+     * rank, number of banks, tensor shape, shard shape, and bank coordinates.
+     *
+     * @param args                  Arguments to build the DistributionSpec from.
+     */
+    template <typename Args>
+    constexpr DistributionSpec(const Args& args) :
+        DistributionSpec(
+            args.get_rank(),
+            args.get_num_banks(),
+            Args::tensor_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.tensor_shape_crta_offset()) : nullptr,
+            Args::shard_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.shard_shape_crta_offset()) : nullptr,
+            Args::bank_coords_is_crta ? (uint16_t*)get_common_arg_addr(args.bank_coords_crta_offset()) : nullptr) {
+        static_assert(
+            !Args::rank_is_crta or Args::tensor_shape_is_crta,
+            "Tensor shape must be CRTA if rank is not known at compile time!");
+        static_assert(
+            !Args::rank_is_crta or Args::shard_shape_is_crta,
+            "Shard shape must be CRTA if rank is not known at compile time!");
+        static_assert(
+            !Args::num_banks_is_crta or Args::bank_coords_is_crta,
+            "Bank coords must be CRTA if num_banks is not known at compile time!");
+    }
+
 // Helper macro to avoid code duplication in getters
 #define getter_helper(is_static, val_ct, val_rt) \
     if constexpr (is_static) {                   \
@@ -416,51 +441,5 @@ private:
     static constexpr size_t tensor_volume_ct = precompute_volume_ct(TensorShapeWrapper::elements);
     static constexpr size_t shard_volume_ct = precompute_volume_ct(ShardShapeWrapper::elements);
 };
-
-/**
- * @brief Helper function to build a DistributionSpec from CTA and CRTA. Parses tensor shape, shard shape,
- * bank coordinates if needed, and passes to DSpec constructor.
- */
-template <typename Args>
-auto make_dspec_from_args(const Args& args) {
-    // Dispatch to the appropriate ShapeWrapper and BankCoordsWrapper types based on the "staticness"
-    using TensorShapeType =
-        typename ArrayWrapperTypeSelectorU32<!Args::tensor_shape_is_crta, Args::TensorShapeCTAOffset, Args::RankCT>::
-            type;
-    using ShardShapeType =
-        typename ArrayWrapperTypeSelectorU32<!Args::shard_shape_is_crta, Args::ShardShapeCTAOffset, Args::RankCT>::type;
-    using BankCoordsType = typename ArrayWrapperTypeSelectorPackedU16<
-        !Args::bank_coords_is_crta,
-        Args::BankCoordsCTAOffset,
-        Args::NumBanksCT>::type;
-
-    auto rank = args.get_rank();
-    auto num_banks = args.get_num_banks();
-
-    static_assert(
-        !Args::rank_is_crta or Args::tensor_shape_is_crta,
-        "Tensor shape must be CRTA if rank is not known at compile time!");
-    static_assert(
-        !Args::rank_is_crta or Args::shard_shape_is_crta,
-        "Shard shape must be CRTA if rank is not known at compile time!");
-    static_assert(
-        !Args::num_banks_is_crta or Args::bank_coords_is_crta,
-        "Bank coords must be CRTA if num_banks is not known at compile time!");
-
-    constexpr bool is_interleaved = !Args::is_sharded;
-    return DistributionSpec<
-        Args::RankCT,
-        Args::NumBanksCT,
-        TensorShapeType,
-        ShardShapeType,
-        BankCoordsType,
-        is_interleaved,
-        Args::is_dram>(
-        rank,
-        num_banks,
-        Args::tensor_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.tensor_shape_crta_offset()) : nullptr,
-        Args::shard_shape_is_crta ? (uint32_t*)get_common_arg_addr(args.shard_shape_crta_offset()) : nullptr,
-        Args::bank_coords_is_crta ? (uint16_t*)get_common_arg_addr(args.bank_coords_crta_offset()) : nullptr);
-}
 
 }  // namespace tensor_accessor
