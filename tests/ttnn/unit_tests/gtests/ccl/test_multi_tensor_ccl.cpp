@@ -76,7 +76,7 @@ TEST_F(MultiCQFabricMeshDevice2x4Fixture, AllGatherCommandProcessorAsync) {
         tensors,
         /* dim */ 0,
         multi_dev_semaphore,
-        /* persistent_output_buffers */ std::nullopt,
+        /* persistent_output_buffer */ std::nullopt,
         /* num_links */ 1,
         /* memory_config */ std::nullopt,
         ttnn::ccl::Topology::Linear,

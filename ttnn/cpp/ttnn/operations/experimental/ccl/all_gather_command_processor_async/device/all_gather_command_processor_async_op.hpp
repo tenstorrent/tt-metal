@@ -122,7 +122,7 @@ std::vector<Tensor> all_gather_command_processor_async(
     const std::vector<Tensor>& input_tensors,
     int32_t dim,
     const std::vector<global_semaphore::MultiDeviceGlobalSemaphore>& multi_device_global_semaphore,
-    const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers = std::nullopt,
+    const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt,
     uint32_t num_links = 1,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
