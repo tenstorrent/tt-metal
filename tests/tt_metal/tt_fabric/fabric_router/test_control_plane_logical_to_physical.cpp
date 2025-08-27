@@ -423,6 +423,34 @@ TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds1x8MeshOn2x
             {0, 0}, {1, 4}, {2, 5}, {3, 1}, {4, 2}, {5, 7}, {6, 6}, {7, 3}  // horizontal line
         });
 }
+
+TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIds1x1Mesh) {
+    // Test 1x1 single chip mesh shape
+    // Shape: 0
+    // Single chip with no neighbors
+    test_adjacency_map = {{0, {}}};
+
+    std::set<chip_id_t> user_chip_ids = {0};
+    tt::tt_metal::distributed::MeshShape mesh_shape(1, 1);
+
+    auto topology_info = build_mesh_adjacency_map(
+        user_chip_ids, mesh_shape, [this](chip_id_t chip_id) { return this->get_adjacent_chips(chip_id); });
+
+    auto adj_map_sorter = [&](const IntraMeshAdjacencyMap& topology_info) {
+        return std::make_pair(topology_info.adjacency_map, 0);  // Start with chip 0
+    };
+
+    auto physical_chip_ids = convert_1d_mesh_adjacency_to_row_major_vector(topology_info, adj_map_sorter);
+
+    // Verify chip mapping for 1x1 mesh
+    verify_physical_chip_ids(
+        physical_chip_ids,
+        1,
+        {
+            {0, 0}  // single chip
+        });
+}
+
 // Torus and ring support?
 TEST_F(LogicalToPhysicalConversionFixture, TestGetMeshPhysicalChipIdsLooped1DMesh) {
     GTEST_SKIP() << "Ring topology currently not supported";
