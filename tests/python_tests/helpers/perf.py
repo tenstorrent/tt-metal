@@ -7,7 +7,7 @@ import shutil
 from dataclasses import dataclass, fields, is_dataclass
 from enum import Enum
 from pathlib import Path
-from statistics import mean, variance
+from statistics import mean, stdev
 from typing import List
 
 import plotly.graph_objects as go
@@ -100,7 +100,7 @@ def process_runs(runs, test_config):
     return tuple(
         {
             "mean": mean(column) / tile_cnt,
-            "variance": variance(column) / (tile_cnt * tile_cnt),
+            "stddev": stdev(column) / tile_cnt,
         }
         for column in zip(*runs)
     )
@@ -194,7 +194,7 @@ def _get_stat_names(result):
         for idx in range(stats_count):
             idx_str = f"[{idx}]" if len(stats) > 1 else ""
             names[column] = f"mean({run_type.name}{idx_str})"
-            names[column + 1] = f"variance({run_type.name}{idx_str})"
+            names[column + 1] = f"stddev({run_type.name}{idx_str})"
             column += 2
 
     return names
@@ -229,7 +229,7 @@ def update_report(report: PerfReport, test_config, results):
     for stats in results.values():
         for stat in stats:
             stat_values.append(stat["mean"])
-            stat_values.append(stat["variance"])
+            stat_values.append(stat["stddev"])
     report.stat_values.append(stat_values)
 
 
