@@ -535,7 +535,17 @@ def run_sweeps(
     try:
         for module_name in module_names:
             test_module = importlib.import_module("sweeps." + module_name)
-            suites = vector_source.get_available_suites(module_name)
+            if config.suite_name:
+                # Filter to only the specified suite
+                all_suites = vector_source.get_available_suites(module_name)
+                if config.suite_name not in all_suites:
+                    logger.warning(
+                        f"Suite '{config.suite_name}' not found in module '{module_name}'. Available suites: {all_suites}"
+                    )
+                    continue  # or exit with error
+                suites = [config.suite_name]
+            else:
+                suites = vector_source.get_available_suites(module_name)
 
             for suite in suites:
                 suite_start_time = dt.datetime.now()
