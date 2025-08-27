@@ -478,7 +478,7 @@ class MochiTransformer3DModel:
         init=False,
         ccl_manager=None,
         parallel_config=None,
-        is_fsdp=False,
+        is_fsdp=True,
     ):
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
@@ -707,17 +707,21 @@ class MochiTransformer3DModel:
             timestep, text_embeds, encoder_attention_mask, hidden_dtype=torch.float32
         )
 
+        valid_prompt_length = encoder_attention_mask.sum(dim=1).max().int().item()
+
         logger.info(f"temb shape: {temb.shape}")
         logger.info(f"encoder_hidden_states shape: {encoder_hidden_states.shape}")
 
         tt_temb_11BD = bf16_tensor(temb.unsqueeze(0).unsqueeze(0), device=self.mesh_device)
         tt_prompt_1BLP = bf16_tensor(encoder_hidden_states.unsqueeze(0), device=self.mesh_device)
 
-        logger.warning(
-            "Preparing timestep and text features - attention mask not taken into account for the shape of the prompt. May lead to poor outputs"
-        )
-        if not torch.all(encoder_attention_mask == 1):
-            logger.warning("Attention mask is not all ones. May lead to poor outputs!!!")
+        logger.info(f"valid prompt length: {valid_prompt_length}")
+        prompt_shape = list(tt_prompt_1BLP.shape)
+        prompt_shape[2] = valid_prompt_length
+        tt_prompt_1BLP = ttnn.reshape(tt_prompt_1BLP, ttnn.Shape(prompt_shape), tt_prompt_1BLP.padded_shape)
+
+        if valid_prompt_length < text_embeds.shape[-2]:
+            logger.warning("Attention mask is not all ones. Truncating prompt")
 
         logger.info(f"TT temb shape: {tt_temb_11BD.shape}")
         logger.info(f"TT prompt shape: {tt_prompt_1BLP.shape}")

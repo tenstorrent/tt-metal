@@ -270,6 +270,9 @@ def test_mochi_transformer_block(
     ],
     ids=["short_seq", "medium_seq", "long_seq"],
 )
+@pytest.mark.parametrize(
+    "test_attention_mask", [True, False], ids=["yes_test_attention_mask", "no_test_attention_mask"]
+)
 @pytest.mark.parametrize("load_cache", [True, False], ids=["yes_load_cache", "no_load_cache"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mochi_transformer_model(
@@ -283,6 +286,7 @@ def test_mochi_transformer_model(
     W: int,
     prompt_seq: int,
     load_cache: bool,
+    test_attention_mask: bool,
 ) -> None:
     torch_dtype = torch.float32
 
@@ -335,6 +339,9 @@ def test_mochi_transformer_model(
     prompt_input = torch.randn((B, prompt_seq, text_embed_dim), dtype=torch_dtype)
     timestep_input = torch.randint(0, 1000, (B,), dtype=torch_dtype)
     attention_mask = torch.ones((B, prompt_seq), dtype=torch_dtype)
+    if test_attention_mask:
+        # Test that masking prompt works
+        attention_mask[:, prompt_seq // 2 :] = 0
 
     # Create TT model
     tt_model = MochiTransformer3DModel(

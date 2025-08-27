@@ -151,7 +151,7 @@ def test_tt_mochi_pipeline(
         mesh_device=mesh_device,
         parallel_config=parallel_config,
         num_links=num_links,
-        use_cache=False,
+        use_cache=True,
         model_name="genmo/mochi-1-preview",
     )
 
@@ -163,11 +163,11 @@ def test_tt_mochi_pipeline(
     # Generate frames with reduced parameters for faster testing
     frames = tt_pipe(
         prompt,
-        num_inference_steps=10,  # Reduced for faster testing
+        num_inference_steps=50,  # Reduced for faster testing
         guidance_scale=3.5,
-        num_frames=16,  # Reduced for faster testing
+        num_frames=48,  # Reduced for faster testing
         height=320,  # Reduced resolution for faster testing
-        width=320,  # Reduced resolution for faster testing
+        width=400,  # Reduced resolution for faster testing
     ).frames[0]
 
     # Validate output
@@ -182,7 +182,7 @@ def test_tt_mochi_pipeline(
     try:
         from diffusers.utils import export_to_video
 
-        export_to_video(frames, "tt_mochi_test_output.mp4", fps=4)
+        export_to_video(frames, "tt_mochi_test_output.mp4", fps=30)
         logger.info("TT Pipeline video exported to tt_mochi_test_output.mp4")
     except ImportError:
         logger.info("Could not export video - diffusers.utils.export_to_video not available")

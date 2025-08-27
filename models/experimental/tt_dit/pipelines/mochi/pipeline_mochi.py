@@ -1,5 +1,6 @@
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Union
+import os
 
 import ttnn
 import numpy as np
@@ -18,6 +19,8 @@ from diffusers.pipelines.mochi.pipeline_output import MochiPipelineOutput
 
 from ...parallel.config import DiTParallelConfig
 from ...parallel.manager import CCLManager
+from ...models.transformers.transformer_mochi import MochiTransformer3DModel
+from ...utils.cache import get_cache_path, load_cache_dict
 
 
 # from: https://github.com/genmoai/models/blob/075b6e36db58f1242921deff83a1066887b9c9e1/src/mochi_preview/infer.py#L77
@@ -165,7 +168,7 @@ class MochiPipeline(DiffusionPipeline):
 
         # Load pretrained T5 text encoder and tokenizer (Torch)
         self.text_encoder = T5EncoderModel.from_pretrained(
-            model_name, subfolder="text_encoder", torch_dtype=torch.bfloat16
+            model_name, subfolder="text_encoder", torch_dtype=torch.float32
         )
         self.tokenizer = T5TokenizerFast.from_pretrained(model_name, subfolder="tokenizer")
 
@@ -174,36 +177,46 @@ class MochiPipeline(DiffusionPipeline):
         from diffusers import MochiTransformer3DModel as TorchMochiTransformer3DModel
 
         torch_transformer = TorchMochiTransformer3DModel.from_pretrained(
-            model_name, subfolder="transformer", torch_dtype=torch.bfloat16
+            model_name, subfolder="transformer", torch_dtype=torch.float32
         )
-        self.transformer = torch_transformer
 
-        # # Create TT version with the same config
-        # self.transformer = MochiTransformer3DModel(
-        #     patch_size=torch_transformer.config.patch_size,
-        #     num_attention_heads=torch_transformer.config.num_attention_heads,
-        #     attention_head_dim=torch_transformer.config.attention_head_dim,
-        #     num_layers=torch_transformer.config.num_layers,
-        #     pooled_projection_dim=torch_transformer.config.pooled_projection_dim,
-        #     in_channels=torch_transformer.config.in_channels,
-        #     text_embed_dim=torch_transformer.config.text_embed_dim,
-        #     time_embed_dim=torch_transformer.config.time_embed_dim,
-        #     activation_fn=torch_transformer.config.activation_fn,
-        #     mesh_device=mesh_device,
-        #     ccl_manager=self.ccl_manager,
-        #     parallel_config=parallel_config,
-        #     is_fsdp=True,
-        # )
+        self.transformer_config = torch_transformer.config
+
+        # Create TT version with the same config
+        self.transformer = MochiTransformer3DModel(
+            patch_size=torch_transformer.config.patch_size,
+            num_attention_heads=torch_transformer.config.num_attention_heads,
+            attention_head_dim=torch_transformer.config.attention_head_dim,
+            num_layers=torch_transformer.config.num_layers,
+            pooled_projection_dim=torch_transformer.config.pooled_projection_dim,
+            in_channels=torch_transformer.config.in_channels,
+            text_embed_dim=torch_transformer.config.text_embed_dim,
+            time_embed_dim=torch_transformer.config.time_embed_dim,
+            activation_fn=torch_transformer.config.activation_fn,
+            mesh_device=mesh_device,
+            ccl_manager=self.ccl_manager,
+            parallel_config=parallel_config,
+            is_fsdp=True,
+        )
 
         # Load state dict into TT transformer
         if use_cache:
-            # TODO: Implement cache loading logic similar to test_transformer_mochi.py
-            pass
+            cache_path = get_cache_path(
+                model_name="mochi-1-preview",
+                subfolder="transformer",
+                parallel_config=parallel_config,
+                dtype="bf16",
+            )
+            assert os.path.exists(
+                cache_path
+            ), "Cache path does not exist. Run test_mochi_transformer_model_caching first with the desired parallel config."
+            cache_dict = load_cache_dict(cache_path)
+            self.transformer.from_cached_state_dict(cache_dict)
         else:
             self.transformer.load_state_dict(torch_transformer.state_dict())
 
         # Load pretrained VAE (Torch)
-        self.vae = AutoencoderKLMochi.from_pretrained(model_name, subfolder="vae", torch_dtype=torch.bfloat16)
+        self.vae = AutoencoderKLMochi.from_pretrained(model_name, subfolder="vae", torch_dtype=torch.float32)
 
         # Update tokenizer max length
         self.tokenizer_max_length = self.tokenizer.model_max_length if self.tokenizer is not None else 256
@@ -541,7 +554,7 @@ class MochiPipeline(DiffusionPipeline):
         print(f"negative_prompt_embeds.shape: {negative_prompt_embeds.shape}")
         print(f"negative_prompt_attention_mask.shape: {negative_prompt_attention_mask.shape}")
         # 4. Prepare latent variables
-        num_channels_latents = self.transformer.config.in_channels
+        num_channels_latents = self.transformer_config.in_channels
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
             num_channels_latents,
@@ -602,20 +615,27 @@ class MochiPipeline(DiffusionPipeline):
                 print(f"prompt_attention_mask.shape: {prompt_attention_mask.shape}")
                 print(f"attention_kwargs: {attention_kwargs}")
 
-                noise_pred = self.transformer(
-                    hidden_states=latent_model_input,
-                    encoder_hidden_states=prompt_embeds,
-                    timestep=timestep,
-                    encoder_attention_mask=prompt_attention_mask,
-                    attention_kwargs=attention_kwargs,
-                    return_dict=False,
-                )[0]
-                print(f"noise_pred.shape: {noise_pred.shape}")
+                noise_pred_uncond = self.transformer(
+                    spatial=latent_model_input[:1],
+                    prompt=prompt_embeds[:1],
+                    timestep=timestep[:1],
+                    prompt_attention_mask=prompt_attention_mask[:1],
+                )
+                noise_pred_text = self.transformer(
+                    spatial=latent_model_input[1:],
+                    prompt=prompt_embeds[1:],
+                    timestep=timestep[1:],
+                    prompt_attention_mask=prompt_attention_mask[1:],
+                )
+                print(f"noise_pred_uncond.shape: {noise_pred_uncond.shape}")
+                print(f"noise_pred_text.shape: {noise_pred_text.shape}")
                 # Mochi CFG + Sampling runs in FP32
-                noise_pred = noise_pred.to(torch.float32)
+                noise_pred_uncond = noise_pred_uncond.to(torch.float32)
+                noise_pred_text = noise_pred_text.to(torch.float32)
 
+                assert self.do_classifier_free_guidance == True
                 if self.do_classifier_free_guidance:
-                    noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
+                    # noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
                     noise_pred = noise_pred_uncond + self.guidance_scale * (noise_pred_text - noise_pred_uncond)
 
                 # compute the previous noisy sample x_t -> x_t-1
