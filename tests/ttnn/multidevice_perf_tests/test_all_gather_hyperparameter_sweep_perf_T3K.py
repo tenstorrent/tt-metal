@@ -10,7 +10,7 @@ import time
 import pandas as pd
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import (
+from tests.ttnn.multidevice_perf_tests.sweep_all_gather_hyperparameters_T3K import (
     get_max_chunks_per_sync,
     CONFIGS,
     CHUNKS_PER_SYNC,
@@ -38,7 +38,7 @@ def test_all_gather_chunk_perf(
     subdir = "ag_perf"
     num_links = 1
     if arch_type == "T3K":
-        file = f"pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
+        file = f"pytest tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py"
         num_links = 1
     else:
         raise ValueError(f"Invalid arch_type: {arch_type}")

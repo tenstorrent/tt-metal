@@ -10,8 +10,8 @@ import time
 import pandas as pd
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import get_max_chunks_per_sync
-from tests.nightly.tg.ccl.test_minimal_all_gather_async import (
+from tests.ttnn.multidevice_perf_tests.sweep_all_gather_hyperparameters_T3K import get_max_chunks_per_sync
+from tests.ttnn.multidevice_perf_tests.sweep_all_gather_hyperparameters_6U import (
     CONFIGS,
     CHUNKS_PER_SYNC,
     WORKERS_PER_LINK,
@@ -36,7 +36,7 @@ def test_all_gather_chunk_perf(
     rows = []
 
     subdir = "ag_perf"
-    file = f"pytest tests/nightly/tg/ccl/test_minimal_all_gather_async.py"
+    file = f"pytest tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_6U.py"
 
     base_command = file + "::test_all_gather_chunks_per_sync"
 
