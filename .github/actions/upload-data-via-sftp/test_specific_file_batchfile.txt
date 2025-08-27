@@ -1,17 +1,14 @@
 # Test batchfile for uploading oprun files from /work/tests/sweep_framework/results_export/
 # This will upload all files starting with "oprun_" (typically oprun_*.json files)
 
-# Change to the results_export directory
-cd tests/sweep_framework/results_export
-
 # Create a test directory on the server (optional)
 mkdir test_uploads
 
-# Upload all oprun files to the test directory
-put oprun_* test_uploads/
+# Upload all oprun files from the local results_export directory to the test directory
+put tests/sweep_framework/results_export/oprun_* test_uploads/
 
 # List files to verify upload
 ls -hal test_uploads/
 
-# Show what files we're uploading from local directory
-ls -hal oprun_*
+# List what's in the remote home directory
+ls -hal
