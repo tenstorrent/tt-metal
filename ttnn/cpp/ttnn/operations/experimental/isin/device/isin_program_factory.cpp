@@ -8,6 +8,7 @@
 #include "tt-metalium/buffer.hpp"
 #include "tt-metalium/buffer_types.hpp"
 #include "tt-metalium/tensor_accessor_args.hpp"
+#include "tt-metalium/work_split.hpp"
 #include "ttnn/operations/experimental/isin/device/isin_device_op.hpp"
 #include "ttnn/operations/experimental/isin/isin_cbs.hpp"
 
@@ -42,7 +43,6 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
 
     const auto& elements_tensor = tensor_args.elements_tensor;
     const auto& test_elements_tensor = tensor_args.test_elements_tensor;
-    // const auto& index_hint_tensor = tensor_args.index_hint_tensor;
 
     const auto& elements_dtype = elements_tensor.dtype();
     const auto& test_elements_dtype = test_elements_tensor.dtype();
@@ -54,45 +54,24 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
 
     const auto& elements_buffer = elements_tensor.buffer();
     const auto& test_elements_buffer = test_elements_tensor.buffer();
-    // const auto& index_hint_buffer = index_hint_tensor.buffer();
     const auto& output_buffer = output_tensor.buffer();
-
-    const bool is_elements_dram = elements_buffer->buffer_type() == BufferType::DRAM;
-    const bool is_test_elements_dram = test_elements_buffer->buffer_type() == BufferType::DRAM;
-    // const bool is_index_hint_dram = index_hint_buffer->buffer_type() == BufferType::DRAM;
-    const bool is_output_dram = output_buffer->buffer_type() == BufferType::DRAM;
 
     const auto elements_tensor_buffer_address = elements_buffer->address();
     const auto test_elements_tensor_buffer_address = test_elements_buffer->address();
-    // const auto index_hint_tensor_buffer_address = index_hint_buffer->address();
     const auto output_tensor_buffer_address = output_buffer->address();
 
     // input dtype byte sizes
     const uint32_t& elements_datum_size = elements_tensor.element_size();
     const uint32_t& test_elements_datum_size = test_elements_tensor.element_size();
-    // const uint32_t& index_hint_datum_size = 4;
     const uint32_t& output_datum_size = output_tensor.element_size();
 
     // input row byte sizes
     const uint32_t& elements_subchunk_size_bytes = single_fetch_subchunk_size * elements_datum_size;
     const uint32_t& test_elements_subchunk_size_bytes = single_fetch_subchunk_size * test_elements_datum_size;
-    // const uint32_t& index_hint_stick_size_bytes = single_fetch_subchunk_size * index_hint_datum_size;
     const uint32_t& output_subchunk_size_bytes = single_fetch_subchunk_size * output_datum_size;
 
     auto* device = elements_tensor.device();
     const auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    // const auto worker_cores = get_worker_cores(optimal_isin_conf, compute_with_storage_grid_size);
-    const auto worker_cores = CoreCoord{0, 0};
-    const auto worker_cores_range = CoreRangeSet{worker_cores};
-    // const CoreRange all_cores_range{
-    //     CoreCoord(0, 0), CoreCoord(compute_with_storage_grid_size.x - 1, compute_with_storage_grid_size.y - 1)};
-    // const CoreRangeSet all_cores = std::set<CoreRange>({all_cores_range});
-
-    create_cb(program, elements_dtype, IsInCB::ELEMENTS, worker_cores_range, elements_subchunk_size_bytes);
-    create_cb(
-        program, test_elements_dtype, IsInCB::TEST_ELEMENTS, worker_cores_range, test_elements_subchunk_size_bytes);
-    // create_cb(program, INDEX_HINT_TENSOR_DTYPE, IsInCB::INDEX_HINT, worker_cores_range, index_hint_stick_size_bytes);
-    create_cb(program, OUTPUT_TENSOR_DATA_TYPE, IsInCB::OUTPUT, worker_cores_range, output_subchunk_size_bytes);
 
     std::vector<uint32_t> compile_time_args{
         elements_tensor_buffer_address,
@@ -104,64 +83,61 @@ IsInProgramFactory::cached_program_t IsInProgramFactory::create(
         elements_tensor.logical_volume(),
         test_elements_tensor.logical_volume(),
         single_fetch_subchunk_size,
-        static_cast<uint32_t>(invert),
-        1};
+        static_cast<uint32_t>(invert)};
     TensorAccessorArgs(*elements_buffer).append_to(compile_time_args);
     TensorAccessorArgs(*test_elements_buffer).append_to(compile_time_args);
-    // TensorAccessorArgs(*index_hint_buffer).append_to(compile_time_args);
     TensorAccessorArgs(*output_buffer).append_to(compile_time_args);
 
-    auto reader_kernel_id =
-        create_kernel(program, READER_KERNEL_PATH, worker_cores_range, ReaderDataMovementConfig{compile_time_args});
-    auto writer_kernel_id =
-        create_kernel(program, WRITER_KERNEL_PATH, worker_cores_range, WriterDataMovementConfig{compile_time_args});
+    const uint32_t subchunks_num =
+        (elements_tensor.logical_volume() + single_fetch_subchunk_size - 1) / single_fetch_subchunk_size;
+    const auto core_grid = device->compute_with_storage_grid_size();
+    const auto
+        [num_cores,                       // number of cores utilized
+         all_cores,                       // set of all cores used
+         core_group_1,                    // Primary core group
+         core_group_2,                    // Secondary core group
+         num_subchunks_per_core_group_1,  // Number of subchunks each core in the primary group processes
+         num_subchunks_per_core_group_2   // Number of subchunks each core in the secondary group processes
+    ] = split_work_to_cores(core_grid, subchunks_num);
+    //
+    create_cb(program, elements_dtype, IsInCB::ELEMENTS, all_cores, elements_subchunk_size_bytes);
+    create_cb(program, test_elements_dtype, IsInCB::TEST_ELEMENTS, all_cores, test_elements_subchunk_size_bytes);
+    create_cb(program, OUTPUT_TENSOR_DATA_TYPE, IsInCB::OUTPUT, all_cores, output_subchunk_size_bytes);
 
-    const uint32_t num_cores = 1;
-    const uint32_t num_cores_y = 1;
+    auto reader_kernel_id =
+        create_kernel(program, READER_KERNEL_PATH, all_cores, ReaderDataMovementConfig{compile_time_args});
+    auto writer_kernel_id =
+        create_kernel(program, WRITER_KERNEL_PATH, all_cores, WriterDataMovementConfig{compile_time_args});
+
+    uint32_t subchunks_offset = 0;
+    const uint32_t num_cores_y = compute_with_storage_grid_size.y;
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core{i / num_cores_y, i % num_cores_y};
+        uint32_t subchunks_per_core;
+        if (core_group_1.contains(core)) {
+            subchunks_per_core = num_subchunks_per_core_group_1;
+        } else if (core_group_2.contains(core)) {
+            subchunks_per_core = num_subchunks_per_core_group_2;
+        } else {
+            TT_THROW("Core not in any predefined core range.");
+        }
+
         SetRuntimeArgs(
             program,
             reader_kernel_id,
             core,
-            {
-                elements_tensor_buffer_address,
-                test_elements_tensor_buffer_address,
-            });
-        SetRuntimeArgs(program, writer_kernel_id, core, {output_tensor_buffer_address});
+            {elements_tensor_buffer_address,
+             test_elements_tensor_buffer_address,
+             subchunks_per_core,
+             subchunks_offset});
+        SetRuntimeArgs(
+            program, writer_kernel_id, core, {output_tensor_buffer_address, subchunks_per_core, subchunks_offset});
+
+        subchunks_offset += subchunks_per_core;
     }
 
-    // const uint32_t& num_cores_x = compute_with_storage_grid_size.x;
-    // const uint32_t& num_cores_y = compute_with_storage_grid_size.y;
-    // auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
-    // uint32_t stick_offset = 0;
-    // for (uint32_t i = 0; i < num_cores; ++i) {
-    // CoreCoord core{i / num_cores_y, i % num_cores_y};
-
-    //     uint32_t sticks_per_core;
-    //     if (core_group_1.contains(core)) {
-    //         sticks_per_core = num_sticks_per_core_group_1;
-    //     } else if (core_group_2.contains(core)) {
-    //         sticks_per_core = num_sticks_per_core_group_2;
-    //     } else {
-    //         TT_THROW("Core not in any predefined core range.");
-    //     }
-
-    //     SetRuntimeArgs(
-    //         program,
-    //         reader_kernel,
-    //         core,
-    //         {input_buffer->address(), index_buffer->address(), src_buffer->address(), stick_offset,
-    //         sticks_per_core, input_and_output_chunk_size, index_and_source_chunk_size});
-
-    //     SetRuntimeArgs(program, writer_kernel, core, {output_buffer->address(), stick_offset, sticks_per_core,
-    //     input_and_output_chunk_size});
-
-    //     stick_offset += sticks_per_core;
-    // }
-
-    // return {std::move(program), {reader_kernel, writer_kernel, worker_cores}};
-    return {std::move(program), {reader_kernel_id, writer_kernel_id, {}}};
+    auto cores = grid_to_cores(num_cores, compute_with_storage_grid_size.x, num_cores_y);
+    return {std::move(program), {reader_kernel_id, writer_kernel_id, cores}};
 }
 
 void IsInProgramFactory::override_runtime_arguments(
@@ -176,14 +152,12 @@ void IsInProgramFactory::override_runtime_arguments(
 
     auto input_buffer_address = tensor_args.elements_tensor.buffer()->address();
     auto test_elements_buffer_address = tensor_args.test_elements_tensor.buffer()->address();
-    // auto source_buffer_address = tensor_args.src_tensor.buffer()->address();
     auto output_buffer_address = output_tensor.buffer()->address();
     for (const auto& core : cores) {
         auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
         auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
         reader_runtime_args[0] = input_buffer_address;
         reader_runtime_args[1] = test_elements_buffer_address;
-        // reader_runtime_args[2] = source_buffer_address;
         writer_runtime_args[0] = output_buffer_address;
     }
 }
