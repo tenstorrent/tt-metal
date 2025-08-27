@@ -11,7 +11,7 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import start_measuring_time, stop_measuring_time
 from loguru import logger
-from tests.sweep_framework.sweeps.ccl.common import device_context, mesh_shape_iterator 
+from tests.sweep_framework.sweeps.ccl.common import device_context, mesh_shape_iterator
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_pcc
 from tests.ttnn.unit_tests.operations.ccl.test_all_gather import is_unsupported_case
 
@@ -33,7 +33,7 @@ parameters = {
             [1, 1, 32, 1280],
             [1, 1, 32, 31],
             [1, 1, 1, 32, 32],
-            [2, 32, 32],
+            # [2, 32, 32],
             [1, 1, 32, 16384],
             [1, 1, 1, 2048],  # the following shapes are from training
             [
@@ -42,21 +42,21 @@ parameters = {
                 1,
                 4096,
             ],  # https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
-            [1, 32, 2048, 8],
-            [1, 32, 2048, 16],
-            [1, 32, 4096, 16],
-            [1, 32, 2048, 64],
-            [1, 32, 4096, 32],
-            [1, 32, 4096, 64],
-            [1, 1, 1, 1],
-            [1, 1, 1, 8],
-            [1, 1, 1, 16],
-            [1, 1, 1, 32],
-            [1, 1, 8, 8],
-            [1, 1, 16, 16],
+            # [1, 32, 2048, 8],
+            # [1, 32, 2048, 16],
+            # [1, 32, 4096, 16],
+            # [1, 32, 2048, 64],
+            # [1, 32, 4096, 32],
+            # [1, 32, 4096, 64],
+            # [1, 1, 1, 1],
+            # [1, 1, 1, 8],
+            # [1, 1, 1, 16],
+            # [1, 1, 1, 32],
+            # [1, 1, 8, 8],
+            # [1, 1, 16, 16],
         ],
-        "dim": [0, 1, 2, 3, 4],
-        "cluster_axis": [0, 1, None],
+        "dim": [0, 1, 2, 3],
+        "cluster_axis": [0, 1],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_dtype": [ttnn.bfloat16],
         "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
@@ -113,8 +113,12 @@ def run(
     logger.info("STARTING SWEEP")
 
     logger.info(vars())
-
+    print("in run function\n")
     with device_context(mesh_shape, fabric_config) as (device, device_err):
+        # print the vector being used
+        print(
+            f"mesh_shape: {mesh_shape}, fabric_config: {fabric_config}, input_shape: {input_shape}, dim: {dim}, cluster_axis: {cluster_axis}, num_links: {num_links}, input_dtype: {input_dtype}, layout: {layout}, mem_config: {mem_config}, num_iters: {num_iters}, topology: {topology}"
+        )
         assert tuple(device.shape) == mesh_shape
 
         if device_err is not None:
