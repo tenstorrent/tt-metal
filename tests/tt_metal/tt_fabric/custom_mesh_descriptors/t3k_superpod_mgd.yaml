@@ -39,31 +39,6 @@ Mesh: [
   board: 2x4,
   device_topology: [2, 4],
   host_topology: [1, 1],
-},
-{
-  id: 4,
-  board: 2x4,
-  device_topology: [2, 4],
-  host_topology: [1, 1],
-},
-{
-  id: 5,
-  board: 2x4,
-  device_topology: [2, 4],
-  host_topology: [1, 1],
-
-},
-{
-  id: 6,
-  board: 2x4,
-  device_topology: [2, 4],
-  host_topology: [1, 1],
-},
-{
-  id: 7,
-  board: 2x4,
-  device_topology: [2, 4],
-  host_topology: [1, 1],
 }
 ]
 
@@ -122,5 +97,10 @@ Graph: [
   [[7, S2], [5, S2]],
   [[7, S3], [5, S3]],
   [[7, N2], [6, N2]],
-  [[7, N3], [6, N3]]
+  [[7, N3], [6, N3]],
+
+  [[3, N4], [4, S2]],
+  [[3, N5], [4, S3]],
+  [[4, S2], [3, N4]],
+  [[4, S3], [3, N5]]
 ]
