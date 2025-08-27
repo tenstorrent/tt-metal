@@ -29,9 +29,9 @@ struct PageStride {
 };
 
 struct CompressedStrideBlock {
-    std::vector<PageStride> base_pattern;
-    std::vector<Stride> meta_strides;
-    uint32_t num_repeats;
+    std::vector<PageStride> base_pattern = {};
+    std::vector<Stride> meta_strides = {};
+    uint32_t num_repeats = 0;
 };
 
 struct CorePageRange {

@@ -933,8 +933,5 @@ def test_sd_reshard(
     )
 
     assert torch_tensor.shape == torch_tensor_after_round_trip.shape
-    if tt_dtype != ttnn.bfloat8_b:
-        passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
-    else:
-        passing, output = comp_pcc(torch_tensor, torch_tensor_after_round_trip)
+    passing, output = comp_equal(torch_tensor, torch_tensor_after_round_trip)
     assert passing, output

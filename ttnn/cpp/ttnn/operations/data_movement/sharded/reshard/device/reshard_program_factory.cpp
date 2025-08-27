@@ -215,7 +215,7 @@ bool are_strides_structurally_equal(const PageStride& a, const PageStride& b) {
            a.num_strides == b.num_strides && a.skip == b.skip;
 }
 
-std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> post_process_ret_map(
+std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> create_stride_of_strides_ret_map(
     const std::unordered_map<CoreCoord, std::vector<detail::PageStride>>& input_map) {
     std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> ret_map;
     ret_map.reserve(input_map.size());
@@ -501,7 +501,7 @@ std::unordered_map<CoreCoord, std::vector<detail::CompressedStrideBlock>> get_co
 
     auto ret_map = create_map_for_reshard(output_core_to_vector_input_core_page, input_buffer, output_buffer);
 
-    auto processed_ret_map = post_process_ret_map(ret_map);
+    auto processed_ret_map = create_stride_of_strides_ret_map(ret_map);
     return processed_ret_map;
 }
 
@@ -514,10 +514,9 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges_diff_width(
     const uint32_t ending_range) {
     std::vector<uint32_t> runtime_args = physical_core_coords;
     runtime_args.push_back(input_addr);
-    runtime_args.push_back(0);
+    auto& num_output_pages_for_this_call = runtime_args.emplace_back(0);
     runtime_args.push_back(ending_range - starting_range);
     runtime_args.push_back(output_page_offset);
-    uint32_t num_output_pages_for_this_call = 0;
 
     for (uint32_t block_id = starting_range; block_id < ending_range; block_id++) {
         const auto& block = compressed_stride_vector[block_id];
@@ -548,8 +547,6 @@ std::vector<uint32_t> get_runtime_args_for_given_ranges_diff_width(
         }
         num_output_pages_for_this_call += pages_in_base_pattern * block.num_repeats;
     }
-
-    runtime_args[physical_core_coords.size() + 1] = num_output_pages_for_this_call;
     return runtime_args;
 }
 

@@ -41,10 +41,12 @@ struct ToMemoryConfig {
                 const auto input_memory_config = ttnn::get_memory_config(tensor);
                 const auto input_shard_spec = input_memory_config.value().shard_spec().value();
                 const auto output_shard_spec = memory_config.shard_spec().value();
-                bool use_s2i = (input_shard_spec.shape[1] != output_shard_spec.shape[1]) &&
-                               (input_memory_config.value().memory_layout() != memory_config.memory_layout() &&
-                                tensor.layout() == Layout::ROW_MAJOR);
-                if (!use_s2i) {
+                // Check if we need to use the s2i->i2s workaround
+                bool use_reshard_workaround =
+                    (input_shard_spec.shape[1] != output_shard_spec.shape[1]) &&
+                    (input_memory_config.value().memory_layout() != memory_config.memory_layout() &&
+                     tensor.layout() == Layout::ROW_MAJOR);
+                if (!use_reshard_workaround) {
                     if (dtype.has_value()) {
                         throw std::runtime_error(
                             "dtype cannot be specified when converting sharded tensor to sharded tensor");
