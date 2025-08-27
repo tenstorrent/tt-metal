@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
@@ -11,7 +10,6 @@
 #include <utility>
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -21,16 +19,15 @@ constexpr uint32_t my_ring_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
 constexpr uint32_t reserved_packet_header_cb_id = get_compile_time_arg_val(2);
 constexpr uint32_t num_packet_headers_storable = get_compile_time_arg_val(3);
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(4));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(6);
-constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(7);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(8);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(9);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(10);
-constexpr uint32_t chunk_granularity = get_compile_time_arg_val(11);
-constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(12);
-constexpr uint32_t N_DRAM_BANKS = get_compile_time_arg_val(13);
+constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(5);
+constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(6);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(7);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(8);
+constexpr bool dynamic_alternate = get_compile_time_arg_val(9);
+constexpr uint32_t chunk_granularity = get_compile_time_arg_val(10);
+constexpr uint32_t contig_pages_advanced = get_compile_time_arg_val(11);
+constexpr uint32_t N_DRAM_BANKS = get_compile_time_arg_val(12);
 
 constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
 constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
@@ -84,7 +81,7 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* pkt_hdr_backward =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr_backward);
 
-    constexpr auto intermediate_tensor_args = TensorAccessorArgs<14>();
+    constexpr auto intermediate_tensor_args = TensorAccessorArgs<13>();
     auto intermediate_tensor_addrgen =
         TensorAccessor(intermediate_tensor_args, intermediate_buffer_addr, tensor0_page_size);
     constexpr auto output_tensor_args = TensorAccessorArgs<intermediate_tensor_args.next_compile_time_args_offset()>();
