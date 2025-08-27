@@ -6,7 +6,8 @@
 
 #include "compute_kernel_api/common_globals.h"
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_softplus.h"
+#include "ckernel_sfpu_softplus.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
 #define MAIN math_main()
 #define MATH(x) x
 #else
@@ -26,19 +27,19 @@ namespace ckernel {
  *
  * | Argument        | Description                                                                | Type     | Valid Range                                           | Required |
  * |-----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | tile_index      | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     | 
- * | beta            | Beta used in softplus calculation                                          | uint32_t | Greater than 0                                        | True     | 
- * | beta_reciprocal | Reciprocal of beta (1/beta) used in softplus calculation                   | uint32_t | Greater than 0                                        | True     | 
+ * | tile_index      | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | beta            | Beta used in softplus calculation                                          | uint32_t | Greater than 0                                        | True     |
+ * | beta_reciprocal | Reciprocal of beta (1/beta) used in softplus calculation                   | uint32_t | Greater than 0                                        | True     |
  * | threshold       | Threshold used in softplus calculation                                     | uint32_t | Greater than 0                                        | True     |
  */
- // clang-format on
+// clang-format on
 ALWI void softplus_tile(uint32_t idst, uint32_t beta, uint32_t beta_reciprocal, uint32_t threshold) {
-    MATH((llk_math_eltwise_unary_sfpu_softplus<APPROX>(idst, beta, beta_reciprocal, threshold)));
+    MATH(SFPU_UNARY_KERNEL_VARIADIC(softplus, RC, APPROX, idst, beta, beta_reciprocal, threshold));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void softplus_tile_init() { MATH((llk_math_eltwise_unary_sfpu_softplus_init<APPROX>())); }
+ALWI void softplus_tile_init() { MATH(SFPU_UNARY_KERNEL_INIT(softplus, APPROX)); }
 
 }  // namespace ckernel
