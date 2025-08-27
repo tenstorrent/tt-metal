@@ -31,13 +31,13 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const
     if (unpack_to_dest)
     {
         ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest);
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else
     {
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_zerosrc, unpack_srcb_set_dvalid);
         tmp.set_start_op(unpack_srca);
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
 }
 
@@ -125,7 +125,7 @@ inline void unpack_tilize_impl(
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
         // Run MOP
-        ckernel::ckernel_template::run(instrn_buffer);
+        ckernel::ckernel_template::run();
 
         // T6::SEMGET for context release
         t6_semaphore_get(semaphore::UNPACK_SYNC);
@@ -163,7 +163,7 @@ inline void unpack_tilize_to_dest_impl(
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     // Unpack top faces
-    ckernel::ckernel_template::run(instrn_buffer);
+    ckernel::ckernel_template::run();
 
     // Unpack bottom faces if needed
     if (num_loops > 1)
@@ -186,7 +186,7 @@ inline void unpack_tilize_to_dest_impl(
         TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::THCON);
 
         // Unpack bottom faces
-        ckernel::ckernel_template::run(instrn_buffer);
+        ckernel::ckernel_template::run();
     }
 
     // T6::SEMGET for context release
@@ -281,7 +281,7 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const bool narrow_tile = false, co
             tmp.set_end_ops(unpack_srca_dat_valid, unpack_srcb_dat_valid);
         }
     }
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
@@ -405,7 +405,7 @@ inline void _llk_unpack_tilizeA_B_(
                 TTI_UNPACR_NOP(SrcA, p_unpacr_nop::UNP_ZEROSRC);
             }
 
-            ckernel::ckernel_template::run(instrn_buffer);
+            ckernel::ckernel_template::run();
 
             if (num_faces == 4 && n != 0)
             {
@@ -415,7 +415,7 @@ inline void _llk_unpack_tilizeA_B_(
         }
         else
         {
-            ckernel::ckernel_template::run(instrn_buffer);
+            ckernel::ckernel_template::run();
         }
 
         // T6::SEMGET for context release
@@ -487,7 +487,7 @@ inline void _llk_unpack_fast_tilize_mop_config_()
         TT_OP_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_2_CH0Y_0_CH0Z_1, 0),
         TT_OP_UNPACR_COMMON(SrcB, ADDRMOD_CH1Y_0_CH1Z_3_CH0Y_0_CH0Z_1, 0));
 
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 inline void _llk_unpack_fast_tilize_init_(const std::uint32_t unpack_dst_format, std::uint32_t full_dim)

@@ -417,7 +417,7 @@ inline void matmul_configure_mop(
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, p_setrwc::SET_ABD_F));
         }
     }
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 template <int Level>
@@ -595,7 +595,7 @@ inline void matmul_configure_mop_throttled(
         }
     }
 
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor, int THROTTLE_LEVEL = 0>
@@ -647,7 +647,7 @@ inline void _llk_math_matmul_(
             {
                 for (uint phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
                 {
-                    ckernel_template::run(instrn_buffer);
+                    ckernel_template::run();
                 }
                 if (reuse_a)
                 {
@@ -660,7 +660,7 @@ inline void _llk_math_matmul_(
             }
             else
             {
-                ckernel_template::run(instrn_buffer);
+                ckernel_template::run();
             }
 
             // Clear srcB or srcA at end of reuse (once per u block row)

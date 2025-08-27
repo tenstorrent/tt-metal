@@ -462,7 +462,7 @@ inline void matmul_configure_mop(
             }
         }
     }
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 template <int THROTTLE_LEVEL, bool HIGH_FIDELITY>
@@ -684,7 +684,7 @@ inline void matmul_configure_mop_throttled(
         }
     }
 
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 template <int MATH_FIDELITY_DESC, DstTileFaceLayout FaceLayout = DstTileFaceLayout::ColMajor, int THROTTLE_LEVEL = 0>
@@ -755,7 +755,7 @@ inline void _llk_math_matmul_(
                 {
                     for (uint phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
                     {
-                        ckernel_template::run(instrn_buffer);
+                        ckernel_template::run();
                     }
                     if (reuse_a)
                     {
@@ -768,7 +768,7 @@ inline void _llk_math_matmul_(
                 }
                 else
                 {
-                    ckernel_template::run(instrn_buffer);
+                    ckernel_template::run();
                 }
 
                 // Done with reuse. Clear srcA or srcB valid
@@ -790,13 +790,13 @@ inline void _llk_math_matmul_(
                 {
                     for (uint phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
                     {
-                        ckernel_template::run(instrn_buffer);
+                        ckernel_template::run();
                     }
                     TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
                 }
                 else
                 {
-                    ckernel_template::run(instrn_buffer);
+                    ckernel_template::run();
                 }
 
                 if ((t + 1) < t_dim)
@@ -835,13 +835,13 @@ inline void _llk_math_matmul_(
                     {
                         for (uint phase = 0; phase < NUM_FIDELITY_PHASES; phase++)
                         {
-                            ckernel_template::run(instrn_buffer);
+                            ckernel_template::run();
                         }
                         TTI_SETRWC(p_setrwc::CLR_NONE, 0, 0, 0, 0, p_setrwc::SET_ABD_F);
                     }
                     else
                     {
-                        ckernel_template::run(instrn_buffer);
+                        ckernel_template::run();
                     }
                 }
 

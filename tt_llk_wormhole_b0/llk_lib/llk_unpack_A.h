@@ -65,14 +65,14 @@ inline void _llk_unpack_A_mop_config_(
             const uint32_t innerloop = 2;
             ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest_transpose_of_faces);
             tmp.set_end_op(TT_OP_SETADCZW(p_setadc::UNP_A, 0, 2, 0, 1, 0b0101));
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
         else
         {
             const uint32_t outerloop     = num_faces;
             constexpr uint32_t innerloop = 1;
             ckernel_template tmp(outerloop, innerloop, unpack_srca_to_dest);
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
     }
     else if constexpr (BType == BroadcastType::COL)
@@ -83,7 +83,7 @@ inline void _llk_unpack_A_mop_config_(
         // ELWADD used in datacopy due to WH broadcast bug, use zerosrca regardless of acc_to_dest
         tmp.set_start_op(unpack_srca_zerosrc_set_dvalid);
         tmp.set_end_op(unpack_srcb);
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else if constexpr (BType == BroadcastType::ROW)
     {
@@ -95,7 +95,7 @@ inline void _llk_unpack_A_mop_config_(
             tmp.set_start_op(unpack_srca_zerosrc_set_dvalid);
         }
         tmp.set_end_op(unpack_srcb_unpack_srcb);
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else if constexpr (BType == BroadcastType::SCALAR)
     {
@@ -105,7 +105,7 @@ inline void _llk_unpack_A_mop_config_(
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_inc_z_0);
         // ELWADD used in datacopy due to WH broadcast bug, use zerosrca regardless of acc_to_dest
         tmp.set_start_op(unpack_srca_zerosrc_set_dvalid);
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else
     {
@@ -132,7 +132,7 @@ inline void _llk_unpack_A_mop_config_(
             {
                 tmp.set_end_op(srca_set_z_1);
             }
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
         else
         {
@@ -153,7 +153,7 @@ inline void _llk_unpack_A_mop_config_(
                 {
                     tmp.set_end_op(unpack_srca_set_dvalid);
                 }
-                tmp.program(instrn_buffer);
+                tmp.program();
             }
             else
             {
@@ -161,7 +161,7 @@ inline void _llk_unpack_A_mop_config_(
                 constexpr uint32_t innerloop = 1;
                 ckernel_template tmp(outerloop, innerloop, unpack_srcb_zerosrc, unpack_srcb_set_dvalid);
                 tmp.set_start_op(unpack_srca);
-                tmp.program(instrn_buffer);
+                tmp.program();
             }
         }
     }
@@ -266,7 +266,7 @@ inline void _llk_unpack_A_(
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     // Run MOP
-    ckernel::ckernel_template::run(instrn_buffer);
+    ckernel::ckernel_template::run();
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);

@@ -124,7 +124,7 @@ inline void _llk_pack_untilize_mop_config_(
 
     tmp.set_last_outer_loop_instr(last_loop_op);
 
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 template <
@@ -199,7 +199,7 @@ inline void _llk_pack_untilize_(
     // Iterate over top, then over bottom faces in the block (if num_faces > 2)
     for (std::uint32_t face = 0; face < num_faces_per_rdim_tile; face++)
     {
-        ckernel::ckernel_template::run(instrn_buffer);
+        ckernel::ckernel_template::run();
 
         TTI_INCADCZW(p_setadc::PAC, 0, 0, 0, 1);         // z cnt increments by 2xface_r_dimxFACE_C_DIM
         TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0010); // reset ch0_y counters

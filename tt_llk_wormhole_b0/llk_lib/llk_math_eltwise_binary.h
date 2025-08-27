@@ -54,7 +54,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
             for (std::uint32_t n = 0; n < outerloop; n++)
             {
                 eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
-                ckernel_template::run(instrn_buffer);
+                ckernel_template::run();
             }
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
             if (num_faces == 4)
@@ -63,7 +63,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
                 for (std::uint32_t n = 0; n < outerloop; n++)
                 {
                     eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
-                    ckernel_template::run(instrn_buffer);
+                    ckernel_template::run();
                 }
                 TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
             }
@@ -75,7 +75,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
             for (std::uint32_t n = 0; n < outerloop; n++)
             {
                 eltwise_binary_reuse_dest_as_src<binary_reuse_dest>();
-                ckernel_template::run(instrn_buffer);
+                ckernel_template::run();
             }
             // Manually clear B once mop is done for scaler bcast
             if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
@@ -110,7 +110,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (0 + n)); // Clear faces 0 & 1
                         }
                     }
-                    ckernel_template::run(instrn_buffer);
+                    ckernel_template::run();
                 }
             }
             else
@@ -133,7 +133,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (0 + n)); // Clear faces 0 & 1
                         }
                     }
-                    ckernel_template::run(instrn_buffer);
+                    ckernel_template::run();
                 }
             }
             TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
@@ -159,7 +159,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
                                 TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (2 + n)); // Clear faces 2 & 3
                             }
                         }
-                        ckernel_template::run(instrn_buffer);
+                        ckernel_template::run();
                     }
                 }
                 else
@@ -182,7 +182,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
                                 TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + (2 + n)); // Clear faces 2 & 3
                             }
                         }
-                        ckernel_template::run(instrn_buffer);
+                        ckernel_template::run();
                     }
                 }
                 TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
@@ -212,7 +212,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + n);
                         }
                     }
-                    ckernel_template::run(instrn_buffer);
+                    ckernel_template::run();
                 }
             }
             else
@@ -235,7 +235,7 @@ inline void _llk_math_eltwise_binary_(const std::uint32_t num_faces, uint dst_in
                             TT_ZEROACC(ZERO_ACC_MODE, ADDR_MOD_1, base_address + n);
                         }
                     }
-                    ckernel_template::run(instrn_buffer);
+                    ckernel_template::run();
                 }
             }
             if constexpr (src_b_bcast_type == BroadcastType::SCALAR)
@@ -330,13 +330,13 @@ inline void eltwise_binary_configure_mop(const std::uint32_t acc_to_dest = 0, co
         {
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, acc_to_dest, broadcast_type, addr_mod, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
         else if constexpr (eltwise_binary_type == ELWSUB)
         {
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWSUB(0, acc_to_dest, broadcast_type, addr_mod, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
         else if constexpr (eltwise_binary_type == ELWMUL)
         {
@@ -350,7 +350,7 @@ inline void eltwise_binary_configure_mop(const std::uint32_t acc_to_dest = 0, co
             {
                 tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             }
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
     }
     else
@@ -359,13 +359,13 @@ inline void eltwise_binary_configure_mop(const std::uint32_t acc_to_dest = 0, co
         {
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, acc_to_dest, broadcast_type, addr_mod, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
         else if constexpr (eltwise_binary_type == ELWSUB)
         {
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWSUB(0, acc_to_dest, broadcast_type, addr_mod, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
         else if constexpr (eltwise_binary_type == ELWMUL)
         {
@@ -379,7 +379,7 @@ inline void eltwise_binary_configure_mop(const std::uint32_t acc_to_dest = 0, co
             {
                 tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_AB, 0, 0, 0, p_setrwc::SET_AB));
             }
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
     }
 }

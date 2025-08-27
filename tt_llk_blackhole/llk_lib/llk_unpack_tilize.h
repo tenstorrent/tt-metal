@@ -34,7 +34,7 @@ inline void _llk_unpack_tilize_mop_config_(const bool narrow_tile = false, const
         tmp.set_start_op(unpack_srca);
     }
 
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
@@ -161,7 +161,7 @@ inline void _llk_unpack_tilize_(
     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     // Run MOP
-    ckernel::ckernel_template::run(instrn_buffer);
+    ckernel::ckernel_template::run();
 
     // T6::SEMGET for context release
     t6_semaphore_get(semaphore::UNPACK_SYNC);
@@ -242,7 +242,7 @@ inline void _llk_unpack_tilizeA_B_mop_config_(const bool narrow_tile = false, co
         0,
         0);
 
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 template <bool neginf_srcA = false, std::uint32_t reload_srcB = false, bool zero_srcA = false, bool zero_srcA_reduce = false>
@@ -351,7 +351,7 @@ inline void _llk_unpack_tilizeA_B_(
         // Unpacks face_r_dim-1 rows of 1x16 datums to SrcA
         if (run_r_dim_loop)
         {
-            ckernel_unpack_template::run(instrn_buffer, face_r_dim - 1, unp_cfg_context == 0 ? 0 : 0xffff);
+            ckernel_unpack_template::run(face_r_dim - 1, unp_cfg_context == 0 ? 0 : 0xffff);
         }
 
         // Unpack last SrcA row of a 16x16 face and SetDvalid

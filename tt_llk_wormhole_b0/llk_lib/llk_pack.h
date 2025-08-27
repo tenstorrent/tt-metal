@@ -84,7 +84,7 @@ inline void _llk_pack_mop_config_(
             tmp.set_end_op(TT_OP_STOREIND(1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR));
         }
 
-        tmp.program(instrn_buffer);
+        tmp.program();
     }
     else
     {
@@ -93,7 +93,7 @@ inline void _llk_pack_mop_config_(
         if ((face_r_dim == 1) || narrow_tile)
         {
             ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 1));
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
         else
         {
@@ -101,7 +101,7 @@ inline void _llk_pack_mop_config_(
             ckernel::ckernel_template tmp(MOP_OUTER_LOOP, MOP_INNER_LOOP, TT_OP_INCADCXY(p_setadc::PAC, 0, 0, 1, 0));
             tmp.set_start_op(TT_OP_PACR(ADDR_MOD_0, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
             tmp.set_end_op(TT_OP_PACR(ADDR_MOD_1, ZERO_OUTPUT_FLAG, PACK_SEL(PACKCNT), 0, MEGAROW, 0, 0));
-            tmp.program(instrn_buffer);
+            tmp.program();
         }
     }
 }
@@ -309,7 +309,7 @@ inline void _llk_pack_fast_tilize_mop_config_(const std::uint32_t unit_dim)
         TT_OP_NOP,
         TT_OP_NOP);
 
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 template <DstSync Dst>

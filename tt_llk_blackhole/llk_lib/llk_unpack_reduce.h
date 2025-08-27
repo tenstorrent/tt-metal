@@ -33,7 +33,7 @@ inline void _llk_unpack_reduce_mop_config_()
         0,
         unpack_srcb,
         0);
-    tmp.program(instrn_buffer);
+    tmp.program();
 }
 
 template <bool is_fp32_dest_acc_en, StochRndType stoch_rnd_mode = StochRndType::None>
