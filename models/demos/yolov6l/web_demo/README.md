@@ -32,6 +32,6 @@
   ```
 - on the client side run:
   ```
-  source run_on_client_YOLOv8_Metal --api-url http://IP.ADDRESS:7000
+  source run_on_client_YOLOv6l_Metal --api-url http://IP.ADDRESS:7000
   ```
 - a browser should automatically open and you will see the live object detection demo using your local camera.
