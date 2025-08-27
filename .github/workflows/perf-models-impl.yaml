@@ -130,13 +130,13 @@ jobs:
         uses: ./.github/actions/model-perf-test
         with:
           run_args: pytest -n auto models/demos/falcon7b_common/tests -m models_performance_bare_metal
-        if: ${{ !cancelled() && ${{ matrix.test-info.model-group == 'llm_javelin' }} }}
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' }}
       - name: Run mamba model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/model-perf-test
         with:
           run_args: pytest -n auto models/demos/wormhole/mamba/tests -m models_performance_bare_metal
-        if: ${{ !cancelled() && ${{ matrix.test-info.model-group == 'llm_javelin' }} }}
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' }}
       - name: Run performance regressions
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/model-perf-test
@@ -157,7 +157,7 @@ jobs:
 
             ## Merge all the generated reports
             env python3 models/perf/merge_perf_results.py
-        if: ${{ !cancelled() && ${{ matrix.test-info.model-group != 'llm_javelin' }} }}
+        if: ${{ !cancelled() && matrix.test-info.model-group != 'llm_javelin' }}
       # TODO: Fix the pipeline before enabling notifications.
       #- uses: tenstorrent/tt-metal/.github/actions/slack-report@main
       #  if: ${{ failure() }}
