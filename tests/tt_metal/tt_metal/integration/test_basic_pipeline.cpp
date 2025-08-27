@@ -277,7 +277,7 @@ TEST_F(UnitMeshCQProgramFixture, TensixTestPipelineAcrossRows) {
         GTEST_SKIP();
     }
 
-    unit_tests::create_pipeline::PipelineRowConfig test_config;
+    unit_tests::create_pipeline::PipelineRowConfig test_config{};
     auto mesh_device = this->devices_[0];
     // // saturate DRAM
     test_config.num_cores = mesh_device->compute_with_storage_grid_size().x - 1;
