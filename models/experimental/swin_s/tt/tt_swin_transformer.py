@@ -110,20 +110,11 @@ class TtSwinTransformer:
         else:
             pass
         output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        # Replace global_avg_pool2d hack with proper TTNN adaptive average pooling
-        batch, c, h, w = output_tensor.shape
+        # AdaptiveAvgPool2d starts
         output_tensor = ttnn.permute(output_tensor, (0, 2, 3, 1), memory_config=ttnn.L1_MEMORY_CONFIG)
-        output_tensor = ttnn.adaptive_avg_pool2d(
-            input_tensor=output_tensor,
-            batch_size=batch,
-            input_h=h,
-            input_w=w,
-            channels=c,
-            output_size=(1, 1),
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        output_tensor = ttnn.global_avg_pool2d(output_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
+        # AdaptiveAvgPool2d  ends
         output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         output_tensor = ttnn.reshape(
             output_tensor, (output_tensor.shape[0], -1)
