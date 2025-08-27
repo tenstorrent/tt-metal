@@ -5,6 +5,10 @@
 import torch
 import pytest
 import ttnn
+import random
+
+# Set fixed random seeds for deterministic test execution
+torch.manual_seed(42)
 
 
 def test_binary_add_storage_type_validation_device_tensors(device):
