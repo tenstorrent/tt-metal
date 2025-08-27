@@ -153,35 +153,37 @@ void MAIN {
                 }
                 {
                     DeviceZoneScopedN("Unpack tilize");
-                    unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
-                        curr_in_cb_id,
-                        curr_scalar_cb_id,
-                        tiles_to_reduce,
-                        0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
-                        num_faces_in_input_tile,
-                        face_r_dim);
-                    ckernel::tensix_sync();
+                    // unpack_tilizeA_B_block<neginf_srca_maxpool, true, false, zero_srca_avgpool>(
+                    //     curr_in_cb_id,
+                    //     curr_scalar_cb_id,
+                    //     tiles_to_reduce,
+                    //     0 /*tile idx for Src b is 0 because only 1 tile of constants is loaded*/,
+                    //     num_faces_in_input_tile,
+                    //     face_r_dim);
+
+                    // ckernel::tensix_sync();
                 }
                 {
                     DeviceZoneScopedN("Reduce");
-                    for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
-                        reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
-                    }
-                    ckernel::tensix_sync();
+                    // for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
+                    //     reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
+                    // }
+                    // ckernel::tensix_sync();
                 }
                 cb_pop_front(curr_in_cb_id, 1);
             }
             tile_regs_commit();
             tile_regs_wait();
             {
-                DeviceZoneScopedN("Pack untilize");
-                if (last_c_block) {
-                    pack_untilize_dest<partial_iter_output_tiles>(
-                        out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                } else {
-                    pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
-                }
-                ckernel::tensix_sync();
+                // DeviceZoneScopedN("Pack untilize");
+                // if (last_c_block) {
+                //     pack_untilize_dest<partial_iter_output_tiles>(
+                //         out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
+                // } else {
+                //     pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks,
+                //     num_faces_in_output_tile);
+                // }
+                // ckernel::tensix_sync();
             }
             cb_push_back(out_cb_id, num_faces_to_reserve);
             tile_regs_release();

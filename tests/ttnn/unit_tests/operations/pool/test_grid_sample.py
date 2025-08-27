@@ -225,9 +225,9 @@ def test_grid_sample_tiled_grid(device, input_shape, grid_shape, use_precomputed
     input_shape_nhwc = [batch_size, height, width, channels]
 
     # Create near-uniform grid with small random perturbation for meaningful testing
-    # torch_grid = torch.rand(grid_shape, dtype=torch.bfloat16) * 2.0 - 1.0  # Small values near zero
+    torch_grid = torch.rand(grid_shape, dtype=torch.bfloat16) * 2 - 1.0
 
-    torch_grid = torch.zeros(grid_shape, dtype=torch.bfloat16)
+    # torch_grid = torch.zeros(grid_shape, dtype=torch.bfloat16)
 
     # Get expected PyTorch output
     torch_grid_float = torch_grid.to(torch.float32)
@@ -235,6 +235,8 @@ def test_grid_sample_tiled_grid(device, input_shape, grid_shape, use_precomputed
         torch_input_nchw, torch_grid_float, mode="bilinear", padding_mode="zeros", align_corners=False
     )
     torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
+
+    # print(torch_output_nhwc)
 
     # Create TTNN tensors
     ttnn_input = ttnn.from_torch(

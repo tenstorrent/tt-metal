@@ -21,6 +21,7 @@
 namespace ttnn::operations::grid_sample {
 
 tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
+
     const Tensor& input_tensor,
     const Tensor& grid_tensor,
     const Tensor& output_tensor,

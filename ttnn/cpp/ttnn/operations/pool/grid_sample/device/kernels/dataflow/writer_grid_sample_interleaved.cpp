@@ -48,7 +48,7 @@ void kernel_main() {
             // The data is already laid out correctly in the CB pages
             {
                 DeviceZoneScopedN("Write + barrier");
-                noc_async_write(base_l1_read_addr, dst_noc_addr, output_stick_size);
+                // noc_async_write(base_l1_read_addr, dst_noc_addr, output_stick_size);
 
                 // noc_async_write_barrier();
             }

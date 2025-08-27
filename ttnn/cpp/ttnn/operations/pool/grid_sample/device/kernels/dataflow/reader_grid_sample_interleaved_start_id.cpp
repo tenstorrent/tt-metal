@@ -164,7 +164,7 @@ void kernel_main() {
                 uint32_t l1_write_input_addr = get_write_ptr(input_cb_index);
 
                 // Check if coordinates are same as last iteration (coordinate caching)
-                bool coordinates_same = (h0 == h0_last && w0 == w0_last);
+                bool coordinates_same = true;  // (h0 == h0_last && w0 == w0_last);
 
                 {
                     DeviceZoneScopedN("Random access part");
@@ -247,6 +247,7 @@ void kernel_main() {
 
                 // Wait for input reads to complete and push input CB
                 if (!coordinates_same) {
+                    DeviceZoneScopedN("Waiting for input reads");
                     noc_async_read_barrier();
                 }
                 cb_push_back(input_cb_index, 1);
