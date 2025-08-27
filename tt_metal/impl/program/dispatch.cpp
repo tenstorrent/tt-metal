@@ -1535,10 +1535,13 @@ public:
                     constants.packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
-                program_command_sequence.launch_msg_write_packed_cmd_ptrs.push_back(
-                    &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
-                                       (write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t)))
-                         ->write_packed);
+                program_command_sequence.launch_msg_write_packed_cmd_ptrs
+                    .push_back(  // NOLINT(bugprone-sizeof-expression)
+                        &((CQDispatchCmd*)((uint32_t*)
+                                               device_command_sequence.data() +  // NOLINT(bugprone-sizeof-expression)
+                                           (write_offset_bytes + sizeof(CQPrefetchCmd)) /
+                                               sizeof(uint32_t)))  // NOLINT(bugprone-sizeof-expression)
+                             ->write_packed);                      // NOLINT(bugprone-sizeof-expression)
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
                      tt::align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedMulticastSubCmd), l1_alignment)) /
@@ -1567,10 +1570,13 @@ public:
                     constants.packed_write_max_unicast_sub_cmds,
                     curr_sub_cmd_idx);
                 curr_sub_cmd_idx += num_sub_cmds_in_cmd;
-                program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs.push_back(
-                    &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
-                                       (write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t)))
-                         ->write_packed);
+                program_command_sequence.unicast_launch_msg_write_packed_cmd_ptrs
+                    .push_back(  // NOLINT(bugprone-sizeof-expression)
+                        &((CQDispatchCmd*)((uint32_t*)
+                                               device_command_sequence.data() +  // NOLINT(bugprone-sizeof-expression)
+                                           (write_offset_bytes + sizeof(CQPrefetchCmd)) /
+                                               sizeof(uint32_t)))  // NOLINT(bugprone-sizeof-expression)
+                             ->write_packed);                      // NOLINT(bugprone-sizeof-expression)
                 uint32_t curr_sub_cmd_data_offset_words =
                     (write_offset_bytes + (sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd)) +
                      tt::align(num_sub_cmds_in_cmd * sizeof(CQDispatchWritePackedUnicastSubCmd), l1_alignment)) /
@@ -1672,10 +1678,11 @@ public:
             num_noc_unicast_txns,
             noc_data_start_idx,
             dispatcher_for_go_signal);
-        program_command_sequence.mcast_go_signal_cmd_ptr =
-            &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +
-                               (write_offset_bytes + sizeof(CQPrefetchCmd)) / sizeof(uint32_t)))
-                 ->mcast;
+        program_command_sequence.mcast_go_signal_cmd_ptr =                  // NOLINT(bugprone-sizeof-expression)
+            &((CQDispatchCmd*)((uint32_t*)device_command_sequence.data() +  // NOLINT(bugprone-sizeof-expression)
+                               (write_offset_bytes + sizeof(CQPrefetchCmd)) /
+                                   sizeof(uint32_t)))  // NOLINT(bugprone-sizeof-expression)
+                 ->mcast;                              // NOLINT(bugprone-sizeof-expression)
     }
 };
 

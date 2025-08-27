@@ -166,7 +166,7 @@ enum TypedU32_ARRAY_Format {
 
 static_assert(sizeof(DebugPrintMemLayout) == DPRINT_BUFFER_SIZE);
 // We use DebugPrintMemLayout to hold noc xfer data, 32 buckets (one for each bit in noc xfer length field).
-static_assert(sizeof(DebugPrintMemLayout().data) >= sizeof(uint32_t) * 8 * sizeof(uint32_t));
+static_assert(sizeof(DebugPrintMemLayout().data) >= 32 * sizeof(uint32_t));
 
 // Size of datum in bytes, dprint-specific to support device-side and bfp* DataFormats
 static inline constexpr uint32_t dprint_datum_size(const CommonDataFormat& format) {

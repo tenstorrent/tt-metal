@@ -183,7 +183,7 @@ struct Attribute final {
                 const auto& object = *reinterpret_cast<const BaseType*>(&storage);
                 return json::to_json(object);
             }} {
-        static_assert(sizeof(BaseType) <= sizeof(storage_t));
+        static_assert(sizeof(BaseType) <= sizeof(storage_t));  // NOLINT(bugprone-sizeof-expression)
         static_assert(ALIGNMENT % alignof(BaseType) == 0);
     }
 

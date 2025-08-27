@@ -58,7 +58,7 @@ uint32_t element_size_bytes(DataType dtype);
 
 template <typename T>
 constexpr size_t packed_buffer_size_bytes(size_t volume_unpacked_data) {
-    auto num_type_in_u32 = sizeof(uint32_t) / sizeof(T);
+    auto num_type_in_u32 = sizeof(uint32_t) / sizeof(T);  // NOLINT(bugprone-sizeof-expression)
     return (volume_unpacked_data / num_type_in_u32) * sizeof(uint32_t);
 }
 
