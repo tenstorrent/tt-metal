@@ -111,7 +111,7 @@ target_sources(
             impl/dispatch/kernels/cq_dispatch.cpp
             impl/dispatch/kernels/cq_dispatch_subordinate.cpp
             impl/dispatch/kernels/cq_prefetch.cpp
-            fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp
+            fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp
             fabric/impl/kernels/tt_fabric_mux.cpp
             kernels/compute/blank.cpp
             kernels/compute/eltwise_binary.cpp
