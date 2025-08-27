@@ -8,6 +8,7 @@
 #include <tt-metalium/work_split.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <algorithm>
+#include <chrono>
 #include <random>
 #include "gmock/gmock.h"
 #include <tt-metalium/fabric.hpp>
@@ -19,6 +20,8 @@
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
 #include <tt-metalium/system_mesh.hpp>
+#include <cstring>
+#include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -34,8 +37,49 @@ struct SocketCoreMapping {
     CoreRangeSet output_cores;
 };
 
+struct ParsedSenderPage {
+    sender_socket_md md;
+    std::vector<uint32_t> bytes_acked;
+    std::vector<sender_downstream_encoding> encodings;
+};
+
+static ParsedSenderPage parse_sender_page(
+    const uint8_t* page_base, uint32_t l1_alignment, uint32_t max_num_downstreams) {
+    ParsedSenderPage parsed;
+    // copy the static md
+    EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(page_base) % l1_alignment);
+    std::memcpy(&parsed.md, page_base, sizeof(sender_socket_md));
+
+    const uint32_t md_size_aligned = tt::align(sizeof(sender_socket_md), l1_alignment);
+    const uint32_t ack_stride = tt::align(sizeof(uint32_t), l1_alignment);
+    const uint32_t ack_base = md_size_aligned;
+
+    // copy each of the acked bytes
+    parsed.bytes_acked.resize(parsed.md.num_downstreams);
+    for (uint32_t i = 0; i < parsed.md.num_downstreams; ++i) {
+        uint32_t v = 0;
+        auto bytes_acked_addr = page_base + ack_base + i * ack_stride;
+        EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(bytes_acked_addr) % l1_alignment);
+        std::memcpy(&v, bytes_acked_addr, sizeof(uint32_t));
+        parsed.bytes_acked[i] = v;
+    }
+
+    // copy each of the encodings
+    const uint32_t enc_stride = tt::align(sizeof(sender_downstream_encoding), l1_alignment);
+    const uint32_t enc_base = ack_base + max_num_downstreams * ack_stride;
+    parsed.encodings.resize(parsed.md.num_downstreams);
+    for (uint32_t i = 0; i < parsed.md.num_downstreams; ++i) {
+        sender_downstream_encoding enc{};
+        auto encoding_addr = page_base + enc_base + i * enc_stride;
+        EXPECT_EQ(0, reinterpret_cast<std::uintptr_t>(encoding_addr) % l1_alignment);
+        std::memcpy(&enc, encoding_addr, sizeof(sender_downstream_encoding));
+        parsed.encodings[i] = enc;
+    }
+    return parsed;
+}
+
 void verify_socket_configs(
-    const sender_socket_md& sender_config,
+    const ParsedSenderPage& sender_page,
     const receiver_socket_md& recv_config,
     const MeshSocket& send_socket,
     const MeshSocket& recv_socket,
@@ -44,22 +88,31 @@ void verify_socket_configs(
     const CoreCoord& sender_virtual_coord,
     const CoreCoord& recv_virtual_coord,
     uint32_t socket_fifo_size) {
-    // Validate Sender Configs
     auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
-    EXPECT_EQ(sender_config.bytes_acked, 0);
-    EXPECT_EQ(sender_config.write_ptr, recv_socket.get_data_buffer()->address());
-    EXPECT_EQ(sender_config.bytes_sent, 0);
-    EXPECT_EQ(sender_config.downstream_mesh_id, 0);
-    EXPECT_EQ(sender_config.downstream_chip_id, downstream_device_id);
-    EXPECT_EQ(sender_config.downstream_noc_y, recv_virtual_coord.y);
-    EXPECT_EQ(sender_config.downstream_noc_x, recv_virtual_coord.x);
-    EXPECT_EQ(sender_config.downstream_bytes_sent_addr, recv_socket.get_config_buffer()->address());
-    EXPECT_EQ(sender_config.downstream_fifo_addr, recv_socket.get_data_buffer()->address());
-    EXPECT_EQ(sender_config.downstream_fifo_total_size, socket_fifo_size);
-    EXPECT_EQ(sender_config.is_sender, 1);
-    EXPECT_EQ(sender_config.downstream_bytes_sent_addr % l1_alignment, 0);
+    // Sender md checks
+    EXPECT_EQ(sender_page.md.write_ptr, recv_socket.get_data_buffer()->address());
+    EXPECT_EQ(sender_page.md.bytes_sent, 0);
+    EXPECT_EQ(sender_page.md.downstream_bytes_sent_addr, recv_socket.get_config_buffer()->address());
+    EXPECT_EQ(sender_page.md.downstream_fifo_addr, recv_socket.get_data_buffer()->address());
+    EXPECT_EQ(sender_page.md.downstream_fifo_total_size, socket_fifo_size);
+    EXPECT_EQ(sender_page.md.is_sender, 1);
+    EXPECT_EQ(sender_page.md.downstream_bytes_sent_addr % l1_alignment, 0);
+    // Bytes acks are zero-initialized
+    for (auto v : sender_page.bytes_acked) {
+        EXPECT_EQ(v, 0);
+    }
+    // At least one downstream encoding matches the expected recv info
+    bool found_match = false;
+    for (const auto& enc : sender_page.encodings) {
+        if (enc.downstream_chip_id == downstream_device_id && enc.downstream_noc_y == recv_virtual_coord.y &&
+            enc.downstream_noc_x == recv_virtual_coord.x) {
+            found_match = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found_match);
 
-    // Validate Recv Configs
+    // Receiver checks
     EXPECT_EQ(recv_config.bytes_sent, 0);
     EXPECT_EQ(recv_config.bytes_acked, 0);
     EXPECT_EQ(recv_config.read_ptr, recv_socket.get_data_buffer()->address());
@@ -69,7 +122,9 @@ void verify_socket_configs(
     EXPECT_EQ(recv_config.upstream_chip_id, upstream_device_id);
     EXPECT_EQ(recv_config.upstream_noc_y, sender_virtual_coord.y);
     EXPECT_EQ(recv_config.upstream_noc_x, sender_virtual_coord.x);
-    EXPECT_EQ(recv_config.upstream_bytes_acked_addr, send_socket.get_config_buffer()->address());
+    EXPECT_EQ(
+        recv_config.upstream_bytes_acked_addr,
+        send_socket.get_config_buffer()->address() + tt::align(sizeof(sender_socket_md), l1_alignment));
     EXPECT_EQ(recv_config.upstream_bytes_acked_addr % l1_alignment, 0);
 }
 
@@ -206,9 +261,7 @@ void test_single_connection_single_device_socket(
     MeshCoordinateRange devices(md0->shape());
 
     AddProgramToMeshWorkload(mesh_workload, std::move(send_recv_program), devices);
-
     EnqueueMeshWorkload(md0->mesh_command_queue(), mesh_workload, false);
-
     std::vector<uint32_t> recv_data_readback;
     ReadShard(md0->mesh_command_queue(), recv_data_readback, recv_data_buffer, MeshCoordinate(0, 0));
     EXPECT_EQ(src_vec, recv_data_readback);
@@ -774,7 +827,7 @@ void test_single_connection_multi_device_socket_with_workers(
     auto output_buffer = MeshBuffer::create(buffer_config, output_device_local_config, md1.get());
 
     std::vector<uint32_t> src_vec(data_size / sizeof(uint32_t));
-    std::iota(src_vec.begin(), src_vec.end(), 0);
+    std::iota(src_vec.begin(), src_vec.end(), std::chrono::system_clock::now().time_since_epoch().count());
 
     WriteShard(md0->mesh_command_queue(), sender_data_buffer, src_vec, MeshCoordinate(0, 0));
 
@@ -1722,20 +1775,26 @@ TEST_F(MeshSocketTest, SingleConnectionSingleDeviceConfig) {
     };
     auto [send_socket, recv_socket] = MeshSocket::create_socket_pair(md0, md0, socket_config);
 
-    std::vector<sender_socket_md> sender_config_readback;
+    std::vector<uint8_t> sender_config_bytes;
     std::vector<receiver_socket_md> recv_config_readback;
 
-    ReadShard(md0->mesh_command_queue(), sender_config_readback, send_socket.get_config_buffer(), MeshCoordinate(0, 0));
+    ReadShard(md0->mesh_command_queue(), sender_config_bytes, send_socket.get_config_buffer(), MeshCoordinate(0, 0));
     ReadShard(md0->mesh_command_queue(), recv_config_readback, recv_socket.get_config_buffer(), MeshCoordinate(0, 0));
 
-    EXPECT_EQ(sender_config_readback.size(), 1);
+    const uint32_t sender_page_size = send_socket.get_config_buffer()->page_size();
+    EXPECT_EQ(sender_config_bytes.size(), sender_page_size);
     EXPECT_EQ(recv_config_readback.size(), 1);
 
-    const auto& sender_config = sender_config_readback[0];
     const auto& recv_config = recv_config_readback[0];
 
+    // Parse single sender page (page index 0)
+    auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
+    // Single connection => max_num_downstreams = 1
+    ParsedSenderPage sender_page =
+        parse_sender_page(sender_config_bytes.data(), l1_alignment, /*max_num_downstreams*/ 1);
+
     verify_socket_configs(
-        sender_config,
+        sender_page,
         recv_config,
         send_socket,
         recv_socket,
@@ -1788,13 +1847,14 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
 
     auto [send_socket, recv_socket] = MeshSocket::create_socket_pair(md0, md0, socket_config);
 
-    std::vector<sender_socket_md> sender_configs;
+    std::vector<uint8_t> sender_config_bytes;
     std::vector<receiver_socket_md> recv_configs;
 
-    ReadShard(md0->mesh_command_queue(), sender_configs, send_socket.get_config_buffer(), MeshCoordinate(0, 0));
+    ReadShard(md0->mesh_command_queue(), sender_config_bytes, send_socket.get_config_buffer(), MeshCoordinate(0, 0));
     ReadShard(md0->mesh_command_queue(), recv_configs, recv_socket.get_config_buffer(), MeshCoordinate(0, 0));
 
-    EXPECT_EQ(sender_configs.size(), sender_logical_coords.size());
+    const uint32_t sender_page_size = send_socket.get_config_buffer()->page_size();
+    EXPECT_EQ(sender_config_bytes.size(), sender_page_size * sender_logical_coords.size());
     EXPECT_EQ(recv_configs.size(), recv_logical_coords.size());
 
     const auto& sender_core_to_core_id =
@@ -1803,19 +1863,22 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceConfig) {
     const auto& recv_core_to_core_id =
         recv_socket.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
 
+    const uint32_t max_num_downstreams = 1;
+    const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     for (const auto& connection : socket_connections) {
         const auto& sender = connection.sender_core;
         const auto& recv = connection.receiver_core;
         auto sender_idx = sender_core_to_core_id.at(sender.core_coord);
         auto recv_idx = recv_core_to_core_id.at(recv.core_coord);
 
-        const auto& sender_config = sender_configs[sender_idx];
+        const uint8_t* page_ptr = sender_config_bytes.data() + sender_idx * sender_page_size;
+        ParsedSenderPage sender_page = parse_sender_page(page_ptr, l1_alignment, max_num_downstreams);
         const auto& recv_config = recv_configs[recv_idx];
 
         auto sender_virtual_coord = md0->worker_core_from_logical_core(sender.core_coord);
         auto recv_virtual_coord = md0->worker_core_from_logical_core(recv.core_coord);
         verify_socket_configs(
-            sender_config,
+            sender_page,
             recv_config,
             send_socket,
             recv_socket,
@@ -1903,20 +1966,23 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
     const auto& recv_core_to_core_id =
         recv_socket_l1.get_config_buffer()->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
 
-    std::unordered_map<MeshCoordinate, std::vector<sender_socket_md>> sender_configs_per_dev_coord;
+    std::unordered_map<MeshCoordinate, std::vector<uint8_t>> sender_bytes_per_dev_coord;
     std::unordered_map<MeshCoordinate, std::vector<receiver_socket_md>> recv_configs_per_dev_coord;
 
     for (const auto& device_coord : MeshCoordinateRange(md0->shape())) {
-        std::vector<sender_socket_md> sender_configs;
+        std::vector<uint8_t> sender_bytes;
         std::vector<receiver_socket_md> recv_configs;
 
-        ReadShard(md0->mesh_command_queue(), sender_configs, send_socket_l1.get_config_buffer(), device_coord);
+        ReadShard(md0->mesh_command_queue(), sender_bytes, send_socket_l1.get_config_buffer(), device_coord);
         ReadShard(md1->mesh_command_queue(), recv_configs, recv_socket_l1.get_config_buffer(), device_coord);
 
-        sender_configs_per_dev_coord[device_coord] = std::move(sender_configs);
+        sender_bytes_per_dev_coord[device_coord] = std::move(sender_bytes);
         recv_configs_per_dev_coord[device_coord] = std::move(recv_configs);
     }
 
+    const uint32_t max_num_downstreams = 1;
+    const uint32_t sender_page_size = send_socket_l1.get_config_buffer()->page_size();
+    const auto l1_alignment = MetalContext::instance().hal().get_alignment(HalMemType::L1);
     for (const auto& connection : socket_connections) {
         const auto& sender_core = connection.sender_core;
         const auto& recv_core = connection.receiver_core;
@@ -1933,13 +1999,15 @@ TEST_F(MeshSocketTest2DFabric, MultiConnectionMultiDeviceTest) {
         auto sender_device_id = sender_device_coord_to_id[sender_device_coord];
         auto receiver_device_id = receiver_device_coord_to_id[recv_device_coord];
 
-        const auto& sender_config = sender_configs_per_dev_coord[sender_device_coord][sender_idx];
+        const auto& sender_bytes = sender_bytes_per_dev_coord[sender_device_coord];
+        const uint8_t* page_ptr = sender_bytes.data() + sender_idx * sender_page_size;
+        ParsedSenderPage sender_page = parse_sender_page(page_ptr, l1_alignment, max_num_downstreams);
         const auto& recv_config = recv_configs_per_dev_coord[recv_device_coord][recv_idx];
 
         auto sender_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(sender_device_id);
         auto receiver_fabric_node_id = control_plane.get_fabric_node_id_from_physical_chip_id(receiver_device_id);
         verify_socket_configs(
-            sender_config,
+            sender_page,
             recv_config,
             send_socket_l1,
             recv_socket_l1,
@@ -2048,7 +2116,7 @@ TEST_F(MeshSocketTest2DFabric, SocketsOnSubDevice) {
     md1->clear_loaded_sub_device_manager();
 }
 
-TEST_F(MeshSocketTest, AssertOnDuplicateCores) {
+TEST_F(MeshSocketTest, AssertOnDuplicateRecvCores) {
     auto [coord0, coord1] = get_random_mesh_coordinates(mesh_device_->shape());
     auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), coord0);
     auto md1 = mesh_device_->create_submesh(MeshShape(1, 1), coord1);
@@ -2085,7 +2153,7 @@ TEST_F(MeshSocketTest, AssertOnDuplicateCores) {
     SocketConfig socket_config_2 = {
         .socket_connection_config = {socket_connection}, .socket_mem_config = socket_mem_config};
 
-    EXPECT_THROW(MeshSocket::create_socket_pair(md0, md1, socket_config_0), std::exception);
+    EXPECT_NO_THROW(MeshSocket::create_socket_pair(md0, md1, socket_config_0));
     EXPECT_THROW(MeshSocket::create_socket_pair(md0, md1, socket_config_1), std::exception);
     // Having the sender and receiver on the same core is valid. Ensure that this doesn't fail.
     EXPECT_NO_THROW(MeshSocket::create_socket_pair(md0, md0, socket_config_2));
