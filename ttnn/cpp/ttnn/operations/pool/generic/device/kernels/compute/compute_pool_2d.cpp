@@ -164,7 +164,7 @@ void MAIN {
                     // ckernel::tensix_sync();
                 }
                 {
-                    DeviceZoneScopedN("Reduce");
+                    // DeviceZoneScopedN("Reduce");
                     // for (uint32_t math_tile_idx = 0; math_tile_idx < tiles_to_reduce; ++math_tile_idx) {
                     //     reduce_tile_math(math_tile_idx, num_faces_in_input_tile);
                     // }
@@ -175,7 +175,7 @@ void MAIN {
             tile_regs_commit();
             tile_regs_wait();
             {
-                // DeviceZoneScopedN("Pack untilize");
+                DeviceZoneScopedN("Pack untilize");
                 // if (last_c_block) {
                 //     pack_untilize_dest<partial_iter_output_tiles>(
                 //         out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
