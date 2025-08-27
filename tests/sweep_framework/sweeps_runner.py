@@ -159,11 +159,11 @@ def sanitize_inputs(test_vectors):
 
 
 def get_devices(test_module):
-    return default_device()
-    # try:
-    #     return test_module.mesh_device_fixture()
-    # except:
-    #     return default_device()
+    default_device()
+    try:
+        return test_module.mesh_device_fixture()
+    except:
+        return default_device()
 
 
 def gather_single_test_perf(device, test_passed):
@@ -274,33 +274,41 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
     except AssertionError as e:
         output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
         return
+
     try:
-        while True:
-            test_vector = input_queue.get(block=True, timeout=1)
-            test_vector = deserialize_vector_structured(test_vector)
-            try:
-                results = test_module.run(**test_vector, device=device)
-                if type(results) == list:
-                    status, message = results[0]
-                    e2e_perf = results[1] / 1000000  # Nanoseconds to milliseconds
-                else:
-                    status, message = results
+        try:
+            while True:
+                test_vector = input_queue.get(block=True, timeout=1)
+                test_vector = deserialize_vector_structured(test_vector)
+                try:
+                    results = test_module.run(**test_vector, device=device)
+                    if type(results) == list:
+                        status, message = results[0]
+                        e2e_perf = results[1] / 1000000  # Nanoseconds to milliseconds
+                    else:
+                        status, message = results
+                        e2e_perf = None
+                except Exception as e:
+                    status, message = False, str(e)
                     e2e_perf = None
-            except Exception as e:
-                status, message = False, str(e)
-                e2e_perf = None
-            if config.measure_device_perf:
-                perf_result = gather_single_test_perf(device, status)
-                message = get_updated_message(message, perf_result)
-                output_queue.put([status, message, e2e_perf, perf_result])
-            else:
-                output_queue.put([status, message, e2e_perf, None])
-    except Empty as e:
+                if config.measure_device_perf:
+                    perf_result = gather_single_test_perf(device, status)
+                    message = get_updated_message(message, perf_result)
+                    output_queue.put([status, message, e2e_perf, perf_result])
+                else:
+                    output_queue.put([status, message, e2e_perf, None])
+        except Empty as e:
+            # Queue timeout - normal completion when no more test vectors
+            pass
+    finally:
+        # Always close the device when exiting the run function
         try:
             # Run teardown in mesh_device_fixture
             next(device_generator)
         except StopIteration:
             logger.info(f"Closed device configuration, {device_name}.")
+        except Exception as e:
+            logger.warning(f"Error during device cleanup: {e}")
 
 
 def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
