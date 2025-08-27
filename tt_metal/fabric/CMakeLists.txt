@@ -31,9 +31,9 @@ target_sources(
             hw/inc/edm_fabric/fabric_txq_setup.h
             hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp
             hw/inc/fabric_routing_table_interface.h
+            fabric_edm_packet_header.hpp
     PRIVATE
         control_plane.cpp
-        mesh_graph_descriptor.cpp
         routing_table_generator.cpp
         mesh_graph.cpp
         erisc_datamover_builder.cpp
@@ -62,32 +62,11 @@ endforeach()
 # Add the generated headers to your target
 target_sources(fabric PRIVATE ${GENERATED_FBS_HEADERS})
 
-# Include helper functions and generate headers from protobuf schemas
-find_package(Protobuf QUIET REQUIRED)
-include(protobuf)
-set(PROTO_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto)
-
-# Collect all generated protobuf files
-set(GENERATED_PROTO_SRCS)
-foreach(PROTO_FILE ${PROTO_SCHEMAS})
-    GENERATE_PROTO_FILES(${PROTO_FILE} OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR})
-    list(APPEND GENERATED_PROTO_SRCS ${PROTO_SRCS})
-endforeach()
-
-# Add the generated protobuf files to your target
-target_sources(fabric PRIVATE ${GENERATED_PROTO_SRCS})
-target_link_libraries(fabric PUBLIC protobuf::libprotobuf)
-
 target_include_directories(
     fabric
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
-)
-
-target_include_directories(
-    fabric
-    PUBLIC
-        ${CMAKE_CURRENT_BINARY_DIR}
+        ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
 
 target_link_libraries(
