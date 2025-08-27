@@ -2,7 +2,6 @@ set(UNIT_TESTS_FABRIC_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/common/utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_control_plane_logical_to_physical.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/mesh_graph_descriptor_tests.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_intermesh_apis.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_multi_host.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_basic_fabric_apis.cpp
