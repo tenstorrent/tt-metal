@@ -90,8 +90,8 @@ private:
     // Output directory for device profiler logs
     std::filesystem::path output_dir;
 
-    // Hash to marker source locations
-    std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_marker_src_locations;
+    // Hash to zone source locations
+    std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
 
     // Device-Core tracy context
     std::unordered_map<std::pair<uint16_t, CoreCoord>, TracyTTCtx, pair_hash<uint16_t, CoreCoord>>

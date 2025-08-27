@@ -83,38 +83,37 @@ uint16_t hash16CT(const std::string& str) {
     return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
 }
 
-void populateMarkerSrcLocations(
+void populateZoneSrcLocations(
     const std::string& new_log_name,
     const std::string& log_name,
     const bool push_new,
-    std::unordered_map<uint16_t, tracy::MarkerDetails>& hash_to_marker_src_locations,
-    std::unordered_set<std::string>& marker_src_locations) {
+    std::unordered_map<uint16_t, tracy::MarkerDetails>& hash_to_zone_src_locations,
+    std::unordered_set<std::string>& zone_src_locations) {
     std::ifstream log_file_read(new_log_name);
     std::string line;
     while (std::getline(log_file_read, line)) {
         std::string delimiter = "'#pragma message: ";
         int delimiter_index = line.find(delimiter) + delimiter.length();
-        std::string marker_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
+        std::string zone_src_location = line.substr(delimiter_index, line.length() - delimiter_index - 1);
 
-        uint16_t hash_16bit = hash16CT(marker_src_location);
+        uint16_t hash_16bit = hash16CT(zone_src_location);
 
-        auto did_insert = marker_src_locations.insert(marker_src_location);
-        if (did_insert.second &&
-            (hash_to_marker_src_locations.find(hash_16bit) != hash_to_marker_src_locations.end())) {
+        auto did_insert = zone_src_locations.insert(zone_src_location);
+        if (did_insert.second && (hash_to_zone_src_locations.find(hash_16bit) != hash_to_zone_src_locations.end())) {
             TT_THROW("Source location hashes are colliding, two different locations are having the same hash");
         }
 
-        std::stringstream ss(marker_src_location);
-        std::string marker_name;
+        std::stringstream ss(zone_src_location);
+        std::string zone_name;
         std::string source_file;
         std::string line_num_str;
-        std::getline(ss, marker_name, ',');
+        std::getline(ss, zone_name, ',');
         std::getline(ss, source_file, ',');
         std::getline(ss, line_num_str, ',');
 
-        tracy::MarkerDetails details(marker_name, source_file, std::stoull(line_num_str));
+        tracy::MarkerDetails details(zone_name, source_file, std::stoull(line_num_str));
 
-        auto ret = hash_to_marker_src_locations.emplace(hash_16bit, details);
+        auto ret = hash_to_zone_src_locations.emplace(hash_16bit, details);
         if (ret.second && push_new) {
             std::ofstream log_file_write(log_name, std::ios::app);
             log_file_write << line << std::endl;
@@ -124,23 +123,23 @@ void populateMarkerSrcLocations(
     log_file_read.close();
 }
 
-std::unordered_map<uint16_t, tracy::MarkerDetails> generateMarkerSourceLocationsHashes() {
-    std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_marker_src_locations;
-    std::unordered_set<std::string> marker_src_locations;
+std::unordered_map<uint16_t, tracy::MarkerDetails> generateZoneSourceLocationsHashes() {
+    std::unordered_map<uint16_t, tracy::MarkerDetails> hash_to_zone_src_locations;
+    std::unordered_set<std::string> zone_src_locations;
 
-    // Load existing markers from previous runs
-    populateMarkerSrcLocations(
-        tt::tt_metal::PROFILER_MARKER_SRC_LOCATIONS_LOG, "", false, hash_to_marker_src_locations, marker_src_locations);
+    // Load existing zones from previous runs
+    populateZoneSrcLocations(
+        tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG, "", false, hash_to_zone_src_locations, zone_src_locations);
 
-    // Load new markers from the current run
-    populateMarkerSrcLocations(
-        tt::tt_metal::NEW_PROFILER_MARKER_SRC_LOCATIONS_LOG,
-        tt::tt_metal::PROFILER_MARKER_SRC_LOCATIONS_LOG,
+    // Load new zones from the current run
+    populateZoneSrcLocations(
+        tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG,
+        tt::tt_metal::PROFILER_ZONE_SRC_LOCATIONS_LOG,
         true,
-        hash_to_marker_src_locations,
-        marker_src_locations);
+        hash_to_zone_src_locations,
+        zone_src_locations);
 
-    return hash_to_marker_src_locations;
+    return hash_to_zone_src_locations;
 }
 
 void parallelMergeSortedDeviceMarkerChunks(
@@ -150,39 +149,29 @@ void parallelMergeSortedDeviceMarkerChunks(
 
     const uint32_t num_chunks = device_markers_chunk_offsets.size() - 1;
 
-    std::vector<std::thread> threads;
-
     uint32_t num_chunks_to_merge_together = 2;
     while (num_chunks_to_merge_together <= num_chunks) {
         uint32_t i = 0;
         while (i <= num_chunks - num_chunks_to_merge_together) {
-            threads.emplace_back(
-                std::thread([&device_markers, &device_markers_chunk_offsets, i, num_chunks_to_merge_together]() {
-                    TT_ASSERT(std::is_sorted(
-                        device_markers.begin() + device_markers_chunk_offsets[i],
-                        device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
-                        [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-                           std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
-                    TT_ASSERT(std::is_sorted(
-                        device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
-                        device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
-                        [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-                           std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
+            TT_ASSERT(std::is_sorted(
+                device_markers.begin() + device_markers_chunk_offsets[i],
+                device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
+                [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+                   std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
+            TT_ASSERT(std::is_sorted(
+                device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
+                device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
+                [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+                   std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
 
-                    std::inplace_merge(
-                        device_markers.begin() + device_markers_chunk_offsets[i],
-                        device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
-                        device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
-                        [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
-                           std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
-                }));
+            std::inplace_merge(
+                device_markers.begin() + device_markers_chunk_offsets[i],
+                device_markers.begin() + device_markers_chunk_offsets[i + (num_chunks_to_merge_together / 2)],
+                device_markers.begin() + device_markers_chunk_offsets[i + num_chunks_to_merge_together],
+                [](std::reference_wrapper<const tracy::TTDeviceMarker> a,
+                   std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); });
             i += num_chunks_to_merge_together;
         }
-
-        for (auto& thread : threads) {
-            thread.join();
-        }
-        threads.clear();
 
         TT_ASSERT(std::is_sorted(
             device_markers.begin() + device_markers_chunk_offsets[i - num_chunks_to_merge_together],
@@ -1322,8 +1311,8 @@ void DeviceProfiler::updateFirstTimestamp(uint64_t timestamp) {
 }
 
 tracy::MarkerDetails DeviceProfiler::getMarkerDetails(uint16_t timer_id) const {
-    auto marker_details_iter = hash_to_marker_src_locations.find(timer_id);
-    if (marker_details_iter != hash_to_marker_src_locations.end()) {
+    auto marker_details_iter = hash_to_zone_src_locations.find(timer_id);
+    if (marker_details_iter != hash_to_zone_src_locations.end()) {
         return marker_details_iter->second;
     } else {
         return tracy::UnidentifiedMarkerDetails;
@@ -1384,6 +1373,8 @@ struct DispatchMetaData {
 };
 
 void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& device_markers) {
+    ZoneScoped;
+
     DispatchMetaData current_dispatch_meta_data;
     std::stack<std::set<tracy::TTDeviceMarker>::iterator> start_marker_stack;
 
@@ -1585,19 +1576,10 @@ DeviceProfiler::~DeviceProfiler() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
-    uint32_t i = 0;
-    std::vector<std::thread> threads(this->device_markers_per_core_risc_map.size());
     for (auto& [_, device_markers_per_risc_map] : this->device_markers_per_core_risc_map) {
-        threads[i] = std::thread([this, &device_markers_per_risc_map]() {
-            for (auto& [risc_num, device_markers] : device_markers_per_risc_map) {
-                processDeviceMarkerData(device_markers);
-            }
-        });
-        i++;
-    }
-
-    for (auto& thread : threads) {
-        thread.join();
+        for (auto& [risc_num, device_markers] : device_markers_per_risc_map) {
+            processDeviceMarkerData(device_markers);
+        }
     }
 
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
@@ -1639,7 +1621,7 @@ void DeviceProfiler::readResults(
         "{}-{}-{}-{}", "readResults", device_id, enchantum::to_string(state), enchantum::to_string(data_source));
     ZoneName(zone_name.c_str(), zone_name.size());
 
-    hash_to_marker_src_locations = generateMarkerSourceLocationsHashes();
+    hash_to_zone_src_locations = generateZoneSourceLocationsHashes();
 
     TT_ASSERT(doAllDispatchCoresComeAfterNonDispatchCores(device, virtual_cores));
 
