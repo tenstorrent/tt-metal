@@ -244,6 +244,19 @@ public:
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
+    CBHandle add_circular_buffer(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
+    CBHandle add_circular_buffer(
+        const CoreRangeSet& core_range_set,
+        const CircularBufferConfig& config,
+        const experimental::GlobalCircularBuffer& global_circular_buffer);
+
+    std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
+
+    // Ensures that statically allocated circular buffers do not grow into L1 buffer space
+    void validate_circular_buffer_region(const IDevice* device);
+
+    KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
+
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -327,23 +340,9 @@ private:
     friend std::shared_ptr<CircularBuffer> GetCircularBuffer(const Program& program, CBHandle id);
     friend void ValidateCircularBufferRegion(const Program& program, const IDevice* device);
 
-    friend KernelHandle AddKernel(
-        Program& program, const std::shared_ptr<Kernel>& kernel, HalProgrammableCoreType core_type);
-
-    KernelHandle add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType& core_type);
-
     CBHandle add_circular_buffer_(const std::shared_ptr<CircularBuffer>& circular_buffer);
-    CBHandle add_circular_buffer(const CoreRangeSet& core_range_set, const CircularBufferConfig& config);
-    CBHandle add_circular_buffer(
-        const CoreRangeSet& core_range_set,
-        const CircularBufferConfig& config,
-        const experimental::GlobalCircularBuffer& global_circular_buffer);
-    std::shared_ptr<CircularBuffer> get_circular_buffer(CBHandle cb_id) const;
 
     void add_semaphore(const CoreRangeSet& crs, uint32_t semaphore_id, uint32_t init_value, CoreType core_type);
-
-    // Ensures that statically allocated circular buffers do not grow into L1 buffer space
-    void validate_circular_buffer_region(const IDevice* device);
 
     void set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const;
 

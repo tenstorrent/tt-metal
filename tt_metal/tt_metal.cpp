@@ -1095,13 +1095,13 @@ KernelHandle CreateDataMovementKernel(
     if (mode != ROUTING_MODE_UNDEFINED) {
         kernel->add_defines({{"ROUTING_MODE", std::to_string(static_cast<int>(mode))}});
     }
-    return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
+    return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
 
 KernelHandle CreateComputeKernel(
     Program& program, const KernelSource& kernel_src, const CoreRangeSet& core_range_set, const ComputeConfig& config) {
     std::shared_ptr<Kernel> kernel = std::make_shared<ComputeKernel>(kernel_src, core_range_set, config);
-    return detail::AddKernel(program, kernel, HalProgrammableCoreType::TENSIX);
+    return program.impl().add_kernel(kernel, HalProgrammableCoreType::TENSIX);
 }
 
 KernelHandle CreateEthernetKernel(
@@ -1144,7 +1144,7 @@ KernelHandle CreateEthernetKernel(
         "cores because both NOCs are in use!",
         kernel->name());
 
-    return detail::AddKernel(program, kernel, eth_core_type);
+    return program.impl().add_kernel(kernel, eth_core_type);
 }
 
 KernelHandle CreateKernel(
@@ -1193,17 +1193,17 @@ CBHandle CreateCircularBuffer(
     const CircularBufferConfig& config) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-    auto cb_handle = program.add_circular_buffer(core_ranges, config);
+    auto cb_handle = program.impl().add_circular_buffer(core_ranges, config);
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureCreateCircularBuffer, cb_handle, program, core_spec, config);
     return cb_handle;
 }
 
 const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle cb_handle) {
-    return detail::GetCircularBuffer(program, cb_handle)->config();
+    return program.impl().get_circular_buffer(cb_handle)->config();
 }
 
 void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_t total_size) {
-    std::shared_ptr<CircularBuffer> circular_buffer = detail::GetCircularBuffer(program, cb_handle);
+    std::shared_ptr<CircularBuffer> circular_buffer = program.impl().get_circular_buffer(cb_handle);
     if (not circular_buffer->globally_allocated()) {
         program.invalidate_circular_buffer_allocation();
     }
@@ -1211,11 +1211,11 @@ void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_
 }
 
 void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t buffer_index, uint32_t page_size) {
-    detail::GetCircularBuffer(program, cb_handle)->config().set_page_size(buffer_index, page_size);
+    program.impl().get_circular_buffer(cb_handle)->config().set_page_size(buffer_index, page_size);
 }
 
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer) {
-    auto circular_buffer = detail::GetCircularBuffer(program, cb_handle);
+    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     TT_FATAL(!circular_buffer->is_global_circular_buffer(), "CircularBuffer must not be a GlobalCircularBuffer!");
     circular_buffer->config().set_globally_allocated_address(buffer);
     circular_buffer->assign_global_address();
@@ -1223,7 +1223,7 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size) {
-    auto circular_buffer = detail::GetCircularBuffer(program, cb_handle);
+    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     circular_buffer->config().set_globally_allocated_address_and_total_size(buffer, total_size);
     circular_buffer->assign_global_address();
 }
@@ -1461,12 +1461,12 @@ CBHandle CreateCircularBuffer(
     const CircularBufferConfig& config,
     const GlobalCircularBuffer& global_circular_buffer) {
     CoreRangeSet core_ranges = GetCoreRangeSet(core_spec);
-    return program.add_circular_buffer(core_ranges, config, global_circular_buffer);
+    return program.impl().add_circular_buffer(core_ranges, config, global_circular_buffer);
 }
 
 void UpdateDynamicCircularBufferAddress(
     Program& program, CBHandle cb_handle, const GlobalCircularBuffer& global_circular_buffer) {
-    auto circular_buffer = detail::GetCircularBuffer(program, cb_handle);
+    auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     TT_FATAL(circular_buffer->is_global_circular_buffer(), "CircularBuffer must be linked to a GlobalCircularBuffer!");
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
 }
