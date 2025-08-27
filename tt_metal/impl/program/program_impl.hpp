@@ -227,6 +227,7 @@ public:
     void populate_dispatch_data(IDevice* device);
 
     uint32_t get_sem_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
+    uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
 
     void finalize_offsets(IDevice* device);
 

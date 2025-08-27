@@ -122,7 +122,8 @@ public:
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
     // debug/test
-    uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
+    uint32_t get_sem_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type) /* = delete */;
+    uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type) /* = delete */;
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     void set_last_used_command_queue_for_testing(CommandQueue* queue);
