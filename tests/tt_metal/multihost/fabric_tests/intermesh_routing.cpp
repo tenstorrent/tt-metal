@@ -173,7 +173,7 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMeshNorthMulticast_1) {
 TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
-    constexpr uint32_t num_iterations = 10;
+    constexpr uint32_t num_iterations = 100;
     std::vector<uint32_t> all_ranks = {0, 1, 2, 3, 4, 5, 6, 7};
     for (uint32_t sender_rank : all_ranks) {
         if (*(distributed_context->rank()) == sender_rank) {
