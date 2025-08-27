@@ -28,8 +28,9 @@ void kernel_main() {
         }
         for (uint32_t i = 0; i < W; i++) {
             uint32_t val = stick[i];
-            stick[i] = val + 1;
-            // DPRINT << "val: " << val << ENDL();
+            if (val != (uint32_t)-1) {
+                stick[i] = val + 1;
+            }
         }
         if (src0_is_dram) {
             uint64_t dst_noc_addr = get_noc_addr(h, s0);
