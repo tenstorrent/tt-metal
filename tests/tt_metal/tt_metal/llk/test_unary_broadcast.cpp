@@ -53,7 +53,7 @@ using namespace tt;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 
-namespace unit_tests::compute::broadcast {
+namespace unit_tests::compute::unary_broadcast {
 
 enum BroadcastDim : uint8_t { ROW, COL, SCALAR, NONE, NUM_DIMS };
 
@@ -339,9 +339,9 @@ void run_single_core_unary_broadcast(
 
     ASSERT_TRUE(result);
 }
-}  // namespace unit_tests::compute::broadcast
+}  // namespace unit_tests::compute::unary_broadcast
 
-using namespace unit_tests::compute::broadcast;
+using namespace unit_tests::compute::unary_broadcast;
 
 TEST_F(MeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
     if (this->arch_ == tt::ARCH::GRAYSKULL) {
@@ -368,7 +368,7 @@ TEST_F(MeshDeviceFixture, TensixComputeSingleTileUnaryBroadcast) {
                     broadcast_dim_to_type.at(test_config.broadcast_dim_1),
                     test_config.in1_t,
                     test_config.out1_t);
-                unit_tests::compute::broadcast::run_single_core_unary_broadcast(this->devices_.at(0), test_config);
+                run_single_core_unary_broadcast(this->devices_.at(0), test_config);
             }
         }
     }

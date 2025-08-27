@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 #include "all_reduce_create_qkv_heads_program_factory.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/fabric.hpp>
 namespace ttnn {
 
@@ -38,7 +39,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
     Tensor& k_output_tensor = output_tensors[2];
     Tensor& v_output_tensor = output_tensors[3];
 
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     // For qkv heads fuse
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
@@ -348,6 +349,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         batch_offset_cb_index_reader,
         out_cb_index,
     };
+    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.buffer()).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {
         reduction_cb_index,  // reduction_cb_index
@@ -365,6 +367,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_reduce_create_qkv_heads_minima
         batch_offset_cb_index_reader,
         out_cb_index,
     };
+    tt::tt_metal::TensorAccessorArgs(batch_offset_tensor.buffer()).append_to(writer_compile_time_args);
 
     auto reduction_reader_kernel_config = tt::tt_metal::DataMovementConfig{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,

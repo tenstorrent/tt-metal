@@ -2333,7 +2333,6 @@ void ControlPlane::populate_fabric_connection_info(
     connection_info.edm_noc_y = static_cast<uint8_t>(fabric_router_virtual_core.y);
     connection_info.edm_buffer_base_addr = edm_config.sender_channels_base_address[sender_channel];
     connection_info.num_buffers_per_channel = edm_config.sender_channels_num_buffers[sender_channel];
-    connection_info.edm_l1_sem_addr = edm_config.sender_channels_local_flow_control_semaphore_address[sender_channel];
     connection_info.edm_connection_handshake_addr =
         edm_config.sender_channels_connection_semaphore_address[sender_channel];
     connection_info.edm_worker_location_info_addr =
@@ -2359,8 +2358,6 @@ void ControlPlane::populate_fabric_connection_info(
         tensix_connection_info.edm_buffer_base_addr = tensix_config.get_channels_base_address(risc_id, sender_channel);
         tensix_connection_info.num_buffers_per_channel = tensix_config.get_num_buffers_per_channel();
         tensix_connection_info.buffer_size_bytes = tensix_config.get_buffer_size_bytes_full_size_channel();
-        tensix_connection_info.edm_l1_sem_addr =
-            tensix_config.get_local_flow_control_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
         tensix_connection_info.edm_connection_handshake_addr =
             tensix_config.get_connection_semaphore_address(physical_chip_id, eth_channel_id, sender_channel);
         tensix_connection_info.edm_worker_location_info_addr =

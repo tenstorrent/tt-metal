@@ -10,8 +10,8 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
-#include "tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "fabric/fabric_edm_packet_header.hpp"
 
 namespace tt::tt_fabric::linear::experimental {
 
@@ -226,7 +226,6 @@ static FORCE_INLINE void fabric_set_unicast_route(
 #else
         (LowLatencyMeshPacketHeader*)packet_header,
 #endif
-        static_cast<eth_chan_directions>(slot.eth_dir),
         connection_manager.my_dev_id,
         slot.dst_dev_id,
         slot.dst_mesh_id,

@@ -45,6 +45,9 @@ set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
 # jit-build is cross compiling; shlibdeps does not find dependencies on the host; it should be self-contained anyway.
 set(CPACK_DEBIAN_METALIUM-JIT_PACKAGE_SHLIBDEPS FALSE)
 
+set(CPACK_DEBIAN_METALIUM-DEV_PACKAGE_DEPENDS "nlohmann-json3-dev (>= 3.10)")
+set(CPACK_DEBIAN_NN-DEV_PACKAGE_DEPENDS "libxtensor-dev (>= 0.23.10)")
+
 include(CMakePackageConfigHelpers)
 write_basic_package_version_file(
     ${PROJECT_BINARY_DIR}/tt-metalium-config-version.cmake
@@ -92,6 +95,7 @@ list(
     msgpack-cxx
     Headers
     Library
+    json-dev
     Unspecified # TODO: audit if there's anything we need to ship here
 )
 
@@ -108,7 +112,6 @@ cpack_add_component(tracy GROUP metalium)
 cpack_add_component_group(metalium-dev)
 cpack_add_component(metalium-dev DEPENDS metalium GROUP metalium-dev DESCRIPTION "TT-Metalium SDK")
 cpack_add_component(fmt-core GROUP metalium-dev)
-cpack_add_component(json-dev GROUP metalium-dev)
 cpack_add_component(enchantum GROUP metalium-dev)
 cpack_add_component(umd-dev GROUP metalium-dev)
 cpack_add_component(spdlog-dev GROUP metalium-dev)
