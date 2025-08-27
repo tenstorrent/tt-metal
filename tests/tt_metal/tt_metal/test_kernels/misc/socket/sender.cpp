@@ -18,8 +18,6 @@ void kernel_main() {
     set_sender_socket_page_size(sender_socket, page_size);
 
     uint32_t data_addr = local_l1_buffer_addr;
-    uint64_t receiver_noc_coord_addr = get_noc_addr(sender_socket.downstream_noc_x, sender_socket.downstream_noc_y, 0);
-
     // Sends 1 page at a time and does handshake with receiver, can be optimized
     // to notify receiver after writing larger chunks
     while (outstanding_data_size) {
@@ -29,7 +27,13 @@ void kernel_main() {
         // Issuing the write requires the wptr from the socket itself
         // The user can get the wptr directly from the sender_socket, or
         // we can add wrappers issue the write itself
-        noc_async_write(data_addr, receiver_noc_coord_addr | sender_socket.write_ptr, page_size);
+        for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
+            sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
+            noc_async_write(
+                data_addr,
+                get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.write_ptr),
+                page_size);
+        }
         data_addr += page_size;
         outstanding_data_size -= page_size;
         socket_push_pages(sender_socket, 1);

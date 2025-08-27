@@ -12,8 +12,8 @@ void fabric_write_any_len(
     uint32_t src_addr,
     uint64_t dst_addr,
     uint32_t xfer_size,
-    SocketSenderInterface& sender_socket) {
-    fabric_set_unicast_route(data_packet_header_addr, sender_socket);
+    sender_downstream_encoding& downstream_enc) {
+    fabric_set_unicast_route(data_packet_header_addr, downstream_enc);
     while (xfer_size > FABRIC_MAX_PACKET_SIZE) {
         data_packet_header_addr->to_noc_unicast_write(NocUnicastCommandHeader{dst_addr}, FABRIC_MAX_PACKET_SIZE);
         fabric_connection.wait_for_empty_write_slot();
@@ -55,7 +55,6 @@ void kernel_main() {
     set_sender_socket_page_size(sender_socket, page_size);
 
     uint32_t data_addr = local_l1_buffer_addr;
-    uint64_t receiver_noc_coord_addr = get_noc_addr(sender_socket.downstream_noc_x, sender_socket.downstream_noc_y, 0);
 
     uint32_t outstanding_data_size = data_size;
 
@@ -63,14 +62,18 @@ void kernel_main() {
     // to notify receiver after writing larger chunks
     while (outstanding_data_size) {
         socket_reserve_pages(sender_socket, 1);
-        // Write Data over Fabric
-        fabric_write_any_len(
-            data_packet_header_addr,
-            fabric_connection,
-            data_addr,
-            receiver_noc_coord_addr | sender_socket.write_ptr,
-            page_size,
-            sender_socket);
+        for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
+            sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
+            uint64_t receiver_noc_coord_addr =
+                get_noc_addr(downstream_enc.downstream_noc_x, downstream_enc.downstream_noc_y, sender_socket.write_ptr);
+            fabric_write_any_len(
+                data_packet_header_addr,
+                fabric_connection,
+                data_addr,
+                receiver_noc_coord_addr,
+                page_size,
+                downstream_enc);
+        }
         data_addr += page_size;
         outstanding_data_size -= page_size;
         socket_push_pages(sender_socket, 1);
