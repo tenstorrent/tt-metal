@@ -22,6 +22,7 @@ public:
 
 private:
     std::unique_ptr<proto::MeshGraphDescriptor> proto_;
+    static bool static_validate(const proto::MeshGraphDescriptor& proto);
 };
 
 }  // namespace tt::tt_fabric
