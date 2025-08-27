@@ -11,11 +11,8 @@ import ttnn
 from loguru import logger
 from transformers import CLIPTextModelWithProjection, CLIPTokenizer, CLIPTextModel
 
-from models.experimental.stable_diffusion_35_large.tt.clip_encoder import (
-    TtCLIPTextTransformer,
-    TtCLIPTextTransformerParameters,
-    TtCLIPConfig,
-)
+from models.experimental.tt_dit.encoders.clip.model_clip import CLIPEncoder, CLIPConfig
+from models.experimental.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.experimental.stable_diffusion_35_large.tt.utils import assert_quality
 
 
@@ -34,11 +31,17 @@ from models.experimental.stable_diffusion_35_large.tt.utils import assert_qualit
     indirect=["device_params"],
 )
 def test_clip_encoder(
-    *, mesh_device: ttnn.Device, clip_path: str, tokenizer_path: str, expected_pcc: float, is_ci_env
+    *, mesh_device: ttnn.Device, clip_path: str, tokenizer_path: str, expected_pcc: float, is_ci_env, reset_seeds
 ) -> None:
     model_name_checkpoint = f"stabilityai/stable-diffusion-xl-base-1.0"
 
     has_projection = clip_path == "text_encoder_2"  # text encoder 2 has text projection, text encoder 1 does not
+
+    # Note: Factor for SDXL should always be 1; since we don't support TP
+    parallel_config = EncoderParallelConfig(
+        tensor_parallel=ParallelFactor(factor=mesh_device.shape[1], mesh_axis=1),
+    )
+    ccl_manager = None
 
     if has_projection:
         hf_model = CLIPTextModelWithProjection.from_pretrained(
@@ -51,6 +54,7 @@ def test_clip_encoder(
     )
 
     hf_model.eval()
+    eos_token_id = hf_model.config.eos_token_id
 
     # debug
     logger.info("=== HuggingFace Model 1 Config ===")
@@ -67,34 +71,29 @@ def test_clip_encoder(
     # test text encoder 1
     logger.info("testing text encoder 1...")
     start_time = time.time()
-    parameters = TtCLIPTextTransformerParameters.from_torch(
-        hf_model.state_dict(),
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        parallel_manager=None,
-        has_text_projection=has_projection,
-    )
 
-    config = TtCLIPConfig(
+    # === TT-DiT CLIP ====
+    config = CLIPConfig(
         vocab_size=hf_model.config.vocab_size,
-        d_model=hf_model.config.hidden_size,
-        d_ff=hf_model.config.intermediate_size,
+        embed_dim=hf_model.config.hidden_size,
+        ff_dim=hf_model.config.intermediate_size,
         num_heads=hf_model.config.num_attention_heads,
-        num_layers=hf_model.config.num_hidden_layers,
-        max_position_embeddings=77,
+        num_hidden_layers=hf_model.config.num_hidden_layers,
+        max_prompt_length=77,
         layer_norm_eps=hf_model.config.layer_norm_eps,
         attention_dropout=hf_model.config.attention_dropout,
         hidden_act=hf_model.config.hidden_act,
     )
 
-    tt_model = TtCLIPTextTransformer(parameters, config)
+    tt_clip = CLIPEncoder(config, mesh_device, ccl_manager, parallel_config, eos_token_id)
+    tt_clip.load_state_dict(hf_model.state_dict())
     logger.info(f"text encoder creation time: {time.time() - start_time}")
 
     # cannot use randn tensor, since HF tokenizer appends a specific eos token syntax
     test_text = "A coffee shop on Main Street that serves excellent pastries and opens at 7 AM on weekdays"
 
     hf_inputs = tokenizer(test_text, padding=True, truncation=True, max_length=77, return_tensors="pt")
-    tt_tokens = ttnn.from_torch(
+    tt_prompt = ttnn.from_torch(
         hf_inputs.input_ids,
         dtype=ttnn.uint32,
         layout=ttnn.TILE_LAYOUT,
@@ -109,6 +108,8 @@ def test_clip_encoder(
         pooled_output = hf_output.text_embeds if has_projection else hf_output.pooler_output
     logger.info(f"text encoder 1 CPU runtime: {time.time() - start_time}")
 
+    print(f"HF LIST LEN: {len(hf_output.hidden_states)}")
+
     # debug
     logger.info(f"HF text encoder 1 sequence output shape: {sequence_output.shape}")
     logger.info(f"HF text encoder 1 pooled output shape: {pooled_output.shape}")
@@ -118,18 +119,19 @@ def test_clip_encoder(
     logger.info(f"HF text encoder 1 pooled output mean: {pooled_output.mean():.6f}, std: {pooled_output.std():.6f}")
 
     logger.info("compiling text encoder...")
-    tt_model(tt_tokens, mesh_device, parallel_manager=None)
+    tt_clip(tt_prompt, mesh_device, with_projection=has_projection)
 
     logger.info("executing text encoder...")
     start_time = time.time()
-    eos_token_id = hf_model.config.eos_token_id
 
-    tt_sequence_output, tt_projected_output = tt_model(tt_tokens, mesh_device, eos_token_id, parallel_manager=None)
+    tt_sequence_output, tt_projected_output = tt_clip(tt_prompt, mesh_device, with_projection=has_projection)
 
     logger.info(f"text encoder TT-NN runtime: {time.time() - start_time}")
     logger.info("text encoder done...")
 
-    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output.hidden_states[-2])[0])
+    print(f"TT LIST LEN: {len(tt_sequence_output)}")
+
+    tt_sequence_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_sequence_output[-3])[0])
     tt_projected_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_projected_output)[0])
 
     # debug
