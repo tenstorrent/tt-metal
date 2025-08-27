@@ -242,10 +242,6 @@ RunTimeOptions::RunTimeOptions() {
         force_context_reinit = true;
     }
 
-    if (getenv("TT_METAL_FABRIC_BLACKHOLE_TWO_ERISC")) {
-        this->enable_2_erisc_mode_with_fabric = true;
-    }
-
     if (getenv("TT_METAL_LOG_KERNELS_COMPILE_COMMANDS")) {
         this->log_kernels_compilation_commands = true;
     }
