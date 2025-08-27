@@ -2120,7 +2120,8 @@ def test_binary_subtile_scalar_bcast(a_shape, b_shape, device):
 @pytest.mark.parametrize(
     "a_shape, b_shape",
     [
-        [[1, 1, 320, 1], [1, 1, 1, 320]],
+        [[1, 1, 9600, 1], [1, 1, 1, 9600]],
+        [[1, 1, 1, 9600], [1, 1, 9600, 1]],
         # a col, b row
         [[1, 1, 320, 1], [1, 4, 1, 320]],
         [[1, 1, 320, 1], [4, 1, 1, 320]],
@@ -2149,9 +2150,11 @@ def test_binary_subtile_row_b_col_a_bcast(a_shape, b_shape, device):
     torch_input_tensor_a, input_tensor_a = rand_bf16_gen(a_shape, device)
     torch_input_tensor_b, input_tensor_b = rand_bf16_gen(b_shape, device)
 
-    torch_output_tensor = torch_input_tensor_a + torch_input_tensor_b
-
-    output_tensor = ttnn.add(input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None)
+    torch_output_tensor = torch_input_tensor_a - torch_input_tensor_b
+    # add is non associative, so we use subtract to test the bcast because it is associative
+    output_tensor = ttnn.subtract(
+        input_tensor_a, input_tensor_b, memory_config=ttnn.DRAM_MEMORY_CONFIG, use_legacy=None
+    )
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert output_tensor.shape == torch_output_tensor.shape

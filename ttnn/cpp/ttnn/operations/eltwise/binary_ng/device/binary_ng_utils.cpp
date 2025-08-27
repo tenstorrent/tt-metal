@@ -4,6 +4,7 @@
 
 #include "binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/assert.hpp>
 
 #include <fmt/core.h>
@@ -139,6 +140,11 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
         case KernelName::ComputeRowBcastNg:
             return fmt::format(
                 compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp");
+        case KernelName::ComputeRowColBcastNg:
+            return fmt::format(
+                compute,
+                root_ng,
+                is_sfpu ? "eltwise_binary_sfpu_row_col_bcast.cpp" : "eltwise_binary_row_col_bcast.cpp");
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
@@ -341,6 +347,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case SUB:
             if (dtype == DataType::INT32) {
                 return {"sub_int_tile_init();", "sub_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"sub_int_tile_init();", "sub_uint32_tile"};
             } else if (dtype == DataType::UINT16) {
                 return {"sub_int_tile_init();", "sub_uint16_tile"};
             } else {
@@ -525,7 +533,8 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const
     if (dtype == DataType::UINT32) {
         return std::bit_cast<uint32_t>(scalar);
     }
-    return pack_two_bfloat16_into_uint32({scalar, scalar});
+    uint16_t bf16_bits = (*reinterpret_cast<const uint32_t*>(&scalar)) >> 16;
+    return pack_two_bfloat16_into_uint32({bf16_bits, bf16_bits});
 }
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);

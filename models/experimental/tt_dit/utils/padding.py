@@ -241,3 +241,27 @@ def pad_qkv_biases(
     padded_v_bias = pad_qkv_bias(v_bias)
 
     return padded_q_bias, padded_k_bias, padded_v_bias
+
+
+def get_padded_vision_seq_len(N, chunk_size_lcm, num_devices):
+    divisor = chunk_size_lcm * num_devices
+
+    # Calculate padding needed to make seq_len divisible by both tile size and num_devices
+    padded_seq_len = math.ceil(N / divisor) * divisor
+    return padded_seq_len
+
+
+def pad_vision_seq_parallel(tensor, chunk_size_lcm, num_devices):
+    """
+    Sequence parallelism shards the vision tensor in dim2.
+    dim2 must be divisible by tile size and num_devices.
+    """
+    seq_len = tensor.shape[2]
+    padded_seq_len = get_padded_vision_seq_len(seq_len, chunk_size_lcm, num_devices)
+    pad_len = padded_seq_len - seq_len
+
+    # Pad the sequence length dimension (dim2) on the right
+    if pad_len > 0:
+        tensor = torch.nn.functional.pad(tensor, (0, 0, 0, pad_len))
+
+    return tensor

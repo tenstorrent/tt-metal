@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 import ttnn
 
-from tests.ttnn.utils_for_testing import assert_with_pcc, divup
+from tests.ttnn.utils_for_testing import assert_with_pcc, divup, assert_equal
 
 
 @pytest.mark.parametrize(
@@ -28,7 +28,7 @@ def test_zeros_like(device, input_shape):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, output_tensor)
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
@@ -50,7 +50,7 @@ def test_ones_like(device, input_shape):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, output_tensor)
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
@@ -73,7 +73,7 @@ def test_full_like(device, input_shape, fill_value):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, output_tensor)
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
@@ -96,7 +96,7 @@ def test_full_like_bf8b(device, input_shape, fill_value):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor).to(torch.bfloat16)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    assert_equal(torch_output_tensor, output_tensor)
     assert torch.allclose(torch_output_tensor, output_tensor)
 
 
@@ -136,7 +136,7 @@ def test_full_like_opt_tensor(device, input_shape, fill_value, layout):
     opt_tensor = ttnn.from_device(opt_tensor)
     opt_tensor = ttnn.to_torch(opt_tensor)
 
-    assert_with_pcc(torch_output_tensor, opt_tensor, 0.9999)
+    assert_equal(torch_output_tensor, opt_tensor)
     assert torch.allclose(torch_output_tensor, opt_tensor)
 
 
@@ -154,7 +154,7 @@ def test_ones(device, input_shape):
     assert ttnn.is_tensor_storage_on_device(tensor)
     tensor = ttnn.to_torch(tensor)
 
-    assert_with_pcc(torch_tensor, tensor, 0.9999)
+    assert_equal(torch_tensor, tensor)
     assert torch.allclose(torch_tensor, tensor)
 
 
@@ -172,7 +172,7 @@ def test_zeros(device, input_shape):
     assert ttnn.is_tensor_storage_on_device(tensor)
     tensor = ttnn.to_torch(tensor)
 
-    assert_with_pcc(torch_tensor, tensor, 0.9999)
+    assert_equal(torch_tensor, tensor)
     assert torch.allclose(torch_tensor, tensor)
 
 
@@ -199,7 +199,7 @@ def test_full(device, input_shape, fill_value, layout):
     assert ttnn.is_tensor_storage_on_device(tensor)
     tensor = ttnn.to_torch(tensor)
 
-    assert_with_pcc(torch_tensor, tensor, 0.9999)
+    assert_equal(torch_tensor, tensor)
     assert torch.allclose(torch_tensor, tensor)
 
 
@@ -233,7 +233,7 @@ def test_full_with_opt_tensor(device, input_shape, layout, fill_value):
     assert ttnn.is_tensor_storage_on_device(opt_tensor)
     opt_tensor = ttnn.to_torch(opt_tensor)
 
-    assert_with_pcc(torch_tensor, opt_tensor, 0.9999)
+    assert_equal(torch_tensor, opt_tensor)
     assert torch.allclose(torch_tensor, opt_tensor)
 
 
@@ -260,7 +260,7 @@ def test_full_multi_device(mesh_device, input_shape, fill_value, layout):
     assert ttnn.is_tensor_storage_on_device(tensor)
     output_tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tensor.cpu())]
     for output_tensor in output_tensors:
-        assert_with_pcc(torch_tensor, output_tensor, 0.9999)
+        assert_equal(torch_tensor, output_tensor)
         assert torch.allclose(torch_tensor, output_tensor)
 
 
@@ -300,8 +300,7 @@ def test_arange_tile_layout(device, start, end, step):
     if (start > end and step > 0) or (start < end and step < 0) or (step == 0):
         pytest.skip(f"Skipping invalid case: start={start}, end={end}, step={step}")
 
-    golden_arange = ttnn.get_golden_function(ttnn.arange)
-    torch_output_tensor = golden_arange(start, end, step)
+    torch_output_tensor = torch.arange(start, end, step).bfloat16()
 
     output_tensor = ttnn.arange(start, end, step, device=device, layout=ttnn.TILE_LAYOUT)
     width_dim = int(((abs(end - start) + abs(step) - 1) // abs(step)))
@@ -314,7 +313,10 @@ def test_arange_tile_layout(device, start, end, step):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    if torch_output_tensor.numel() == 0:
+        assert output_tensor.numel() == 0
+    else:
+        assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -333,14 +335,20 @@ def test_arange(device, start, end, step):
     if (start > end and step > 0) or (start < end and step < 0) or (step == 0):
         pytest.skip(f"Skipping invalid case: start={start}, end={end}, step={step}")
 
-    torch_output_tensor = torch.arange(start, end, step)
+    # torch.arange has worse accuracy for bf16 than ttnn for some reason:
+    # https://github.com/tenstorrent/tt-metal/pull/19882#issuecomment-2772903175
+    torch_output_tensor_int = torch.arange(start, end, step, dtype=torch.int32)
+    torch_output_tensor = torch_output_tensor_int.to(torch.bfloat16)
 
     output_tensor = ttnn.arange(start, end, step, dtype=ttnn.bfloat16, device=device)
     assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+    if torch_output_tensor.numel() == 0:
+        assert output_tensor.numel() == 0
+    else:
+        assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(
@@ -358,7 +366,10 @@ def test_arange(device, start, end, step):
 def test_arange_multi_device(mesh_device, start, end, step):
     if (start > end and step > 0) or (start < end and step < 0) or (step == 0):
         pytest.skip(f"Skipping invalid case: start={start}, end={end}, step={step}")
-    torch_output_tensor = torch.arange(start, end, step)
+    # torch.arange has worse accuracy for bf16 than ttnn for some reason:
+    # https://github.com/tenstorrent/tt-metal/pull/19882#issuecomment-2772903175
+    torch_output_tensor_int = torch.arange(start, end, step, dtype=torch.int32)
+    torch_output_tensor = torch_output_tensor_int.to(torch.bfloat16)
 
     output_tensor = ttnn.arange(
         start,
@@ -372,7 +383,10 @@ def test_arange_multi_device(mesh_device, start, end, step):
     output_tensor = ttnn.from_device(output_tensor)
     output_tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output_tensor.cpu())]
     for output_tensor in output_tensors:
-        assert_with_pcc(torch_output_tensor, output_tensor, 0.9999)
+        if torch_output_tensor.numel() == 0:
+            assert output_tensor.numel() == 0
+        else:
+            assert_equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize(

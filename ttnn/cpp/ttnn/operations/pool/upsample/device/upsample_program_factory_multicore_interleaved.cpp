@@ -17,6 +17,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 namespace ttnn::operations::upsample {
 
@@ -115,12 +116,12 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
     const bool src_size_is_power_of_two = tt::tt_metal::is_power_of_two_at_least_32(aligned_input_unit_size);
     const uint32_t src_log2_size = src_size_is_power_of_two ? (std::uint32_t)log2(aligned_input_unit_size) : 0;
 
-    const std::vector<uint32_t> reader_compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)src0_cb_index,
-        (std::uint32_t)src_is_dram,
         (std::uint32_t)aligned_input_unit_size,
-        (std::uint32_t)src_size_is_power_of_two,
-        (std::uint32_t)src_log2_size};
+    };
+
+    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
 
     const tt::tt_metal::KernelHandle unary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -137,10 +138,7 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
 
     std::vector<uint32_t> writer_compile_time_args = {
         (std::uint32_t)output_cb_index,
-        (std::uint32_t)dst_is_dram,
         (std::uint32_t)writer_unit_size,
-        (std::uint32_t)dst_size_is_power_of_two,
-        (std::uint32_t)dst_log2_size,
         (std::uint32_t)scale_factor_h,
         (std::uint32_t)scale_factor_w,
         (std::uint32_t)output_shape[1],
@@ -163,6 +161,8 @@ tt::tt_metal::operation::ProgramWithCallbacks upsample_multi_core_interleaved(
         writer_compile_time_args.push_back((std::uint32_t)block_height);
         writer_compile_time_args.push_back(num_units_per_output_stick);
     }
+
+    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_time_args);
 
     const std::map<std::string, std::string> kernel_defines;
     const tt::tt_metal::KernelHandle unary_writer_kernel_id = tt::tt_metal::CreateKernel(
