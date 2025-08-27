@@ -383,8 +383,6 @@ void gen_cmds(
     CoreRange worker_cores,
     DeviceData& device_data,
     uint32_t page_size) {
-    uint32_t total_size_bytes = 0;
-    uint32_t buffer_size = prefetcher_buffer_size_g - page_size;  // for terminate
     uint32_t cmd_count = 0;
 
     switch (test_type_g) {
@@ -490,7 +488,7 @@ int main(int argc, char** argv) {
         uint32_t dram_data_addr = l1_buf_base;
         uint32_t l1_data_addr = l1_buf_base;
 
-        // Seperate Buffer space for paged write testing to not conflict with dispatch or prefetch buffers in L1
+        // Separate Buffer space for paged write testing to not conflict with dispatch or prefetch buffers in L1
         if (paged_test) {
             // Seems like 16B alignment is required otherwise mismatches in readback. Linear writes only target 16B
             // aligned transfer sizes too. It's okay for these not to be, the random calc below will align final
@@ -543,7 +541,8 @@ int main(int argc, char** argv) {
         // Generate commands once and write them to prefetcher core.
         vector<uint32_t> cmds;
         gen_cmds(device, cmds, all_workers_g, device_data, dispatch_buffer_page_size_g);
-        llrt::write_hex_vec_to_core(device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
+            device->id(), phys_spoof_prefetch_core, cmds, l1_buf_base);
 
         const uint32_t spoof_prefetch_core_sem_0_id =
             tt_metal::CreateSemaphore(program, {spoof_prefetch_core}, dispatch_buffer_pages);

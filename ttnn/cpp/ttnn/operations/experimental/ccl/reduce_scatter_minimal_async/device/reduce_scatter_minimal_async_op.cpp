@@ -289,7 +289,11 @@ tt::tt_metal::operation::Hash ReduceScatterMinimalAsync::compute_program_hash(
         this->topology,
         this->barrier_semaphore.has_value(),
         this->using_persistent_buffers,
-        this->sub_device_id,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->cluster_axis,
         this->chunks_per_sync,
         this->num_workers_per_link,
@@ -321,6 +325,9 @@ Tensor reduce_scatter_minimal_async_impl(
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "reduce_scatter_minimal_async op is only supported for Fast Dispatch");
+
+    int32_t rank = input_tensor.logical_shape().rank();
+    int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
     // For reduce_scatter_minimal_async_impl, we need to calculate the ring size based on cluster_axis
     // Since we don't have a specific coordinate here, we use the maximum possible devices
@@ -360,7 +367,7 @@ Tensor reduce_scatter_minimal_async_impl(
     return tt::tt_metal::operation::run(
                ttnn::ReduceScatterMinimalAsync(
                    devices,
-                   dim,
+                   scatter_dim,
                    num_links,
                    num_devices,
                    memory_config.value_or(input_tensor.memory_config()),

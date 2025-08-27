@@ -8,7 +8,7 @@
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
 #include "tt_metal/hw/inc/dataflow_api.h"
 #include "tt_metal/hw/inc/dataflow_api_addrgen.h"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_datamover_channels.hpp"
 
@@ -35,14 +35,16 @@ FORCE_INLINE bool connect_is_requested(uint32_t cached) {
 
 template <uint8_t MY_ETH_CHANNEL, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void establish_worker_connection(
-    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface) {
+    tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
+        local_sender_channel_worker_interface) {
     local_sender_channel_worker_interface.template cache_producer_noc_addr<MY_ETH_CHANNEL>();
     local_sender_channel_worker_interface.notify_worker_of_read_counter_update();
 }
 
 template <uint8_t MY_ETH_CHANNEL, uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void check_worker_connections(
-    tt::tt_fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>& local_sender_channel_worker_interface,
+    tt::tt_fabric::EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, SENDER_NUM_BUFFERS>&
+        local_sender_channel_worker_interface,
     bool& channel_connection_established,
     uint32_t stream_id) {
     if (!channel_connection_established) {

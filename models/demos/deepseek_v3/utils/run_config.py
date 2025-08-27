@@ -8,23 +8,31 @@ from enum import Enum
 from types import NoneType
 from typing import Any, Callable, overload
 
+from loguru import logger
+
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase
+from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, OpConfigBase, SavedWeight
 
 MESH_DEVICE_STATE_DICT_KEY = "mesh_device"
 
-WeightConfig = dict[str, "WeightConfig | str | None"] | list["WeightConfig | str | None"]
+WeightConfig = (
+    dict[str, "WeightConfig | SavedTensor | None"]
+    | list["WeightConfig | SavedTensor | None"]
+    | tuple["WeightConfig | SavedTensor | None"]  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+)
 
 _PRIMITIVE_COPYABLE_TYPES = bool | int | float | complex | str | bytes | None | Enum
 # In general, we require ModelConfig to be serializable (NOTE: mesh device and classes that hold references to the objects on it are NOT serializable).
 ModelPrefillConfig = (
     dict[str, "ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
     | list["ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["ModelPrefillConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
     | OpConfigBase
 )
 ModelDecodeConfig = (
     dict[str, "ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
     | list["ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["ModelDecodeConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
     | OpConfigBase
 )
 
@@ -33,11 +41,13 @@ ModelState = Any  # Type of the model state
 RunPrefillConfig = (
     dict[str, "RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
     | list["RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["RunPrefillConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
     | OpConfigBase
 )
 RunDecodeConfig = (
     dict[str, "RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
     | list["RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES"]
+    | tuple["RunDecodeConfig | _PRIMITIVE_COPYABLE_TYPES", ...]
     | OpConfigBase
 )
 
@@ -86,7 +96,7 @@ def create_run_config(model_config, weight_config, *model_states):
         mb_mesh_device=None,
     )
 
-    print(f"run config: {_convert_run_config_to_pretty_print(run_config)}")
+    logger.info(f"run config: {_convert_run_config_to_pretty_print(run_config)}")
 
     return run_config
 
@@ -116,8 +126,10 @@ def _merge_model_config_state_items(model_config_item: Any, state_item: Any, mb_
 
 
 def _merge_run_config(model_state_config_item: Any, weight_config_item: Any, _: ttnn.Device | None) -> Any:
-    if isinstance(model_state_config_item, FromWeightConfig) and isinstance(weight_config_item, str):
-        return ttnn.load_tensor(weight_config_item, device=model_state_config_item.mesh_device)
+    if isinstance(model_state_config_item, FromWeightConfig) and isinstance(
+        weight_config_item, SavedWeight
+    ):  # TODO: bring regular tensor saving back once Issue #26763 is resolved
+        return load_weight(weight_config_item, model_state_config_item.mesh_device)
 
     if weight_config_item is None:
         assert not isinstance(
@@ -320,3 +332,17 @@ def _convert_run_config_to_pretty_print(run_config_item: Any, indent: int = 0) -
 def is_op_config(obj: Any) -> bool:
     """Check if the object is an op config instance."""
     return issubclass(type(obj), OpConfigBase) and is_dataclass(obj)
+
+
+def load_weight(saved_weight: SavedWeight, device: ttnn.Device) -> ttnn.Tensor:
+    """
+    Load a weight tensor from a SavedWeight object to a given mesh device.
+    """
+
+    return ttnn.load_tensor(
+        saved_weight.path,
+        enable_multihost_format=True,
+    ).to(
+        device=device,
+        mem_config=saved_weight.memory_config,
+    )

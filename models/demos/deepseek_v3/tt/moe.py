@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from typing import cast
 
 import torch
 from transformers.configuration_utils import PretrainedConfig
@@ -12,6 +13,7 @@ from models.demos.deepseek_v3.tt.experts import Experts as MoEExperts
 from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.abstract_module import AbstractModule
 from models.demos.deepseek_v3.utils.config_dataclass import (
+    AllGatherAsyncConfig,
     AllToAllCombineConfig,
     AllToAllDispatchConfig,
     MulConfig,
@@ -39,20 +41,19 @@ class MoE(SharedStateAddOn, AbstractModule):
     def convert_weights(
         cls,
         hf_config: PretrainedConfig,
-        state_dict: dict[str, torch.Tensor],
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
         output_path: Path,
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
-        weight_config = {}
+        assert (
+            len(state_dicts) == 1 and state_dicts[0] is not None
+        ), f"MoE expects exactly one non-padding state dict, got {len(state_dicts)}"
+        (state_dict,) = cast(tuple[dict[str, torch.Tensor]], state_dicts)
 
-        # Create subdirectories for each submodule
-        moe_gate_path = output_path / "moe_gate"
-        moe_experts_path = output_path / "moe_experts"
-
-        weight_config["moe_gate"] = MoEGate.convert_weights(hf_config, state_dict, moe_gate_path, mesh_device, "gate.")
-        weight_config["moe_experts"] = MoEExperts.convert_weights(hf_config, state_dict, moe_experts_path, mesh_device)
-
-        return weight_config
+        return {
+            "moe_gate": MoEGate.convert_weights(hf_config, state_dict, output_path / "moe_gate", mesh_device, "gate."),
+            "moe_experts": MoEExperts.convert_weights(hf_config, state_dict, output_path / "moe_experts", mesh_device),
+        }
 
     @classmethod
     def create_state(
@@ -90,16 +91,18 @@ class MoE(SharedStateAddOn, AbstractModule):
             "expert_mapping_tensors": expert_mapping_tensors,
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
-                "global_semaphore": ccl.get_semaphore(0),
                 "num_links": 1,
             },
             "all_to_all_combine": {
-                "global_semaphore": ccl.get_semaphore(0),
                 "num_links": 1,
             },
             "final_output_reduce_scatter": {
-                "from_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
-                "to_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
+                "from_remote_multi_device_global_semaphore": ccl.get_from_sem(1),
+                "to_remote_multi_device_global_semaphore": ccl.get_to_sem(1),
+                "num_links": ccl.get_max_links(1),
+            },
+            "revert_tp": {
+                "multi_device_global_semaphore": ccl.get_gather_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
         }
@@ -155,6 +158,13 @@ class MoE(SharedStateAddOn, AbstractModule):
                 memory_config=memory_config,
                 topology=ttnn.Topology.Linear,
             ),
+            "revert_tp": AllGatherAsyncConfig(
+                mesh_device=mesh_device,
+                dim=-1,  # Last dimension
+                memory_config=memory_config,
+                cluster_axis=1,
+                topology=ttnn.Topology.Linear,
+            ),
         }
 
     @classmethod
@@ -204,7 +214,8 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        assert x.memory_config() == cfg["input_memory_config"]
+        x = ttnn.experimental.all_gather_async(x, **cfg["revert_tp"])
+
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
         batch_size_per_device = x.shape[
             -2

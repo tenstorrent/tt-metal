@@ -36,8 +36,8 @@ static const char* TT_METAL_KERNEL_PATH_ENV_VAR = "TT_METAL_KERNEL_PATH";
 // Set this var to change the cache dir.
 static const char* TT_METAL_CACHE_ENV_VAR = "TT_METAL_CACHE";
 // Used for demonstration purposes and will be removed in the future.
-static const char* TT_METAL_FD_FABRIC_DEMO = "TT_METAL_FD_FABRIC";
-static const char* TT_METAL_VISIBLE_DEVICES_ENV_VAR = "TT_METAL_VISIBLE_DEVICES";
+// Env variable to override the core grid configuration
+static const char* TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR = "TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE";
 
 RunTimeOptions::RunTimeOptions() {
     const char* root_dir_str = std::getenv(TT_METAL_HOME_ENV_VAR);
@@ -60,25 +60,16 @@ RunTimeOptions::RunTimeOptions() {
     }
     this->system_kernel_dir = "/usr/share/tenstorrent/kernels/";
 
-    const char* visible_devices_str = std::getenv(TT_METAL_VISIBLE_DEVICES_ENV_VAR);
-    if (visible_devices_str != nullptr) {
-        this->is_visible_devices_env_var_set = true;
-        std::string devices_string(visible_devices_str);
-        size_t pos = 0;
-        while ((pos = devices_string.find(',')) != std::string::npos) {
-            std::string device_str = devices_string.substr(0, pos);
-            this->visible_devices.push_back(std::stoi(device_str));
-            devices_string.erase(0, pos + 1);
-        }
-        if (!devices_string.empty()) {
-            this->visible_devices.push_back(std::stoi(devices_string));
-        }
-    }
-
     const char* custom_fabric_mesh_graph_desc_path_str = std::getenv("TT_MESH_GRAPH_DESC_PATH");
     if (custom_fabric_mesh_graph_desc_path_str != nullptr) {
         this->is_custom_fabric_mesh_graph_desc_path_set = true;
         this->custom_fabric_mesh_graph_desc_path = std::string(custom_fabric_mesh_graph_desc_path_str);
+    }
+
+    const char* core_grid_override_todeprecate_str = std::getenv(TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR);
+    if (core_grid_override_todeprecate_str != nullptr) {
+        this->is_core_grid_override_todeprecate_env_var_set = true;
+        this->core_grid_override_todeprecate = std::string(core_grid_override_todeprecate_str);
     }
 
     build_map_enabled = (getenv("TT_METAL_KERNEL_MAP") != nullptr);
@@ -283,6 +274,14 @@ const std::string& RunTimeOptions::get_kernel_dir() const {
     return this->kernel_dir;
 }
 
+const std::string& RunTimeOptions::get_core_grid_override_todeprecate() const {
+    if (!this->is_core_grid_override_todeprecate()) {
+        TT_THROW("Env var {} is not set.", TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE_ENV_VAR);
+    }
+
+    return this->core_grid_override_todeprecate;
+}
+
 const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }
 
 void RunTimeOptions::ParseWatcherEnv() {
@@ -316,7 +315,8 @@ void RunTimeOptions::ParseWatcherEnv() {
         watcher_pause_str,
         watcher_ring_buffer_str,
         watcher_stack_usage_str,
-        watcher_dispatch_str};
+        watcher_dispatch_str,
+        watcher_eth_link_status_str};
     for (const std::string& feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;

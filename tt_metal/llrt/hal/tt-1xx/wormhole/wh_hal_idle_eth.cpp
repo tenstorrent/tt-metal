@@ -5,12 +5,8 @@
 #define COMPILE_FOR_IDLE_ERISC
 
 #include "dev_msgs.h"
-#include <algorithm>
-#include <cstddef>
 #include <cstdint>
-#include <vector>
 
-#include "core_config.h"
 #include "dev_mem_map.h"
 #include "hal_types.hpp"
 #include "llrt_common/mailbox.hpp"
@@ -23,6 +19,9 @@
 #define GET_IERISC_MAILBOX_ADDRESS_HOST(x) ((std::uint64_t)&(((mailboxes_t*)MEM_IERISC_MAILBOX_BASE)->x))
 
 namespace tt::tt_metal::wormhole {
+
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
+#include "core_config.h"
 
 HalCoreInfoType create_idle_eth_mem_map() {
     std::uint32_t max_alignment = std::max(DRAM_ALIGNMENT, L1_ALIGNMENT);
@@ -38,7 +37,8 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_IERISC_MAILBOX_BASE;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = GET_IERISC_MAILBOX_ADDRESS_HOST(launch);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(watcher);
-    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DPRINT)] = GET_IERISC_MAILBOX_ADDRESS_HOST(dprint_buf);
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] =
+        GET_IERISC_MAILBOX_ADDRESS_HOST(dprint_buf);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = GET_IERISC_MAILBOX_ADDRESS_HOST(profiler);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] = MEM_IERISC_MAP_END;
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::UNRESERVED)] =
@@ -58,7 +58,7 @@ HalCoreInfoType create_idle_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::MAILBOX)] = MEM_IERISC_MAILBOX_SIZE;
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH)] = sizeof(launch_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::WATCHER)] = sizeof(watcher_msg_t);
-    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT)] = sizeof(dprint_buf_msg_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::DPRINT_BUFFERS)] = sizeof(dprint_buf_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::PROFILER)] = sizeof(profiler_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::KERNEL_CONFIG)] =
         L1_KERNEL_CONFIG_SIZE;  // TODO: this is wrong, need idle eth specific value

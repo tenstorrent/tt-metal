@@ -139,6 +139,11 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_sfpu) {
         case KernelName::ComputeRowBcastNg:
             return fmt::format(
                 compute, root_ng, is_sfpu ? "eltwise_binary_sfpu_row_bcast.cpp" : "eltwise_binary_row_bcast.cpp");
+        case KernelName::ComputeRowColBcastNg:
+            return fmt::format(
+                compute,
+                root_ng,
+                is_sfpu ? "eltwise_binary_sfpu_row_col_bcast.cpp" : "eltwise_binary_row_col_bcast.cpp");
         default: __builtin_unreachable();  // GCC 12 doesn't compile even though we exhaustively match
     }
 }
@@ -190,7 +195,7 @@ OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<EnumT>) : b
             process_lhs = unary::UnaryOpType::NEZ;
             process_rhs = unary::UnaryOpType::NEZ;
             binary_op = EnumT::ADD;
-            postprocess = unary::UnaryOpType::GTZ;
+            postprocess = unary::UnaryOpType::NEZ;
             break;
         case BinaryOpType::LOGICAL_XOR:
             process_lhs = unary::UnaryOpType::NEZ;
@@ -341,6 +346,8 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
         case SUB:
             if (dtype == DataType::INT32) {
                 return {"sub_int_tile_init();", "sub_int32_tile"};
+            } else if (dtype == DataType::UINT32) {
+                return {"sub_int_tile_init();", "sub_uint32_tile"};
             } else if (dtype == DataType::UINT16) {
                 return {"sub_int_tile_init();", "sub_uint16_tile"};
             } else {
@@ -356,7 +363,12 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             }
         case DIV: return {"div_binary_tile_init();", "div_binary_tile"};
         case POWER: return {"power_binary_tile_init();", "power_binary_tile"};
-        case RSUB: return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+        case RSUB:
+            if (dtype == DataType::INT32) {
+                return {"rsub_int32_tile_init();", "rsub_int32_tile"};
+            } else {
+                return {"rsub_binary_tile_init();", "rsub_binary_tile"};
+            }
         case GCD: return {"gcd_tile_init();", "gcd_tile"};
         case LCM: return {"lcm_tile_init();", "lcm_tile"};
         case LEFT_SHIFT:

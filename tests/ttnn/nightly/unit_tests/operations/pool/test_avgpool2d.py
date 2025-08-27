@@ -14,11 +14,11 @@ from models.utility_functions import is_blackhole
 def correct_torch_asym_pad(
     torch_output, input_shape, kernel_size, stride, padding, divisor_override, count_include_pad
 ):
-    in_n, in_c, in_h, in_w = input_shape
+    _, _, in_h, in_w = input_shape
     pad_t, pad_b, pad_l, pad_r = padding
     kernel_h, kernel_w = kernel_size
     stride_h, stride_w = stride
-    out_n, out_c, out_h, out_w = torch_output.shape
+    _, _, out_h, out_w = torch_output.shape
     padded_h = in_h + pad_t + pad_b
     padded_w = in_w + pad_l + pad_r
 
@@ -95,6 +95,7 @@ def run_avg_pool2d(
     run_twice=False,
     dtype=ttnn.bfloat16,
     nightly_skips=True,
+    skips_enabled=True,
 ):
     in_n, in_c, in_h, in_w = input_shape
     kernel_h, kernel_w = kernel_size
@@ -116,15 +117,18 @@ def run_avg_pool2d(
     else:
         raise ValueError(f"Padding must be 2D or 4D tuple, got {len(padding)}D")
 
-    # skips to avoid unimportant combinations
-    if divisor_override is not None:
-        if count_include_pad or ceil_mode:
-            pytest.skip("divisor_override paired with count_include_pad or ceil_mode is trivial and not useful to test")
-    if count_include_pad and padding == (0, 0):
-        pytest.skip("count_include_pad paired with no padding is trivial and not useful to test")
-    if ceil_mode:
-        if stride == (1, 1):
-            pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
+    if skips_enabled:
+        # skips to avoid unimportant combinations
+        if divisor_override is not None:
+            if count_include_pad or ceil_mode:
+                pytest.skip(
+                    "divisor_override paired with count_include_pad or ceil_mode is trivial and not useful to test"
+                )
+        if count_include_pad and padding == (0, 0):
+            pytest.skip("count_include_pad paired with no padding is trivial and not useful to test")
+        if ceil_mode:
+            if stride == (1, 1):
+                pytest.skip("ceiling mode with stride (1, 1) is trivial and not useful to test")
 
     # skips to speed up nightly test
     if nightly_skips:
@@ -143,14 +147,10 @@ def run_avg_pool2d(
     if (in_h + pad_h) < kernel_h or (in_w + pad_w) < kernel_w:
         pytest.skip("kernel is too large for the padded tensor")
 
-    out_n = in_n
-    out_c = (
-        max(in_c, 32) if dtype == ttnn.bfloat8_b else in_c
-    )  # TTNN will pad the output channels to 32 for bfloat8_b only
     ceil_mode_out_shape_adj = False
     if ceil_mode:
-        out_h = math.ceil((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.ceil((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        out_h = math.ceil((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.ceil((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
         if ((out_h - 1) * stride_h) >= (in_h + pad_t):
             ceil_mode_out_shape_adj = True
             out_h -= 1
@@ -158,8 +158,8 @@ def run_avg_pool2d(
             ceil_mode_out_shape_adj = True
             out_w -= 1
     else:
-        out_h = math.floor((in_h + pad_h - (dilation_h * kernel_h - 1) - 1) / stride_h) + 1
-        out_w = math.floor((in_w + pad_w - (dilation_w * kernel_w - 1) - 1) / stride_w) + 1
+        out_h = math.floor((in_h + pad_h - dilation_h * (kernel_h - 1) - 1) / stride_h) + 1
+        out_w = math.floor((in_w + pad_w - dilation_w * (kernel_w - 1) - 1) / stride_w) + 1
 
     # using non-zero seed to avoid random spike in floating point error on single element of the
     # 1x256x56x56 tensor with divisor_override=5 and 5x5 kernel resulting in rtol=0.015 for that element
@@ -241,9 +241,10 @@ def run_avg_pool2d(
 
     # adjust the TTNN output to match the expected shape
     ttnn_output = ttnn.to_torch(ttnn_output)
-    ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
+    ttnn_output = ttnn_output.reshape(
+        torch_output.shape[0], torch_output.shape[2], torch_output.shape[3], torch_output.shape[1]
+    )  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
-    ttnn_output = ttnn_output[:, :in_c, :, :]
 
     # apply correction to TORCH output for asymmetric padding when needed
     torch_needs_correction = padding_is_4d and divisor_override is None and count_include_pad is False
@@ -287,11 +288,13 @@ def run_avg_pool2d(
         [1, 256, 56, 56],
         [1, 512, 28, 28],
         [1, 192, 264, 40],
-        # wide non-4 multiple tests
+        # # wide non-4 multiple tests
         [1, 800, 32, 32],
         [1, 576, 32, 32],
-        # C=16 test
+        # C partial tile test
         [1, 16, 12, 12],
+        [1, 1, 56, 56],
+        [2, 290, 10, 10],
     ),
 )
 @pytest.mark.parametrize(

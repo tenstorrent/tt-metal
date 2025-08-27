@@ -81,7 +81,6 @@ target_sources(
             api/tt-metalium/buffer_types.hpp
             api/tt-metalium/circular_buffer_constants.h
             api/tt-metalium/constants.hpp
-            api/tt-metalium/fabric_edm_packet_header.hpp
             api/tt-metalium/fabric_edm_types.hpp
             api/tt-metalium/edm_fabric_counters.hpp
             core_descriptors/blackhole_140_arch.yaml
@@ -97,6 +96,7 @@ target_sources(
             fabric/mesh_graph_descriptors/single_galaxy_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml
             fabric/mesh_graph_descriptors/tg_mesh_graph_descriptor.yaml
+            fabric/fabric_edm_packet_header.hpp
             ${FABRIC_HW_INC}
             impl/dispatch/kernels/cq_commands.hpp
             impl/dispatch/kernels/cq_common.hpp
@@ -232,7 +232,6 @@ if(TT_INSTALL)
             reflect
             enchantum
             TracyClient
-            small_vector
             tt-logger
         EXPORT Metalium
         FILE_SET

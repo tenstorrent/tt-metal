@@ -267,11 +267,31 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     env_(env),
     core_id_(build_config.processor_id),
     is_fw_(build_config.is_fw),
-    dispatch_message_addr_(build_config.dispatch_message_addr) {}
+    dispatch_message_addr_(build_config.dispatch_message_addr),
+    out_path_(build_config.is_fw ? env_.out_firmware_root_ : env_.out_kernel_root_),
+    cflags_(env.cflags_),
+    defines_(env.defines_),
+    includes_(env.includes_),
+    lflags_(env.lflags_),
+    default_compile_opt_level_("Os"),
+    default_linker_opt_level_("Os"),
+    process_defines_at_compile_(true) {
+    // Anything that is arch-specific should be added to HalJitBuildQueryInterface instead of here.
+    if (build_config.core_type == HalProgrammableCoreType::TENSIX &&
+        build_config.processor_class == HalProcessorClassType::COMPUTE) {
+        this->default_compile_opt_level_ = "O3";
+        this->default_linker_opt_level_ = "O3";
+        this->includes_ += "-I" + env_.gpp_include_dir_ + " ";
+        this->process_defines_at_compile_ = false;
+    } else if (build_config.core_type == HalProgrammableCoreType::ACTIVE_ETH && build_config.is_cooperative) {
+        // Only cooperative active ethernet needs "-L <root>/tt_metal/hw/toolchain",
+        // because its linker script depends on some files in that directory.
+        // Maybe we should move the dependencies to runtime/hw/toolchain/<arch>/?
+        fmt::format_to(std::back_inserter(this->lflags_), "-L{}/tt_metal/hw/toolchain/ ", env_.root_);
+    }
 
-// Fill in common state derived from the default state set up in the constructors
-void JitBuildState::finish_init(HalProgrammableCoreType core_type, HalProcessorClassType processor_class) {
-    HalJitBuildQueryInterface::Params params{this->is_fw_, core_type, processor_class, this->core_id_};
+    HalJitBuildQueryInterface::Params params{
+        this->is_fw_, build_config.core_type, build_config.processor_class, this->core_id_};
     const auto& jit_build_query = tt_metal::MetalContext::instance().hal().get_jit_build_query();
 
     this->target_name_ = jit_build_query.target_name(params);
@@ -345,73 +365,6 @@ void JitBuildState::finish_init(HalProgrammableCoreType core_type, HalProcessorC
     }
 }
 
-JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
-    JitBuildState(env, build_config) {
-    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid data movement processor");
-    this->lflags_ = env.lflags_;
-    this->cflags_ = env.cflags_;
-    this->default_compile_opt_level_ = "Os";
-    this->default_linker_opt_level_ = "Os";
-    this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
-    this->includes_ = env_.includes_;
-    this->defines_ = env_.defines_;
-    this->process_defines_at_compile = true;
-
-    finish_init(HalProgrammableCoreType::TENSIX, HalProcessorClassType::DM);
-}
-
-JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
-    JitBuildState(env, build_config) {
-    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 3, "Invalid compute processor");
-    this->lflags_ = env.lflags_;
-    this->cflags_ = env.cflags_;
-    this->default_compile_opt_level_ = "O3";
-    this->default_linker_opt_level_ = "O3";
-    this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
-    this->defines_ = env_.defines_;
-    this->includes_ = env_.includes_ + "-I" + env_.gpp_include_dir_ + " ";
-    this->process_defines_at_compile = false;
-
-    finish_init(HalProgrammableCoreType::TENSIX, HalProcessorClassType::COMPUTE);
-}
-
-JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
-    JitBuildState(env, build_config) {
-    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid active ethernet processor");
-    const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-    this->lflags_ = env.lflags_;
-    this->cflags_ = env.cflags_;
-    this->default_compile_opt_level_ = "Os";
-    this->default_linker_opt_level_ = "Os";
-    this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
-    this->includes_ = env_.includes_;
-    this->defines_ = env_.defines_;
-    if (build_config.is_cooperative) {
-        // Only cooperative active ethernet needs "-L <root>/tt_metal/hw/toolchain",
-        // because its linker script depends on some files in that directory.
-        // Maybe we should move the dependencies to runtime/hw/toolchain/<arch>/?
-        fmt::format_to(std::back_inserter(this->lflags_), "-L{}/tt_metal/hw/toolchain/ ", env_.root_);
-    }
-    this->process_defines_at_compile = true;
-
-    finish_init(HalProgrammableCoreType::ACTIVE_ETH, HalProcessorClassType::DM);
-}
-
-JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
-    JitBuildState(env, build_config) {
-    TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid idle ethernet processor");
-    this->lflags_ = env.lflags_;
-    this->cflags_ = env.cflags_;
-    this->default_compile_opt_level_ = "Os";
-    this->default_linker_opt_level_ = "Os";
-    this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
-    this->includes_ = env_.includes_;
-    this->defines_ = env_.defines_;
-    this->process_defines_at_compile = true;
-
-    finish_init(HalProgrammableCoreType::IDLE_ETH, HalProcessorClassType::DM);
-}
-
 void JitBuildState::compile_one(
     const string& log_file,
     const string& out_dir,
@@ -424,9 +377,13 @@ void JitBuildState::compile_one(
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
 
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
+        cmd += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
+    }
+
     if (settings) {
         // Append user args
-        if (process_defines_at_compile) {
+        if (process_defines_at_compile_) {
             settings->process_defines([&defines](const string& define, const string& value) {
                 defines += fmt::format("-D{}='{}' ", define, value);
             });
@@ -487,7 +444,7 @@ void JitBuildState::link(const string& log_file, const string& out_dir, const Ji
     string lflags = this->lflags_;
     if (tt::tt_metal::MetalContext::instance().rtoptions().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
-        lflags += "-save-temps -fdump-tree-all -fdump-rtl-all ";
+        lflags += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
     }
 
     // Append user args
@@ -573,34 +530,16 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     write_successful_jit_build_marker(build, settings);
 }
 
-void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* settings) {
-    // ZoneScoped;
+void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
     std::vector<std::shared_future<void>> events;
-    for (size_t i = 0; i < build_set.size(); ++i) {
+    for (auto& build : build_subset) {
         // Capture the necessary objects by reference
-        auto& build = build_set[i];
-        launch_build_step([build, settings] { build->build(settings); }, events);
+        launch_build_step([&build, settings] { build.build(settings); }, events);
     }
 
     sync_events(events);
-    for (size_t i = 0; i < build_set.size(); ++i) {
-        auto& build = build_set[i];
-        write_successful_jit_build_marker(*build, settings);
-    }
-}
-
-void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSettings* settings) {
-    std::vector<std::shared_future<void>> events;
-    for (size_t i = 0; i < build_subset.size; ++i) {
-        // Capture the necessary objects by reference
-        auto& build = build_subset.build_ptr[i];
-        launch_build_step([build, settings] { build->build(settings); }, events);
-    }
-
-    sync_events(events);
-    for (size_t i = 0; i < build_subset.size; ++i) {
-        auto& build = build_subset.build_ptr[i];
-        write_successful_jit_build_marker(*build, settings);
+    for (auto& build : build_subset) {
+        write_successful_jit_build_marker(build, settings);
     }
 }
 

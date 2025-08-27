@@ -54,6 +54,10 @@ struct has_subscript_operator<T, std::void_t<decltype(std::declval<T>()[std::dec
 template <typename T>
 constexpr bool has_subscript_operator_v = has_subscript_operator<T>::value;
 
+// Helper for template-dependent static_assert that only fails when instantiated
+template <typename...>
+constexpr bool always_false_v = false;
+
 // No c++20 == no std::span :(
 template <typename T>
 struct Span {

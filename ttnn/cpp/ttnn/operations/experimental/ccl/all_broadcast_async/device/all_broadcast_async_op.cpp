@@ -32,48 +32,6 @@ void AllBroadcastAsync::validate_with_output_tensors(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "Unsupported memory layout {}.",
         input_tensor.memory_config().memory_layout());
-
-    if (output_tensors.size() > 0) {
-        TT_FATAL(output_tensors.size() == this->ring_size, "Need a persistent output buffer for each output tensor");
-
-        for (uint32_t k = 0; k < output_tensors.size(); k++) {
-            TT_FATAL(output_tensors[k].has_value(), "Persistent output buffer must have value");
-            const auto& output_tensor = output_tensors[k].value();
-
-            TT_FATAL(
-                output_tensor.storage_type() == StorageType::DEVICE, "Operands to all_broadcast need to be on device!");
-            TT_FATAL(
-                output_tensor.layout() == layout,
-                "Error, Output tensor layout should be same as input tensor layout but has {}",
-                output_tensor.layout());
-            TT_FATAL(
-                output_tensor.dtype() == dtype,
-                "Error, Output tensor dtype should be same as input tensor dtype but has {}",
-                output_tensor.dtype());
-            TT_FATAL(
-                output_tensor.tensor_spec().page_config() == input_tensor.tensor_spec().page_config(),
-                "Error, Output tensor page config should be same as input tensor page config but has {}",
-                output_tensor.tensor_spec().page_config());
-            TT_FATAL(
-                output_tensor.memory_config() == this->output_mem_config,
-                "Error, Output tensor memory config should be same as output_mem_config but has {}",
-                output_tensor.memory_config());
-
-            // check the output tensor size
-            auto output_shape = output_tensor.padded_shape();
-            const auto& input_shape = input_tensor.padded_shape();
-            TT_FATAL(
-                output_shape.size() == input_shape.size(),
-                "Error, Output tensor shape should have same number of dimensions as input tensor but has {}",
-                output_shape.size());
-
-            // check memory layout
-            TT_FATAL(
-                output_tensor.memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
-                "Error, Output tensor memory layout should be same as input tensor memory layout but has {}",
-                output_tensor.memory_config().memory_layout());
-        }
-    }
 }
 
 std::vector<ttnn::TensorSpec> AllBroadcastAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -92,14 +50,32 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllBroadcastAsync::create_mes
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const std::vector<Tensor>& input_tensors,
     std::vector<Tensor>& output_tensors) const {
+    auto mesh_device = input_tensors[0].mesh_device();
+    auto sub_device_id = this->sub_device_id;
+
+    auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);
+    const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice);
+    auto subdevices = {subdevice};
+
+    auto init_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    auto final_barrier_semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
+    log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready");
+    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, subdevices);
+    log_debug(tt::LogOp, "All devices are ready, starting program execution");
+
     return ccl::create_mesh_workload_from_programs(
         tensor_coords, input_tensors, output_tensors, [&, this](const ttnn::MeshCoordinate& coord) {
-            return create_program_at(coord, input_tensors, output_tensors);
+            return create_program_at(
+                coord, input_tensors, output_tensors, init_barrier_semaphore, final_barrier_semaphore);
         });
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_at(
-    const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    const MeshCoordinate& coord,
+    const std::vector<Tensor>& input_tensors,
+    std::vector<Tensor>& output_tensors,
+    const GlobalSemaphore& init_barrier_semaphore,
+    const GlobalSemaphore& final_barrier_semaphore) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
     auto mesh_device = input_tensors[0].mesh_device();
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
@@ -144,10 +120,9 @@ tt::tt_metal::operation::ProgramWithCallbacks AllBroadcastAsync::create_program_
         target_ring_size,
         device_index,
         this->topology,
-        this->semaphore,
-        this->barrier_semaphore,
-        this->sub_device_id,
-        this->using_persistent_buffers);
+        final_barrier_semaphore,
+        init_barrier_semaphore,
+        this->sub_device_id);
 }
 
 tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -162,7 +137,11 @@ tt::tt_metal::operation::Hash AllBroadcastAsync::compute_program_hash(const std:
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
-        this->using_persistent_buffers,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         input_shape,
         input_memory_layout,
         input_dtype,
@@ -173,8 +152,6 @@ namespace operations::experimental::ccl {
 
 std::vector<Tensor> all_broadcast_async_impl(
     const Tensor& input_tensor,
-    const GlobalSemaphore& multi_device_global_semaphore,
-    const GlobalSemaphore& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -205,9 +182,6 @@ std::vector<Tensor> all_broadcast_async_impl(
     log_debug(tt::LogOp, "DEBUG: creating line_fabric with num devices: {}, num links: {}", devices.size(), num_links);
     log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
-    // all_broadcast_async currently doesn't support using persistent buffers
-    bool using_persistent_buffers = true;
-
     return tt::tt_metal::operation::run(
         ttnn::AllBroadcastAsync(
             devices,
@@ -215,18 +189,13 @@ std::vector<Tensor> all_broadcast_async_impl(
             num_devices,
             memory_config.value_or(input_tensor.memory_config()),
             ccl_topology,
-            multi_device_global_semaphore,
-            barrier_semaphore,
             sub_device_id,
-            cluster_axis,
-            using_persistent_buffers),
+            cluster_axis),
         {input_tensor});
 }
 
 std::vector<Tensor> all_broadcast_async(
     const Tensor& input_tensor,
-    const GlobalSemaphore& multi_device_global_semaphore,
-    const GlobalSemaphore& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
@@ -234,8 +203,6 @@ std::vector<Tensor> all_broadcast_async(
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id) {
     return all_broadcast_async_impl(
         input_tensor,
-        multi_device_global_semaphore,
-        barrier_semaphore,
         num_links,
         memory_config,
         topology,

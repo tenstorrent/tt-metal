@@ -84,8 +84,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     std::optional<experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset) {
     auto mesh_device = input_tensor[0].mesh_device();
-    const bool is_first_chip = ring_index == 0;
-    const bool is_last_chip = ring_index == ring_size - 1;
+    [[maybe_unused]] const bool is_first_chip = ring_index == 0;
+    [[maybe_unused]] const bool is_last_chip = ring_index == ring_size - 1;
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
@@ -159,7 +159,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_forward_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_forward_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,

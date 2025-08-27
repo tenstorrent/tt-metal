@@ -11,6 +11,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "hal_types.hpp"
 
 namespace tt::tt_metal {
 
@@ -31,14 +32,16 @@ struct transfer_info {
 };
 
 struct kernel_bins_transfer_info {
+    HalProgrammableCoreType core_type;
+    HalProcessorClassType processor_class;
     std::vector<std::uint32_t> dst_base_addrs;  // BRISC, NCRISC, TRISC etc..
     std::vector<std::uint32_t> page_offsets;    // offsets into paged buffer in DRAM
     std::vector<std::uint32_t> lengths;         // WriteLinear lengths
-    std::vector<tt::RISCV> riscvs;              // RISC that each span is targeted for, for binaries
+    std::vector<std::uint32_t> processor_ids;   // processor ids that each span is targeted for, for binaries
 };
 
 struct ProgramTransferInfo {
-    std::uint32_t num_active_cores;
+    std::uint32_t num_active_cores{};
     std::vector<std::tuple<transfer_info_cores, std::uint32_t, kernel_bins_transfer_info>>
         kernel_bins;                         // noc_encoding, num_mcast_dests, transfer_info
     std::vector<std::uint32_t> binary_data;  // Holds binary data for all program kernels

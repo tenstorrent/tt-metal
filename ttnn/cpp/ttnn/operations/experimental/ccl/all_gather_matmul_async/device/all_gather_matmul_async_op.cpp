@@ -197,7 +197,11 @@ tt::tt_metal::operation::Hash AllGatherMatmulAsync::compute_program_hash(
         this->all_gather_async_struct.ring_size,
         this->all_gather_async_struct.output_mem_config,
         this->all_gather_async_struct.topology,
-        this->all_gather_async_struct.sub_device_id,
+        this->all_gather_async_struct.sub_device_id.has_value(),
+        this->all_gather_async_struct.sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  shard_builder::HalProgrammableCoreType::TENSIX, this->all_gather_async_struct.sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->all_gather_async_struct.cluster_axis,
         this->all_gather_async_struct.barrier_semaphore.has_value(),
         this->all_gather_async_struct.using_persistent_buffers,
@@ -267,6 +271,7 @@ std::vector<ttnn::Tensor> all_gather_matmul_async(
         multi_device_global_semaphore,
         sub_device_id,
         /*cluster_axis=*/std::nullopt,
+        false,
         false,
         barrier_semaphore,
         using_persistent_buffers,

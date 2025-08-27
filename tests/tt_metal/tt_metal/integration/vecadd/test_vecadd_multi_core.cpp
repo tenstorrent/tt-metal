@@ -107,9 +107,9 @@ bool vecadd_multi_core(
     std::vector<bfloat16> b_data = create_random_vector_of_bfloat16_native(tile_size * n_tiles * 2, 10, rng());
 
     const uint32_t cir_buffer_title = 4;
-    CBHandle cb_a = MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_0, cir_buffer_title);
-    CBHandle cb_b = MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_1, cir_buffer_title);
-    CBHandle cb_c = MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_2, cir_buffer_title);
+    MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_0, cir_buffer_title);
+    MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_1, cir_buffer_title);
+    MakeCircularBufferBFP16(program, cores, tt::CBIndex::c_2, cir_buffer_title);
 
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)tt::CBIndex::c_0, (std::uint32_t)tt::CBIndex::c_1};
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CBIndex::c_2};
@@ -173,6 +173,7 @@ bool vecadd_multi_core(
     return pass;
 }
 }  // namespace unit_tests_common::vecadd::test_vecadd_multi_core
+
 
 TEST_F(MeshDispatchFixture, DISABLED_VecaddMultiCore) {
     GTEST_SKIP();

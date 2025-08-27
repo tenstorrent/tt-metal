@@ -186,7 +186,7 @@ To do so, the reader creates 2 interleaved address generators. Unlike on most pr
         }
     }
 
-The compute kernel is a bit more complicated. It is responsible for performing the actual computation. After the initialization calls to configure the matrix engine to perform addition on the input tiles, it enters a loop then waits for the destination registers to be available. Please refer to the Programming Model section for more information on this. In short, the destination registers are a set of 16 registers that are used send data in and out of the computation engines. 8 of them can be used at a time. Once the destination registers are available, it waits for the reader kernel to make data available in the circular buffers. Once there is data, it adds the first tile from each buffer together and writes the result to destination register 0. Wait for space on the output circular buffer, and pushes the computed tile into it. Finally, it marks the input as consumed, output as produced and computation done.
+The compute kernel performs the actual elementwise addition. It initializes the matrix engine for addition, then enters a loop. Inside the loop, it waits for data to be available in the input circular buffers, and for the destination registers to be free. The destination registers (16 in total, with 8 usable at a time) are used to transfer data to and from the computation engines. The kernel adds the input tiles, writes the result to destination register 0, waits to be sure the result is ready, and waits for the output circular buffer to have space, and pushes the computed tile into it. Finally, it marks the input tiles as consumed, the output tile as produced, and releases the registers.
 
 .. code-block:: cpp
 
@@ -206,18 +206,23 @@ The compute kernel is a bit more complicated. It is responsible for performing t
 
         // Loop over all the tiles and perform the computation
         for (uint32_t i = 0; i < n_tiles; i++) {
-            acquire_dst();
             cb_wait_front(cb_in0, 1);
             cb_wait_front(cb_in1, 1);
 
+            tile_regs_acquire();
+
             add_tiles(cb_in0, cb_in1, /*offset_0*/0, /*offset_1*/0, dst_reg_id);
+
+            tile_regs_commit();
+            tile_regs_wait();
 
             cb_reserve_back(cb_out0, 1);
             pack_tile(dst_reg, cb_out0); // copy result to out0
+            tile_regs_release();
+
             cb_push_back(cb_out0, 1);
             cb_pop_front(cb_in0, 1);
             cb_pop_front(cb_in1, 1);
-            release_dst();
         }
     }
     }

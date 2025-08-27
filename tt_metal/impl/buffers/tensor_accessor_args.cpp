@@ -98,7 +98,7 @@ void TensorAccessorArgs::update_args_config() {
         return;
     }
 
-    if (is_sharded(buffer_->buffer_layout())) {
+    if (buffer_->buffer_distribution_spec().has_value()) {
         args_config_.set(tensor_accessor::ArgConfig::Sharded);
     } else {
         args_config_ = tensor_accessor::ArgConfig::None;

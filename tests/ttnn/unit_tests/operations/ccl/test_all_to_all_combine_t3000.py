@@ -239,6 +239,7 @@ def trace_all_to_all_combine(
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     profiler=BenchmarkProfiler(),
+    test_skew=False,
 ):
     devices = mesh_shape[0] * mesh_shape[1]
     # input, output, interm core range set
@@ -264,8 +265,6 @@ def trace_all_to_all_combine(
         scheme=scheme,
         local_reduce=local_reduce,
     )
-
-    ccl_semaphore_handle = ttnn.create_global_semaphore(mesh_device, subdevice_shard_cores_grid, 0)
 
     tt_input_contribs = ttnn.from_torch(
         input_contrib,
@@ -294,8 +293,19 @@ def trace_all_to_all_combine(
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
     )
 
+    if test_skew:
+        delays = []
+        for i in range(mesh_shape[0]):
+            delay_at_i = []
+            for j in range(mesh_shape[1]):
+                delay_at_i.append(0)
+            delays.append(delay_at_i)
+        delays[0][0] = 800000
+
     def run_op(n):
-        for _ in range(n):
+        if test_skew:
+            ttnn.apply_device_delay(mesh_device, delays)
+        for i in range(n):
             tt_out_tensor = ttnn.all_to_all_combine(
                 tt_input_contribs,
                 tt_expert_mapping,
@@ -304,7 +314,6 @@ def trace_all_to_all_combine(
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
-                global_semaphore=ccl_semaphore_handle,
                 axis=axis,
             )
 
@@ -447,7 +456,10 @@ def run_all_to_all_combine_test(
     topology=None,
     input_memory_config=ttnn.DRAM_MEMORY_CONFIG,
     output_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    test_skew=False,
 ):
+    if test_skew and local_reduce:
+        pytest.skip("Skip skew test for local reduce")
     devices = mesh_shape[0] * mesh_shape[1]
     # input, output, interm core range set
     compute_grid = (mesh_device.compute_with_storage_grid_size().x, mesh_device.compute_with_storage_grid_size().y)
@@ -519,15 +531,23 @@ def run_all_to_all_combine_test(
         ]
     )
 
-    # create global semaphore handles
-    ccl_semaphore_handles = [ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)]
-
     tt_out_tensor_list = []
+
+    if test_skew:
+        delays = []
+        for i in range(mesh_shape[0]):
+            delay_at_i = []
+            for j in range(mesh_shape[1]):
+                delay_at_i.append(0)
+            delays.append(delay_at_i)
+        delays[0][0] = 400000
 
     def run_op(n_iters, store_all_results=True):
         tt_output_list = []
 
         for i in range(n_iters):
+            if test_skew:
+                ttnn.apply_device_delay(mesh_device, delays)
             tt_out_tensor = ttnn.all_to_all_combine(
                 input_tensors[i],
                 expert_mapping_tensors[i],
@@ -535,7 +555,6 @@ def run_all_to_all_combine_test(
                 num_links=num_links,
                 topology=topology,
                 memory_config=output_memory_config,
-                global_semaphore=ccl_semaphore_handles[i],
                 local_reduce=local_reduce,
                 axis=axis,
             )
@@ -575,7 +594,7 @@ def check_results(test_tensor, ref_tensor, data_map):
 
 
 @pytest.mark.parametrize(
-    "device_params, mesh_shape, mesh_device, axis, num_links",
+    "device_params, mesh_shape, mesh_device, axis, num_links, test_skew",
     [
         # FABRIC_2D tests with both axis=0 and axis=1
         pytest.param(
@@ -588,6 +607,7 @@ def check_results(test_tensor, ref_tensor, data_map):
             (2, 4),
             0,
             2,
+            False,
             id="fabric_2d_axis_0",
         ),
         pytest.param(
@@ -600,6 +620,7 @@ def check_results(test_tensor, ref_tensor, data_map):
             (2, 4),
             1,
             1,
+            False,
             id="fabric_2d_axis_1",
         ),
         # FABRIC_1D tests with both axis=0 and axis=1
@@ -613,6 +634,7 @@ def check_results(test_tensor, ref_tensor, data_map):
             (2, 4),
             0,
             2,
+            False,
             id="fabric_1d_line_axis_0",
         ),
         pytest.param(
@@ -625,6 +647,7 @@ def check_results(test_tensor, ref_tensor, data_map):
             (2, 4),
             1,
             1,
+            False,
             id="fabric_1d_line_axis_1",
         ),
         # FABRIC_1D_RING tests with only axis=1 (excluding axis=0)
@@ -638,7 +661,22 @@ def check_results(test_tensor, ref_tensor, data_map):
             (1, 8),
             1,
             1,
+            False,
             id="fabric_1d_ring_axis_1",
+        ),
+        # FABRIC_1D_RING tests with only axis=1 (excluding axis=0)
+        pytest.param(
+            {
+                "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "trace_region_size": 500000,
+            },
+            (1, 8),
+            (1, 8),
+            1,
+            1,
+            True,
+            id="fabric_1d_ring_axis_1_skew",
         ),
     ],
     indirect=["device_params", "mesh_device"],
@@ -672,6 +710,7 @@ def test_all_to_all_combine_no_trace(
     num_links,
     topology,
     dtype,
+    test_skew,
 ):
     devices = mesh_shape[0] * mesh_shape[1]
     batch = batches_per_device * devices
@@ -695,6 +734,7 @@ def test_all_to_all_combine_no_trace(
         topology=topology,
         input_memory_config=input_memory_config,
         output_memory_config=output_memory_config,
+        test_skew=test_skew,
     )
 
 

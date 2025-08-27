@@ -12,6 +12,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -20,7 +21,6 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_mapping_tensor,
     const ttnn::Tensor& expert_metadata_tensor,
-    const std::optional<GlobalSemaphore>& global_semaphore,
     const bool locally_reduced,
     std::optional<uint32_t> num_links,
     std::optional<tt::tt_fabric::Topology> topology,
@@ -32,7 +32,7 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
-    uint32_t num_links_ = num_links.value_or(1);
+    uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, axis));
     tt::tt_fabric::Topology topology_ = topology.value_or(tt::tt_fabric::get_fabric_topology());
     auto memory_config_ = memory_config.value_or(input_tensor.memory_config());
 
@@ -43,11 +43,10 @@ ttnn::Tensor ExecuteAllToAllCombine::invoke(
         num_links_,
         topology_,
         memory_config_,
-        global_semaphore,
         axis,
-        subdevice_id,
         optional_output_tensor,
-        locally_reduced);
+        locally_reduced,
+        subdevice_core_range_set);
 }
 
 }  // namespace ttnn::operations::ccl

@@ -422,7 +422,12 @@ install_mpi_ulfm() {
 }
 
 install_rust() {
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.89.0 -y
+    INSTALL_CMD="curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain 1.89.0 --profile minimal -y"
+    if [ -n "$SUDO_USER" ]; then
+        sudo -u "$SUDO_USER" /bin/bash -c "$INSTALL_CMD"
+    else
+        /bin/bash -c "$INSTALL_CMD"
+    fi
 }
 
 # We don't really want to have hugepages dependency
@@ -436,7 +441,7 @@ configure_hugepages() {
         return
     fi
 
-    # Fetch the lastest tt-tools release link and name of package
+    # Fetch the latest tt-tools release link and name of package
     TT_TOOLS_LINK=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .browser_download_url')
     TT_TOOLS_NAME=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".deb")) | .name')
 

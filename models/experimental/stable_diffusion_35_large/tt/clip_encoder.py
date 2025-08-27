@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import torch
 import ttnn
+from ttnn.distributed.distributed import ConcatMeshToTensor
 
 from .linear import TtLinear, TtLinearParameters
 from .substate import indexed_substates, substate
@@ -85,10 +86,17 @@ class TtCLIPAttentionParameters:
 
             return TtLinearParameters(weight=weight, bias=bias)
 
-        q_proj = column_parallel_linear("q_proj")
-        k_proj = column_parallel_linear("k_proj")
-        v_proj = column_parallel_linear("v_proj")
-        o_proj = column_parallel_linear("out_proj")
+        if parallel_manager is not None:
+            q_proj = column_parallel_linear("q_proj")
+            k_proj = column_parallel_linear("k_proj")
+            v_proj = column_parallel_linear("v_proj")
+            o_proj = column_parallel_linear("out_proj")
+        else:
+            # Plain data parallelism
+            q_proj = TtLinearParameters.from_torch(substate(state, "q_proj"), dtype=dtype, device=device)
+            k_proj = TtLinearParameters.from_torch(substate(state, "k_proj"), dtype=dtype, device=device)
+            v_proj = TtLinearParameters.from_torch(substate(state, "v_proj"), dtype=dtype, device=device)
+            o_proj = TtLinearParameters.from_torch(substate(state, "out_proj"), dtype=dtype, device=device)
 
         return cls(
             q_proj=q_proj,
@@ -119,10 +127,14 @@ class TtCLIPAttention:
         self, hidden_states: ttnn.Tensor, causal_mask: ttnn.Tensor, parallel_manager: EncoderParallelManager = None
     ) -> ttnn.Tensor:
         """
+        In cases of parallel_manager valid:
+
         input is replicated
         Q, K, V are head-parallel
         SDPA executes head-parallel
         output is replicated
+
+        Else assume plain data parallelism, all inputs are split over batch and weights are replicated.
         """
         batch_size, seq_length, _ = hidden_states.shape
 
@@ -133,8 +145,12 @@ class TtCLIPAttention:
         q = q * self._scale
 
         # reshape for multihead attention
-        num_devices = parallel_manager.tensor_parallel.factor
-        num_local_heads = self._num_heads // num_devices
+        if parallel_manager is not None:
+            num_devices = parallel_manager.tensor_parallel.factor
+            num_local_heads = self._num_heads // num_devices
+        else:
+            num_devices = 1
+            num_local_heads = self._num_heads
 
         q = ttnn.reshape(q, (batch_size, seq_length, num_local_heads, self._head_dim))
         k = ttnn.reshape(k, (batch_size, seq_length, num_local_heads, self._head_dim))
@@ -163,29 +179,31 @@ class TtCLIPAttention:
 
         # all-gather
         orig_shape = list(attn_output.shape)
-        attn_output = ttnn.experimental.all_gather_async(
-            attn_output,
-            dim=len(attn_output.shape) - 1,
-            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
-            mesh_device=parallel_manager.mesh_device,
-            topology=parallel_manager.topology,
-            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if parallel_manager is not None:
+            attn_output = ttnn.experimental.all_gather_async(
+                attn_output,
+                dim=len(attn_output.shape) - 1,
+                cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+                mesh_device=parallel_manager.mesh_device,
+                topology=parallel_manager.topology,
+                multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         dense_out = self._o_proj(attn_output)
 
-        dense_out = ttnn.experimental.all_gather_async(
-            dense_out,
-            dim=len(dense_out.shape) - 1,
-            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
-            mesh_device=parallel_manager.mesh_device,
-            topology=parallel_manager.topology,
-            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if parallel_manager is not None:
+            dense_out = ttnn.experimental.all_gather_async(
+                dense_out,
+                dim=len(dense_out.shape) - 1,
+                cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+                mesh_device=parallel_manager.mesh_device,
+                topology=parallel_manager.topology,
+                multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         dense_out_shape = list(dense_out.shape)
         dense_out_shape[2] = orig_shape[2]
         dense_out = ttnn.reshape(dense_out, tuple(dense_out_shape), dense_out.shape)
@@ -245,9 +263,19 @@ class TtCLIPMLPParameters:
                 )
             return TtLinearParameters(weight=weight, bias=bias)
 
+        fc1 = (
+            parallel_weight_bias("fc1", -1)
+            if parallel_manager is not None
+            else TtLinearParameters.from_torch(substate(state, "fc1"), dtype=dtype, device=device)
+        )
+        fc2 = (
+            parallel_weight_bias("fc2", -2)
+            if parallel_manager is not None
+            else TtLinearParameters.from_torch(substate(state, "fc2"), dtype=dtype, device=device)
+        )
         return cls(
-            fc1=parallel_weight_bias("fc1", -1),
-            fc2=parallel_weight_bias("fc2", -2),
+            fc1=fc1,
+            fc2=fc2,
         )
 
 
@@ -266,30 +294,31 @@ class TtCLIPMLP:
             hidden_states = hidden_states * ttnn.sigmoid(1.702 * hidden_states)
 
         hidden_states = self._fc2(hidden_states)
-        hidden_states_shape = list(hidden_states.shape)
-        hidden_states = ttnn.unsqueeze(hidden_states, 0)
-        # AllReduce output
+        if parallel_manager is not None:
+            hidden_states_shape = list(hidden_states.shape)
+            hidden_states = ttnn.unsqueeze(hidden_states, 0)
+            # AllReduce output
 
-        hidden_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
-            hidden_states,
-            dim=3,
-            multi_device_global_semaphore=parallel_manager.get_rs_ping_pong_semaphore(),
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=parallel_manager.topology,
-            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
-        )
-        hidden_states = ttnn.experimental.all_gather_async(
-            hidden_states_scattered,
-            dim=3,
-            cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
-            mesh_device=parallel_manager.mesh_device,
-            topology=parallel_manager.topology,
-            multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
-            num_links=1,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        hidden_states = ttnn.reshape(hidden_states, hidden_states_shape, hidden_states.shape)
+            hidden_states_scattered = ttnn.experimental.reduce_scatter_minimal_async(
+                hidden_states,
+                dim=3,
+                multi_device_global_semaphore=parallel_manager.get_rs_ping_pong_semaphore(),
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=parallel_manager.topology,
+                cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+            )
+            hidden_states = ttnn.experimental.all_gather_async(
+                hidden_states_scattered,
+                dim=3,
+                cluster_axis=parallel_manager.tensor_parallel.mesh_axis,
+                mesh_device=parallel_manager.mesh_device,
+                topology=parallel_manager.topology,
+                multi_device_global_semaphore=parallel_manager.get_ping_pong_semaphore(),
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            hidden_states = ttnn.reshape(hidden_states, hidden_states_shape, hidden_states.shape)
         return hidden_states
 
 
@@ -547,6 +576,7 @@ class TtCLIPTextTransformerParameters:
         dtype: ttnn.DataType | None = None,
         device: ttnn.Device,
         parallel_manager: EncoderParallelManager = None,
+        has_text_projection: bool = True,  # SDXL Base encoder 1 does not have text projection, so this is a quick hack to handle it
     ) -> TtCLIPTextTransformerParameters:
         text_model_state = substate(state, "text_model")
 
@@ -567,7 +597,9 @@ class TtCLIPTextTransformerParameters:
             ),
             text_projection_weight=from_torch_fast(
                 state["text_projection.weight"], dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT
-            ),
+            )
+            if has_text_projection
+            else None,
         )
 
 
@@ -622,16 +654,25 @@ class TtCLIPTextTransformer:
 
         pooled_output = self._gather_eos(normalized_final_state, input_ids, eos_token_id, device)
 
-        text_projection_transposed = ttnn.transpose(self._text_projection, -2, -1)
-        projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
+        if self._text_projection is not None:
+            text_projection_transposed = ttnn.transpose(self._text_projection, -2, -1)
+            projected_output = ttnn.matmul(pooled_output, text_projection_transposed)
+        else:
+            projected_output = pooled_output
 
         return encoder_output, projected_output
 
-    def _gather_eos(
-        self, seq_emb: ttnn.Tensor, input_ids: ttnn.Tensor, eos_token_id: int, device: ttnn.Device
-    ) -> ttnn.Tensor:
-        ids_t = ttnn.to_torch(ttnn.get_device_tensors(input_ids)[0])
+    def _pool_eos_from_torch_tensors(self, ids_t: torch.Tensor, seq_t: torch.Tensor, eos_token_id: int) -> torch.Tensor:
+        """Helper function to pool EOS tokens from torch tensors.
 
+        Args:
+            ids_t: Token IDs tensor [B, S]
+            seq_t: Sequence embeddings tensor [B, S, H]
+            eos_token_id: EOS token ID to search for
+
+        Returns:
+            Pooled tensor [B, H]
+        """
         # from HF: if self.eos_token_id == 2: use argmax, else: search for eos_token_id
         if eos_token_id == 2:
             # use argmax (highest token ID position)
@@ -641,17 +682,45 @@ class TtCLIPTextTransformer:
             eos_mask = (ids_t.to(dtype=torch.int, device=ids_t.device) == eos_token_id).int()
             eos_idx = eos_mask.argmax(dim=-1)
 
-        seq_t = ttnn.to_torch(ttnn.get_device_tensors(seq_emb)[0])  # [B, S, H]
+        # Use vectorized indexing to get pooled output
         b = torch.arange(seq_t.size(0))
         pooled_t = seq_t[b, eos_idx]  # [B, H]
+        return pooled_t
 
-        return ttnn.from_torch(
-            pooled_t,
-            dtype=seq_emb.get_dtype(),
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-        )
+    def _gather_eos(
+        self,
+        seq_emb: ttnn.Tensor,
+        input_ids: ttnn.Tensor,
+        eos_token_id: int,
+        device: ttnn.Device,
+        encoder_parallel_manager: EncoderParallelManager = None,
+    ) -> ttnn.Tensor:
+        if encoder_parallel_manager is not None:
+            ids_t = ttnn.to_torch(ttnn.get_device_tensors(input_ids)[0])
+            seq_t = ttnn.to_torch(ttnn.get_device_tensors(seq_emb)[0])  # [B, S, H]
+
+            pooled_t = self._pool_eos_from_torch_tensors(ids_t, seq_t, eos_token_id)
+
+            return ttnn.from_torch(
+                pooled_t,
+                dtype=seq_emb.get_dtype(),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
+        else:
+            ids_t = ttnn.to_torch(input_ids, mesh_composer=ConcatMeshToTensor(device, dim=0))
+            seq_t = ttnn.to_torch(seq_emb, mesh_composer=ConcatMeshToTensor(device, dim=0))
+
+            pooled_t = self._pool_eos_from_torch_tensors(ids_t, seq_t, eos_token_id)
+
+            return ttnn.from_torch(
+                pooled_t,
+                dtype=seq_emb.get_dtype(),
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                mesh_mapper=ttnn.ShardTensorToMesh(device, dim=0),
+            )
 
 
 # adapted from https://github.com/huggingface/transformers/blob/main/src/transformers/models/clip/modeling_clip.py

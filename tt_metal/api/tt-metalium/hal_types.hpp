@@ -27,7 +27,7 @@ enum class HalL1MemAddrType : uint8_t {
     MAILBOX,
     LAUNCH,
     WATCHER,
-    DPRINT,
+    DPRINT_BUFFERS,
     PROFILER,
     KERNEL_CONFIG,  // End is start of unreserved memory
     UNRESERVED,     // Only for ethernet cores
@@ -45,6 +45,7 @@ enum class HalL1MemAddrType : uint8_t {
     CRC_ERR,    // Link status - CRC error count
     CORR_CW,    // Link status - Corrected Codewords count
     UNCORR_CW,  // Link status - Uncorrected Codewords count
+    LINK_UP,    // Link status - Link up status
     FABRIC_ROUTER_CONFIG,
     ETH_FW_MAILBOX,
     ETH_LINK_REMOTE_INFO,

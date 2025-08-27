@@ -4,6 +4,17 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      t3k_multihost:
+        description: 'Run T3K multi-host job'
+        required: false
+        default: true
+        type: boolean
+      galaxy_multihost:
+        description: 'Run Galaxy multi-host job'
+        required: false
+        default: true
+        type: boolean
 
 jobs:
   build-artifact:
@@ -14,10 +25,11 @@ jobs:
     with:
       version: 22.04
       build-wheel: true
-  deploy:
+  multi-host-t3k:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.t3k_multihost == 'true' }}
     runs-on:
       # A physical, multi-host WH T3K that's in service
-      - multi-host
+      - multi-host-t3000
       - arch-wormhole_b0
       - bare-metal
       - in-service
@@ -44,7 +56,7 @@ jobs:
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
       - name: Run tests on multiple hosts
         uses: ./.github/actions/docker-run
-        timeout-minutes: 15
+        timeout-minutes: 30
         with:
           docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
@@ -53,13 +65,59 @@ jobs:
             -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
-            -v ${{ steps.capture-home.outputs.home }}:${{ steps.capture-home.outputs.home }}:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
             --device /dev/tenstorrent
-            --privileged
             --pid=host
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" bash -c "tt-smi-metal -r"
-            TT_METAL_HOME=/home/ansible/actions-runner/_work/tt-metal/tt-metal PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml
-            TT_METAL_HOME=/home/ansible/actions-runner/_work/tt-metal/tt-metal PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
+            TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/perf_microbenchmark/routing/test_dual_t3k.yaml
+            TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/multi_host_fabric_tests
+            TT_METAL_HOME=$(pwd) PYTHONPATH=$(pwd) tt-run --rank-binding tests/tt_metal/distributed/config/dual_t3k_rank_bindings.yaml --mpi-args "--hostfile /etc/mpirun/hostfile --mca btl_tcp_if_exclude docker0,lo --tag-output" ./build/test/tt_metal/test_mesh_socket_main --test_config tests/tt_metal/multihost/fabric_tests/mesh_socket_dual_t3k.yaml
+  multi-host-galaxy:
+    if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.galaxy_multihost == 'true' }}
+    runs-on:
+      # A physical, multi-host WH Galaxy that's in service
+      - multi-host-galaxy
+      - arch-wormhole_b0
+      - bare-metal
+      - in-service
+    needs: build-artifact
+    steps:
+      - name: ⬇️ Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: ⬇️ Download Build
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        timeout-minutes: 10
+        with:
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Capture runner's home directory
+        id: capture-home
+        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
+      - name: Run tests on multiple hosts
+        uses: ./.github/actions/docker-run
+        timeout-minutes: 30
+        with:
+          docker_image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e PYTHONPATH=${{ github.workspace }}
+            -e TT_METAL_ENABLE_ERISC_IRAM="1"
+            -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
+            -v /etc/mpirun:/etc/mpirun:ro
+            -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
+            --device /dev/tenstorrent
+            --pid=host
+            --hostname=mpirun-host
+          install_wheel: true
+          run_args: |
+            echo "add tests here..."

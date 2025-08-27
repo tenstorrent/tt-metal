@@ -860,7 +860,7 @@ class ModelOptimisations:
                 r"down_blocks\.1\.attentions\.[01]\.transformer_blocks\.[01]\.attn[12]\.dense_out"
             )
 
-            # 8 occurences
+            # 8 occurrences
             if pattern_downn_block_1_dense_out.search(matmul_path):
                 return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_4096"]
 
@@ -868,7 +868,7 @@ class ModelOptimisations:
                 r"down_blocks\.1\.attentions\.[01]\.transformer_blocks\.[01]\.ff\.net\.2"
             )
 
-            # 4 occurences
+            # 4 occurrences
             if pattern_down_blocks_1_ff2.search(matmul_path):
                 return self.matmul_configs["2D_FF2_SEQ_LEN_4096"]
 
@@ -877,7 +877,7 @@ class ModelOptimisations:
                 r"down_blocks\.2\.attentions\.[01]\.transformer_blocks\.[0123456789]\.attn[12]\.dense_out"
             )
 
-            # 40 occurences
+            # 40 occurrences
             if pattern_down_blocks_2_dense_out.search(matmul_path):
                 return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_1024"]
 
@@ -885,7 +885,7 @@ class ModelOptimisations:
                 r"down_blocks\.2\.attentions\.[01]\.transformer_blocks\.[0123456789]\.ff\.net\.2"
             )
 
-            # 20 occurences
+            # 20 occurrences
             if pattern_down_blockcs_2_ff2.search(matmul_path):
                 return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
 
@@ -894,7 +894,7 @@ class ModelOptimisations:
                 r"mid_block\.attentions\.0\.transformer_blocks\.[0123456789]\.ff\.net\.2"
             )
 
-            # 10 occurences
+            # 10 occurrences
             if pattern_mid_block_ff2.search(matmul_path):
                 return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
 
@@ -902,7 +902,7 @@ class ModelOptimisations:
                 r"mid_block\.attentions\.0\.transformer_blocks\.[0123456789]\.attn[12]\.dense_out"
             )
 
-            # 20 occurences
+            # 20 occurrences
             if pattern_mid_block_dense_out.search(matmul_path):
                 return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_1024"]
 
@@ -911,7 +911,7 @@ class ModelOptimisations:
                 r"up_blocks\.0\.attentions\.[012]\.transformer_blocks\.[0123456789]\.attn[12]\.dense_out"
             )
 
-            # 60 occurences
+            # 60 occurrences
             if pattern_up_blocks_0_dense_out.search(matmul_path):
                 return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_1024"]
 
@@ -919,7 +919,7 @@ class ModelOptimisations:
                 r"up_blocks\.0\.attentions\.[012]\.transformer_blocks\.[0123456789]\.ff\.net\.2"
             )
 
-            # 30 occurences
+            # 30 occurrences
             if pattern_up_blocks_0_ff2.search(matmul_path):
                 return self.matmul_configs["2D_FF2_SEQ_LEN_1024"]
 
@@ -928,7 +928,7 @@ class ModelOptimisations:
                 r"up_blocks\.1\.attentions\.[012]\.transformer_blocks\.[01]\.attn[12]\.dense_out"
             )
 
-            # 12 occurences
+            # 12 occurrences
             if pattern_up_blocks_1_dense_out.search(matmul_path):
                 return self.matmul_configs["2D_LINEAR_ATTENTION_DO_SEQ_LEN_4096"]
 
@@ -936,7 +936,7 @@ class ModelOptimisations:
                 r"up_blocks\.1\.attentions\.[012]\.transformer_blocks\.[01]\.ff\.net\.2"
             )
 
-            # 6 occurences
+            # 6 occurrences
             if pattern_up_blocks_1_ff2.search(matmul_path):
                 return self.matmul_configs["2D_FF2_SEQ_LEN_4096"]
 
@@ -1038,6 +1038,12 @@ class ModelOptimisations:
                 return self.conv_configs["ABH_64_NO_ADB_DRAM"]  # should be 128, OOM in demo
             elif "decoder.conv_out" == conv_path:
                 return self.conv_configs["ABH_512_NO_ADB_DRAM"]
+            elif (
+                "decoder.mid_block.resnet" in conv_path
+                or "decoder.up_blocks.0.resnet" in conv_path
+                and not "upsampler" in conv_path
+            ):
+                return self.conv_configs["ABH_128_NO_ADB_BS"]
             else:
                 return self.conv_configs["DEFAULT_DRAM"]
 

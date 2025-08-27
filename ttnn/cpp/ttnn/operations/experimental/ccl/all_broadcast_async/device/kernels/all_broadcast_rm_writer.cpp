@@ -12,6 +12,7 @@
 #include <utility>
 #include "ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
 
 using address_t = uint32_t;
 using tt::tt_metal::BufferType;
@@ -30,10 +31,12 @@ constexpr uint32_t max_packet_size = get_compile_time_arg_val(6);
 constexpr uint32_t num_packets_per_row = get_compile_time_arg_val(7);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(8);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(9);
-constexpr bool dynamic_alternate = get_compile_time_arg_val(10);
-constexpr uint32_t num_max_targets = std::max(num_targets_forward_direction, num_targets_backward_direction);
-constexpr uint32_t num_sync_targets_forward = dynamic_alternate ? num_max_targets : num_targets_forward_direction;
-constexpr uint32_t num_sync_targets_backward = dynamic_alternate ? num_max_targets : num_targets_backward_direction;
+constexpr ccl_routing_utils::line_multicast_route_info_t forward_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<10>();
+constexpr ccl_routing_utils::line_multicast_route_info_t backward_multicast_route_info =
+    ccl_routing_utils::get_line_multicast_route_info_from_args<10 + ccl_routing_utils::num_line_multicast_args>();
+
+inline constexpr uint32_t sharded_args_start_idx = 10 + 2 * ccl_routing_utils::num_line_multicast_args;
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -55,7 +58,6 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
-    bool use_barrier = get_arg_val<uint32_t>(arg_idx++);
     size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
@@ -63,13 +65,12 @@ void kernel_main() {
 
 #ifdef SHARDED
     typedef ShardedInfo<
-        get_compile_time_arg_val(11),
-        get_compile_time_arg_val(12),
-        get_compile_time_arg_val(13),
-        get_compile_time_arg_val(14),
-        get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16),
-        get_compile_time_arg_val(17)>
+        get_compile_time_arg_val(sharded_args_start_idx),
+        get_compile_time_arg_val(sharded_args_start_idx + 1),
+        get_compile_time_arg_val(sharded_args_start_idx + 2),
+        get_compile_time_arg_val(sharded_args_start_idx + 3),
+        get_compile_time_arg_val(sharded_args_start_idx + 4),
+        get_compile_time_arg_val(sharded_args_start_idx + 5)>
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =
@@ -104,43 +105,36 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* pkt_hdr_seminc =
         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_seminc);
 
-    pkt_hdr_forward->to_chip_multicast(
-        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-    pkt_hdr_backward->to_chip_multicast(
-        tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
+    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_forward, forward_multicast_route_info);
+    ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_backward, backward_multicast_route_info);
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open();
     }
 
-    if (use_barrier) {
-        uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
+    uint32_t num_total_targets = num_targets_forward_direction + num_targets_backward_direction;
 
-        uint64_t barrier_sem_noc_addr_in_pkt =
-            safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
-        pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            barrier_sem_noc_addr_in_pkt,
-            static_cast<uint16_t>(1),  // increment 1
-            32});
+    uint64_t barrier_sem_noc_addr_in_pkt = safe_get_noc_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem, 0);
+    pkt_hdr_seminc->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
+        barrier_sem_noc_addr_in_pkt,
+        static_cast<uint16_t>(1),  // increment 1
+        32});
 
-        if (num_targets_forward_direction) {
-            fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-            pkt_hdr_seminc->to_chip_multicast(
-                tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-            fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
-        }
-        if (num_targets_backward_direction) {
-            pkt_hdr_seminc->to_chip_multicast(
-                tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
-            fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-            fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
-                packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
-        }
-
-        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
-        noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
+    if (num_targets_forward_direction) {
+        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, forward_multicast_route_info);
+        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
+            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
+    if (num_targets_backward_direction) {
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, backward_multicast_route_info);
+        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+        fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
+            packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
+    }
+
+    noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), num_total_targets);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
 
     // 1. mcast via fabric to remote tensor addresses
     uint32_t row_id = row_id_start;
@@ -158,12 +152,6 @@ void kernel_main() {
 
             write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr, pkt_hdr_forward, pkt_hdr_backward, fabric_connection, l1_read_addr, packet_size);
-            if constexpr (dynamic_alternate) {
-                std::swap(
-                    pkt_hdr_forward->routing_fields.value,
-                    pkt_hdr_backward->routing_fields
-                        .value);  // alternate the packet header distance for better balancing
-            }
             offset += packet_size;  // advance the noc address for the next packet
         }
         row_id++;
@@ -180,15 +168,13 @@ void kernel_main() {
     // Write the mcast packet (forward)
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        pkt_hdr_seminc->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_forward)});
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, forward_multicast_route_info);
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));
     }
     // Write the mcast packet (backward)
     if (fabric_connection.has_backward_connection()) {
-        pkt_hdr_seminc->to_chip_multicast(
-            tt::tt_fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_sync_targets_backward)});
+        ccl_routing_utils::fabric_set_line_multicast_route(pkt_hdr_seminc, backward_multicast_route_info);
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
             packet_header_buffer_seminc, sizeof(PACKET_HEADER_TYPE));

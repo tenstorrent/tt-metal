@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-from pathlib import Path
 
 import pytest
 import torch
@@ -14,7 +13,7 @@ from models.demos.deepseek_v3.tt.mlp.mlp_1d_dequant import MLP1DDequant
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.utils.config_helpers import dequantize
-from models.demos.deepseek_v3.utils.run_config import create_run_config
+from models.demos.deepseek_v3.utils.run_config import create_run_config, load_weight
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
     get_model_config,
@@ -82,13 +81,13 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     assert "input_tensor_b" in weight_config["w2"]
     assert "input_tensor_b" in weight_config["w3"]
 
-    # Verify files exist
-    assert Path(weight_config["w1"]["input_tensor_b"]).exists()
-    assert Path(weight_config["w2"]["input_tensor_b"]).exists()
-    assert Path(weight_config["w3"]["input_tensor_b"]).exists()
+    # # Verify files exist # TODO: bring regular tensor saving back once Issue #26763 is resolved
+    # assert Path(weight_config["w1"]["input_tensor_b"]).exists()
+    # assert Path(weight_config["w2"]["input_tensor_b"]).exists()
+    # assert Path(weight_config["w3"]["input_tensor_b"]).exists()
 
     # Load and verify a weight
-    w1_ttnn = ttnn.load_tensor(weight_config["w1"]["input_tensor_b"], device=mesh_device)
+    w1_ttnn = load_weight(weight_config["w1"]["input_tensor_b"], device=mesh_device)
     w1_ttnn = ttnn.unsqueeze(w1_ttnn, 0)  # Unsqueeze to collect shards on a separate dim
     w1_torch = ttnn.to_torch(
         w1_ttnn,
@@ -141,6 +140,7 @@ def test_forward_pass(
     mesh_device,
     model_path,
     ccl,
+    reset_seeds,
 ):
     num_module_layers, _ = mesh_device.shape
 
