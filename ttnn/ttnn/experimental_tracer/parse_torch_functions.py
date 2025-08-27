@@ -20,7 +20,15 @@ logging.getLogger("mcp.client.streamable_http").setLevel(logging.ERROR)
 SERVER_URL = "https://mcp.deepwiki.com/mcp"
 
 
-def deepwiki_query(question):
+def is_valid_python(code_str):
+    try:
+        ast.parse(code_str)
+        return True
+    except SyntaxError:
+        return False
+
+
+def deepwiki_query(question, timeout=90):
     final_result = None
 
     async def main_async():
@@ -36,7 +44,7 @@ def deepwiki_query(question):
                 final_result = str(result)
 
     try:
-        asyncio.run(main_async())
+        asyncio.run(asyncio.wait_for(main_async(), timeout=timeout))
     except:
         return None
     return final_result
@@ -198,7 +206,7 @@ Do NOT include any text, commentary, or formatting outside these markers. Make y
             print("Failed to get a valid response. Retrying...")
         else:
             result = parse_explanation_and_function(response)
-            if result is None:
+            if result is None or not is_valid_python(result[1]):
                 failed_funcs.append((func, num_times + 1))  # Re-add to failed list if parsing failed
                 print("Failed to parse explanation and function from the response. Trying again...")
                 continue
@@ -217,9 +225,10 @@ Do NOT include any text, commentary, or formatting outside these markers. Make y
             # Write explanation as a multiline comment
             if len(explanation.strip()) > 0:
                 explanation_comment = f'    """\n    {explanation}\n    """\n'
-                fn_def = func_code.split(":")
-                fn_def[1] = "\n" + explanation_comment + fn_def[1]  # Insert explanation before the function body
-                func_code = ":".join(fn_def)
+                fn_def = func_code.split("\n")
+                if "def" in fn_def[0] and "(" in fn_def[0] and ")" in fn_def[0] and ":" in fn_def[0]:
+                    fn_def[1] = explanation_comment + fn_def[1]  # Insert explanation before the function body
+                func_code = "\n".join(fn_def)
             # Write the function code
             f.write(func_code + "\n\n")
     format_file_with_black("ttnn_composite_functions.py")

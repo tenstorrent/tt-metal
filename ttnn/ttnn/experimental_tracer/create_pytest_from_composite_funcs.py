@@ -72,7 +72,7 @@ def extract_functions(filepath, func_names):
 # ---------- Test file generation ----------
 
 
-def generate_test_file(json_file, ref_file, opt_file, output_file="test_generated.py"):
+def generate_test_file(json_file, ref_file, ttnn_file, output_file="test_generated.py"):
     # Load JSON (list of test cases)
     with open(json_file, "r") as f:
         test_cases = json.load(f)
@@ -86,11 +86,11 @@ def generate_test_file(json_file, ref_file, opt_file, output_file="test_generate
 
     # Extract function sources
     ref_sources = extract_functions(ref_file, all_funcs)
-    opt_sources = extract_functions(opt_file, all_funcs)
+    ttnn_sources = extract_functions(ttnn_file, all_funcs)
 
     # Build rename maps
     ref_rename_map = {name: f"ref_{name}" for name in ref_sources.keys()}
-    opt_rename_map = {name: f"opt_{name}" for name in opt_sources.keys()}
+    ttnn_rename_map = {name: f"ttnn_{name}" for name in ttnn_sources.keys()}
 
     with open(output_file, "w") as f:
         f.write("import pytest\n")
@@ -108,9 +108,9 @@ def generate_test_file(json_file, ref_file, opt_file, output_file="test_generate
             f.write("\n" + src.replace(f"def {name}(", f"def ref_{name}(") + "\n")
 
         # Write opt functions
-        for name, src in opt_sources.items():
-            src = rename_function_calls(src, opt_rename_map)
-            f.write("\n" + src.replace(f"def {name}(", f"def opt_{name}(") + "\n")
+        for name, src in ttnn_sources.items():
+            src = rename_function_calls(src, ttnn_rename_map)
+            f.write("\n" + src.replace(f"def {name}(", f"def ttnn_{name}(") + "\n")
 
         # Generate pytest test functions
         for func_name, input_lists in func_to_inputs.items():
@@ -119,7 +119,16 @@ def generate_test_file(json_file, ref_file, opt_file, output_file="test_generate
             for inputs in input_lists:
                 single_case = []
                 for inp in inputs:
-                    single_case.append((inp["shape"], inp["dtype"], inp["min_max"]))
+                    if isinstance(inp, (list, tuple)):
+                        single_case.append(
+                            [
+                                (nested_inp["shape"], nested_inp["dtype"], nested_inp["min_max"])
+                                for nested_inp in inp
+                                if isinstance(nested_inp, dict)
+                            ]
+                        )
+                    else:
+                        single_case.append((inp["shape"], inp["dtype"], inp["min_max"]))
                 param_values.append(single_case)
 
             param_str = ",\n    ".join([str(v) for v in param_values])
@@ -131,7 +140,7 @@ def generate_test_file(json_file, ref_file, opt_file, output_file="test_generate
                 tensors = get_tensors_from_input_spec(input_specs)
                 out_ref = ref_{func_name}(*tensors)
                 tensors_tt = [ttnn.from_torch(t, dtype=ttnn.bfloat16, device=device) for t in tensors]
-                out_opt = opt_{func_name}(*tensors_tt)
+                out_opt = ttnn_{func_name}(*tensors_tt)
                 out_opt = ttnn.to_torch(out_opt)
                 assert_with_pcc(out_ref, out_opt, 0.9999)
                 """

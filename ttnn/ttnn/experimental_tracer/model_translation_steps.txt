@@ -1,7 +1,9 @@
 python3 sample_tracer.py --model vit_so400m_patch14_siglip_224  --input-shape 1 3 224 224
 
-python3 parse_torch_functions.py clustered_graph.py
+python3 graph.py
 
 python3 clustered_graph.py
+
+python3 parse_torch_functions.py clustered_graph.py
 
 python3 create_pytest_from_composite_funcs.py clustered_graph.py ttnn_composite_functions.py tensor_io_log.json
