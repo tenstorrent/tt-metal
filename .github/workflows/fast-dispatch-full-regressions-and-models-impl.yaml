@@ -70,7 +70,8 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            ${{ matrix.model == 'stable_diffusion_xl_base' && '-e HF_HOME=/mnt/MLPerf/huggingface -e TT_MM_THROTTLE_PERF=5' || '' }}
+            -e HF_HOME=/mnt/MLPerf/huggingface
+            ${{ matrix.model == 'stable_diffusion_xl_base' && '-e TT_MM_THROTTLE_PERF=5' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
           run_args: |

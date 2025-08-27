@@ -1,9 +1,12 @@
 # SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from typing import Any
 
+import datasets.builder
 from datasets import load_dataset
+from datasets.utils.filelock import SoftFileLock
 from loguru import logger
 from torch.utils.data import Dataset
 
@@ -91,6 +94,10 @@ def squad_divide_chunks(dataset_question, dataset_context, dataset_reference, ba
 
 
 def squadv2_1K_samples_input(tokenizer, seq_len, attention_mask, token_type_ids, microbatch=8):
+    if os.getenv("CI") == "true":
+        # UnixFileLock throws error while creating FileLock in read-only system
+        datasets.builder.FileLock = SoftFileLock
+
     squadv2_dataset = load_dataset("squad_v2", use_auth_token=False, streaming=True)["validation"]
     dataset_iter = iter(squadv2_dataset)
     dataset_question = []

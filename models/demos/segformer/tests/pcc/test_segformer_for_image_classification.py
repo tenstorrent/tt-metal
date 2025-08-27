@@ -2,9 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
+import datasets.builder
 import pytest
 import torch
 from datasets import load_dataset
+from datasets.utils.filelock import SoftFileLock
 from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -54,6 +58,10 @@ def create_custom_mesh_preprocessor(mesh_mapper=None, device=None):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_segformer_image_classificaton(device, model_location_generator):
+    if os.getenv("CI") == "true":
+        # UnixFileLock throws error while creating FileLock in read-only system
+        datasets.builder.FileLock = SoftFileLock
+
     dataset = load_dataset("huggingface/cats-image")
     image = dataset["train"]["image"][0]
     _, weights_mesh_mapper, _ = get_mesh_mappers(device)

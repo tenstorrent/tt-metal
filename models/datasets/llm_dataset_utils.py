@@ -2,11 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import re
 
 import datasets
+import datasets.builder
 import numpy as np
 import torch
+from datasets.utils.filelock import SoftFileLock
 from loguru import logger
 from sklearn.metrics import top_k_accuracy_score
 
@@ -47,6 +50,10 @@ def wikitext_detokenizer(string):
 
 
 def prepare_textgen_dataset(dataset_name, dataset_config, split):
+    if os.getenv("CI") == "true":
+        # UnixFileLock throws error while creating FileLock in read-only system
+        datasets.builder.FileLock = SoftFileLock
+
     dataset = datasets.load_dataset(dataset_name, dataset_config, split=split, ignore_verifications=True)
     if dataset_name == "wikitext":
         dataset = wikitext_detokenizer("\n".join(dataset["text"]))
