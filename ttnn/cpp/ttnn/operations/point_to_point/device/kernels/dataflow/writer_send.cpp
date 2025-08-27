@@ -6,6 +6,7 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "../common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 
 using tt::data_movement::common::round_up;
 using tt::data_movement::common::tt_memmove;
@@ -79,9 +80,9 @@ void kernel_main() {
             tt_memmove<false, false, false, 0>(packet_addr, src_addr, transfer_size_bytes);
             ++packet_page_idx;
             if (packet_page_idx >= curr_pages_per_packet) {
-                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer_addrgen, 0, 0);
+                const uint64_t dst_noc_addr = get_noc_addr(packet_idx, dst_buffer, 0, 0);
                 tt::tt_fabric::linear::to_noc_unicast_write(
-                    align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer_addrgen);
+                    align(payload_size_bytes, alignment), packet_header_ptr, packet_idx, dst_buffer);
                 perform_payload_send(connection_direction, packet_base_addr, payload_size_bytes, packet_header_ptr);
 
                 // reset counters
