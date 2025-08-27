@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package tt_fabric.system_health;
+
+// Generic board configuration schema
+// This represents the structure of any board YAML configuration
+
+// Individual board definition
+message Board {
+  BoardTypeEnum board_type = 1;  // Board type (e.g., N300, WH_UBB, P300)
+  map<string, PortType> port_map = 2;        // Key is port type (e.g., "QSFP", "WARP100", "TRACE", "LINKING_BOARD_1")
+  map<string, ConnectionList> connections = 3;  // Key is connection type (e.g., "TRACE")
+}
+
+// Port type definition (QSFP, WARP100, TRACE, LINKING_BOARD_1, etc.)
+message PortType {
+  map<uint32, Port> ports = 1;  // Key is port number
+}
+
+// Individual port definition
+message Port {
+  repeated AsicChannels asic_channels = 1;
+}
+
+// List of channels on an ASIC
+message AsicChannels {
+  uint32 asic = 1;           // ASIC number
+  repeated uint32 channels = 2;  // Channel numbers (e.g., [6, 7])
+}
+
+// Connection list for a specific connection type
+message ConnectionList {
+  repeated Connection connections = 1;
+}
+
+// Individual connection definition
+message Connection {
+  repeated uint32 endpoints = 1;  // Connection endpoints (e.g., [1, 2])
+}
+
+// Supported port types enum for validation
+enum PortTypeEnum {
+  PORT_TYPE_UNSPECIFIED = 0;
+  QSFP = 1;
+  WARP100 = 2;
+  WARP400 = 3;
+  TRACE = 4;
+  LINKING_BOARD_1 = 5;
+  LINKING_BOARD_2 = 6;
+  LINKING_BOARD_3 = 7;
+}
+
+// Supported board types enum for validation
+enum BoardTypeEnum {
+  BOARD_TYPE_UNSPECIFIED = 0;
+  N300 = 1;
+  N150 = 2;
+  P300 = 3;
+  P150 = 4;
+  UBB = 5;
+}
