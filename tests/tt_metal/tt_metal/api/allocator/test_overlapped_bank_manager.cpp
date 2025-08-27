@@ -24,8 +24,6 @@ namespace tt::tt_metal {
 TEST_F(DeviceSingleCardBufferFixture, TestOverlappedBankManager) {
     // This test sets up a BankManager for DRAM and L1, mimicking Allocator initialization.
 
-    using namespace tt::tt_metal;
-
     // Get device and soc descriptor
     IDevice* device = this->device_;
     const metal_SocDescriptor& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());

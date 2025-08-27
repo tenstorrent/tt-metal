@@ -85,15 +85,15 @@ private:
     // Number of independent states tracked by this manager
     uint32_t num_states_{};
 
-    // Types of buffers allocated in the banks per state
-    std::vector<BufferType> buffer_types_{};
-    std::vector<std::unordered_set<DeviceAddr>> allocated_buffers_{};
+    // Type of buffers allocated in the banks (same across states)
+    BufferType buffer_type_{};
+    std::unordered_set<DeviceAddr> allocated_buffers_{};
     // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all
     // banks using only bank_id. Set to 0 for cores/nodes with only 1 bank.
-    std::vector<std::unordered_map<uint32_t, int64_t>> bank_id_to_bank_offset_{};
+    std::unordered_map<uint32_t, int64_t> bank_id_to_bank_offset_{};
     std::vector<std::unique_ptr<allocator::Algorithm>> allocators_{};
-    std::vector<DeviceAddr> interleaved_address_limit_{};
-    std::vector<uint32_t> alignment_bytes_{};
+    DeviceAddr interleaved_address_limit_{};
+    uint32_t alignment_bytes_{};
 
     void validate_bank_id(uint32_t bank_id, uint32_t state) const;
     void assert_single_state(uint32_t state) const;

@@ -56,24 +56,20 @@ BankManager::BankManager(
     bool disable_interleaved,
     uint32_t num_states) :
     num_states_(num_states) {
-    buffer_types_.resize(num_states_);
-    allocated_buffers_.resize(num_states_);
-    bank_id_to_bank_offset_.resize(num_states_);
+    // buffer_type_ and allocated_buffers_ are scalar now
     allocators_.resize(num_states_);
-    interleaved_address_limit_.resize(num_states_);
-    alignment_bytes_.resize(num_states_);
 
     // For now, mirror the same configuration across states; we assert single-state in API usage
     for (uint32_t s = 0; s < num_states_; ++s) {
-        buffer_types_[s] = buffer_type;
-        alignment_bytes_[s] = alignment_bytes;
+        buffer_type_ = buffer_type;
+        alignment_bytes_ = alignment_bytes;
         unsigned int bank_id = 0;
         for (const auto bank_offset : bank_offsets) {
-            bank_id_to_bank_offset_[s].insert({bank_id, bank_offset});
+            bank_id_to_bank_offset_.insert({bank_id, bank_offset});
             bank_id++;
         }
-        interleaved_address_limit_[s] = 0;
-        validate_num_banks(bank_id_to_bank_offset_[s].size(), buffer_types_[s], disable_interleaved);
+        interleaved_address_limit_ = 0;
+        validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
         this->init_allocator(
             size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset, s);
     }
@@ -89,19 +85,15 @@ BankManager::BankManager(
     bool disable_interleaved,
     uint32_t num_states) :
     num_states_(num_states) {
-    buffer_types_.resize(num_states_);
-    allocated_buffers_.resize(num_states_);
-    bank_id_to_bank_offset_.resize(num_states_);
+    // buffer_type_ and allocated_buffers_ are scalar now
     allocators_.resize(num_states_);
-    interleaved_address_limit_.resize(num_states_);
-    alignment_bytes_.resize(num_states_);
 
     for (uint32_t s = 0; s < num_states_; ++s) {
-        buffer_types_[s] = buffer_type;
-        bank_id_to_bank_offset_[s] = bank_id_to_bank_offset;
-        interleaved_address_limit_[s] = interleaved_address_limit;
-        alignment_bytes_[s] = alignment_bytes;
-        validate_num_banks(bank_id_to_bank_offset_[s].size(), buffer_types_[s], disable_interleaved);
+        buffer_type_ = buffer_type;
+        bank_id_to_bank_offset_ = bank_id_to_bank_offset;
+        interleaved_address_limit_ = interleaved_address_limit;
+        alignment_bytes_ = alignment_bytes;
+        validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
         this->init_allocator(
             size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset, s);
     }
@@ -109,7 +101,7 @@ BankManager::BankManager(
 
 uint32_t BankManager::num_banks(uint32_t state) const {
     this->assert_single_state(state);
-    return bank_id_to_bank_offset_[state].size();
+    return bank_id_to_bank_offset_.size();
 }
 
 DeviceAddr BankManager::bank_size(uint32_t state) const {
@@ -126,15 +118,15 @@ DeviceAddr BankManager::bank_size(uint32_t state) const {
 int64_t BankManager::bank_offset(uint32_t bank_id, uint32_t state) const {
     this->assert_single_state(state);
     this->validate_bank_id(bank_id, state);
-    return bank_id_to_bank_offset_[state].at(bank_id);
+    return bank_id_to_bank_offset_.at(bank_id);
 }
 
 void BankManager::validate_bank_id(uint32_t bank_id, uint32_t state) const {
     TT_FATAL(
-        bank_id_to_bank_offset_[state].find(bank_id) != bank_id_to_bank_offset_[state].end(),
+        bank_id_to_bank_offset_.find(bank_id) != bank_id_to_bank_offset_.end(),
         "Expected bank {} to be tracked!",
         bank_id,
-        bank_id_to_bank_offset_[state].size());
+        bank_id_to_bank_offset_.size());
 }
 
 void BankManager::assert_single_state(uint32_t state) const {
@@ -162,11 +154,10 @@ uint64_t BankManager::allocate_buffer(
             num_compute_banks);
         num_banks = num_shards.value();
     }
-    DeviceAddr size_per_bank =
-        tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, alignment_bytes_[state]);
+    DeviceAddr size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(size, page_size, num_banks, alignment_bytes_);
     DeviceAddr address_limit = 0;
-    if (!is_sharded and buffer_types_[state] == BufferType::L1) {
-        address_limit = interleaved_address_limit_[state];
+    if (!is_sharded and buffer_type_ == BufferType::L1) {
+        address_limit = interleaved_address_limit_;
         TT_FATAL(address_limit > 0, "Address limit {} needs to be larger than zero.", address_limit);
     }
     TT_ASSERT(bool(allocators_[state]), "Allocator not initialized!");
@@ -176,11 +167,11 @@ uint64_t BankManager::allocate_buffer(
             "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
             "store {} B",
             size,
-            enchantum::to_string(buffer_types_[state]),
+            enchantum::to_string(buffer_type_),
             num_banks,
             size_per_bank);
     }
-    allocated_buffers_[state].insert(address.value());
+    allocated_buffers_.insert(address.value());
     return address.value();
 }
 
@@ -191,7 +182,7 @@ void BankManager::deallocate_buffer(DeviceAddr address, uint32_t state) {
 
 void BankManager::deallocate_all(uint32_t state) {
     this->assert_single_state(state);
-    for (DeviceAddr addr : allocated_buffers_[state]) {
+    for (DeviceAddr addr : allocated_buffers_) {
         allocators_[state]->deallocate(addr);
     }
 }
@@ -204,26 +195,23 @@ void BankManager::clear(uint32_t state) {
 }
 
 BankManager::~BankManager() {
-    for (uint32_t s = 0; s < num_states_; ++s) {
-        if (s < allocated_buffers_.size() && s < allocators_.size() && allocators_[s]) {
-            for (DeviceAddr addr : allocated_buffers_[s]) {
-                allocators_[s]->deallocate(addr);
-            }
+    if (!allocators_.empty() && allocators_[0]) {
+        for (DeviceAddr addr : allocated_buffers_) {
+            allocators_[0]->deallocate(addr);
         }
     }
     allocated_buffers_.clear();
-    bank_id_to_bank_offset_.clear();
     allocators_.clear();
 }
 
 BankManager&& BankManager::operator=(BankManager&& that) noexcept {
     num_states_ = that.num_states_;
-    buffer_types_ = std::move(that.buffer_types_);
+    buffer_type_ = that.buffer_type_;
     allocated_buffers_ = std::move(that.allocated_buffers_);
     bank_id_to_bank_offset_ = std::move(that.bank_id_to_bank_offset_);
     allocators_ = std::move(that.allocators_);
-    interleaved_address_limit_ = std::move(that.interleaved_address_limit_);
-    alignment_bytes_ = std::move(that.alignment_bytes_);
+    interleaved_address_limit_ = that.interleaved_address_limit_;
+    alignment_bytes_ = that.alignment_bytes_;
     return std::move(*this);
 }
 
