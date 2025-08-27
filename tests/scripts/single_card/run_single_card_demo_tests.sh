@@ -11,13 +11,13 @@ run_mistral7b_func() {
 
   mistral7b=/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db
   mistral_cache=/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3
-  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1200 ci-token-matching ; fail+=$?
+  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1200 -k ci-token-matching ; fail+=$?
 
 }
 
 run_qwen7b_func() {
 
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py ci-token-matching --timeout 1800
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout 1800
 
 }
 
@@ -93,7 +93,7 @@ run_llama3_func() {
 
   # Run Llama3 accuracy tests for 1B, 3B, 8B, 11b weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 420  -k "accuracy and ci-token-matching" || fail=1
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 420 -k ci-token-matching || fail=1
     echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
   done
 
