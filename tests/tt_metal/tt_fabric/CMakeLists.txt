@@ -152,23 +152,25 @@ target_sources(test_fabric_1d_bw PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test_fabric
 # cabling_generator
 
 find_package(Protobuf REQUIRED)
+
+add_executable(cabling_generator)
+
 protobuf_generate_cpp(
-    PROTO_CCS
-    PROTO_HS
+    CG_PROTO_CCS
+    CG_PROTO_HS
     ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/cabling.proto
     ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/deployment.proto
 )
     
-add_executable(cabling_generator)
 target_include_directories(
     cabling_generator
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/
         ${CMAKE_CURRENT_BINARY_DIR})
-target_link_libraries(
+
+        target_link_libraries(
     cabling_generator
     PRIVATE
-        tt_metal
         protobuf 
 )
 set_target_properties(
@@ -180,5 +182,5 @@ target_sources(
     cabling_generator 
     PRIVATE         
         ${CMAKE_CURRENT_SOURCE_DIR}/cabling_generator/cabling_generator.cpp
-        ${PROTO_CCS}
+        ${CG_PROTO_CCS}
 )
