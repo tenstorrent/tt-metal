@@ -49,16 +49,6 @@ void SliceWriteDeviceOperation::validate_with_output_tensors(
             this->slice_start[i],
             this->slice_end[i]);
     }
-    TT_FATAL(
-        this->slice_start[-1] == 0,
-        "Slice write doesn't support slicing along the last dimension. Slice start [-1] should be 0");
-    TT_FATAL(
-        this->slice_end[-1] == output_padded_shape[-1],
-        "Slice write doesn't support slicing along the last dimension. Slice end [-1] {} should be equal to output "
-        "shape "
-        "[-1] {}",
-        this->slice_end[-1],
-        output_padded_shape[-1]);
 }
 
 std::vector<ttnn::Tensor> SliceWriteDeviceOperation::create_output_tensors(
