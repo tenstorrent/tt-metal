@@ -24,17 +24,6 @@ struct ExecuteScaledDotProductAttention {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor_q,
-        const ttnn::Tensor& input_tensor_k,
-        const ttnn::Tensor& input_tensor_v,
-        const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,
-        bool is_causal = true,
-        std::optional<float> scale = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 struct ExecuteChunkedScaledDotProductAttention {
@@ -49,34 +38,11 @@ struct ExecuteChunkedScaledDotProductAttention {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor_q,
-        const ttnn::Tensor& input_tensor_k,
-        const ttnn::Tensor& input_tensor_v,
-        const ttnn::Tensor& page_table_tensor,
-        int64_t chunk_start_idx,
-        std::optional<float> scale = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 struct ExecuteJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor> invoke(
         QueueId queue_id,
-        const ttnn::Tensor& input_tensor_q,
-        const ttnn::Tensor& input_tensor_k,
-        const ttnn::Tensor& input_tensor_v,
-        const ttnn::Tensor& joint_tensor_q,
-        const ttnn::Tensor& joint_tensor_k,
-        const ttnn::Tensor& joint_tensor_v,
-        const std::string& joint_strategy,
-        SDPAProgramConfig program_config,
-        std::optional<float> scale = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-    static std::tuple<ttnn::Tensor, ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
@@ -127,33 +93,11 @@ struct ExecuteFlashMLAPrefill {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<SDPAProgramConfig> program_config = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor_q,
-        const ttnn::Tensor& input_tensor_k,
-        uint32_t head_dim_v,
-        const std::optional<ttnn::Tensor>& attn_mask = std::nullopt,
-        bool is_causal = true,
-        std::optional<float> scale = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 };
 
 struct ExecuteChunkedFlashMLAPrefill {
     static ttnn::Tensor invoke(
         QueueId queue_id,
-        const ttnn::Tensor& input_tensor_q,
-        const ttnn::Tensor& input_tensor_k,
-        uint32_t head_dim_v,
-        const ttnn::Tensor& page_table_tensor,
-        int64_t chunk_start_idx,
-        std::optional<float> scale = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<SDPAProgramConfig> program_config = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-    static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         uint32_t head_dim_v,
