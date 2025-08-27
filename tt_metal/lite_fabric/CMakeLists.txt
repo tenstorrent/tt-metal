@@ -24,6 +24,7 @@ target_sources(
             hw/inc/init-fsm-basic.hpp
             hw/inc/risc_interface.hpp
             hw/inc/types.hpp
+            hw/inc/kernel_api.hpp
     PRIVATE
         build.cpp
         host_util.cpp

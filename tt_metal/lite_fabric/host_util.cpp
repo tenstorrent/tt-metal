@@ -50,33 +50,34 @@ uint32_t GetEthChannelMask(chip_id_t device_id) {
     return mask;
 }
 
-SystemDescriptor GetSystemDescriptor2Devices(
-    tt::Cluster& cluster, chip_id_t mmio_device_id, chip_id_t connected_device_id) {
+SystemDescriptor GetSystemDescriptorFromMmio(tt::Cluster& cluster, chip_id_t mmio_device_id) {
     SystemDescriptor desc;
 
     // Get the eth mask for each device
     desc.enabled_eth_channels[mmio_device_id] = GetEthChannelMask(mmio_device_id);
-    desc.enabled_eth_channels[connected_device_id] = GetEthChannelMask(connected_device_id);
 
-    for (const auto& mmio_eth_core : cluster.get_ethernet_sockets(mmio_device_id, connected_device_id)) {
-        const auto& [other_device, other_core] = cluster.get_connected_ethernet_core({mmio_device_id, mmio_eth_core});
-        TT_FATAL(
-            other_device == connected_device_id,
-            "Error in ethernet core descriptors. Expected other device id to be {} but got {}",
-            connected_device_id,
-            other_device);
-        desc.tunnels_from_mmio.push_back(TunnelDescriptor{
-            .mmio_id = mmio_device_id,
-            .mmio_core_virtual =
-                cluster.get_virtual_coordinate_from_logical_coordinates(mmio_device_id, mmio_eth_core, CoreType::ETH),
-            .mmio_core_logical = mmio_eth_core,
-            .connected_id = other_device,
-            .connected_core_virtual =
-                cluster.get_virtual_coordinate_from_logical_coordinates(other_device, other_core, CoreType::ETH),
-            .connected_core_logical = other_core,
-        });
-        log_info(
-            tt::LogMetal, "Add tunnel from {} {} to {} {}", mmio_device_id, mmio_eth_core, other_device, other_core);
+    // Find the correct ethernet core to connect mmio device to connected device id
+    const auto connected_id = cluster.get_ethernet_connected_device_ids(mmio_device_id);
+    for (const auto& dev_id : connected_id) {
+            desc.enabled_eth_channels[dev_id] = GetEthChannelMask(dev_id);
+        int hop_count = 1;
+        for (const auto& mmio_eth_core : cluster.get_ethernet_sockets(mmio_device_id, dev_id)) {
+            const auto& [other_device, other_core] = cluster.get_connected_ethernet_core({mmio_device_id, mmio_eth_core});
+            desc.tunnels_from_mmio.push_back(TunnelDescriptor{
+                .mmio_id = mmio_device_id,
+                .mmio_core_virtual =
+                    cluster.get_virtual_coordinate_from_logical_coordinates(mmio_device_id, mmio_eth_core, CoreType::ETH),
+                .mmio_core_logical = mmio_eth_core,
+                .connected_id = other_device,
+                .connected_core_virtual =
+                    cluster.get_virtual_coordinate_from_logical_coordinates(other_device, other_core, CoreType::ETH),
+                .connected_core_logical = other_core,
+                .num_hops = hop_count,
+            });
+            hop_count++;
+            log_info(
+                tt::LogMetal, "Add tunnel from {} {} to {} {} ({} hops)", mmio_device_id, mmio_eth_core, other_device, other_core, hop_count);
+        }
     }
 
     return desc;

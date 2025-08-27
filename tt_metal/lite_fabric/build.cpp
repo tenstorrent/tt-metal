@@ -12,7 +12,6 @@
 #include <string>
 #include <fmt/format.h>
 #include "tt_cluster.hpp"
-#include "tt_metal/fabric/hw/inc/fabric_routing_mode.h"
 
 namespace {
 std::string GetToolchainPath(const std::string& root_dir) {
@@ -92,12 +91,8 @@ int CompileFabricLite(
         root_dir / "tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib",
         root_dir / "tt_metal/lite_fabric/hw/inc"};  // For memory configuration headers
 
-    // TODO remove hardcoded defines
     std::vector<std::string> defines{
         "ARCH_BLACKHOLE",
-        "IS_NOT_POW2_NUM_L1_BANKS=1",
-        "LOG_BASE_2_OF_NUM_DRAM_BANKS=3",
-        "NUM_DRAM_BANKS=8 -DNUM_L1_BANKS=130",
         "TENSIX_FIRMWARE",
         "LOCAL_MEM_EN=0",
         "COMPILE_FOR_ERISC",  // This is needed to enable the ethernet APIs
@@ -107,17 +102,16 @@ int CompileFabricLite(
         "NOC_INDEX=0",
         "DISPATCH_MESSAGE_ADDR=0",
         "COMPILE_FOR_LITE_FABRIC=1",
-        // Fabric
-        fmt::format("ROUTING_MODE={}", ROUTING_MODE_1D | ROUTING_MODE_LOW_LATENCY),
+        "ROUTING_FW_ENABLED",
+        // This is needed to get things to compile
+        "NUM_DRAM_BANKS=1",
+        "NUM_L1_BANKS=1",
+        "LOG_BASE_2_OF_NUM_DRAM_BANKS=0",
+        "LOG_BASE_2_OF_NUM_L1_BANKS=0",
+        // We do not access the PCIe cores
+        "PCIE_NOC_X=0",
+        "PCIE_NOC_Y=0",
     };
-
-    // This assumes both chips are the same
-    auto soc_d = cluster.get_soc_desc(0);
-    auto pcie_cores = soc_d.get_cores(CoreType::PCIE, CoordSystem::TRANSLATED);
-    CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
-
-    defines.push_back(fmt::format("PCIE_NOC_X={}", std::to_string(pcie_core.x)));
-    defines.push_back(fmt::format("PCIE_NOC_Y={}", std::to_string(pcie_core.y)));
 
     defines.insert(defines.end(), extra_defines.begin(), extra_defines.end());
 
