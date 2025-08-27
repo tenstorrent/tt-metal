@@ -5,7 +5,6 @@
 import torch
 import pytest
 import ttnn
-import random
 
 # Set fixed random seeds for deterministic test execution
 torch.manual_seed(42)
