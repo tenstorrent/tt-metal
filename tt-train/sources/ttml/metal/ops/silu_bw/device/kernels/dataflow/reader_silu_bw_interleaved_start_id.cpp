@@ -25,9 +25,10 @@ constexpr bool do_mask_w = true;
 constexpr bool do_mask_w = false;
 #endif
 
+template <typename AddrGen>
 inline void read_tiles(
     uint32_t cb_idx,
-    const InterleavedAddrGenFast</* is dram */ true>& addr_gen,
+    const AddrGen& addr_gen,
     uint32_t start_idx,
     uint32_t block_size,
     uint32_t current_block_size,
@@ -49,13 +50,10 @@ void kernel_main() {
     uint32_t start_row = get_arg_val<uint32_t>(runtime_args_counter++);
 
     const uint32_t tile_bytes = get_tile_size(cb_input_idx);
-    const DataFormat data_format = get_dataformat(cb_input_idx);
-
-    const InterleavedAddrGenFast</* is_dram */ true> input_address_generator = {
-        .bank_base_address = input_address, .page_size = tile_bytes, .data_format = data_format};
-
-    const InterleavedAddrGenFast</* is_dram */ true> dL_out_address_generator = {
-        .bank_base_address = dL_out_address, .page_size = tile_bytes, .data_format = data_format};
+    constexpr auto input_args = TensorAccessorArgs<2>();
+    constexpr auto dL_out_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    const auto input_address_generator = TensorAccessor(input_args, input_address, tile_bytes);
+    const auto dL_out_address_generator = TensorAccessor(dL_out_args, dL_out_address, tile_bytes);
 
     // Read input tensors row by row, reading each row's data twice due to compute requirements
     uint32_t end_row = start_row + num_rows_to_process;
