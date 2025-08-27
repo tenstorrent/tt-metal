@@ -262,7 +262,7 @@ class ContextParallelConv3d:
             device_tensors_front_pad = ttnn.concat([front_slice] * 2, dim=1)
             ttnn.deallocate(front_slice)
             device_tensors_front_pad = ttnn.multiply(device_tensors_front_pad, self.mask)
-            # ttnn.reallocate(device_tensors_front_pad)
+            device_tensors_front_pad = ttnn.reallocate(device_tensors_front_pad)
             halo_tensor = x_NTHWC[:, -context_size:, :, :, :]
             halo_tensor = ttnn.squeeze(halo_tensor, 0)
             halos = ttnn.experimental.all_gather_async(
