@@ -24,14 +24,12 @@ echo "Creating virtual env in: $PYTHON_ENV_DIR"
 $PYTHON_CMD -m venv $PYTHON_ENV_DIR
 source $PYTHON_ENV_DIR/bin/activate
 
+# Import functions for detecting OS
+. ./install_dependencies.sh --source-only
+detect_os
 
-# Detect Ubuntu version
-UBUNTU_VERSION=""
-if [ -f /etc/os-release ]; then
-    UBUNTU_VERSION=$(grep VERSION_ID /etc/os-release | cut -d'=' -f2 | tr -d '"')
-fi
 
-if [ "$UBUNTU_VERSION" = "22.04" ]; then
+if [ "$OS_VERSION" = "22.04" ]; then
     echo "Ubuntu 22.04 detected: force pip/setuptools/wheel versions"
     pip install --force-reinstall pip==21.2.4
     python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
