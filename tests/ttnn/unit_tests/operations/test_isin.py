@@ -27,42 +27,41 @@ def select_torch_dtype(ttnn_dtype):
 
 
 @pytest.mark.parametrize(
-    "elements, test_elements, dtype",
+    "elements, test_elements, dtype, layout",
     [
-        (
-            [i for i in range(200)],
-            [2, 3, 1, 500],
-            ttnn.int32,
-        ),
-        (
-            [i for i in range(200)],
-            [-100, 200, 300],
-            ttnn.int32,
-        ),
-        (
-            [i for i in range(10, 200)],
-            [11, 2, 3, 24, 20, 10, 200, 199],
-            ttnn.uint16,
-        ),
+        ([i for i in range(100)], [2, 3, 1, 500], ttnn.int32, ttnn.ROW_MAJOR_LAYOUT),
+        ([i for i in range(200)], [-100, 200, 300], ttnn.int32, ttnn.TILE_LAYOUT),
+        ([i for i in range(10, 200)], [11, 2, 3, 24, 20, 10, 200, 199], ttnn.uint16, ttnn.ROW_MAJOR_LAYOUT),
         (
             [[i for i in range(10, 20)] for _ in range(5)],
             [11, 2, 3, 24, 20, 10, 200, 199],
             ttnn.uint32,
+            ttnn.TILE_LAYOUT,
         ),
         (
             [[[i ^ j ^ k for i in range(0, 10)] for j in range(0, 10)] for k in range(0, 10)],
             [28 * i for i in range(0, 20)],
             ttnn.int32,
+            ttnn.TILE_LAYOUT,
+        ),
+        (
+            [
+                [[[i ^ j ^ k ^ l for i in range(0, 10)] for j in range(0, 10)] for k in range(0, 10)]
+                for l in range(0, 10)
+            ],
+            [28 * i for i in range(0, 20)],
+            ttnn.int32,
+            ttnn.TILE_LAYOUT,
         ),
     ],
 )
-def test_isin_normal(elements, test_elements, dtype, device):
+def test_isin_normal(elements, test_elements, dtype, layout, device):
     torch_dtype = select_torch_dtype(dtype)
     elements_torch = torch.tensor(elements, dtype=torch_dtype)
     test_elements_torch = torch.tensor(test_elements, dtype=torch_dtype)
 
-    elements_ttnn = ttnn.from_torch(elements_torch, device=device)
-    test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device)
+    elements_ttnn = ttnn.from_torch(elements_torch, device=device, layout=layout)
+    test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, layout=layout)
 
     torch_isin_result = torch.isin(elements_torch, test_elements_torch)
     ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn)
@@ -78,21 +77,19 @@ def test_isin_normal(elements, test_elements, dtype, device):
         ([20], [10]),
         ([10, 10], [20, 20]),
         ([20, 10], [10, 20]),
+        ([32], [32]),
         ([5, 10, 50], [4, 10]),
         ([2, 2, 2, 2, 2], [1, 2, 2, 1]),
         ([3, 2, 3, 2, 3, 2, 3], [1, 1, 10, 2, 1]),
-        # (
-        #     [100, 1000], [20, 10, 5, 2, 5]
-        # ),
+        ([100, 1000], [20, 10, 5, 2, 5]),
         ([1, 1, 80000], [10]),
-        ([1, 1, 20000], [100]),
+        ([1, 1, 20000, 1, 1], [100]),
+        ([1, 10000, 1], [100]),
         ([20000, 2, 1], [1, 100, 1]),
-        # (
-        #     [100000, 1, 1], [100]
-        # ),
-        # (
-        #     [10, 10, 10, 10, 10], [20, 2]
-        # ),
+        ([100000, 1, 1], [100]),
+        ([10, 10, 10, 10, 10], [20, 2]),
+        ([10, 10, 2, 10, 2], [1, 20, 20, 1, 20, 20]),
+        ([10, 10, 2, 5, 50], [20, 10, 20, 1, 10, 1]),
         ([5, 10, 5, 1, 1, 1, 1, 1, 1, 5], [20]),
     ],
 )
@@ -104,9 +101,40 @@ def test_isin_random(elements_shape, test_elements_shape, device):
 
     elements_ttnn = ttnn.from_torch(elements_torch, device=device, dtype=ttnn.int32)
     test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, dtype=ttnn.int32)
+    ttnn.set_printoptions(profile="full")
 
     torch_isin_result = torch.isin(elements_torch, test_elements_torch)
     ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn)
 
     assert torch_isin_result.shape == ttnn_isin_result.shape
     assert torch_isin_result.count_nonzero() == ttnn.to_torch(ttnn_isin_result).count_nonzero()
+
+
+@pytest.mark.parametrize(
+    "elements_shape, test_elements_shape, expected_num_program_cache_entries",
+    [
+        ([10], [20], 1),
+        ([20], [10], 1),
+        ([10, 10], [20, 20], 4),
+        # (
+        #     [10, 100, 2, 10, 50], [20, 10, 20, 10], 5
+        # ),
+        ([5, 10, 5, 1, 1, 1, 1, 1, 1, 5], [20], 3),
+    ],
+)
+def test_isin_callback_random(elements_shape, test_elements_shape, expected_num_program_cache_entries, device):
+    torch.manual_seed(0)
+
+    elements_torch = torch.randint(0, 10000, elements_shape, dtype=torch.int64)
+    test_elements_torch = torch.randint(0, 10000, test_elements_shape, dtype=torch.int64)
+
+    elements_ttnn = ttnn.from_torch(elements_torch, device=device, dtype=ttnn.int32)
+    test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, dtype=ttnn.int32)
+
+    for _ in range(2):
+        torch_isin_result = torch.isin(elements_torch, test_elements_torch)
+        ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn)
+
+    assert torch_isin_result.shape == ttnn_isin_result.shape
+    assert torch_isin_result.count_nonzero() == ttnn.to_torch(ttnn_isin_result).count_nonzero()
+    assert device.num_program_cache_entries() == expected_num_program_cache_entries
