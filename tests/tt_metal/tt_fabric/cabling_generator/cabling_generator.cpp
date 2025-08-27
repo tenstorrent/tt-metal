@@ -20,17 +20,17 @@
 #include "cabling.pb.h"     // Generated from cabling.proto
 #include <google/protobuf/text_format.h>
 
-typedef enum { CABLE_0_5, CABLE_1, CABLE_2_5, CABLE_3, CABLE_5, OPTICAL_CABLE } cable_length_t;
+enum class CableLength { CABLE_0_5, CABLE_1, CABLE_2_5, CABLE_3, CABLE_5, OPTICAL_CABLE };
 
-std::unordered_map<cable_length_t, std::string> cable_length_str = {
-    {CABLE_0_5, "0.5m"},
-    {CABLE_1, "1m"},
-    {CABLE_2_5, "2.5m"},
-    {CABLE_3, "3m"},
-    {CABLE_5, "5m"},
-    {OPTICAL_CABLE, "Optical"}};
+std::unordered_map<CableLength, std::string> cable_length_str = {
+    {CableLength::CABLE_0_5, "0.5m"},
+    {CableLength::CABLE_1, "1m"},
+    {CableLength::CABLE_2_5, "2.5m"},
+    {CableLength::CABLE_3, "3m"},
+    {CableLength::CABLE_5, "5m"},
+    {CableLength::OPTICAL_CABLE, "Optical"}};
 
-cable_length_t calc_cable_length(int rack_0, int shelf_u_0, int rack_1, int shelf_u_1) {
+CableLength calc_cable_length(int rack_0, int shelf_u_0, int rack_1, int shelf_u_1) {
     double standard_rack_w = 600.0;    // mm
     double standard_rack_u_h = 44.45;  // mm
 
@@ -40,17 +40,17 @@ cable_length_t calc_cable_length(int rack_0, int shelf_u_0, int rack_1, int shel
     double cable_length = sqrt(rack_distance * rack_distance + u_distance * u_distance);
 
     if (cable_length <= 500.0) {
-        return CABLE_0_5;
+        return CableLength::CABLE_0_5;
     } else if (cable_length <= 1000.0) {
-        return CABLE_1;
+        return CableLength::CABLE_1;
     } else if (cable_length <= 2500.0) {
-        return CABLE_2_5;
+        return CableLength::CABLE_2_5;
     } else if (cable_length <= 3000.0) {
-        return CABLE_3;
+        return CableLength::CABLE_3;
     } else if (cable_length <= 5000.0) {
-        return CABLE_5;
+        return CableLength::CABLE_5;
     } else {
-        return OPTICAL_CABLE;
+        return CableLength::OPTICAL_CABLE;
     }
 }
 
@@ -60,10 +60,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    const std::string dep_fn = argv[1];
-    std::ifstream d_input(dep_fn);
+    const std::string dendpoint_fn = argv[1];
+    std::ifstream d_input(dendpoint_fn);
     if (!d_input) {
-        std::cerr << "Failed to open file: " << dep_fn << std::endl;
+        std::cerr << "Failed to open file: " << dendpoint_fn << std::endl;
         return 1;
     }
     // Create the Deployment protobuf object
@@ -105,39 +105,42 @@ int main(int argc, char* argv[]) {
     output_file << "Hall,Aisle,Rack,U,Tray,Port,Label,Hall,Aisle,Rack,U,Tray,Port,Label,," << std::endl;
 
     uint32_t max_host = deployment.hosts_size();
-    for (size_t i = 0; i < cabling.connections_size(); i++) {
-        const auto& connection = cabling.connections(i);
-
-        if (connection.ep_a().host() >= max_host || connection.ep_b().host() >= max_host) {
-            std::cerr << "Invalid host index in connection " << i
+    uint32_t connection_idx = 0;
+    for (auto& connection : cabling.connections()) {
+        if (connection.endpoint_a().host() >= max_host || connection.endpoint_b().host() >= max_host) {
+            std::cerr << "Invalid host index in connection " << connection_idx
                       << ": Please review cabling and deployment specifications." << std::endl;
-            break;
+            return 1;
         }
         std::stringstream label;
         label.fill('0');
-        int32_t host_a = connection.ep_a().host();
-        int32_t host_b = connection.ep_b().host();
+        int32_t host_a = connection.endpoint_a().host();
+        int32_t host_b = connection.endpoint_b().host();
 
         deployment::Host host_info_a = deployment.hosts(host_a);
         deployment::Host host_info_b = deployment.hosts(host_b);
 
-        cable_length_t cable_l =
+        CableLength cable_l =
             calc_cable_length(host_info_a.rack(), host_info_a.shelf_u(), host_info_b.rack(), host_info_b.shelf_u());
 
         label << host_info_a.hall() << host_info_a.aisle() << std::setw(2) << host_info_a.rack() << "U" << std::setw(2)
-              << host_info_a.shelf_u() << "-" << connection.ep_a().tray() << "-" << connection.ep_a().port();
+              << host_info_a.shelf_u() << "-" << connection.endpoint_a().tray() << "-"
+              << connection.endpoint_a().port();
 
         output_file << host_info_a.hall() << "," << host_info_a.aisle() << "," << std::setw(2) << host_info_a.rack()
-                    << "," << host_info_a.shelf_u() << "," << connection.ep_a().tray() << ","
-                    << connection.ep_a().port() << "," << label.str() << ",";
+                    << "," << host_info_a.shelf_u() << "," << connection.endpoint_a().tray() << ","
+                    << connection.endpoint_a().port() << "," << label.str() << ",";
         label.str("");  // Clear the stringstream for reuse
         label << host_info_b.hall() << host_info_b.aisle() << std::setw(2) << host_info_b.rack() << "U" << std::setw(2)
-              << host_info_b.shelf_u() << "-" << connection.ep_b().tray() << "-" << connection.ep_b().port();
+              << host_info_b.shelf_u() << "-" << connection.endpoint_b().tray() << "-"
+              << connection.endpoint_b().port();
         output_file << host_info_b.hall() << "," << host_info_b.aisle() << "," << std::setw(2) << host_info_b.rack()
-                    << "," << host_info_b.shelf_u() << "," << connection.ep_b().tray() << ","
-                    << connection.ep_b().port() << "," << label.str() << ",";
-        output_file << cable_length_str.at(cable_l) << "," << ((cable_l == OPTICAL_CABLE) ? "Optical" : "QSFP_DD")
-                    << std::endl;
+                    << "," << host_info_b.shelf_u() << "," << connection.endpoint_b().tray() << ","
+                    << connection.endpoint_b().port() << "," << label.str() << ",";
+        output_file << cable_length_str.at(cable_l) << ","
+                    << ((cable_l == CableLength::OPTICAL_CABLE) ? "Optical" : "QSFP_DD") << std::endl;
+
+        connection_idx++;
     }
 
     d_input.close();

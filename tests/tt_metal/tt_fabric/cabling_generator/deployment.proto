@@ -9,12 +9,11 @@ message Host {
   string aisle = 2;
   int32 rack = 3;
   int32 shelf_u = 4;
-  string pod_type = 6;
   string host = 5;
+  string pod_type = 6;
 }
 
 // Represents the overall deployment configuration
 message DeploymentDescriptor {
-  int32 rack_capacity = 1;
   repeated Host hosts = 2;
 }

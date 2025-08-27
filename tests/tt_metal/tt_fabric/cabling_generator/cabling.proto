@@ -12,8 +12,8 @@ message CablingDescriptor {
             int32 tray = 2;
             int32 port = 3;
         }
-        Endpoint ep_a = 1;
-        Endpoint ep_b = 2;
+        Endpoint endpoint_a = 1;
+        Endpoint endpoint_b = 2;
     }
     int32 num_hosts = 1;
     repeated Connection connections = 2;
