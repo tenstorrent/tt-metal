@@ -108,6 +108,7 @@ while [[ "$found" == "false" ]]; do
       timeout_rc=0
       break
     else
+      echo "Test logs:"
       cat "$output_file"
       timeout_rc=$?
       echo "Test failed (code $timeout_rc), retrying…"
