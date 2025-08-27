@@ -4,7 +4,6 @@
 #include <string>
 
 #include "tt-metalium/circular_buffer_config.hpp"
-#include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_op_program_factory_common.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
@@ -141,8 +140,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         shard_shape[1],
         output_channels,
         filter_w,
-        device->arch() == tt::ARCH::BLACKHOLE);
-    log_info(tt::LogOp, "enable_split_reader: {}", enable_split_reader);
+        device->arch() == tt::ARCH::BLACKHOLE,
+        a.dtype());
 
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
