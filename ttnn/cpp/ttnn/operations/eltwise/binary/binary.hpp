@@ -37,8 +37,7 @@ struct BinaryOperation {
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<uint32_t>& stack_id = std::nullopt);
+        const std::optional<bool>& use_legacy = std::nullopt);
 
     static Tensor invoke(
         QueueId queue_id,
@@ -50,8 +49,7 @@ struct BinaryOperation {
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations = {},
         tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<uint32_t>& stack_id = std::nullopt);
+        const std::optional<bool>& use_legacy = std::nullopt);
 };
 
 template <BinaryOpType binary_op_type>

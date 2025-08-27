@@ -59,12 +59,18 @@ public:
     void set_device_operation_id(std::int64_t device_operation_id);
     std::int64_t fetch_and_increment_device_operation_id();
 
+    // Thread-local storage for device operation ID tracking
+    void set_first_assigned_device_operation_id(std::int64_t device_operation_id);
+    std::int64_t get_first_assigned_device_operation_id();
+    void clear_first_assigned_device_operation_id();
+
 private:
     CoreIDs() = default;
     ~CoreIDs() = default;
     std::atomic<std::int64_t> tensor_id;
     std::atomic<std::int64_t> python_operation_id;
     std::atomic<std::int64_t> device_operation_id = 1;
+    thread_local static std::int64_t first_assigned_device_operation_id;
 };
 
 }  // namespace ttnn

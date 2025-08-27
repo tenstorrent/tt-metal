@@ -487,18 +487,9 @@ namespace ttnn::operations::binary_ng {
 
 // Implements c = a op b
 BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperation::ProgramFactory::create(
-    const operation_attributes_t& operation_attributes,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& c,
-    const std::optional<uint32_t>& stack_id) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args, tensor_return_value_t& c) {
     using namespace tt;
     using namespace tt::tt_metal;
-
-    if (stack_id.has_value()) {
-        std::cout << "ProgramFactory::create called with stack_id: " << *stack_id << std::endl;
-    } else {
-        std::cout << "ProgramFactory::create called without stack_id" << std::endl;
-    }
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;

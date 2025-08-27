@@ -451,8 +451,7 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<Tensor>& output_tensor,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations,
-    const std::optional<uint32_t>& stack_id) {
+    tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
     auto subtile_broadcast_type = get_subtile_broadcast_type(
         input_tensor_a.logical_shape()[-2],
         input_tensor_a.logical_shape()[-1],
@@ -479,8 +478,7 @@ BinaryNgDeviceOperation::invoke(
             std::nullopt,
             subtile_broadcast_type,
             is_sfpu_op,
-            is_quant_op,
-            stack_id},
+            is_quant_op},
         tensor_args_t{input_tensor_a, input_tensor_b, std::move(output_tensor)}};
 }
 
@@ -494,8 +492,7 @@ BinaryNgDeviceOperation::invoke(
     const std::optional<Tensor>& output_tensor,
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
-    tt::stl::Span<const unary::UnaryWithParam> post_activations,
-    const std::optional<uint32_t>& stack_id) {
+    tt::stl::Span<const unary::UnaryWithParam> post_activations) {
     DataType dtype_a = input_tensor_a.dtype();
     bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a));
     bool is_quant_op = utils::is_quant_op(binary_op_type);
@@ -514,8 +511,7 @@ BinaryNgDeviceOperation::invoke(
             std::nullopt,
             SubtileBroadcastType::NONE,
             is_sfpu_op,
-            is_quant_op,
-            stack_id},
+            is_quant_op},
         tensor_args_t{input_tensor_a, std::nullopt, std::move(output_tensor)}};
 }
 

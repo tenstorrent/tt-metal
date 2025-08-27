@@ -240,10 +240,6 @@ public:
 
     std::vector<uint32_t>& get_program_config_sizes() noexcept { return program_config_sizes_; }
 
-    // Stack ID getter/setter for debugging/tracing
-    void set_stack_id(uint32_t stack_id) { stack_id_ = stack_id; }
-    const std::optional<uint32_t>& get_stack_id() const { return stack_id_; }
-
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -319,9 +315,6 @@ private:
     std::vector<uint32_t> program_config_sizes_;
 
     uint32_t kernel_bins_sizeB = 0;
-
-    // Stack ID from Python call stack for debugging/tracing
-    std::optional<uint32_t> stack_id_;
 
     // The rta_updates from one cached command sequence may reference data in another cached command sequence.
     std::unordered_map<uint64_t, ProgramCommandSequence> cached_program_command_sequences_;

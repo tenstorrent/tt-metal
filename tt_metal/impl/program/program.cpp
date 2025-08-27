@@ -1685,10 +1685,6 @@ const std::vector<SubDeviceId>& Program::determine_sub_device_ids(const IDevice*
     return internal_->determine_sub_device_ids(device);
 }
 
-void Program::set_stack_id(uint32_t stack_id) { internal_->set_stack_id(stack_id); }
-
-const std::optional<uint32_t>& Program::get_stack_id() const { return internal_->get_stack_id(); }
-
 const ProgramTransferInfo& detail::ProgramImpl::get_program_transfer_info() const noexcept {
     return program_transfer_info;
 }

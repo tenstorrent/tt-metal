@@ -226,10 +226,29 @@ def colorize_arguments(text: str) -> str:
     if not arguments:
         return text
 
-    # Create color mapping for arguments
-    arg_colors = {}
+    # Create color mapping for arguments and parameter names
+    arg_colors = {}  # Maps call arguments (result3, 1.0) to colors
+    param_colors = {}  # Maps parameter names (arg_0, arg_1) to colors
+
     for i, arg in enumerate(arguments):
-        arg_colors[arg] = COLORS[i % len(COLORS)]
+        color = COLORS[i % len(COLORS)]
+        arg_colors[arg] = color
+        # Also map positional parameter names
+        param_colors[f"arg_{i}"] = color
+
+    # Also look for keyword arguments in the argument descriptions
+    # and add any named parameters we find
+    for line in lines:
+        line_stripped = line.lstrip(" ·")
+        # Look for parameter names that aren't arg_0, arg_1 style
+        param_match = re.match(r"^([a-zA-Z_][a-zA-Z0-9_]*)\s*[:\[=]", line_stripped)
+        if param_match:
+            param_name = param_match.group(1)
+            if param_name not in param_colors and not param_name.startswith("arg_"):
+                # Find the position in arguments to assign consistent color
+                # This handles keyword arguments like 'tensor', 'device', etc.
+                if len(param_colors) < len(COLORS):
+                    param_colors[param_name] = COLORS[len(param_colors) % len(COLORS)]
 
     # Apply colors to the text
     colored_lines = []
@@ -243,18 +262,22 @@ def colorize_arguments(text: str) -> str:
                 pattern = r"\b" + re.escape(arg) + r"\b"
                 colored_line = re.sub(pattern, f"{color}{arg}{RST}", colored_line)
 
-        # Color the argument descriptions (lines starting with argument name)
+        # Color the argument descriptions (lines starting with parameter name)
         else:
             line_stripped = line.lstrip(" ·")
-            for arg, color in arg_colors.items():
+            for param_name, color in param_colors.items():
                 # Match both verbose format (arg :) and concise format (arg [shape])
-                if line_stripped.startswith(f"{arg} :") or line_stripped.startswith(f"{arg} ["):
+                if (
+                    line_stripped.startswith(f"{param_name} :")
+                    or line_stripped.startswith(f"{param_name} [")
+                    or line_stripped.startswith(f"{param_name} =")
+                ):
                     # Color the entire line in the argument's color
                     indent_match = re.match(r"^(\s*·?\s*)", line)
                     indent = indent_match.group(1) if indent_match else ""
                     content = line_stripped
-                    # Color the argument name at the start
-                    content = re.sub(r"^(" + re.escape(arg) + r")", f"{color}\\1{RST}", content)
+                    # Color the parameter name at the start
+                    content = re.sub(r"^(" + re.escape(param_name) + r")", f"{color}\\1{RST}", content)
                     colored_line = indent + content
                     break
 
@@ -336,11 +359,15 @@ def load_host_id_mapping(mapping_file: str | None) -> dict:
     try:
         with open(mapping_file, "r") as f:
             yaml_data = yaml.safe_load(f) or []
-            # Convert list of operations to dict keyed by operation_id
+            # Convert list of operations to dict keyed by device_operation_id
             mapping = {}
             for op in yaml_data:
-                if isinstance(op, dict) and "operation_id" in op:
-                    mapping[str(op["operation_id"])] = op
+                if isinstance(op, dict):
+                    # Support both old format (operation_id) and new format (device_operation_id)
+                    if "device_operation_id" in op and op["device_operation_id"] != "none":
+                        mapping[str(op["device_operation_id"])] = op
+                    elif "operation_id" in op:
+                        mapping[str(op["operation_id"])] = op
             return mapping
     except Exception:
         return {}
@@ -380,9 +407,13 @@ def dump_ops(
 
             # If we found a valid kernel_config_host_id, add one entry for this location
             if kernel_config_host_id is not None:
-                # Use kernel_config_host_assigned_id as operation_id to look up in mapping
-                # Decrement by 1 since kernel_config_host_assigned_id starts at 1 but operation_id starts at 0
-                operation_id_key = str(kernel_config_host_id - 1)
+                # Use kernel_config_host_assigned_id to look up in mapping
+                # For new format: device_operation_id matches kernel_config_host_assigned_id directly
+                # For old format: decrement by 1 since kernel_config_host_assigned_id starts at 1 but operation_id starts at 0
+                operation_id_key = str(kernel_config_host_id)
+                if operation_id_key not in host_id_mapping:
+                    # Fallback to old format offset for backwards compatibility
+                    operation_id_key = str(kernel_config_host_id - 1)
 
                 # Get callstack and args from mapping if available
                 callstack = ""

@@ -9,119 +9,10 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/types.hpp"
-#include <iostream>
-#include <sstream>
-#include <fstream>
-#include <functional>
-#include <atomic>
-#include <string>
-#include <filesystem>
-
-// External reference to global operation ID counter defined in core.cpp
-extern std::atomic<uint32_t> ttnn_global_operation_id;
 
 namespace ttnn {
 namespace operations {
 namespace binary {
-
-// Function to get Python call stack as string
-std::string get_python_call_stack() {
-    std::stringstream stack_stream;
-    try {
-        py::module traceback = py::module::import("traceback");
-        py::object stack = traceback.attr("format_stack")();
-
-        // Filter out pytest and environment frames, only show user code
-        for (py::handle frame : stack) {
-            std::string frame_str = py::str(frame).cast<std::string>();
-
-            // Skip frames that are from pytest, pybind, or other internal stuff
-            // if (frame_str.find("/pytest") != std::string::npos || frame_str.find("/pluggy/") != std::string::npos ||
-            //     frame_str.find("/python3.10/site-packages/") != std::string::npos ||
-            //     frame_str.find("ttnn/__init__.py") != std::string::npos ||
-            //     frame_str.find("decorators.py") != std::string::npos) {
-            //     continue;
-            // }
-
-            stack_stream << frame_str;
-        }
-    } catch (const std::exception& e) {
-        stack_stream << "Failed to get Python call stack: " << e.what() << std::endl;
-    }
-    return stack_stream.str();
-}
-
-// Helper function to convert scalar to string - overloaded for different types
-std::string scalar_to_string(float scalar) { return std::to_string(scalar); }
-
-std::string scalar_to_string(const std::variant<int32_t, float>& scalar) {
-    if (std::holds_alternative<int32_t>(scalar)) {
-        return std::to_string(std::get<int32_t>(scalar));
-    } else {
-        return std::to_string(std::get<float>(scalar));
-    }
-}
-
-// Function to write operation info to file and return stack_id
-uint32_t write_operation_info_to_file(const std::string& callstack, const std::string& args_info) {
-    // Get next operation ID
-    uint32_t stack_id = ttnn_global_operation_id.fetch_add(1);
-
-    // Create directory if it doesn't exist
-    std::string dir_path = "./generated/inspector/ops";
-    std::filesystem::create_directories(dir_path);
-
-    // Create filename with full path
-    std::string filename = dir_path + "/ops.yaml";
-
-    // Check if file exists and has content
-    bool file_exists = std::filesystem::exists(filename);
-    bool is_empty = !file_exists || std::filesystem::file_size(filename) == 0;
-
-    // Helper function to escape YAML special chars
-    auto escape_yaml = [](const std::string& str) -> std::string {
-        std::string result;
-        for (char c : str) {
-            if (c == '\n') {
-                result += "\\n";
-            } else if (c == '\r') {
-                result += "\\r";
-            } else if (c == '\t') {
-                result += "\\t";
-            } else if (c == '"') {
-                result += "\\\"";
-            } else if (c == '\\') {
-                result += "\\\\";
-            } else {
-                result += c;
-            }
-        }
-        return result;
-    };
-
-    // Append to YAML file
-    std::ofstream file(filename, std::ios::app);
-    if (file.is_open()) {
-        file << "- operation_id: " << stack_id << "\n";
-        file << "  callstack: |\n";
-        // Write callstack as literal block
-        std::istringstream callstack_stream(callstack);
-        std::string line;
-        while (std::getline(callstack_stream, line)) {
-            file << "    " << line << "\n";
-        }
-        file << "  arguments: |\n";
-        // Write arguments as literal block
-        std::istringstream args_stream(args_info);
-        while (std::getline(args_stream, line)) {
-            file << "    " << line << "\n";
-        }
-        file.close();
-    }
-    std::cout << "Operation dispatched with stack_id: " << stack_id << " -> " << filename << std::endl;
-
-    return stack_id;
-}
 
 namespace detail {
 
@@ -267,16 +158,6 @@ void bind_binary_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
-                std::string callstack = get_python_call_stack();
-
-                std::stringstream args_stream;
-                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
-                            << " data_type = " << input_tensor_a.dtype() << " layout = " << input_tensor_a.layout()
-                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
-                args_stream << "scalar = " << scalar_to_string(scalar) << std::endl;
-
-                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
-
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -314,18 +195,6 @@ void bind_binary_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
-                std::string callstack = get_python_call_stack();
-
-                std::stringstream args_stream;
-                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
-                            << " data_type = " << input_tensor_a.dtype()
-                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
-                args_stream << "input_tensor_b : shape = " << input_tensor_b.logical_shape()
-                            << " data_type = " << input_tensor_b.dtype()
-                            << " memory_config = " << input_tensor_b.memory_config() << std::endl;
-
-                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
-
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -432,18 +301,6 @@ void bind_binary_gcd_lcm_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
-                std::string callstack = get_python_call_stack();
-
-                std::stringstream args_stream;
-                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
-                            << " data_type = " << input_tensor_a.dtype()
-                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
-                args_stream << "input_tensor_b : shape = " << input_tensor_b.logical_shape()
-                            << " data_type = " << input_tensor_b.dtype()
-                            << " memory_config = " << input_tensor_b.memory_config() << std::endl;
-
-                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
-
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -538,16 +395,6 @@ void bind_binary_unary_max_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
-                std::string callstack = get_python_call_stack();
-
-                std::stringstream args_stream;
-                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
-                            << " data_type = " << input_tensor_a.dtype() << " layout = " << input_tensor_a.layout()
-                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
-                args_stream << "scalar = " << scalar_to_string(scalar) << std::endl;
-
-                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
-
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -585,18 +432,6 @@ void bind_binary_unary_max_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
-                std::string callstack = get_python_call_stack();
-
-                std::stringstream args_stream;
-                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
-                            << " data_type = " << input_tensor_a.dtype()
-                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
-                args_stream << "input_tensor_b : shape = " << input_tensor_b.logical_shape()
-                            << " data_type = " << input_tensor_b.dtype()
-                            << " memory_config = " << input_tensor_b.memory_config() << std::endl;
-
-                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
-
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -698,16 +533,6 @@ void bind_binary_unary_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
-                std::string callstack = get_python_call_stack();
-
-                std::stringstream args_stream;
-                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
-                            << " data_type = " << input_tensor_a.dtype() << " layout = " << input_tensor_a.layout()
-                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
-                args_stream << "scalar = " << scalar_to_string(scalar) << std::endl;
-
-                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
-
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -745,18 +570,6 @@ void bind_binary_unary_operation(
                const ttnn::SmallVector<unary::UnaryWithParam>& input_tensor_b_activations,
                const std::optional<bool>& use_legacy,
                QueueId queue_id) -> ttnn::Tensor {
-                std::string callstack = get_python_call_stack();
-
-                std::stringstream args_stream;
-                args_stream << "input_tensor_a : shape = " << input_tensor_a.logical_shape()
-                            << " data_type = " << input_tensor_a.dtype()
-                            << " memory_config = " << input_tensor_a.memory_config() << std::endl;
-                args_stream << "input_tensor_b : shape = " << input_tensor_b.logical_shape()
-                            << " data_type = " << input_tensor_b.dtype()
-                            << " memory_config = " << input_tensor_b.memory_config() << std::endl;
-
-                uint32_t stack_id = write_operation_info_to_file(callstack, args_stream.str());
-
                 return self(
                     queue_id,
                     input_tensor_a,
