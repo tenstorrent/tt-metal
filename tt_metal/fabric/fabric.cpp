@@ -4,11 +4,11 @@
 
 #include <stdint.h>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
+#include "erisc_datamover_builder.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
-#include <tt-metalium/fabric_edm_packet_header.hpp>
+#include "fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/assert.hpp>
 #include <tt-metalium/control_plane.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
@@ -357,6 +357,11 @@ bool is_2d_fabric_config(tt::tt_fabric::FabricConfig fabric_config) {
            fabric_config == tt::tt_fabric::FabricConfig::FABRIC_2D_DYNAMIC_TORUS_XY;
 }
 
+// TODO: this should subtract out links used by runtime for dispatching to non-mmio capable devices, tracked by #27196
+size_t get_num_available_routing_planes_in_direction(FabricNodeId fabric_node_id, RoutingDirection routing_direction) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    return control_plane.get_num_available_routing_planes_in_direction(fabric_node_id, routing_direction);
+}
 namespace experimental {
 
 size_t get_number_of_available_routing_planes(

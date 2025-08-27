@@ -27,8 +27,8 @@ from ...parallel.config import DiTParallelConfig, ParallelFactor
         [(4, 8), (2, 1), (4, 0), (4, 1), ttnn.Topology.Linear, 4],
     ],
     ids=[
-        "t3k_cfg2_sp2_tp2",
-        "tg_cfg2_sp4_tp4",
+        "2x4cfg1sp0tp1",
+        "4x8cfg1sp0tp1",
     ],
     indirect=["mesh_device"],
 )
@@ -37,6 +37,7 @@ from ...parallel.config import DiTParallelConfig, ParallelFactor
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 25000000}],
     indirect=True,
 )
+@pytest.mark.parametrize("use_cache", [True, False], ids=["yes_use_cache", "no_use_cache"])
 def test_sd35_new_pipeline_performance(
     *,
     mesh_device: ttnn.MeshDevice,
@@ -51,6 +52,7 @@ def test_sd35_new_pipeline_performance(
     topology,
     num_links,
     model_location_generator,
+    use_cache,
 ) -> None:
     """Performance test for new SD35 pipeline with detailed timing analysis."""
 
@@ -92,9 +94,11 @@ def test_sd35_new_pipeline_performance(
         enable_t5_text_encoder=enable_t5_text_encoder,
         guidance_cond=guidance_cond,
         parallel_config=parallel_config,
+        num_links=num_links,
         height=image_h,
         width=image_w,
         model_location_generator=model_location_generator,
+        use_cache=use_cache,
     )
 
     # Prepare pipeline
