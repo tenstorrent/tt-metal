@@ -192,7 +192,6 @@ void kernel_main() {
         for (uint32_t test_elements_subchunk_id = test_elements_start_subchunk_id, test_elements_offset = 0;
              test_elements_offset < ctas.test_elements_size;
              ++test_elements_subchunk_id, test_elements_offset += ctas.single_fetch_subchunk_size) {
-            DPRINT << test_elements_subchunk_id << ENDL();
             const uint32_t test_elements_subchunk_size =
                 std::min(ctas.test_elements_size - test_elements_offset, ctas.single_fetch_subchunk_size);
             load_to_cb<elements_number_type, decltype(test_elements_addr_gtor)>(
