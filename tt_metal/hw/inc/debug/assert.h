@@ -14,7 +14,7 @@ void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type = DebugA
     if (v->tripped == DebugAssertOK) {
         v->line_num = line_num;
         v->tripped = assert_type;
-        v->which = PROCESSOR_INDEX;
+        v->which = debug_get_which_riscv();
     }
 
     // Hang, or in the case of erisc, early exit.

@@ -246,7 +246,7 @@ void __attribute__((noinline)) debug_sanitize_post_noc_addr_and_hang(
         v[noc_id].noc_addr = noc_addr;
         v[noc_id].l1_addr = l1_addr;
         v[noc_id].len = len;
-        v[noc_id].which_risc = PROCESSOR_INDEX;
+        v[noc_id].which_risc = debug_get_which_riscv();
         v[noc_id].is_multicast = (multicast == DEBUG_SANITIZE_NOC_MULTICAST);
         v[noc_id].is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
         v[noc_id].is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
