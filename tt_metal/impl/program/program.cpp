@@ -929,9 +929,9 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     }
 }
 
-size_t detail::ProgramImpl::num_semaphores() const { return semaphores_.size(); }
+std::size_t detail::ProgramImpl::num_semaphores() const { return semaphores_.size(); }
 
-size_t Program::num_semaphores() const { return internal_->num_semaphores(); }
+std::size_t Program::num_semaphores() const { return internal_->num_semaphores(); }
 
 void detail::ProgramImpl::init_semaphores(
     const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
@@ -1484,9 +1484,9 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
 void Program::compile(IDevice* device, bool force_slow_dispatch) { internal_->compile(device, force_slow_dispatch); }
 
-void detail::ProgramImpl::set_runtime_id(uint64_t id) { this->runtime_id = id; }
+void detail::ProgramImpl::set_runtime_id(Program::id_t id) { this->runtime_id = id; }
 
-void Program::set_runtime_id(uint64_t id) { internal_->set_runtime_id(id); }
+void Program::set_runtime_id(Program::id_t id) { internal_->set_runtime_id(id); }
 
 uint32_t detail::ProgramImpl::get_sem_base_addr(IDevice* device, CoreCoord /*logical_core*/, CoreType core_type) {
     HalProgrammableCoreType programmable_core_type = hal_programmable_core_type_from_core_type(core_type);
@@ -1562,13 +1562,13 @@ Program& Program::operator=(Program &&other) noexcept = default;
 
 Program::~Program() noexcept = default;
 
-uint64_t detail::ProgramImpl::get_id() const { return this->id; }
+Program::id_t detail::ProgramImpl::get_id() const { return this->id; }
 
-uint64_t Program::get_id() const { return internal_->get_id(); }
+Program::id_t Program::get_id() const { return internal_->get_id(); }
 
-uint64_t detail::ProgramImpl::get_runtime_id() const { return this->runtime_id; }
+Program::id_t detail::ProgramImpl::get_runtime_id() const { return this->runtime_id; }
 
-uint64_t Program::get_runtime_id() const { return internal_->get_runtime_id(); }
+Program::id_t Program::get_runtime_id() const { return internal_->get_runtime_id(); }
 
 size_t detail::ProgramImpl::num_kernels() const {
     size_t count = 0;
@@ -1578,7 +1578,7 @@ size_t detail::ProgramImpl::num_kernels() const {
     return count;
 }
 
-size_t Program::num_kernels() const { return internal_->num_kernels(); }
+std::size_t Program::num_kernels() const { return internal_->num_kernels(); }
 
 const std::vector<std::shared_ptr<CircularBuffer>>& detail::ProgramImpl::circular_buffers() const {
     return circular_buffers_;
@@ -1616,13 +1616,13 @@ void detail::ProgramImpl::set_finalized() { this->finalized_ = true; }
 
 bool Program::is_finalized() const { return internal_->is_finalized(); }
 
-ProgramBinaryStatus Program::get_program_binary_status(std::size_t device_id) const {
+ProgramBinaryStatus Program::get_program_binary_status(chip_id_t device_id) const {
     return internal_->get_program_binary_status(device_id);
 }
-void Program::set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
+void Program::set_program_binary_status(chip_id_t device_id, ProgramBinaryStatus status) {
     internal_->set_program_binary_status(device_id, status);
 }
-void detail::ProgramImpl::set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) {
+void detail::ProgramImpl::set_program_binary_status(chip_id_t device_id, ProgramBinaryStatus status) {
     Inspector::program_set_binary_status(this, device_id, status);
     this->binaries_on_device_[device_id] = status;
 }

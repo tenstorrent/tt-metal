@@ -181,10 +181,10 @@ public:
 
     ~ProgramImpl() noexcept;
 
-    void set_runtime_id(uint64_t id);
-    uint64_t get_runtime_id() const;
-    uint64_t get_id() const;
-    size_t num_kernels() const;
+    void set_runtime_id(Program::id_t id);
+    Program::id_t get_runtime_id() const;
+    Program::id_t get_id() const;
+    std::size_t num_kernels() const;
     const std::vector<std::shared_ptr<CircularBuffer>>& circular_buffers() const;
     const std::vector<Semaphore>& semaphores() const;
     KernelGroup* kernels_on_core(const CoreCoord& core, uint32_t programmable_core_type_index);
@@ -197,7 +197,7 @@ public:
     std::vector<CoreRange> circular_buffers_unique_coreranges() const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
-    size_t num_semaphores() const;
+    std::size_t num_semaphores() const;
     void init_semaphores(
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     // XXXXX TODO: this should return a const reference
@@ -209,7 +209,7 @@ public:
     void set_finalized();
     void allocate_kernel_bin_buf_on_device(IDevice* device);
     bool is_cached() const { return this->cached_device_hash_.has_value(); }
-    ProgramBinaryStatus get_program_binary_status(std::size_t device_id) const {
+    ProgramBinaryStatus get_program_binary_status(chip_id_t device_id) const {
         if (auto it = this->binaries_on_device_.find(device_id); it != this->binaries_on_device_.end()) {
             return it->second;
         }
@@ -217,7 +217,7 @@ public:
     }
     void set_cached(uint64_t device_hash) { this->cached_device_hash_ = device_hash; }
     const std::optional<uint64_t>& get_cached() const { return this->cached_device_hash_; }
-    void set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status);
+    void set_program_binary_status(chip_id_t device_id, ProgramBinaryStatus status);
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
     ProgramConfig& get_program_config(uint32_t programmable_core_type_index);
     const ProgramConfig& get_program_config(uint32_t programmable_core_type_index) const;
@@ -332,7 +332,7 @@ private:
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_local_cb_indices_;
     std::unordered_map<CoreCoord, std::bitset<NUM_CIRCULAR_BUFFERS>> per_core_remote_cb_indices_;
-    std::unordered_map<std::size_t, ProgramBinaryStatus> binaries_on_device_;
+    std::unordered_map<chip_id_t, ProgramBinaryStatus> binaries_on_device_;
     // Used to generate circular buffer addresses. There is one CircularBufferAllocator per unique CoreRange
     std::vector<CircularBufferAllocator> cb_allocators_;
 
