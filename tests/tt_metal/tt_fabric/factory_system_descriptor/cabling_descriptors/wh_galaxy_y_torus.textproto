@@ -7,36 +7,36 @@ boards {
 port_type_connections {
   key: "LINKING_BOARD_1"
   value {
-    connections { p_a { tray_id: 1 port_id: 1 } p_b { tray_id: 2 port_id: 1 } }
-    connections { p_a { tray_id: 1 port_id: 2 } p_b { tray_id: 2 port_id: 2 } }
-    connections { p_a { tray_id: 3 port_id: 1 } p_b { tray_id: 4 port_id: 1 } }
-    connections { p_a { tray_id: 3 port_id: 2 } p_b { tray_id: 4 port_id: 2 } }
+    connections { port_a { tray_id: 1 port_id: 1 } port_b { tray_id: 2 port_id: 1 } }
+    connections { port_a { tray_id: 1 port_id: 2 } port_b { tray_id: 2 port_id: 2 } }
+    connections { port_a { tray_id: 3 port_id: 1 } port_b { tray_id: 4 port_id: 1 } }
+    connections { port_a { tray_id: 3 port_id: 2 } port_b { tray_id: 4 port_id: 2 } }
   }
 }
 port_type_connections {
   key: "LINKING_BOARD_2"
   value {
-    connections { p_a { tray_id: 1 port_id: 1 } p_b { tray_id: 2 port_id: 1 } }
-    connections { p_a { tray_id: 1 port_id: 2 } p_b { tray_id: 2 port_id: 2 } }
-    connections { p_a { tray_id: 3 port_id: 1 } p_b { tray_id: 4 port_id: 1 } }
-    connections { p_a { tray_id: 3 port_id: 2 } p_b { tray_id: 4 port_id: 2 } }
+    connections { port_a { tray_id: 1 port_id: 1 } port_b { tray_id: 2 port_id: 1 } }
+    connections { port_a { tray_id: 1 port_id: 2 } port_b { tray_id: 2 port_id: 2 } }
+    connections { port_a { tray_id: 3 port_id: 1 } port_b { tray_id: 4 port_id: 1 } }
+    connections { port_a { tray_id: 3 port_id: 2 } port_b { tray_id: 4 port_id: 2 } }
   }
 }
 port_type_connections {
   key: "LINKING_BOARD_3"
   value {
-    connections { p_a { tray_id: 1 port_id: 1 } p_b { tray_id: 3 port_id: 1 } }
-    connections { p_a { tray_id: 1 port_id: 2 } p_b { tray_id: 3 port_id: 2 } }
-    connections { p_a { tray_id: 2 port_id: 1 } p_b { tray_id: 4 port_id: 1 } }
-    connections { p_a { tray_id: 2 port_id: 2 } p_b { tray_id: 4 port_id: 2 } }
+    connections { port_a { tray_id: 1 port_id: 1 } port_b { tray_id: 3 port_id: 1 } }
+    connections { port_a { tray_id: 1 port_id: 2 } port_b { tray_id: 3 port_id: 2 } }
+    connections { port_a { tray_id: 2 port_id: 1 } port_b { tray_id: 4 port_id: 1 } }
+    connections { port_a { tray_id: 2 port_id: 2 } port_b { tray_id: 4 port_id: 2 } }
   }
 }
 port_type_connections {
   key: "QSFP"
   value {
-    connections { p_a { tray_id: 1 port_id: 2 } p_b { tray_id: 3 port_id: 2 } }
-    connections { p_a { tray_id: 1 port_id: 1 } p_b { tray_id: 3 port_id: 1 } }
-    connections { p_a { tray_id: 2 port_id: 1 } p_b { tray_id: 4 port_id: 1 } }
-    connections { p_a { tray_id: 2 port_id: 2 } p_b { tray_id: 4 port_id: 2 } }
+    connections { port_a { tray_id: 1 port_id: 2 } port_b { tray_id: 3 port_id: 2 } }
+    connections { port_a { tray_id: 1 port_id: 1 } port_b { tray_id: 3 port_id: 1 } }
+    connections { port_a { tray_id: 2 port_id: 1 } port_b { tray_id: 4 port_id: 1 } }
+    connections { port_a { tray_id: 2 port_id: 2 } port_b { tray_id: 4 port_id: 2 } }
   }
 }

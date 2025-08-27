@@ -24,48 +24,48 @@ port_type_connections {
   key: "QSFP"
   value {
     connections {
-      p_a {
+      port_a {
         pod_id: 1
         tray_id: 4
         port_id: 2
       }
-      p_b {
+      port_b {
         pod_id: 2
         tray_id: 1
         port_id: 2
       }
     }
     connections {
-      p_a {
+      port_a {
         pod_id: 1
         tray_id: 3
         port_id: 1
       }
-      p_b {
+      port_b {
         pod_id: 4
         tray_id: 1
         port_id: 2
       }
     }
     connections {
-      p_a {
+      port_a {
         pod_id: 1
         tray_id: 2
         port_id: 1
       }
-      p_b {
+      port_b {
         pod_id: 3
         tray_id: 1
         port_id: 2
       }
     }
     connections {
-      p_a {
+      port_a {
         pod_id: 1
         tray_id: 1
         port_id: 2
       }
-      p_b {
+      port_b {
         pod_id: 5
         tray_id: 1
         port_id: 2
