@@ -20,13 +20,13 @@ port_type_connections {
   key: "QSFP"
   value {
     connections {
-      p_a {
+      port_a {
         superpod_id: 1
         pod_id: 1
         tray_id: 2
         port_id: 1
       }
-      p_b {
+      port_b {
         superpod_id: 3
         pod_id: 1
         tray_id: 2
@@ -34,13 +34,13 @@ port_type_connections {
       }
     }
     connections {
-      p_a {
+      port_a {
         superpod_id: 1
         pod_id: 3
         tray_id: 1
         port_id: 2
       }
-      p_b {
+      port_b {
         superpod_id: 2
         pod_id: 2
         tray_id: 1
@@ -48,13 +48,13 @@ port_type_connections {
       }
     }
     connections {
-      p_a {
+      port_a {
         superpod_id: 1
         pod_id: 4
         tray_id: 4
         port_id: 2
       }
-      p_b {
+      port_b {
         superpod_id: 4
         pod_id: 1
         tray_id: 2
@@ -62,13 +62,13 @@ port_type_connections {
       }
     }
     connections {
-      p_a {
+      port_a {
         superpod_id: 3
         pod_id: 3
         tray_id: 1
         port_id: 2
       }
-      p_b {
+      port_b {
         superpod_id: 4
         pod_id: 2
         tray_id: 1
@@ -76,13 +76,13 @@ port_type_connections {
       }
     }
     connections {
-      p_a {
+      port_a {
         superpod_id: 3
         pod_id: 4
         tray_id: 4
         port_id: 2
       }
-      p_b {
+      port_b {
         superpod_id: 2
         pod_id: 1
         tray_id: 2
@@ -90,13 +90,13 @@ port_type_connections {
       }
     }
     connections {
-      p_a {
+      port_a {
         superpod_id: 2
         pod_id: 4
         tray_id: 4
         port_id: 2
       }
-      p_b {
+      port_b {
         superpod_id: 4
         pod_id: 4
         tray_id: 4

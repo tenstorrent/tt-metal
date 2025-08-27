@@ -8,25 +8,25 @@ pods {
 port_type_connections {
   key: "QSFP"
   value {
-    connections { p_a { pod_id: 3 tray_id: 4 port_id: 3 } p_b { pod_id: 2 tray_id: 4 port_id: 3 } }
-    connections { p_a { pod_id: 3 tray_id: 4 port_id: 4 } p_b { pod_id: 1 tray_id: 4 port_id: 4 } }
-    connections { p_a { pod_id: 3 tray_id: 4 port_id: 6 } p_b { pod_id: 5 tray_id: 4 port_id: 6 } }
-    connections { p_a { pod_id: 3 tray_id: 2 port_id: 6 } p_b { pod_id: 4 tray_id: 2 port_id: 3 } }
-    connections { p_a { pod_id: 2 tray_id: 4 port_id: 4 } p_b { pod_id: 1 tray_id: 4 port_id: 3 } }
-    connections { p_a { pod_id: 2 tray_id: 4 port_id: 6 } p_b { pod_id: 5 tray_id: 4 port_id: 5 } }
-    connections { p_a { pod_id: 2 tray_id: 2 port_id: 6 } p_b { pod_id: 4 tray_id: 2 port_id: 4 } }
-    connections { p_a { pod_id: 2 tray_id: 3 port_id: 6 } p_b { pod_id: 3 tray_id: 1 port_id: 6 } }
-    connections { p_a { pod_id: 1 tray_id: 4 port_id: 6 } p_b { pod_id: 5 tray_id: 4 port_id: 4 } }
-    connections { p_a { pod_id: 1 tray_id: 2 port_id: 6 } p_b { pod_id: 4 tray_id: 2 port_id: 5 } }
-    connections { p_a { pod_id: 1 tray_id: 3 port_id: 6 } p_b { pod_id: 3 tray_id: 3 port_id: 6 } }
-    connections { p_a { pod_id: 1 tray_id: 1 port_id: 6 } p_b { pod_id: 2 tray_id: 1 port_id: 3 } }
-    connections { p_a { pod_id: 5 tray_id: 2 port_id: 6 } p_b { pod_id: 4 tray_id: 4 port_id: 6 } }
-    connections { p_a { pod_id: 5 tray_id: 3 port_id: 6 } p_b { pod_id: 3 tray_id: 3 port_id: 4 } }
-    connections { p_a { pod_id: 5 tray_id: 1 port_id: 6 } p_b { pod_id: 2 tray_id: 1 port_id: 5 } }
-    connections { p_a { pod_id: 5 tray_id: 1 port_id: 5 } p_b { pod_id: 1 tray_id: 1 port_id: 4 } }
-    connections { p_a { pod_id: 4 tray_id: 3 port_id: 6 } p_b { pod_id: 3 tray_id: 3 port_id: 3 } }
-    connections { p_a { pod_id: 4 tray_id: 1 port_id: 6 } p_b { pod_id: 2 tray_id: 1 port_id: 6 } }
-    connections { p_a { pod_id: 4 tray_id: 1 port_id: 5 } p_b { pod_id: 1 tray_id: 1 port_id: 5 } }
-    connections { p_a { pod_id: 4 tray_id: 1 port_id: 3 } p_b { pod_id: 5 tray_id: 1 port_id: 3 } }
+    connections { port_a { pod_id: 3 tray_id: 4 port_id: 3 } port_b { pod_id: 2 tray_id: 4 port_id: 3 } }
+    connections { port_a { pod_id: 3 tray_id: 4 port_id: 4 } port_b { pod_id: 1 tray_id: 4 port_id: 4 } }
+    connections { port_a { pod_id: 3 tray_id: 4 port_id: 6 } port_b { pod_id: 5 tray_id: 4 port_id: 6 } }
+    connections { port_a { pod_id: 3 tray_id: 2 port_id: 6 } port_b { pod_id: 4 tray_id: 2 port_id: 3 } }
+    connections { port_a { pod_id: 2 tray_id: 4 port_id: 4 } port_b { pod_id: 1 tray_id: 4 port_id: 3 } }
+    connections { port_a { pod_id: 2 tray_id: 4 port_id: 6 } port_b { pod_id: 5 tray_id: 4 port_id: 5 } }
+    connections { port_a { pod_id: 2 tray_id: 2 port_id: 6 } port_b { pod_id: 4 tray_id: 2 port_id: 4 } }
+    connections { port_a { pod_id: 2 tray_id: 3 port_id: 6 } port_b { pod_id: 3 tray_id: 1 port_id: 6 } }
+    connections { port_a { pod_id: 1 tray_id: 4 port_id: 6 } port_b { pod_id: 5 tray_id: 4 port_id: 4 } }
+    connections { port_a { pod_id: 1 tray_id: 2 port_id: 6 } port_b { pod_id: 4 tray_id: 2 port_id: 5 } }
+    connections { port_a { pod_id: 1 tray_id: 3 port_id: 6 } port_b { pod_id: 3 tray_id: 3 port_id: 6 } }
+    connections { port_a { pod_id: 1 tray_id: 1 port_id: 6 } port_b { pod_id: 2 tray_id: 1 port_id: 3 } }
+    connections { port_a { pod_id: 5 tray_id: 2 port_id: 6 } port_b { pod_id: 4 tray_id: 4 port_id: 6 } }
+    connections { port_a { pod_id: 5 tray_id: 3 port_id: 6 } port_b { pod_id: 3 tray_id: 3 port_id: 4 } }
+    connections { port_a { pod_id: 5 tray_id: 1 port_id: 6 } port_b { pod_id: 2 tray_id: 1 port_id: 5 } }
+    connections { port_a { pod_id: 5 tray_id: 1 port_id: 5 } port_b { pod_id: 1 tray_id: 1 port_id: 4 } }
+    connections { port_a { pod_id: 4 tray_id: 3 port_id: 6 } port_b { pod_id: 3 tray_id: 3 port_id: 3 } }
+    connections { port_a { pod_id: 4 tray_id: 1 port_id: 6 } port_b { pod_id: 2 tray_id: 1 port_id: 6 } }
+    connections { port_a { pod_id: 4 tray_id: 1 port_id: 5 } port_b { pod_id: 1 tray_id: 1 port_id: 5 } }
+    connections { port_a { pod_id: 4 tray_id: 1 port_id: 3 } port_b { pod_id: 5 tray_id: 1 port_id: 3 } }
   }
 }
