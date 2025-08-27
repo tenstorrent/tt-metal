@@ -56,7 +56,6 @@ uint32_t calculate_max_fetch_size(const Tensor& elements, const Tensor& test_ele
     const auto output_datum_size = 4;
 
     return l1_size_per_core * confidence_margin / (elements_datum_size + test_elements_datum_size + output_datum_size);
-    // return 1024;
 }
 
 IsInPreprocessingResult isin_preprocessing(
