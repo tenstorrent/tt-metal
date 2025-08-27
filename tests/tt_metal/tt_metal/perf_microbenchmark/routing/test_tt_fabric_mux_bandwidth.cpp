@@ -528,7 +528,7 @@ int main(int argc, char** argv) {
         device, drainer_logical_core, drainer_kernel_config.get_termination_signal_address(), termiation_signal);
 
     log_info(tt::LogTest, "Waiting for programs");
-    tt::tt_metal::distributed::Finish(cq);
+    cq.finish();
 
     log_info(tt::LogTest, "Collecting results");
 

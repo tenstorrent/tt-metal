@@ -449,7 +449,7 @@ int main(int argc, char** argv) {
         //                      Copy Input To DRAM or L1
         ////////////////////////////////////////////////////////////////////////////
         tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, input_vec, false);
-        tt_metal::distributed::Finish(device->mesh_command_queue());
+        device->mesh_command_queue().finish();
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Execution Application
@@ -462,7 +462,7 @@ int main(int argc, char** argv) {
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
             tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
-            tt_metal::distributed::Finish(device->mesh_command_queue());
+            device->mesh_command_queue().finish();
             tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();

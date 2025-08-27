@@ -49,7 +49,7 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms) 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), syncer_workload, true);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), incrementer_workload, false);
     mesh_device->reset_sub_device_stall_group();
-    distributed::Finish(mesh_device->mesh_command_queue());
+    mesh_device->mesh_command_queue().finish();
 
     // Capture the trace
     auto tid_1 = distributed::BeginTraceCapture(mesh_device.get(), mesh_device->mesh_command_queue().id());
@@ -73,7 +73,7 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms) 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), syncer_workload, false);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), incrementer_workload, false);
     mesh_device->reset_sub_device_stall_group();
-    distributed::Finish(mesh_device->mesh_command_queue());
+    mesh_device->mesh_command_queue().finish();
 
     for (uint32_t i = 0; i < num_iters; i++) {
         // Regular program execution
@@ -92,7 +92,7 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms) 
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), waiter_workload, false);
         distributed::ReplayTrace(mesh_device.get(), mesh_device->mesh_command_queue().id(), tid_3, false);
     }
-    distributed::Finish(mesh_device->mesh_command_queue());
+    mesh_device->mesh_command_queue().finish();
     ReadMeshDeviceProfilerResults(*mesh_device, ProfilerReadState::NORMAL);
 }
 
@@ -129,7 +129,7 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations) {
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), syncer_workload_1, false);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), incrementer_workload_1, false);
     mesh_device->reset_sub_device_stall_group();
-    distributed::Finish(mesh_device->mesh_command_queue());
+    mesh_device->mesh_command_queue().finish();
 
     // Capture the trace
     auto tid_1 = distributed::BeginTraceCapture(mesh_device.get(), mesh_device->mesh_command_queue().id());
@@ -154,7 +154,7 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations) {
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), syncer_workload_2, false);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), incrementer_workload_2, false);
     mesh_device->reset_sub_device_stall_group();
-    distributed::Finish(mesh_device->mesh_command_queue());
+    mesh_device->mesh_command_queue().finish();
 
     auto tid_2 = distributed::BeginTraceCapture(mesh_device.get(), mesh_device->mesh_command_queue().id());
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), waiter_workload_2, false);
@@ -170,7 +170,7 @@ TEST_F(UnitMeshCQSingleCardTraceFixture, TensixTestSubDeviceIllegalOperations) {
         distributed::ReplayTrace(mesh_device.get(), mesh_device->mesh_command_queue().id(), tid_1, false),
         std::exception);
 
-    distributed::Finish(mesh_device->mesh_command_queue());
+    mesh_device->mesh_command_queue().finish();
 
     mesh_device->remove_sub_device_manager(sub_device_manager_1);
     EXPECT_THROW(mesh_device->load_sub_device_manager(sub_device_manager_1), std::exception);

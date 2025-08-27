@@ -608,7 +608,7 @@ std::shared_ptr<tt_metal::distributed::MeshBuffer> create_and_transfer_data_shar
         input_buffer = tt_metal::distributed::MeshBuffer::create(global_buf, device_local_config, device);
     }
     tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, input_vec, false);
-    tt_metal::distributed::Finish(device->mesh_command_queue());
+    device->mesh_command_queue().finish();
 
     log_info(tt::LogTest, "created sharded tensor");
 
@@ -909,7 +909,7 @@ int main(int argc, char** argv) {
                     tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
                 }
             }
-            tt_metal::distributed::Finish(device->mesh_command_queue());
+            device->mesh_command_queue().finish();
             for ([[maybe_unused]] auto& mesh_workload : mesh_workloads) {
                 tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);
             }

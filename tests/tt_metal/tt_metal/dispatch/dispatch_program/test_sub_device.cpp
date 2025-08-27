@@ -179,7 +179,7 @@ void test_sub_device_synchronization(distributed::MeshDevice* device) {
 
     // Full synchronization
     device->reset_sub_device_stall_group();
-    distributed::Finish(device->mesh_command_queue());
+    device->mesh_command_queue().finish();
 }
 
 TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceSynchronization) {
@@ -343,7 +343,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
     distributed::AddProgramToMeshWorkload(mesh_workload_2, std::move(program_2), device_range);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload_2, false);
 
-    distributed::Finish(mesh_device->mesh_command_queue());
+    mesh_device->mesh_command_queue().finish();
     mesh_device->reset_sub_device_stall_group();
     distributed::Synchronize(
         mesh_device.get(), std::nullopt);  // Ensure this CQ is cleared. Each CQ can only work on 1 sub device
@@ -392,7 +392,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, TensixTestSubDeviceMyLogicalCoordinat
         distributed::AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
 
-        distributed::Finish(mesh_device->mesh_command_queue());
+        mesh_device->mesh_command_queue().finish();
         mesh_device->reset_sub_device_stall_group();
         distributed::Synchronize(
             mesh_device.get(), 0);  // Ensure this CQ is cleared. Each CQ can only work on 1 sub device
@@ -521,7 +521,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_1, false), std::exception);
 
     // Finish allows transfering ownership of sub device 1.
-    distributed::Finish(mesh_device->mesh_command_queue(0));
+    mesh_device->mesh_command_queue(0).finish();
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_1, false);
 
     // CQ 1 owns sub devices 1 and 2.
@@ -546,8 +546,8 @@ TEST_F(UnitMeshMultiCQSingleDeviceFixture, TensixTestSubDeviceCQOwnership) {
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(0), mesh_workload_1, false);
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(1), mesh_workload_2, false);
 
-    distributed::Finish(mesh_device->mesh_command_queue(0));
-    distributed::Finish(mesh_device->mesh_command_queue(1));
+    mesh_device->mesh_command_queue(0).finish();
+    mesh_device->mesh_command_queue(1).finish();
 }
 
 }  // namespace tt::tt_metal

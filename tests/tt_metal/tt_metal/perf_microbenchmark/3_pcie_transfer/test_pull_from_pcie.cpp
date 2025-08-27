@@ -322,7 +322,7 @@ int main(int argc, char** argv) {
             std::thread t1([&]() {
                 if (enable_kernel_read) {
                     tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
-                    tt_metal::distributed::Finish(device->mesh_command_queue());
+                    device->mesh_command_queue().finish();
                 }
             });
 

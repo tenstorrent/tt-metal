@@ -633,7 +633,7 @@ int main(int argc, char** argv) {
                 std::chrono::duration<double, std::nano> duration{};
                 auto t_begin = std::chrono::high_resolution_clock::now();
                 tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
-                tt_metal::distributed::Finish(device->mesh_command_queue());
+                device->mesh_command_queue().finish();
                 auto t_end = std::chrono::high_resolution_clock::now();
                 log_debug(LogTest, "EnqueueMeshWorkload done");
                 tt_metal::detail::ReadDeviceProfilerResults(device->get_devices()[0]);

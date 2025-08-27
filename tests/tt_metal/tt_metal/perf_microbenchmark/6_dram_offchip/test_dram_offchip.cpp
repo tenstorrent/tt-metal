@@ -252,7 +252,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         if (access_type == 0) {
             tt_metal::distributed::EnqueueWriteMeshBuffer(device->mesh_command_queue(), input_buffer, input_vec, false);
-            tt_metal::distributed::Finish(device->mesh_command_queue());
+            device->mesh_command_queue().finish();
         } else {
             uint64_t input_offset = 0;
             for (uint32_t i = 0; i < num_cores; ++i) {
@@ -283,7 +283,7 @@ int main(int argc, char** argv) {
         for (uint32_t i = 0; i < num_tests; ++i) {
             auto t_begin = std::chrono::steady_clock::now();
             tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
-            tt_metal::distributed::Finish(device->mesh_command_queue());
+            device->mesh_command_queue().finish();
             auto t_end = std::chrono::steady_clock::now();
             auto elapsed_us = duration_cast<microseconds>(t_end - t_begin).count();
             dram_bandwidth.push_back((input_size / 1024.0 / 1024.0 / 1024.0) / (elapsed_us / 1000.0 / 1000.0));

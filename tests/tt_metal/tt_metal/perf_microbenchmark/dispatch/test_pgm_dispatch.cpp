@@ -511,7 +511,7 @@ void run_benchmark_timing_loop(
         if (info.time_just_finish) {
             start = std::chrono::system_clock::now();
         }
-        Finish(mesh_cq);
+        mesh_cq.finish();
         auto end = std::chrono::system_clock::now();
 
         if constexpr (std::is_same_v<T, benchmark::State>) {

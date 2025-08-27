@@ -152,7 +152,7 @@ public:
         tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *mesh_workload_, true);
     }
 
-    void wait_for_programs() { tt::tt_metal::distributed::Finish(mesh_device_->mesh_command_queue()); }
+    void wait_for_programs() { mesh_device_->mesh_command_queue().finish(); }
 
     void close_devices() {
         if (!are_devices_open_) {

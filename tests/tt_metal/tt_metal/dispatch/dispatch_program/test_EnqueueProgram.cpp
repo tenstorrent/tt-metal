@@ -1069,7 +1069,7 @@ void test_basic_dispatch_functions(std::shared_ptr<distributed::MeshDevice> mesh
         }
     }
 
-    distributed::Finish(cq);
+    cq.finish();
 }
 
 }  // namespace local_test_functions

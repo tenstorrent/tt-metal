@@ -153,7 +153,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
     EXPECT_TRUE(eager_output_data == trace_output_data);
 
     // Done
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(this->device_.get(), tid);  //?
 }
 
@@ -212,7 +212,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoop
     }
 
     // Done
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
@@ -263,7 +263,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload, kBlocking);
     distributed::ReadShard(
         mesh_command_queue, expected_output_data, output, distributed::MeshCoordinate{0, 0}, kBlocking);
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
 
     for (bool blocking : blocking_flags) {
         std::string mode = blocking ? "Eager-B" : "Eager-NB";
@@ -276,7 +276,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
         }
         if (not blocking) {
             // (Optional) wait for the last non-blocking command to finish
-            distributed::Finish(mesh_command_queue);
+            mesh_command_queue.finish();
         }
         EXPECT_TRUE(eager_output_data == expected_output_data);
     }
@@ -294,7 +294,7 @@ TEST_F(UnitMeshMultiCQSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenc
         distributed::ReadShard(
             mesh_command_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, kNonBlocking);
     }
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
 
     // Expect same output across all loops
     for (auto i = 0; i < num_loops; i++) {
@@ -399,7 +399,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramTraceCapture) {
     EXPECT_TRUE(eager_output_data == trace_output_data);
 
     // Done
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(mesh_device.get(), tid);
 }
 
@@ -459,7 +459,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueProgramDeviceCapture) {
     }
 
     // Done
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(mesh_device.get(), tid);
 }
 
@@ -512,7 +512,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
     distributed::EnqueueMeshWorkload(mesh_command_queue, workload1, kBlocking);
     distributed::ReadShard(
         mesh_command_queue, expected_output_data, output, distributed::MeshCoordinate{0, 0}, kBlocking);
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
 
     for (bool blocking : blocking_flags) {
         std::string mode = blocking ? "Eager-B" : "Eager-NB";
@@ -526,7 +526,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
         }
         if (not blocking) {
             // (Optional) wait for the last non-blocking command to finish
-            distributed::Finish(mesh_command_queue);
+            mesh_command_queue.finish();
         }
         EXPECT_TRUE(eager_output_data == expected_output_data);
     }
@@ -545,7 +545,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueTwoProgramTrace) {
         distributed::ReadShard(
             mesh_command_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, kNonBlocking);
     }
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(mesh_device.get(), tid);
 
     // Expect same output across all loops
@@ -620,7 +620,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
         }
         if (not blocking) {
             // (Optional) wait for the last non-blocking command to finish
-            distributed::Finish(mesh_command_queue);
+            mesh_command_queue.finish();
         }
     }
 
@@ -639,7 +639,7 @@ TEST_F(UnitMeshCQTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
         distributed::ReadShard(
             mesh_command_queue, trace_outputs[i], output, distributed::MeshCoordinate{0, 0}, kNonBlocking);
     }
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(mesh_device.get(), tid);
 }
 
@@ -660,7 +660,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestSimpleProgramsTrace) {
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
@@ -684,7 +684,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestSimpleProgramsTrace) {
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
@@ -717,7 +717,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestSimpleProgramsTrace
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
@@ -736,7 +736,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTrace) {
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
@@ -765,7 +765,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTrace) {
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
@@ -807,7 +807,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTrace) {
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
@@ -834,7 +834,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestAlternatingLargeAndSmallProg
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
@@ -861,7 +861,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramFollowedBySmallP
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
@@ -888,7 +888,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestLargeProgramInBetweenFiveSma
 
     const distributed::MeshTraceId trace_id = this->trace_programs();
 
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     distributed::ReleaseTrace(this->device_.get(), trace_id);
 }
 
@@ -917,7 +917,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
             program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].get_id(), trace_id);
         }
     }
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
 
     for (auto& workload : this->workloads) {
         const uint64_t program_id = workload.get_programs()[device_range_].get_id();
@@ -929,7 +929,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixTestProgramsTraceAndNoTrace) {
         distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
     }
 
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     for (const distributed::MeshTraceId trace_id : trace_ids) {
         distributed::ReleaseTrace(this->device_.get(), trace_id);
     }
@@ -972,7 +972,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
             program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].get_id(), trace_id);
         }
     }
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
 
     for (auto& workload : this->workloads) {
         const uint64_t program_id = workload.get_programs()[device_range_].get_id();
@@ -984,7 +984,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, ActiveEthTestProgramsTraceAndNoTrace) 
         distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
     }
 
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     for (const distributed::MeshTraceId trace_id : trace_ids) {
         distributed::ReleaseTrace(this->device_.get(), trace_id);
     }
@@ -1039,7 +1039,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
             program_ids_to_trace_ids.emplace(workload.get_programs()[device_range_].get_id(), trace_id);
         }
     }
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
 
     for (auto& workload : this->workloads) {
         const uint64_t program_id = workload.get_programs()[device_range_].get_id();
@@ -1051,7 +1051,7 @@ TEST_F(UnitMeshRandomProgramTraceFixture, TensixActiveEthTestProgramsTraceAndNoT
         distributed::EnqueueMeshWorkload(mesh_command_queue, workload, false);
     }
 
-    distributed::Finish(mesh_command_queue);
+    mesh_command_queue.finish();
     for (const distributed::MeshTraceId trace_id : trace_ids) {
         distributed::ReleaseTrace(this->device_.get(), trace_id);
     }
