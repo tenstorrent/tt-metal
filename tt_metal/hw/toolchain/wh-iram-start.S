@@ -21,6 +21,9 @@ _start:
 	lw  sp, MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS( zero )
 	lw  a0, 13 * 4( sp )
 	call  kernel_launch
+	// Store function return (kernel stack usage)
+	sw a0, 13 * 4(sp)
+	
 	lw ra, 14 * 4(sp)
 	sw ra,  MEM_NCRISC_RESUME_ADDR_MAILBOX_ADDRESS( zero )
 	sb zero, MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS( zero )   /* Tell brisc we're done */

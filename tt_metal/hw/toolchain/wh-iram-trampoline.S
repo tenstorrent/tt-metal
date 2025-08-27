@@ -71,6 +71,9 @@ return_from_iram:
     lw  s9, 10 * 4( sp )
     lw  s10, 11 * 4( sp )
     lw  s11, 12 * 4( sp )
+	
+	// Return value was stored in slot 13
+	lw a0, 13 * 4( sp )
 
 	addi sp, sp, CONTEXT_SIZE
 
