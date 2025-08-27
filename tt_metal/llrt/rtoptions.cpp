@@ -266,14 +266,13 @@ std::string RunTimeOptions::get_profiler_logs_dir() const {
     std::string profiler_logs_dir;
 
     if (env) {
-        profiler_logs_dir = std::string(env) + "/";
+        profiler_logs_dir = std::string(env) + "/.logs/";
     } else if (is_root_dir_specified()) {
         profiler_logs_dir = root_dir + "/generated/profiler/.logs/";
     } else {
         TT_THROW("Cannot determine PROFILER logs directory.");
     }
 
-    std::cout << "BAZINGA!!!! Profiler logs directory: " << profiler_logs_dir << std::endl;
     return profiler_logs_dir;
 }
 
