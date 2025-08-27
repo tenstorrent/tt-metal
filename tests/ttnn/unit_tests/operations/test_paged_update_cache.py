@@ -54,15 +54,11 @@ def run_test_update_cache_decode(
         cache_idxs = [cache_idx + i for i in range(num_users)]
     else:
         cache_idxs = [cache_idx + i * 17 for i in range(num_users)]
-
     if cache_idx_tensor and not share_cache:
         cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
         cachett = ttnn.experimental.paged_update_cache(cachett, xt, update_idxs_tensor=cache_idxs_tt, share_cache=False)
     else:
-        cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
-        cachett = ttnn.experimental.paged_update_cache(
-            cachett, xt, update_idxs_tensor=cache_idxs_tt, share_cache=share_cache
-        )
+        cachett = ttnn.experimental.paged_update_cache(cachett, xt, update_idxs=cache_idxs, share_cache=share_cache)
 
     for i in range(num_users):
         update_idx = cache_idxs[i]
