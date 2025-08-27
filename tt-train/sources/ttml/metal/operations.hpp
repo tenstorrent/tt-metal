@@ -12,6 +12,7 @@
 #include "ops/sdpa_fw/sdpa_fw.hpp"
 #include "ops/silu_bw/silu_bw.hpp"
 #include "ops/softmax/softmax.hpp"
+#include "ops/swiglu_fw/swiglu_fw.hpp"
 
 namespace ttml::metal {
 
@@ -40,5 +41,8 @@ constexpr auto silu_bw =
 
 constexpr auto sdpa_fw =
     ttnn::register_operation<"ttml::metal::sdpa_fw", ttml::metal::ops::sdpa_fw::SDPAForwardOperation>();
+    
+constexpr auto swiglu_fw =
+    ttnn::register_operation<"ttml::metal::swiglu_fw", ttml::metal::ops::swiglu_fw::SwiGLUForwardOperation>();
 
 }  // namespace ttml::metal
