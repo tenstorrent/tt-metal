@@ -98,12 +98,15 @@ decltype(auto) validate_and_get_reference_value(
         TT_THROW("{} [{}:{}] failed: MeshDevice has no devices", loc.function_name(), loc.file_name(), loc.line());
     }
 
+    // Forward the callable once to preserve its value category.
+    auto&& callable = std::forward<F>(func);
+
     // Get reference to first device's value
-    decltype(auto) reference_value = std::forward<F>(func)(devices.front());
+    decltype(auto) reference_value = callable(devices.front());
 
     // Validate all other devices match
     for (auto it = devices.begin() + 1; it != devices.end(); ++it) {
-        const auto& current_value = std::forward<F>(func)(*it);
+        decltype(auto) current_value = callable(*it);
         if (current_value != reference_value) {
             TT_THROW(
                 "{} [{}:{}] failed: Device at index {} returned value that differs from reference. "
