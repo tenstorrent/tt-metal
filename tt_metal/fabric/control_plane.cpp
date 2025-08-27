@@ -561,7 +561,11 @@ std::vector<chip_id_t> ControlPlane::get_mesh_physical_chip_ids(
     std::optional<chip_id_t> nw_corner_chip_id) const {
     // Convert the coordinate range to a set of chip IDs using MeshContainer iterator
     const auto& user_chip_ids = tt::tt_metal::MetalContext::instance().get_cluster().user_exposed_chip_ids();
-    TT_ASSERT(user_chip_ids.size() >= mesh_container.size());
+    TT_FATAL(
+        user_chip_ids.size() >= mesh_container.size(),
+        "Number of chips visible ({}) is less than number of chips specified in mesh graph descriptor ({})",
+        user_chip_ids.size(),
+        mesh_container.size());
 
     // Special case for 1x1 mesh
     if (mesh_container.shape() == tt::tt_metal::distributed::MeshShape(1, 1)) {
