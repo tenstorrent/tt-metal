@@ -14,6 +14,7 @@
 #include <unordered_set>
 #include <vector>
 #include <algorithm>
+#include <tt_stl/small_vector.hpp>
 
 #include "algorithms/allocator_algorithm.hpp"
 #include "core_coord.hpp"
@@ -32,26 +33,18 @@ public:
     BankManager() = default;
 
     struct StateDependencies {
-        std::vector<std::vector<uint32_t>> adjacency{};
+        struct StateId {
+            uint32_t value{0};
+            bool operator==(const StateId& other) const noexcept { return value == other.value; }
+            bool operator!=(const StateId& other) const noexcept { return value != other.value; }
+        };
 
-        StateDependencies() : adjacency(1) {}
+        tt::stl::SmallVector<tt::stl::SmallVector<StateId>> adjacency{};
 
-        explicit StateDependencies(const std::unordered_map<uint32_t, std::vector<uint32_t>>& deps) {
-            uint32_t max_index = 0;
-            for (const auto& kv : deps) {
-                max_index = std::max(max_index, kv.first);
-                for (uint32_t d : kv.second) {
-                    max_index = std::max(max_index, d);
-                }
-            }
-            adjacency.clear();
-            adjacency.resize(max_index + 1);
-            for (const auto& kv : deps) {
-                adjacency[kv.first] = kv.second;
-            }
-        }
+        StateDependencies();
+        explicit StateDependencies(const std::unordered_map<StateId, tt::stl::SmallVector<StateId>>& deps);
 
-        uint32_t num_states() const { return static_cast<uint32_t>(adjacency.size()); }
+        uint32_t num_states() const;
     };
 
     BankManager(

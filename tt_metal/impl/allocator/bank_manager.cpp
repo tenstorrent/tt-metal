@@ -22,6 +22,27 @@ namespace tt {
 
 namespace tt_metal {
 
+// --- StateDependencies impl ---
+BankManager::StateDependencies::StateDependencies() : adjacency(1) {}
+
+BankManager::StateDependencies::StateDependencies(
+    const std::unordered_map<StateId, tt::stl::SmallVector<StateId>>& deps) {
+    uint32_t max_index = 0;
+    for (const auto& kv : deps) {
+        max_index = std::max(max_index, kv.first.value);
+        for (const auto d : kv.second) {
+            max_index = std::max(max_index, d.value);
+        }
+    }
+    adjacency.clear();
+    adjacency.resize(max_index + 1);
+    for (const auto& kv : deps) {
+        adjacency[kv.first.value] = kv.second;
+    }
+}
+
+uint32_t BankManager::StateDependencies::num_states() const { return static_cast<uint32_t>(adjacency.size()); }
+
 void BankManager::init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset, uint32_t state) {
     this->assert_single_state(state);
     allocators_[state] = std::make_unique<allocator::FreeListOpt>(
