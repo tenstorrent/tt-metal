@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+package tt.fsd.proto;
+
+message PodDescriptor {
+    message Board {
+      int32 tray_id = 1;
+      string board_type = 2;
+    }
+
+    message Boards {
+        repeated Board board = 1;
+    }
+
+    message Port {
+        int32 tray_id = 1;
+        int32 port_id = 2;
+    }
+
+    message Connection {
+        Port p_a = 1;
+        Port p_b = 2;
+    }
+
+    message PortConnections {
+        repeated Connection connections = 1;
+    }
+
+    Boards boards = 1;
+    map<string, PortConnections> port_type_connections = 2;
+}

@@ -156,8 +156,11 @@ find_package(Protobuf REQUIRED)
 protobuf_generate_cpp(
     PROTO_SRCS
     PROTO_HDRS
-    ${CMAKE_CURRENT_SOURCE_DIR}/system_health/descriptors/board_config.proto
-    ${CMAKE_CURRENT_SOURCE_DIR}/system_health/descriptors/factory_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/factory_system_descriptor.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/pod_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/superpod_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/cabling_descriptors/cluster_config.proto
+    ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/deployment/deployment.proto
 )
 
 add_executable(test_factory_system_descriptor)
@@ -166,8 +169,6 @@ target_include_directories(
     PRIVATE
         ${UMD_HOME}
         ${PROJECT_SOURCE_DIR}/tests
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${CMAKE_CURRENT_SOURCE_DIR}/common
         ${CMAKE_CURRENT_BINARY_DIR} # For generated protobuf headers
 )
 set_target_properties(
@@ -179,17 +180,20 @@ set_target_properties(
 target_link_libraries(
     test_factory_system_descriptor
     PRIVATE
-        tt_metal
-        fabric
-        test_common_libs
-        yaml-cpp::yaml-cpp
+        umd::device
+        tt-logger::tt-logger
+        TT::STL
+        enchantum::enchantum
         fmt::fmt-header-only
+        yaml-cpp::yaml-cpp
+        gmock_main
         ${Protobuf_LIBRARIES} # Link against protobuf libraries
 )
 target_sources(
     test_factory_system_descriptor
     PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/system_health/test_factory_system_descriptor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/test_factory_system_descriptor.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/factory_system_descriptor/board/board.cpp
         ${PROTO_SRCS} # Add generated protobuf source files
         ${PROTO_HDRS} # Add generated protobuf header files
 )
