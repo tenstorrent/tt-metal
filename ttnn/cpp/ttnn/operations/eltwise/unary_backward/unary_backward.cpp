@@ -1701,7 +1701,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
 
     auto shape_wh = input.padded_shape();
     TT_FATAL(shape_wh[0] == 1 && "input shape[0] should be 1", "Error");
-    auto ttnn_device = input.mesh_device();
+    auto ttnn_device = input.device();
     // input.padded_shape()[0]
     // If repeat shape has 0's, it returns zeros of given input
     if (shape[0] == 0 || shape[1] == 0 || shape[2] == 0 || shape[3] == 0) {

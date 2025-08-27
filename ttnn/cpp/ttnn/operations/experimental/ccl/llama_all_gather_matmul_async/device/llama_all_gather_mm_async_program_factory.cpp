@@ -57,7 +57,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
     tt::tt_metal::Program program{};
 
-    IDevice* mesh_device = input_tensor.mesh_device();
+    IDevice* mesh_device = input_tensor.device();
     if (!mesh_device) {
         mesh_device = input_tensor.device();
     }

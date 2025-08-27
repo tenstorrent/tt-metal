@@ -70,7 +70,6 @@ auto compute_program_hash(
     }
 }
 
-
 // Helper to create a mesh workload from a WorkloadFactory that may or may not
 // provide create_mesh_workload. If missing, synthesize it from create_at.
 template <typename WorkloadFactory, typename device_operation_t>
@@ -378,7 +377,7 @@ typename device_operation_t::tensor_return_value_t launch_on_device(
     }
 
     auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    auto mesh_device = first_tensor.mesh_device();
+    auto mesh_device = first_tensor.device();
     launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
         cq_id, operation_attributes, tensor_args, tensor_return_value, mesh_device);
     return tensor_return_value;

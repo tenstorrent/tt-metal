@@ -64,7 +64,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
     Program program{};
 
     // todo maybe, subdevice
-    auto mesh_device = topk_tensor.mesh_device();
+    auto mesh_device = topk_tensor.device();
     const auto grid = mesh_device->compute_with_storage_grid_size();
     // CoreCoord grid = {1,1};
 

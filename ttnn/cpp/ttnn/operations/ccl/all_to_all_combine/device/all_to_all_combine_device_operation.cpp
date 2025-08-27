@@ -53,7 +53,7 @@ void AllToAllCombineDeviceOperation::validate_on_program_cache_miss(
     const auto& metadata_shape = metadata_tensor.tensor_spec().logical_shape();
     const auto& mapping_shape = mapping_tensor.tensor_spec().logical_shape();
 
-    const auto mesh_view = input_tensor.mesh_device()->get_view();
+    const auto mesh_view = input_tensor.device()->get_view();
     const auto mesh_rows = mesh_view.num_rows();
     const auto mesh_cols = mesh_view.num_cols();
     const auto batch = metadata_shape[1];
@@ -111,7 +111,7 @@ AllToAllCombineDeviceOperation::spec_return_value_t AllToAllCombineDeviceOperati
     const auto& input_shape = input_tensor.tensor_spec().logical_shape();
     const auto& metadata_shape = tensor_args.metadata_tensor.tensor_spec().logical_shape();
 
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     const auto& mesh_view = mesh_device->get_view();
 
     const auto num_devices = mesh_view.num_devices();

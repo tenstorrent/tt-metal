@@ -250,7 +250,7 @@ tt::tt_metal::operation::ProgramWithCallbacks RMSAllGather::create_program_at(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
     std::vector<Tensor>& output_tensors) const {
-    ttnn::MeshDevice* mesh_device = input_tensors.at(0).mesh_device();
+    ttnn::MeshDevice* mesh_device = input_tensors.at(0).device();
     const auto target_device = mesh_device->get_device(mesh_coord);
     const auto mesh_view = mesh_device->get_view();
     TT_FATAL(
