@@ -11,6 +11,7 @@ import ttnn
 from models.demos.utils.common_demo_utils import get_mesh_mappers
 from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE
 from models.demos.yolov4.runner.performant_runner_infra import YOLOv4PerformanceRunnerInfra
+from models.demos.yolov4.runner.pipeline_runner import YoloV4PipelineRunner
 from models.perf.perf_utils import prep_perf_report
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 from models.utility_functions import profiler, run_for_wormhole_b0
@@ -21,16 +22,11 @@ def _run_model_pipeline(
 ):
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
 
-    def model_wrapper(l1_input_tensor):
-        test_infra.input_tensor = l1_input_tensor
-        test_infra.run()
-        return test_infra.output_tensor
-
     pipeline = create_pipeline_from_config(
         config=PipelineConfig(
             use_trace=trace, num_command_queues=num_command_queues, all_transfers_on_separate_command_queue=False
         ),
-        model=model_wrapper,
+        model=YoloV4PipelineRunner(test_infra),
         device=device,
         dram_input_memory_config=sharded_mem_config_DRAM,
         l1_input_memory_config=input_mem_config,

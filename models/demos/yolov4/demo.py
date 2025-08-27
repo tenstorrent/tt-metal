@@ -16,6 +16,7 @@ from models.demos.utils.common_demo_utils import LoadImages, get_mesh_mappers, l
 from models.demos.yolov4.common import YOLOV4_L1_SMALL_SIZE, get_model_result
 from models.demos.yolov4.post_processing import plot_boxes_cv2, post_processing
 from models.demos.yolov4.runner.performant_runner_infra import YOLOv4PerformanceRunnerInfra
+from models.demos.yolov4.runner.pipeline_runner import YoloV4PipelineRunner
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
 from models.utility_functions import disable_persistent_kernel_cache, run_for_wormhole_b0
 
@@ -60,19 +61,11 @@ def run_yolov4(
         device, mesh_mapper=inputs_mesh_mapper, mesh_composer=output_mesh_composer
     )
 
-    # Create a model wrapper that handles the input tensor properly
-    def model_wrapper(l1_input_tensor):
-        # Set up the input tensor for the model
-        test_infra.input_tensor = l1_input_tensor
-        test_infra.run()
-        # Return the output tensor tuple (boxes, confs)
-        return test_infra.output_tensor
-
     # Create pipeline configuration
     config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
     pipeline = create_pipeline_from_config(
         config,
-        model_wrapper,
+        YoloV4PipelineRunner(test_infra),
         device,
         dram_input_memory_config=sharded_mem_config_DRAM,
         l1_input_memory_config=input_mem_config,
@@ -163,19 +156,11 @@ def run_yolov4_coco(
         device, mesh_mapper=inputs_mesh_mapper, mesh_composer=output_mesh_composer
     )
 
-    # Create a model wrapper that handles the input tensor properly
-    def model_wrapper(l1_input_tensor):
-        # Set up the input tensor for the model
-        test_infra.input_tensor = l1_input_tensor
-        test_infra.run()
-        # Return the output tensor tuple (boxes, confs)
-        return test_infra.output_tensor
-
     # Create pipeline configuration
     config = PipelineConfig(use_trace=True, num_command_queues=2, all_transfers_on_separate_command_queue=False)
     pipeline = create_pipeline_from_config(
         config,
-        model_wrapper,
+        YoloV4PipelineRunner(test_infra),
         device,
         dram_input_memory_config=sharded_mem_config_DRAM,
         l1_input_memory_config=input_mem_config,
