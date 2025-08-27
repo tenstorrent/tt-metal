@@ -20,8 +20,8 @@ void kernel_main() {
          ++output_subchunk_id, output_offset += ctas.single_fetch_subchunk_size) {
         const uint32_t output_subchunk_size =
             std::min(ctas.elements_size - output_offset, ctas.single_fetch_subchunk_size);
-        const uint32_t output_l1_write_addr = get_write_ptr(ctas.output_cb);
+        // const uint32_t output_l1_write_addr = get_write_ptr(ctas.output_cb);
         write_to_dram<output_number_type, decltype(output_addr_gtor)>(
-            ctas.output_cb, output_addr_gtor, output_subchunk_id, output_subchunk_size);
+            ctas.output_cb, output_addr_gtor, output_offset, output_subchunk_size);
     }
 }

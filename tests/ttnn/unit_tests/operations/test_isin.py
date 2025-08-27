@@ -49,11 +49,11 @@ def select_torch_dtype(ttnn_dtype):
             [11, 2, 3, 24, 20, 10, 200, 199],
             ttnn.uint32,
         ),
-        # (
-        #     [[[i ^ j ^ k for i in range(0, 10)] for j in range(0, 10)] for k in range(0, 10)],
-        #     [28 * i for i in range(0, 20)],
-        #     ttnn.int32
-        # )
+        (
+            [[[i ^ j ^ k for i in range(0, 10)] for j in range(0, 10)] for k in range(0, 10)],
+            [28 * i for i in range(0, 20)],
+            ttnn.int32,
+        ),
     ],
 )
 def test_isin_normal(elements, test_elements, dtype, device):
@@ -63,6 +63,47 @@ def test_isin_normal(elements, test_elements, dtype, device):
 
     elements_ttnn = ttnn.from_torch(elements_torch, device=device)
     test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device)
+
+    torch_isin_result = torch.isin(elements_torch, test_elements_torch)
+    ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn)
+
+    assert torch_isin_result.shape == ttnn_isin_result.shape
+    assert torch_isin_result.count_nonzero() == ttnn.to_torch(ttnn_isin_result).count_nonzero()
+
+
+@pytest.mark.parametrize(
+    "elements_shape, test_elements_shape",
+    [
+        ([10], [20]),
+        ([20], [10]),
+        ([10, 10], [20, 20]),
+        ([20, 10], [10, 20]),
+        ([5, 10, 50], [4, 10]),
+        ([2, 2, 2, 2, 2], [1, 2, 2, 1]),
+        ([3, 2, 3, 2, 3, 2, 3], [1, 1, 10, 2, 1]),
+        # (
+        #     [100, 1000], [20, 10, 5, 2, 5]
+        # ),
+        ([1, 1, 80000], [10]),
+        ([1, 1, 20000], [100]),
+        ([20000, 2, 1], [1, 100, 1]),
+        # (
+        #     [100000, 1, 1], [100]
+        # ),
+        # (
+        #     [10, 10, 10, 10, 10], [20, 2]
+        # ),
+        ([5, 10, 5, 1, 1, 1, 1, 1, 1, 5], [20]),
+    ],
+)
+def test_isin_random(elements_shape, test_elements_shape, device):
+    torch.manual_seed(0)
+
+    elements_torch = torch.randint(0, 10000, elements_shape, dtype=torch.int64)
+    test_elements_torch = torch.randint(0, 10000, test_elements_shape, dtype=torch.int64)
+
+    elements_ttnn = ttnn.from_torch(elements_torch, device=device, dtype=ttnn.int32)
+    test_elements_ttnn = ttnn.from_torch(test_elements_torch, device=device, dtype=ttnn.int32)
 
     torch_isin_result = torch.isin(elements_torch, test_elements_torch)
     ttnn_isin_result = ttnn.experimental.isin(elements_ttnn, test_elements_ttnn)
