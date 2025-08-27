@@ -1,4 +1,4 @@
-name: "[internal] T3000 profiler tests impl"
+name: "[internal] profiler tests impl"
 
 on:
   workflow_call:
@@ -16,16 +16,19 @@ on:
         required: false
         type: string
         default: "in-service"
+      topology:
+        required: false
+        type: string
+        default: "config-t3000"
 
 jobs:
-  t3000-profiler-tests:
+  profiler-tests:
     strategy:
       fail-fast: false
-    name: "T3000 profiler tests"
+    name: "profiler tests"
     runs-on:
       - arch-wormhole_b0
-      - config-t3000
-      - pipeline-functional
+      - ${{ inputs.topology }}
       - ${{ inputs.extra-tag }}
     container:
       image: ${{ inputs.docker-image }}
