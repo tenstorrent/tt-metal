@@ -482,9 +482,9 @@ MeshTraceId setup_trace_if_enabled(
     MeshTraceId tid;
     if (info.use_trace) {
         const std::size_t cq_id = 0;
-        tid = BeginTraceCapture(mesh_device.get(), cq_id);
+        tid = mesh_device.get()->begin_mesh_trace(cq_id);
         executor.execute_programs();
-        EndTraceCapture(mesh_device.get(), cq_id, tid);
+        mesh_device.get()->end_mesh_trace(cq_id, tid);
         Finish(mesh_device->mesh_command_queue(cq_id));
     }
     return tid;
@@ -504,7 +504,7 @@ void run_benchmark_timing_loop(
     for ([[maybe_unused]] auto _ : state) {
         auto start = std::chrono::system_clock::now();
         if (info.use_trace) {
-            ReplayTrace(mesh_device.get(), cq_id, tid, false);
+            mesh_device.get()->replay_mesh_trace(cq_id, tid, false);
         } else {
             execute_func();
         }

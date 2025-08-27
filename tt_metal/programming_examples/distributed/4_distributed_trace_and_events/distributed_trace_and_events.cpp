@@ -222,10 +222,10 @@ int main() {
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, true);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, true);
     // =========== Step 5: Trace the MeshWorkloads using the Workload Dispatch CQ ===========
-    auto trace_id = BeginTraceCapture(mesh_device.get(), workload_cq_id);
+    auto trace_id = mesh_device.get()->begin_mesh_trace(workload_cq_id);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), add_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
-    EndTraceCapture(mesh_device.get(), workload_cq_id, trace_id);
+    mesh_device.get()->end_mesh_trace(workload_cq_id, trace_id);
 
     // =========== Step 6: Populate inputs ===========
     uint32_t workload_0_src0_val = 2;
@@ -253,7 +253,7 @@ int main() {
     MeshEvent write_event = EnqueueRecordEvent(data_movement_cq);
     workload_cq.enqueue_wait_for_event(write_event);
     // =========== Step 8: Run MeshTrace on MeshCQ0 ===========
-    ReplayTrace(mesh_device.get(), workload_cq_id, trace_id, false);
+    mesh_device.get()->replay_mesh_trace(workload_cq_id, trace_id, false);
     // Synchronize
     MeshEvent trace_event = EnqueueRecordEvent(workload_cq);
     data_movement_cq.enqueue_wait_for_event(trace_event);
@@ -275,7 +275,7 @@ int main() {
             pass &= (mul_sub_dst_vec[i].to_float() == workload_1_src0_val - workload_1_src1_val);
         }
     }
-    ReleaseTrace(mesh_device.get(), trace_id);
+    mesh_device.get()->release_mesh_trace(trace_id);
     if (pass) {
         std::cout << "Running EltwiseBinary MeshTraces on 2 MeshCQs Passed!" << std::endl;
         return 0;

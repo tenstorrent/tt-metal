@@ -14,7 +14,7 @@ namespace ttnn::operations::trace {
 
 MeshTraceId begin_trace_capture(MeshDevice* device, QueueId cq_id) {
     ZoneScoped;
-    return BeginTraceCapture(device, *cq_id);
+    return device->begin_mesh_trace(*cq_id);
 }
 void end_trace_capture(MeshDevice* device, MeshTraceId trace_id, QueueId cq_id) {
     ZoneScoped;

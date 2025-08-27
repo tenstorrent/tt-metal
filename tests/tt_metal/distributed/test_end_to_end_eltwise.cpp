@@ -298,17 +298,17 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseAddTest) {
 
     EnqueueMeshWorkload(cq, mesh_workload, true /* blocking */);
 
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), cq.id());
+    auto trace_id = mesh_device_.get()->begin_mesh_trace(cq.id());
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
-    EndTraceCapture(mesh_device_.get(), cq.id(), trace_id);
+    mesh_device_.get()->end_mesh_trace(cq.id(), trace_id);
 
     cq.enqueue_write_mesh_buffer(a_buffer, a_data.data(), false /* blocking */);
     // Block to prevent wriitng during trace, which is illegal
     cq.enqueue_write_mesh_buffer(b_buffer, b_data.data(), true /* blocking */);
 
-    ReplayTrace(mesh_device_.get(), cq.id(), trace_id, false);
+    mesh_device_.get()->replay_mesh_trace(cq.id(), trace_id, false);
 
-    ReleaseTrace(mesh_device_.get(), trace_id);
+    mesh_device_.get()->release_mesh_trace(trace_id);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
     cq.enqueue_read_mesh_buffer(result_data.data(), out_buffer, true /* blocking */);
@@ -362,17 +362,17 @@ TEST_F(MeshEndToEnd2x4TraceTests, EltwiseMulTest) {
 
     EnqueueMeshWorkload(cq, mesh_workload, true /* blocking */);
 
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), cq.id());
+    auto trace_id = mesh_device_.get()->begin_mesh_trace(cq.id());
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
-    EndTraceCapture(mesh_device_.get(), cq.id(), trace_id);
+    mesh_device_.get()->end_mesh_trace(cq.id(), trace_id);
 
     cq.enqueue_write_mesh_buffer(a_buffer, a_data.data(), false /* blocking */);
     // Block to prevent wriitng during trace, which is illegal
     cq.enqueue_write_mesh_buffer(b_buffer, b_data.data(), true /* blocking */);
 
-    ReplayTrace(mesh_device_.get(), cq.id(), trace_id, false);
+    mesh_device_.get()->replay_mesh_trace(cq.id(), trace_id, false);
 
-    ReleaseTrace(mesh_device_.get(), trace_id);
+    mesh_device_.get()->release_mesh_trace(trace_id);
 
     std::vector<uint32_t> result_data(a_data.size(), 0);
     cq.enqueue_read_mesh_buffer(result_data.data(), out_buffer, true /* blocking */);
@@ -479,10 +479,10 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, true);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, true);
 
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), kWorkloadCqId);
+    auto trace_id = mesh_device_.get()->begin_mesh_trace(kWorkloadCqId);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), add_mesh_workload, false);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), multiply_and_subtract_mesh_workload, false);
-    EndTraceCapture(mesh_device_.get(), kWorkloadCqId, trace_id);
+    mesh_device_.get()->end_mesh_trace(kWorkloadCqId, trace_id);
 
     uint32_t workload_0_src0_val = 2;
     uint32_t workload_0_src1_val = 3;
@@ -508,7 +508,7 @@ TEST_F(MeshEndToEnd2x4TraceTests, SimulEltwiseTest) {
     MeshEvent write_event = EnqueueRecordEvent(data_movement_cq);
     workload_cq.enqueue_wait_for_event(write_event);
 
-    ReplayTrace(mesh_device_.get(), kWorkloadCqId, trace_id, false);
+    mesh_device_.get()->replay_mesh_trace(kWorkloadCqId, trace_id, false);
 
     // Synchronize
     MeshEvent trace_event = EnqueueRecordEvent(workload_cq);

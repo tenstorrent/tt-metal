@@ -200,6 +200,7 @@ public:
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
+    MeshTraceId begin_mesh_trace(uint8_t cq_id);  // Creates new trace ID and begins trace capture
     void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
