@@ -130,8 +130,7 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype == DataType::INT32) {
                 op_init_and_name = {
-                    "relu_min_tile_init();",
-                    fmt::format("relu_min_tile_int32({}, {:#x}u);", idst, std::bit_cast<uint32_t>(param0))};
+                    "relu_min_tile_init();", fmt::format("relu_min_tile_int32({}, {}u);", idst, (uint)param0)};
             } else {
                 op_init_and_name = {
                     "relu_min_tile_init();",
