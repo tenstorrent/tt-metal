@@ -82,13 +82,13 @@ class Model1D(SharedStateAddOn, AbstractModule):
             ),
             "mlp_decoder_block": [
                 DecoderBlock.convert_weights(
-                    hf_config, mlp_decoder_block_state_dicts[ml], output_path / "mlp_decoder_block", mesh_device
+                    hf_config, mlp_decoder_block_state_dicts[ml], output_path / f"mlp_decoder_block_{ml}", mesh_device
                 )
                 for ml in range(cls.NUM_MLP_META_LAYERS)
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock.convert_weights(
-                    hf_config, moe_decoder_block_state_dicts[ml], output_path / "moe_decoder_block", mesh_device
+                    hf_config, moe_decoder_block_state_dicts[ml], output_path / f"moe_decoder_block_{ml}", mesh_device
                 )
                 for ml in range(cls.NUM_MOE_META_LAYERS)
             ],
