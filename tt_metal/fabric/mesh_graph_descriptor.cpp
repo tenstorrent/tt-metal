@@ -129,7 +129,6 @@ bool MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& prot
     success &= validate_mesh_topology(proto);
     success &= validate_architecture_consistency(proto);
     success &= validate_channels(proto);
-    success &= validate_policies(proto);
     success &= validate_express_connections(proto);
     success &= validate_graph_descriptors(proto);
     success &= validate_graph_topology_and_connections(proto);
@@ -176,7 +175,8 @@ bool MeshGraphDescriptor::validate_names(const proto::MeshGraphDescriptor& proto
             success = false;
             continue;
         }
-        if (mesh_names.find(mesh.name()) != mesh_names.end()) {
+        auto [it, inserted] = mesh_names.insert(mesh.name());
+        if (!inserted) {
             error_messages_.push_back(
                 fmt::format(
                     "Mesh descriptor name is not unique (Mesh: {})", 
@@ -185,7 +185,6 @@ bool MeshGraphDescriptor::validate_names(const proto::MeshGraphDescriptor& proto
             );
             success = false;
         }
-        mesh_names.insert(mesh.name());
     }
 
     counter = 0;
@@ -282,7 +281,7 @@ bool MeshGraphDescriptor::validate_architecture_consistency(const proto::MeshGra
         }
     }
 
-// Verify that arch, device and host topology must exist in mesh descriptors
+    // Verify that arch, device and host topology must exist in mesh descriptors
     for (const auto& mesh : proto.mesh_descriptors()) {
         if (mesh.arch() == proto::Architecture::INVALID_ARCHITECTURE) {
             error_messages_.push_back( 
@@ -344,7 +343,7 @@ bool MeshGraphDescriptor::validate_channels(const proto::MeshGraphDescriptor& pr
 
     // Check that channels in graph topology are positive
     for (const auto& graph : proto.graph_descriptors()) {
-        if (graph.has_graph_topology() && graph.graph_topology().channels().count() <= 0) {
+        if (graph.graph_topology().channels().count() <= 0) {
             error_messages_.push_back( 
                 fmt::format(
                     "Graph topology channel count must be positive (Graph: {})", 
@@ -367,62 +366,6 @@ bool MeshGraphDescriptor::validate_channels(const proto::MeshGraphDescriptor& pr
                     )
                 );
                 success = false;
-            }
-        }
-    }
-
-    return success;
-}
-
-bool MeshGraphDescriptor::validate_policies(const proto::MeshGraphDescriptor& proto) {
-    bool success = true;
-
-    // Validate policies in mesh descriptors
-    for (const auto& mesh : proto.mesh_descriptors()) {
-        if (mesh.has_channels() && mesh.channels().has_policy()) {
-            if (mesh.channels().policy() != proto::Policy::STRICT && 
-                mesh.channels().policy() != proto::Policy::RELAXED) {
-                error_messages_.push_back( 
-                    fmt::format(
-                        "Invalid policy in mesh channels (Mesh: {})", 
-                        mesh.name()
-                    )
-                );
-                success = false;
-            }
-        }
-    }
-
-    // Validate policies in graph descriptors
-    for (const auto& graph : proto.graph_descriptors()) {
-        // Check graph topology policies
-        if (graph.has_graph_topology() && graph.graph_topology().has_channels() && 
-            graph.graph_topology().channels().has_policy()) {
-            if (graph.graph_topology().channels().policy() != proto::Policy::STRICT && 
-                graph.graph_topology().channels().policy() != proto::Policy::RELAXED) {
-                error_messages_.push_back( 
-                    fmt::format(
-                        "Invalid policy in graph topology channels (Graph: {})", 
-                        graph.name()
-                    )
-                );
-                success = false;
-            }
-        }
-
-        // Check connection policies
-        for (const auto& connection : graph.connections()) {
-            if (connection.has_channels() && connection.channels().has_policy()) {
-                if (connection.channels().policy() != proto::Policy::STRICT && 
-                    connection.channels().policy() != proto::Policy::RELAXED) {
-                    error_messages_.push_back( 
-                        fmt::format(
-                            "Invalid policy in connection channels (Graph: {})", 
-                            graph.name()
-                        )
-                    );
-                    success = false;
-                }
             }
         }
     }

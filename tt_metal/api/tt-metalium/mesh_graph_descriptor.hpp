@@ -39,7 +39,6 @@ private:
     bool validate_mesh_topology(const proto::MeshGraphDescriptor& proto);
     bool validate_architecture_consistency(const proto::MeshGraphDescriptor& proto);
     bool validate_channels(const proto::MeshGraphDescriptor& proto);
-    bool validate_policies(const proto::MeshGraphDescriptor& proto);
     bool validate_express_connections(const proto::MeshGraphDescriptor& proto);
     bool validate_graph_descriptors(const proto::MeshGraphDescriptor& proto);
     bool validate_graph_topology_and_connections(const proto::MeshGraphDescriptor& proto);

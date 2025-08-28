@@ -185,23 +185,4 @@ TEST(MeshGraphDescriptorTests, InvalidProtoGraphDescriptorValidation) {
     }
 }
 
-
-
-TEST(MeshGraphDescriptorTests, InvalidProtoInstanceValidation) {
-    std::string text_proto = R"proto(
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ 1, 3 ] }
-          channels: { count: 1 }
-          host_topology: { dims: [ 1, 3 ] }
-        }
-
-        top_level_instance: { mesh: { mesh_descriptor: "M1" id: 0 } }
-    )proto";
-
-    // FIXME: Not done yet
-    // EXPECT_THROW(MeshGraphDescriptor desc(text_proto), std::runtime_error);
-}
-
 }  // namespace tt::tt_fabric::fabric_router_tests
