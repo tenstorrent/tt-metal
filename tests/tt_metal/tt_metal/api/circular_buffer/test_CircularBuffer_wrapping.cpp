@@ -165,7 +165,7 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
 /**
  * This tests if available at front is working correctly.
  *
- * Here, writer is at Compute Kernel, and reader is at BRSIC.
+ * Here, writer is at Compute Kernel, and reader is at a Dataflow Kernel.
  *
  * The sequence of event is:
  * 1. Writer and Reader churn through the received and acked counter till the acked and received counter 2 steps till
@@ -209,7 +209,7 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
 /**
  * This tests if reservable at back is working correctly.
  *
- * Here, writer is at BRSIC, and reader is at Compute Kernel.
+ * Here, writer is at a Dataflow Kernel, and reader is at Compute Kernel.
  *
  * The sequence of event is:
  * 1. Writer and Reader churn through the received and acked counter till the acked and received counter 2 steps till
