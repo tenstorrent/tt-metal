@@ -358,12 +358,7 @@ inline void l1_only_fabric_send_chip_unicast_noc_unicast_with_semaphore(
 
     // Populate packet header with routing information
     fabric_set_unicast_route(
-        (LowLatencyMeshPacketHeader*)packet_header,
-        static_cast<eth_chan_directions>(fabric_connections[route].direction),
-        SrcChipId,
-        dest_chip_id,
-        dest_mesh_id,
-        MeshCols);
+        (LowLatencyMeshPacketHeader*)packet_header, SrcChipId, dest_chip_id, dest_mesh_id, MeshCols);
 
     return l1_only_fabric_send_noc_unicast_with_semaphore<FabricMaxPacketSzBytes>(
         fabric_connections[route],
