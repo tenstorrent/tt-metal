@@ -138,11 +138,10 @@ Tests:
 
     parametrization_params:
       ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+      size: [1024, 512, 256]
 
     defaults:
       ftype: unicast
-      ntype: unicast_write
-      size: 1024
       num_packets: 1000
     senders:
       - device: [0, 0]
