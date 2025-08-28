@@ -50,8 +50,8 @@ void bind_grid_sample(py::module& module) {
 
             >>> # Create identity grid (should return input unchanged)
             >>> theta = torch.tensor([[[1., 0., 0.], [0., 1., 0.]]], dtype=torch.float)
-            >>> grid = torch.nn.functional.affine_grid(theta, (1, 3, 4, 4), align_corners=False)
-            >>> grid_tensor = ttnn.from_torch(grid, device=device)
+            >>> grid = torch.nn.functional.affine_grid(theta, (1, 32, 4, 4), align_corners=False)
+            >>> grid_tensor = ttnn.from_torch(grid.to(torch.bfloat16), device=device)
 
             >>> # Apply grid sample
             >>> output = ttnn.grid_sample(input_tensor, grid_tensor)
