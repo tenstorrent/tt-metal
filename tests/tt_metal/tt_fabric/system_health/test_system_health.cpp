@@ -181,11 +181,16 @@ std::string get_physical_slot_str(chip_id_t chip_id) {
 }
 
 std::string get_physical_loc_str(chip_id_t chip_id, ClusterType cluster_type) {
+    std::string loc;
     if (cluster_type == tt::tt_metal::ClusterType::GALAXY) {
-        return get_ubb_id_str(chip_id);
+        loc = get_ubb_id_str(chip_id);
     } else {
-        return get_physical_slot_str(chip_id);
+        loc = get_physical_slot_str(chip_id);
     }
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    auto asic_loc = cluster.get_cluster_desc()->get_asic_location(chip_id);
+    loc += " ASIC Location: " + std::to_string(asic_loc);
+    return loc;
 }
 
 std::string get_connector_str(chip_id_t chip_id, CoreCoord eth_core, uint32_t channel, ClusterType cluster_type) {
