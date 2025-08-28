@@ -262,7 +262,8 @@ def run_avg_pool2d(
     # test for equivalence
     pcc_thresh = 0.985
     atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-    # TTNN uses tie-to-even rounding for fp32->bf16 scalar conversion, which improves accuracy
+    # TTNN supports scalars only in Bfloat16 and from recently it uses
+    # tie-to-even rounding for fp32->bf16 scalar conversion, which improves accuracy
     # compared to the previous truncation method. For a 3x3 kernel using scalar 1/9:
     # the new rounding converts 1/9 → 0.111328125 in bf16, and 9 × 0.111328125 = 1.001953125,
     # which rounds back to 1.0 in bf16. This is much better than the old truncation method
