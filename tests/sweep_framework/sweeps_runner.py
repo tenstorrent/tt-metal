@@ -393,6 +393,7 @@ def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_na
                         p.kill()
                         p.join()
                     p = None
+                    breakpoint()
                     reset_util.reset()
                     reset_fabric(ttnn.FabricConfig.FABRIC_1D)
 

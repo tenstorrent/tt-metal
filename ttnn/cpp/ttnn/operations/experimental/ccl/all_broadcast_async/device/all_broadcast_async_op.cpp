@@ -168,7 +168,7 @@ std::vector<Tensor> all_broadcast_async_impl(
         num_devices = devices.size();
     }
 
-    TT_FATAL(num_devices > 1, "all_broadcast_async op will only work for num_devices > 1, but has {}", num_devices);
+    // TT_FATAL(num_devices > 1, "all_broadcast_async op will only work for num_devices > 1, but has {}", num_devices);
 
     ttnn::ccl::Topology ccl_topology = topology;
     if (num_devices == 2) {

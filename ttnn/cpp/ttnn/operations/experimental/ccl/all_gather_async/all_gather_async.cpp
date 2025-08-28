@@ -116,14 +116,14 @@ bool use_composite_all_gather(
         return true;
     }
 
-    // Route to command processor
-    if (semaphore_size == 1) {
-        return false;
-    }
-
     // Use composite for row-major tensors
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
         return true;
+    }
+
+    // Route to command processor
+    if (semaphore_size == 1) {
+        return false;
     }
 
     // Use composite if tiled and padded on the gather dim
