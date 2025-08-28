@@ -13,6 +13,12 @@ else
   echo "Not running inside Docker"
 fi
 
+if [ -n "$VIRTUAL_ENV" ]; then
+    echo "You are in a Python virtual environment: $VIRTUAL_ENV"
+else
+    echo "You are NOT in a Python virtual environment."
+fi
+
 : << 'END'
 Usage:
   -f TEST        : test command to run (quote if it has spaces)
