@@ -103,6 +103,7 @@ jobs:
         -e GTEST_OUTPUT=xml:generated/test_reports/
         -e GITHUB_ACTIONS=true
         -e LOGURU_LEVEL=INFO
+        -e PYTHONPATH=/work
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
