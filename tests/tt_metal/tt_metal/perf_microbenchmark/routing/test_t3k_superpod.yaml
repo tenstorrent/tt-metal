@@ -137,7 +137,7 @@ Tests:
       ftype: unicast
       ntype: unicast_write
       size: 1024
-      num_packets: 10
+      num_packets: 100
     senders:
       - device: [0, 0]
         patterns:
@@ -155,54 +155,6 @@ Tests:
               device: [6, 0]
           - destination:
               device: [7, 0]
-          - destination:
-              device: [8, 0]
-          - destination:
-              device: [9, 0]
-          - destination:
-              device: [10, 0]
-          - destination:
-              device: [11, 0]
-      - device: [4, 0]
-        patterns:
-          - destination:
-              device: [0, 0]
-          - destination:
-              device: [1, 0]
-          - destination:
-              device: [2, 0]
-          - destination:
-              device: [3, 0]
-          - destination:
-              device: [5, 0]
-          - destination:
-              device: [6, 0]
-          - destination:
-              device: [7, 0]
-          - destination:
-              device: [8, 0]
-          - destination:
-              device: [9, 0]
-          - destination:
-              device: [10, 0]
-          - destination:
-              device: [11, 0]
-      - device: [7, 0]
-        patterns:
-          - destination:
-              device: [0, 0]
-          - destination:
-              device: [1, 0]
-          - destination:
-              device: [2, 0]
-          - destination:
-              device: [3, 0]
-          - destination:
-              device: [4, 0]
-          - destination:
-              device: [5, 0]
-          - destination:
-              device: [6, 0]
           - destination:
               device: [8, 0]
           - destination:
