@@ -24,9 +24,8 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen25_vl-3B, resnet50, whisper, openpdn_mnist, vit, sentence_bert, yolov7, swin_s, yolov6l, swin_v2, mobilenetv2, segformer, vgg_unet, yolov10x, yolov11, yolov8s, yolov8s_world, yolov8x, yolov9c, vanilla_unet, yolov5x, efficientnetb0, vovnet, ufld_v2, yolov12x, gemma3]
+        model: [common_models, functional_unet, ttt-llama3.2-1B, qwen25_vl-3B, resnet50, whisper, openpdn_mnist, vit, sentence_bert, yolov7, swin_s, yolov6l, swin_v2, mobilenetv2, segformer, vgg_unet, yolov10x, yolov11, yolov8s, yolov8s_world, yolov8x, yolov9c, vanilla_unet, yolov5x, efficientnetb0, vovnet, ufld_v2, yolov12x, gemma3, ttt-mistral-7B-v0.3]
         # SDXL model requires test run over 30min to successfully execute pcc test on the entire UNet loop
-        # ttt-mistral-7B-v0.3 issue #25861: https://github.com/tenstorrent/tt-metal/issues/25861
         include:
           - model: stable_diffusion_xl_base
             card: N150
@@ -70,7 +69,7 @@ jobs:
             -e ARCH_NAME=wormhole_b0
             -e LD_LIBRARY_PATH=${{ github.workspace }}/build/lib
             -e GTEST_OUTPUT=xml:generated/test_reports/
-            ${{ matrix.model == 'stable_diffusion_xl_base' && '-e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home' || '' }}
+            ${{ matrix.model == 'stable_diffusion_xl_base' && '-e HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home -e TT_MM_THROTTLE_PERF=5' || '' }}
           # TT-Transformer models have a single ci-dispatch test that contains all tests.
           # Due to host OOM issues in CI vm, we currently only run llama-1B (on TT-Transformers) in the model matrix.
           run_args: |

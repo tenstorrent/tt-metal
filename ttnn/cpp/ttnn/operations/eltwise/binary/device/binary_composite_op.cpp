@@ -432,6 +432,7 @@ Tensor run_remainder(
             FusedActivations{},
             false),
         result);
+
     result = ttnn::where(
         ttnn::ltz(input_b),
         ttnn::add(
@@ -445,6 +446,7 @@ Tensor run_remainder(
             FusedActivations{},
             false),
         result);
+
     result = ttnn::where(ttnn::eq(input_a, input_b, std::nullopt, output_mem_config), 0.0f, result);
     result = ttnn::where(ttnn::eqz(input_a), 0.0f, ttnn::where(ttnn::eqz(input_b), t_nan, result), output_mem_config);
     result = ttnn::where(ttnn::logical_and(ttnn::eqz(input_a), ttnn::eqz(input_b)), t_nan, result, output_mem_config);
@@ -671,7 +673,11 @@ Tensor ExecutePower::invoke(
     }
     const float exponent_trunc = exponent - static_cast<float>(exponent_floor);
     Tensor pow_trunc_log = ttnn::multiply(
-        queue_id, ttnn::log(queue_id, input_a, output_mem_config), exponent_trunc, std::nullopt, output_mem_config);
+        queue_id,
+        ttnn::log(queue_id, input_a, true, output_mem_config),
+        exponent_trunc,
+        std::nullopt,
+        output_mem_config);
     Tensor pow_frac = ttnn::exp(queue_id, pow_trunc_log, false, output_mem_config);
     pow_trunc_log.deallocate();
     float t_nan = std::nanf("");

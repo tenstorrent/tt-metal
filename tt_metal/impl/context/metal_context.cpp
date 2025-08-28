@@ -54,6 +54,14 @@ void MetalContext::initialize(
     const BankMapping& l1_bank_remap,
     size_t worker_l1_size,
     bool minimal) {
+
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+        TT_THROW(
+            "Mock cluster cannot be initialized because there is no device. "
+            "Mock clusters are only supported for testing control plane initialization without a device."
+            "Please unset the TT_METAL_MOCK_CLUSTER_DESC_PATH environment variable.");
+    }
+
     // Workaround for galaxy and BH, need to always re-init
     if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
         force_reinit_ = true;
@@ -227,12 +235,17 @@ MetalContext& MetalContext::instance() {
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
+    std::unique_ptr<tt_ClusterDescriptor> cluster_desc;
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     }
 
+    if (rtoptions_.get_mock_enabled()) {
+        cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
+    }
+
     bool is_base_routing_fw_enabled =
-        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
+        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_, cluster_desc.get()));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
@@ -305,7 +318,7 @@ void MetalContext::clear_l1_state(chip_id_t device_id) {
             CoreCoord logical_core(x, y);
             auto virtual_core =
                 cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, logical_core, CoreType::WORKER);
-            tt::llrt::write_hex_vec_to_core(device_id, virtual_core, zero_vec, start_address);
+            cluster_->write_core(device_id, virtual_core, zero_vec, start_address);
         }
     }
 
@@ -318,7 +331,7 @@ void MetalContext::clear_l1_state(chip_id_t device_id) {
 
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
-        llrt::write_hex_vec_to_core(device_id, virtual_core, zero_vec, zero_vec_addr);
+        cluster_->write_core(device_id, virtual_core, zero_vec, zero_vec_addr);
     }
     // TODO: clear idle eriscs as well
     cluster_->l1_barrier(device_id);
@@ -394,6 +407,7 @@ void MetalContext::set_default_fabric_topology() {
     // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
     // mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
+
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     } else {
@@ -597,7 +611,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             "Invalid core {} for context switch check",
             virtual_core.str());
         std::uint32_t launch_erisc_addr = get_active_erisc_launch_flag_addr();
-        auto data = tt::llrt::read_hex_vec_from_core(device_id, virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
+        auto data = cluster_->read_core(device_id, virtual_core, launch_erisc_addr, sizeof(std::uint32_t));
         return (data[0] != 0);
     };
 
@@ -618,7 +632,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
             HalL1MemAddrType::LAUNCH);
 
         std::vector<uint32_t> data(sizeof(launch_msg_t) / sizeof(uint32_t));
-        data = tt::llrt::read_hex_vec_from_core(device_id, virtual_core, launch_addr, sizeof(launch_msg_t));
+        data = cluster_->read_core(device_id, virtual_core, launch_addr, sizeof(launch_msg_t));
 
         launch_msg_t* launch_msg = (launch_msg_t*)(&data[0]);
         launch_msg->kernel_config.exit_erisc_kernel = 1;
@@ -627,7 +641,7 @@ void MetalContext::reset_cores(chip_id_t device_id) {
         if (!is_idle_eth) {
             // Active
             std::vector<uint32_t> clear_flag_data = {0};
-            tt::llrt::write_hex_vec_to_core(
+            cluster_->write_core_immediate(
                 device_id, virtual_core, clear_flag_data, get_active_erisc_launch_flag_addr());
         }
     };
@@ -769,8 +783,11 @@ void MetalContext::generate_device_bank_to_noc_tables(chip_id_t device_id) {
 
     dram_bank_to_noc_xy_[device_id].clear();
     dram_bank_to_noc_xy_[device_id].reserve(hal_->get_num_nocs() * num_dram_banks);
+    bool noc_translation_enabled =
+        cluster_->get_cluster_desc()->get_noc_translation_table_en().at(device_id);
     bool dram_is_virtualized =
-        hal_->get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal_->get_virtualized_core_types().end();
+        noc_translation_enabled &&
+        (hal_->get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal_->get_virtualized_core_types().end());
     for (unsigned int noc = 0; noc < hal_->get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < num_dram_banks; bank_id++) {
             uint16_t noc_x, noc_y;
@@ -977,7 +994,6 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
 
     launch_msg_t launch_msg{};
     go_msg_t go_msg{};
-    std::memset(&launch_msg, 0, sizeof(launch_msg_t));
     go_msg.signal = RUN_MSG_INIT;
 
     // Populate core info, which will be written to device
@@ -1135,7 +1151,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
                 core_info->absolute_logical_x = logical_core.x;
                 core_info->absolute_logical_y = logical_core.y;
                 // Must write to core before starting it
-                tt::llrt::write_hex_vec_to_core(
+                cluster_->write_core_immediate(
                     device_id,
                     worker_core,
                     core_info_vec,
@@ -1156,7 +1172,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
         CoreCoord virtual_core =
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
 
-        llrt::write_hex_vec_to_core(
+        cluster_->write_core_immediate(
             device_id,
             virtual_core,
             zero_vec_erisc_init,
@@ -1170,7 +1186,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
         core_info->absolute_logical_x = eth_core.x;
         core_info->absolute_logical_y = eth_core.y;
-        tt::llrt::write_hex_vec_to_core(
+        cluster_->write_core_immediate(
             device_id,
             virtual_core,
             core_info_vec,
@@ -1187,7 +1203,7 @@ void MetalContext::initialize_and_launch_firmware(chip_id_t device_id) {
             cluster_->get_virtual_coordinate_from_logical_coordinates(device_id, eth_core, CoreType::ETH);
         core_info->absolute_logical_x = eth_core.x;
         core_info->absolute_logical_y = eth_core.y;
-        tt::llrt::write_hex_vec_to_core(
+        cluster_->write_core_immediate(
             device_id,
             virtual_core,
             core_info_vec,

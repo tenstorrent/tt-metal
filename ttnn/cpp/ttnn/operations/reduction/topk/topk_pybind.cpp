@@ -56,6 +56,14 @@ void bind_reduction_topk_operation(py::module& module) {
                     * - BFLOAT8, BFLOAT16
                         - TILE
 
+                .. list-table:: index_tensor
+                    :header-rows: 1
+
+                    * - dtype
+                        - layout
+                    * - UINT16, UINT32
+                        - TILE
+
                 The :attr:`output_value_tensor` will have the same data type as :attr:`input_tensor` and :attr:`output_index_tensor` will have UINT16 data type.
 
             Limitations:

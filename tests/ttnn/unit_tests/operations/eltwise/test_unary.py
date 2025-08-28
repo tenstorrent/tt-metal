@@ -242,6 +242,68 @@ def test_log(device, h, w):
     run_unary_test(device, h, w, ttnn.log)
 
 
+@pytest.mark.parametrize(
+    "input_shapes",
+    (
+        (torch.Size([1, 1, 32, 32])),
+        (torch.Size([4, 7, 21, 133])),
+        (torch.Size([5, 3, 145, 72])),
+        (torch.Size([4, 9, 52, 182])),
+        (torch.Size([6, 6, 98, 125])),
+    ),
+)
+@pytest.mark.parametrize(
+    "log_function, torch_dtype, ttnn_dtype, low_range, high_range",
+    [
+        # for negative input values torch output is nan
+        # for ttnn bfloat8_b due to shared exponent inf/nan values will result in incorrect results due to flushing
+        # Hence ignoring the negative input for bfloat8_b
+        (ttnn.log, torch.bfloat16, ttnn.bfloat8_b, 1, 100),
+        (ttnn.log2, torch.bfloat16, ttnn.bfloat8_b, 1, 100),
+        (ttnn.log10, torch.bfloat16, ttnn.bfloat8_b, 1, 100),
+        # for ttnn bfloat16 nan is packed as inf (doesn't match with torch behavior).
+        # hence ignoring the negative input for bfloat16 as well
+        (ttnn.log, torch.bfloat16, ttnn.bfloat16, 1, 100),
+        (ttnn.log2, torch.bfloat16, ttnn.bfloat16, 1, 100),
+        (ttnn.log10, torch.bfloat16, ttnn.bfloat16, 1, 100),
+        # TODO: add float32 once https://github.com/tenstorrent/tt-metal/pull/26675 is merged
+    ],
+)
+@pytest.mark.parametrize(
+    "data_seed",
+    [4171614],
+)
+# Related to issue 8634 for log based functions with different dtypes
+def test_unary_log_operations_ttnn(
+    input_shapes, log_function, torch_dtype, ttnn_dtype, low_range, high_range, data_seed, device
+):
+    """Test logarithm functions (log, log2, log10)"""
+    torch.manual_seed(data_seed)
+    in_data = torch.Tensor(size=input_shapes).uniform_(low_range, high_range).to(torch_dtype)
+
+    # Only use pad_value=1.0 for bfloat8_b to avoid log(0) issues with shared exponent flushing
+    tensor_kwargs = {
+        "dtype": ttnn_dtype,
+        "layout": ttnn.TILE_LAYOUT,
+        "device": device,
+        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
+    }
+    if ttnn_dtype == ttnn.bfloat8_b:
+        tensor_kwargs["pad_value"] = 1.0
+
+    input_tensor = ttnn.from_torch(in_data, **tensor_kwargs)
+    output_tensor = log_function(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    golden_function = ttnn.get_golden_function(log_function)
+    # for bfloat8_b precision
+    input_torch_converted = ttnn.to_torch(input_tensor)
+    golden_tensor = golden_function(input_torch_converted, device=device)
+    tt_result = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(tt_result, golden_tensor, pcc=0.99)
+    assert torch.allclose(tt_result, golden_tensor, rtol=4e-2, atol=4e-2)
+
+
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_sin(device, h, w):
@@ -400,42 +462,54 @@ def test_pow(device, h, w, scalar):
     run_unary_test_with_float(device, h, w, scalar, ttnn.pow, pcc=0.999)
 
 
-@pytest.mark.parametrize("lower_limit", [0, 1.0, 2])
+@pytest.mark.parametrize("lower_limit", [0, 1.0, 2, -5.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_relu_min(device, h, w, lower_limit):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_relu_min(device, h, w, lower_limit, dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    if dtype == ttnn.bfloat16:
+        torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    elif dtype == ttnn.int32:
+        torch_input_tensor = torch.randint(
+            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, (h, w), dtype=torch.int32
+        )
+        lower_limit = int(lower_limit)
+
     golden_function = ttnn.get_golden_function(ttnn.relu_min)
     torch_output_tensor = golden_function(torch_input_tensor, lower_limit=lower_limit)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.relu_min(input_tensor, lower_limit)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("upper_limit", [0, 1.0, 2])
+@pytest.mark.parametrize("upper_limit", [0, 1.0, 2, -5.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_relu_max(device, h, w, upper_limit):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_relu_max(device, h, w, upper_limit, dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    if dtype == ttnn.bfloat16:
+        torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    elif dtype == ttnn.int32:
+        torch_input_tensor = torch.randint(
+            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, (h, w), dtype=torch.int32
+        )
+        upper_limit = int(upper_limit)
+
     golden_function = ttnn.get_golden_function(ttnn.relu_max)
     torch_output_tensor = golden_function(torch_input_tensor, upper_limit=upper_limit)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.relu_max(input_tensor, upper_limit)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("scalar", [1.5, 2.0])

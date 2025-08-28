@@ -140,7 +140,16 @@ void WatcherServer::Impl::attach_devices() {
 
 void WatcherServer::Impl::detach_devices() {
     // If server isn't running, and wasn't killed due to an error, nothing to do here.
+    auto close_file = [](FILE*& file) {
+        if (file != nullptr) {
+            std::fclose(file);
+            file = nullptr;
+        }
+    };
     if (!server_thread_ and !server_killed_due_to_error_) {
+        close_file(logfile_);
+        close_file(kernel_file_);
+        close_file(kernel_elf_file_);
         return;
     }
 
@@ -179,10 +188,9 @@ void WatcherServer::Impl::detach_devices() {
 
         // Watcher server closed, can use dma library again.
         MetalContext::instance().rtoptions().set_disable_dma_ops(false);
-
-        // Close files
-        std::fclose(logfile_);
-        logfile_ = nullptr;
+        close_file(logfile_);
+        close_file(kernel_file_);
+        close_file(kernel_elf_file_);
     }
 }
 
@@ -239,8 +247,8 @@ void WatcherServer::Impl::register_kernel_elf_paths(int id, std::vector<std::str
 void WatcherServer::Impl::read_kernel_ids_from_file() {
     std::filesystem::path output_dir(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + LOG_FILE_PATH);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
-    FILE* f;
-    if ((f = fopen(fname.c_str(), "r")) == nullptr) {
+    FILE* f = fopen(fname.c_str(), "r");
+    if (!f) {
         TT_THROW("Watcher failed to open kernel name file: {}\n", fname);
     }
 
@@ -271,8 +279,6 @@ double WatcherServer::Impl::get_elapsed_secs() {
 }
 
 void WatcherServer::Impl::create_log_file() {
-    FILE* f;
-
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
@@ -281,7 +287,8 @@ void WatcherServer::Impl::create_log_file() {
     if (rtoptions.get_watcher_skip_logging()) {
         fname = "/dev/null";
     }
-    if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
+    FILE* f = fopen(fname.c_str(), fmode);
+    if (!f) {
         TT_THROW("Watcher failed to create log file\n");
     }
     log_info(LogLLRuntime, "Watcher log file: {}", fname);
@@ -311,13 +318,13 @@ void WatcherServer::Impl::create_log_file() {
 }
 
 void WatcherServer::Impl::create_kernel_file() {
-    FILE* f;
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     const char* fmode = rtoptions.get_watcher_append() ? "a" : "w";
     std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_FILE_NAME;
-    if ((f = fopen(fname.c_str(), fmode)) == nullptr) {
+    FILE* f = fopen(fname.c_str(), fmode);
+    if (!f) {
         TT_THROW("Watcher failed to create kernel name file\n");
     }
     kernel_names_.clear();
@@ -329,12 +336,12 @@ void WatcherServer::Impl::create_kernel_file() {
 }
 
 void WatcherServer::Impl::create_kernel_elf_file() {
-    FILE* f;
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path output_dir(rtoptions.get_root_dir() + LOG_FILE_PATH);
     std::filesystem::create_directories(output_dir);
     std::string fname = output_dir.string() + KERNEL_ELF_FILE_NAME;
-    if ((f = fopen(fname.c_str(), "w")) == nullptr) {
+    FILE* f = fopen(fname.c_str(), "w");
+    if (!f) {
         TT_THROW("Watcher failed to create kernel ELF file\n");
     }
     kernel_elf_file_ = f;
@@ -492,7 +499,7 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
             } else {
                 data->debug_insert_delays = debug_delays_val_zero;
             }
-            tt::llrt::write_hex_vec_to_core(
+            tt::tt_metal::MetalContext::instance().get_cluster().write_core(
                 device_id,
                 worker_core,
                 tt::stl::Span<const uint32_t>(watcher_init_val.data(), watcher_init_val.size()),
@@ -510,7 +517,7 @@ void WatcherServer::Impl::init_device(chip_id_t device_id) {
         } else {
             data->debug_insert_delays = debug_delays_val_zero;
         }
-        tt::llrt::write_hex_vec_to_core(
+        tt::tt_metal::MetalContext::instance().get_cluster().write_core(
             device_id,
             virtual_core,
             watcher_init_val,

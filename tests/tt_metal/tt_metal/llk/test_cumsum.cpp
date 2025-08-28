@@ -20,6 +20,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "device_fixture.hpp"
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -81,8 +82,15 @@ std::vector<bfloat16> gold_cumsum(std::vector<bfloat16>& src, const std::vector<
     return golden;
 }
 
-void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_config) {
+void run_single_core_cumsum(std::shared_ptr<distributed::MeshDevice> mesh_device, const CumsumConfig& test_config) {
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+    distributed::MeshWorkload workload;
     Program program = tt_metal::CreateProgram();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
+    auto device = mesh_device->get_devices()[0];
 
     CoreCoord core = {0, 0};
 
@@ -105,13 +113,13 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     tt_metal::CircularBufferConfig l1_src_cb_config = tt_metal::CircularBufferConfig(dram_buffer_size, {{0, tt::DataFormat::Float16_b}})
         .set_page_size(0, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, l1_src_cb_config);
+    tt_metal::CreateCircularBuffer(program_, core, l1_src_cb_config);
 
     auto dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
     tt_metal::CircularBufferConfig l1_dst_cb_config = tt_metal::CircularBufferConfig(dram_buffer_size, {{16, tt::DataFormat::Float16_b}})
         .set_page_size(16, single_tile_size);
-    tt_metal::CreateCircularBuffer(program, core, l1_dst_cb_config);
+    tt_metal::CreateCircularBuffer(program_, core, l1_dst_cb_config);
 
     std::string reader_kernel_name, writer_kernel_name;
     std::map<std::string, std::string> defines = {};
@@ -129,27 +137,27 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
     }
 
     auto reader_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         reader_kernel_name,
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
 
     auto writer_kernel = tt_metal::CreateKernel(
-        program,
+        program_,
         writer_kernel_name,
         core,
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
 
     tt_metal::CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/compute/cumsum.cpp",
         core,
         tt_metal::ComputeConfig{.compile_args = compile_args, .defines = defines});
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         reader_kernel,
         core,
         {
@@ -164,7 +172,7 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
         });
 
     tt_metal::SetRuntimeArgs(
-        program,
+        program_,
         writer_kernel,
         core,
         {
@@ -190,7 +198,7 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
 
     tt_metal::detail::WriteToBuffer(src_dram_buffer, input_packed_tilized);
 
-    tt_metal::detail::LaunchProgram(device, program);
+    distributed::EnqueueMeshWorkload(cq, workload, false);
 
     std::vector<uint32_t> output_packed_tilized;
     tt_metal::detail::ReadFromBuffer(dst_dram_buffer, output_packed_tilized);
@@ -205,7 +213,7 @@ void run_single_core_cumsum(tt_metal::IDevice* device, const CumsumConfig& test_
 }
 }  // namespace unit_tests::compute::cumsum
 
-TEST_F(DeviceFixture, TensixComputeCumsumColumnwise) {
+TEST_F(MeshDeviceFixture, TensixComputeCumsumColumnwise) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();  // Not implemented for GRAYSKULL
@@ -221,7 +229,7 @@ TEST_F(DeviceFixture, TensixComputeCumsumColumnwise) {
     }
 }
 
-TEST_F(DeviceFixture, TensixComputeCumsumRowwise) {
+TEST_F(MeshDeviceFixture, TensixComputeCumsumRowwise) {
     auto arch = this->arch_;
     if (arch == tt::ARCH::GRAYSKULL) {
         GTEST_SKIP();  // Not implemented for GRAYSKULL
