@@ -1332,7 +1332,9 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
     uint32_t output_size = 0;
     for (const CBInfo& cb : cb_info) {
         if (!cb.is_globally_allocated) {
-            total_CB_size += cb.cb_size_per_core();
+            if (!(cb.name == Conv2dCb::READER_INDICES && conv_config.config_tensors_in_dram)) {
+                total_CB_size += cb.cb_size_per_core();
+            }
             log_trace(tt::LogOp, "CB: {}, size: {}", enchantum::to_string(cb.name), cb.cb_size_per_core());
         }
         if (cb.name == Conv2dCb::OUT) {

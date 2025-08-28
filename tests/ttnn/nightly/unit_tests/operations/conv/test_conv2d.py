@@ -233,6 +233,7 @@ def run_conv(
         in_place=in_place,
         enable_kernel_stride_folding=enable_kernel_stride_folding,
         full_inner_dim=bs_full_inner_dim,
+        config_tensors_in_dram=True,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),

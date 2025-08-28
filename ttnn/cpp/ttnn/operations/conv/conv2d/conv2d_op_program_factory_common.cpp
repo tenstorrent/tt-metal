@@ -245,7 +245,9 @@ void allocate_cbs(
             } else if (cb.name == Conv2dCb::OUT || cb.name == Conv2dCb::MATMUL_PARTIALS) {
                 buffer = output_tensor.buffer();
             } else if (cb.name == Conv2dCb::READER_INDICES) {
-                buffer = l1_indices_tensor.buffer();
+                if (!l1_indices_tensor.memory_config().is_dram()) {
+                    buffer = l1_indices_tensor.buffer();
+                }
             } else {
                 TT_THROW(
                     "Unexpected circular buffer name {}. Expected one of: SHARDED_ACT_CB, OUT0_CB, READER_INDICES_CB",

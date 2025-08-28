@@ -45,7 +45,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool enable_split_reader,
-    bool full_inner_dim) {
+    bool full_inner_dim,
+    bool config_tensors_in_dram) {
     distributed::MeshDevice* device = a.device();
     TT_FATAL(a.layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
@@ -380,9 +381,9 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
 
     // create sharded ttnn config tensors
     Tensor conv_reader_indices_tensor = ttnn::operations::sliding_window::construct_on_host_config_tensor(
-        conv_sharded_input_top_left_indices, parallel_config);
+        conv_sharded_input_top_left_indices, parallel_config, config_tensors_in_dram);
     conv_reader_indices_tensor = ttnn::operations::sliding_window::move_config_tensor_to_device(
-        conv_reader_indices_tensor, parallel_config, block_sharded, a.device());
+        conv_reader_indices_tensor, parallel_config, block_sharded, a.device(), config_tensors_in_dram);
 
     const tt::tt_metal::DeviceStorage& conv_reader_indices_storage = conv_reader_indices_tensor.device_storage();
 
@@ -642,7 +643,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_TILIZED).index,
         get_cb_info_by_name(cb_info, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16).index,
         get_cb_info_by_name(cb_info, Conv2dCb::L1_ARRAY).index,
-    };
+        config_tensors_in_dram};
+    if (config_tensors_in_dram) {
+        reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->address());
+        reader_compile_time_args.push_back(out_block_h_ntiles * tt::constants::TILE_HEIGHT * 2);
+        tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
+    }
 
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
