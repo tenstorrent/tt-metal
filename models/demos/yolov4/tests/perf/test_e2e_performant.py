@@ -38,16 +38,13 @@ def _run_model_pipeline(
     profiler.end("compile")
 
     host_inputs = [tt_inputs_host] * num_measurement_iterations
-
-    pipeline.preallocate_output_tensors_on_host(
-        num_measurement_iterations,
-    )
-
     logger.info(
         f"Starting performance pipeline for {num_measurement_iterations} iterations with batch_size={test_infra.batch_size} and num_devices={test_infra.num_devices}"
     )
+    outputs = []
     profiler.start(f"run_model_pipeline_{num_command_queues}cqs")
-    outputs = pipeline.enqueue(host_inputs).pop_all()
+    for host_input in host_inputs:
+        outputs.append(*pipeline.enqueue([host_input]).pop_all())
     profiler.end(f"run_model_pipeline_{num_command_queues}cqs")
 
     for i, output in enumerate(outputs):
@@ -148,7 +145,7 @@ def run_perf_e2e_yolov4(
 )
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((320, 320), 103), ((640, 640), 46)],
+    [((320, 320), 130), ((640, 640), 65)],
 )
 def test_e2e_performant(
     device,
@@ -183,7 +180,7 @@ def test_e2e_performant(
 )
 @pytest.mark.parametrize(
     "resolution, expected_inference_throughput",
-    [((320, 320), 103), ((640, 640), 46)],
+    [((320, 320), 235), ((640, 640), 120)],
 )
 def test_e2e_performant_dp(
     mesh_device,
