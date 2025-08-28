@@ -54,6 +54,7 @@ inline void calculate_sfpu_mul_u16_to_u32_body() {
 template <int ITERATIONS = 8>
 inline void calculate_sfpu_lcm(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     for (int d = 0; d < ITERATIONS; d++) {
+        // size of each tile in Dest is 64 rows
         constexpr uint dst_tile_size = 64;
 
         TT_SFPLOAD(p_sfpu::LREG0, 4, 3, dst_index_in0 * dst_tile_size);  // a

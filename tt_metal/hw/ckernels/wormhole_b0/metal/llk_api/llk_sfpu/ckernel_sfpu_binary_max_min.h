@@ -16,6 +16,7 @@ template <InstrModLoadStore INSTRUCTION_MODE, bool IS_MAX_OP = true, int ITERATI
 inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
+        // size of each tile in Dest is 64 rows
         constexpr uint dst_tile_size = 64;
 
         TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, dst_index_in0 * dst_tile_size);  // a

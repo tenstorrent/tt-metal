@@ -14,6 +14,7 @@ template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_rsub_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
+        // size of each tile in Dest is 64 rows
         constexpr uint dst_tile_size = 64;
         // operand A - int32
         TT_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
