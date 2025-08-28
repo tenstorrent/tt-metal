@@ -137,6 +137,7 @@ int main(int argc, char** argv) {
         test_context.open_devices(test_config.fabric_setup);
         for (int iter = 0; iter < test_config.iterations; iter++) {
             log_info(tt::LogTest, "Building tests");
+            std::cout << "Running iteration " << iter << std::endl;
             auto built_tests = builder.build_tests({test_config});
 
             // Set benchmark mode and line sync for this test group
