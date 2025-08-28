@@ -98,7 +98,7 @@ void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Prog
 void MeshWorkloadImpl::compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device) {
     ZoneScoped;
     auto& program = programs_.at(device_range);
-    program.compile(mesh_device);
+    program.impl().compile(mesh_device);
     program.allocate_circular_buffers(mesh_device);
     program.impl().validate_circular_buffer_region(mesh_device);
 }
