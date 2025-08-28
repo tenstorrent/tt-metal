@@ -8,6 +8,7 @@
 #include <variant>
 #include "helpers.h"
 #include "array_wrapper.h"
+#include "compile_time_args.h"
 #include <cstring>
 
 // Forward declared from dataflow_api.h
