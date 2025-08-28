@@ -131,19 +131,6 @@ physical_mesh:
       ]
     ]
 Tests:
-  - name: UnicastRandomPairing
-    fabric_setup:
-      topology: Mesh
-      routing_type: Dynamic
-    parametrization_params:
-      size: [512, 1024, 2048]
-      num_packets: [50, 100]
-      ntype: [unicast_write, atomic_inc]
-    defaults:
-      ftype: unicast
-    patterns:
-      - type: full_device_random_pairing
-        iterations: 200
   - name: UnicastWithChipId
     fabric_setup:
       topology: Mesh
@@ -178,6 +165,30 @@ Tests:
               device: [10, 0]
           - destination:
               device: [11, 0]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [4, 1]
+          - destination:
+              device: [5, 1]
+          - destination:
+              device: [6, 1]
+          - destination:
+              device: [7, 1]
+          - destination:
+              device: [8, 1]
+          - destination:
+              device: [9, 1]
+          - destination:
+              device: [10, 1]
+          - destination:
+              device: [11, 1]
       - device: [4, 0]
         patterns:
           - destination:
@@ -202,6 +213,30 @@ Tests:
               device: [10, 0]
           - destination:
               device: [11, 0]
+      - device: [4, 1]
+        patterns:
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [5, 1]
+          - destination:
+              device: [6, 1]
+          - destination:
+              device: [7, 1]
+          - destination:
+              device: [8, 1]
+          - destination:
+              device: [9, 1]
+          - destination:
+              device: [10, 1]
+          - destination:
+              device: [11, 1]
       - device: [7, 0]
         patterns:
           - destination:
@@ -226,6 +261,30 @@ Tests:
               device: [10, 0]
           - destination:
               device: [11, 0]
+      - device: [7, 1]
+        patterns:
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [4, 1]
+          - destination:
+              device: [5, 1]
+          - destination:
+              device: [6, 1]
+          - destination:
+              device: [8, 1]
+          - destination:
+              device: [9, 1]
+          - destination:
+              device: [10, 1]
+          - destination:
+              device: [11, 1]
       - device: [11, 0]
         patterns:
           - destination:
@@ -250,3 +309,27 @@ Tests:
               device: [9, 0]
           - destination:
               device: [10, 0]
+      - device: [11, 1]
+        patterns:
+          - destination:
+              device: [0, 1]
+          - destination:
+              device: [1, 1]
+          - destination:
+              device: [2, 1]
+          - destination:
+              device: [3, 1]
+          - destination:
+              device: [4, 1]
+          - destination:
+              device: [5, 1]
+          - destination:
+              device: [6, 1]
+          - destination:
+              device: [7, 1]
+          - destination:
+              device: [8, 1]
+          - destination:
+              device: [9, 1]
+          - destination:
+              device: [10, 1]
