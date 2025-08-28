@@ -13,7 +13,6 @@ namespace py = pybind11;
 void bind_experimental_dropout_operation(py::module& module) {
     auto doc = fmt::format(
         R"doc(
-
         Applies {0} to :attr:`input_tensor` element-wise.
 
         .. math::

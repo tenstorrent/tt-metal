@@ -16,7 +16,6 @@ namespace py = pybind11;
 void bind_non_zero(py::module& module) {
     auto doc = fmt::format(
         R"doc(
-
             Returns the number of elements (N) that are non-zero as well as a tensor of the same shape as input where the first N elements are the indices of non-zero elements.
 
             Args:

@@ -177,7 +177,7 @@ Tensor QuantOp::invoke(
         const Tensor scale_full = reshape_per_channel_vector_args(*scale_p, input_shape, axis_v, a_dtype);
         const Tensor zero_point_full = reshape_per_channel_vector_args(*zero_point_p, input_shape, axis_v, a_dtype);
         const Tensor input_scaled =
-            ttnn::divideinput_a, scale_full, a_dtype, std::nullopt, std::nullopt, none, none, none, false);
+            ttnn::divide(input_a, scale_full, a_dtype, std::nullopt, std::nullopt, none, none, none, false);
         return ttnn::typecast(
             ttnn::add(
                 input_scaled,
@@ -232,7 +232,6 @@ Tensor QuantOp::invoke(
                     ttnn::divide(input_a, scale, std::nullopt, std::nullopt, std::nullopt, none, none, none, false);
                 return ttnn::typecast(
                     ttnn::add(
-
                         input_scaled,
                         zero_point.dtype() == a_dtype ? zero_point : ttnn::typecast(zero_point, a_dtype),
                         a_dtype,
@@ -259,7 +258,6 @@ Tensor QuantOp::invoke(
                     false);
                 return ttnn::typecast(
                     ttnn::add(
-
                         input_scaled,
                         zero_point.dtype() == a_dtype ? zero_point : ttnn::typecast(zero_point, a_dtype),
                         a_dtype,
@@ -490,7 +488,6 @@ Tensor DequantOp::invoke(
                 check_per_tensor_zero_point(zero_point);
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
-
                         input_tensor, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
                     c_dtype);
                 return ttnn::multiply(
@@ -501,7 +498,6 @@ Tensor DequantOp::invoke(
                 check_per_tensor_zero_point(zero_point);
                 const Tensor input_shifted = ttnn::typecast(
                     ttnn::subtract(
-
                         input_tensor, zero_point, std::nullopt, std::nullopt, std::nullopt, none, none, none, false),
                     c_dtype);
                 return ttnn::multiply(

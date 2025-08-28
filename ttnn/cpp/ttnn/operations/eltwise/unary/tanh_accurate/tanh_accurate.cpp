@@ -32,7 +32,6 @@ Tensor Tanh_accurate::invoke(
                                     : memory_config.value_or(input_tensor.memory_config());
 
     return prim::tanh_accurate(
-
         input_tensor,
         output_dtype,
         output_memory_config,

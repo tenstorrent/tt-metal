@@ -120,7 +120,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
             in_place_unpad &= begins[3] == 0 && ends[3] == padded_output_shape[3];
             if (in_place_unpad) {
                 log_info(tt::LogOp, "In-place unpad optimization via copy");
-                ttnn::copyinput_tensor, output_tensor);
+                ttnn::copy(input_tensor, output_tensor);
                 return output_tensor;
             }
         }

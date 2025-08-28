@@ -58,7 +58,6 @@ void bind_experimental_paged_cache_operations(py::module& module) {
 
     auto paged_fused_update_cache_doc =
         R"doc(
-
             Updates the cache tensors `cache_tensor1` and `cache_tensor2` in parallel with values derived from the corresponding input tensors. This function supports fine-grained updates using specified index lists or tensors.
 
             Positional Arguments:

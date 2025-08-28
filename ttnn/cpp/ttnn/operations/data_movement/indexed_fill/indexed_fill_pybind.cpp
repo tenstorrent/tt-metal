@@ -15,7 +15,6 @@ namespace detail {
 void bind_indexed_fill(pybind11::module& module) {
     auto doc = fmt::format(
         R"doc(
-
             Replaces batch of input in input_b denoted by batch_ids into input_a.
 
             Args:

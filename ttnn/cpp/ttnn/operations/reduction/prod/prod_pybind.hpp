@@ -18,7 +18,6 @@ template <typename unary_operation_t>
 void bind_reduction_prod_operation(py::module& module, const unary_operation_t& operation) {
     auto doc = fmt::format(
         R"doc(
-
             Computes the product of all elements on specified :attr:`dim` of the :attr:`input_tensor` tensor.
 
             If no :attr:`dim` is provided (or :attr:`dim` is set to `None`), it will compute the full product of every element in the :attr:`input_tensor` tensor.

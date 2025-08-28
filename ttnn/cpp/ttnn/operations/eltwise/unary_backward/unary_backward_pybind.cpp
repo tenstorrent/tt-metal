@@ -30,7 +30,6 @@ void bind_unary_backward_two_float(
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
-
         {2}
 
         Args:
@@ -171,7 +170,6 @@ void bind_unary_backward_rsqrt(
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
-
         {2}
 
         Args:

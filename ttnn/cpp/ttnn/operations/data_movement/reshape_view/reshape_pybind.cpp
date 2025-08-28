@@ -69,7 +69,6 @@ void py_bind_reshape_view(pybind11::module& module) {
         ttnn::reshape,
 
         R"doc(
-
         Note: for a 0 cost view, the following conditions must be met:
             * the last dimension must not change
             * In Tiled the second last two dimensions must not change OR there is no padding on the second last dimension

@@ -101,22 +101,22 @@ inline Tensor binary_impl(
     const std::optional<Tensor>& output = std::nullopt) {
     auto output_tensor = lhs;
     if (binary_op_type == BinaryOpType::GT) {
-        output_tensor = ttnn::gt_unarylhs, rhs, memory_config, output);
+        output_tensor = ttnn::gt_unary(lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::LT) {
-        output_tensor = ttnn::lt_unarylhs, rhs, memory_config, output);
+        output_tensor = ttnn::lt_unary(lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::NE) {
-        output_tensor = ttnn::ne_unarylhs, rhs, memory_config, output);
+        output_tensor = ttnn::ne_unary(lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::GE) {
-        output_tensor = ttnn::ge_unarylhs, rhs, memory_config, output);
+        output_tensor = ttnn::ge_unary(lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::LE) {
-        output_tensor = ttnn::le_unarylhs, rhs, memory_config, output);
+        output_tensor = ttnn::le_unary(lhs, rhs, memory_config, output);
     } else if (binary_op_type == BinaryOpType::EQ) {
-        output_tensor = ttnn::eq_unarylhs, rhs, memory_config, output);
+        output_tensor = ttnn::eq_unary(lhs, rhs, memory_config, output);
     } else {
         TT_THROW("Unsupported operation");
     }
     if (dtype.has_value()) {
-        output_tensor = ttnn::typecastoutput_tensor, *dtype, std::nullopt, output);
+        output_tensor = ttnn::typecast(output_tensor, *dtype, std::nullopt, output);
     }
     return output_tensor;
 }
@@ -129,13 +129,13 @@ inline Tensor binary_impl(
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt) {
     if (binary_op_type == BinaryOpType::GE) {
-        return ttnn::gezttnn::sub_sfpulhs, rhs, memory_config), memory_config, output);
+        return ttnn::gez(ttnn::sub_sfpu(lhs, rhs, memory_config), memory_config, output);
     }
     if (binary_op_type == BinaryOpType::LE) {
-        return ttnn::lezttnn::sub_sfpulhs, rhs, memory_config), memory_config, output);
+        return ttnn::lez(ttnn::sub_sfpu(lhs, rhs, memory_config), memory_config, output);
     }
     if (binary_op_type == BinaryOpType::EQ) {
-        return ttnn::eqzttnn::sub_sfpulhs, rhs, memory_config), memory_config, output);
+        return ttnn::eqz(ttnn::sub_sfpu(lhs, rhs, memory_config), memory_config, output);
     }
 
     TT_THROW("Unsupported operation");
@@ -505,7 +505,6 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
     return detail::invoke_binary_ng(
-
         lhs,
         rhs,
         binary_op_type,
@@ -530,7 +529,6 @@ Tensor BinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
     return detail::invoke_binary_ng(
-
         lhs,
         rhs,
         binary_op_type,
@@ -555,7 +553,6 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     const std::optional<bool>& use_legacy) {
     return detail::invoke_binary_ng(
-
         lhs,
         rhs,
         binary_op_type,
@@ -588,7 +585,6 @@ Tensor RelationalBinary<binary_op_type>::invoke(
     }
 
     return detail::invoke_binary_ng(
-
         lhs,
         rhs,
         binary_op_type,
@@ -620,7 +616,6 @@ Tensor InplaceRelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return RelationalBinary<binary_op_type>::invoke(
-
         lhs, rhs, std::nullopt, std::nullopt, lhs, post_activations, lhs_activations, rhs_activations, use_legacy);
 }
 
@@ -633,7 +628,6 @@ Tensor InplaceRelationalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return RelationalBinary<binary_op_type>::invoke(
-
         lhs, rhs, std::nullopt, std::nullopt, lhs, post_activations, lhs_activations, rhs_activations, use_legacy);
 }
 
@@ -646,7 +640,6 @@ Tensor InplaceLogicalBinary<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperation<binary_op_type>::invoke(
-
         lhs, rhs, std::nullopt, std::nullopt, lhs, post_activations, lhs_activations, rhs_activations, use_legacy);
 }
 
@@ -659,7 +652,6 @@ Tensor InplaceBinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperation<binary_op_type>::invoke(
-
         lhs, rhs, std::nullopt, std::nullopt, lhs, post_activations, lhs_activations, rhs_activations, use_legacy);
 }
 
@@ -672,7 +664,6 @@ Tensor InplaceBinaryOperation<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperation<binary_op_type>::invoke(
-
         lhs, rhs, std::nullopt, std::nullopt, lhs, post_activations, lhs_activations, rhs_activations, use_legacy);
 }
 
@@ -688,7 +679,6 @@ Tensor BinaryOperationSfpu<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return detail::invoke_binary_ng(
-
         lhs,
         rhs,
         binary_op_type,

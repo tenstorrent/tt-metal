@@ -163,7 +163,7 @@ struct ExecuteBiasGelu {
         tt::stl::Span<const unary::UnaryWithParam> rhs_activations = {},
         std::optional<bool> use_legacy = std::nullopt) {
         return ttnn::gelu(
-            ttnn::addinput_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
+            ttnn::add(input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
             true,
             memory_config,
             optional_output_tensor);

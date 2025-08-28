@@ -113,7 +113,6 @@ Tensor accumulation_invoke(
     int32_t accumulation_axis;
     wip_tensor = common::preprocess_input_tensor(wip_tensor, cum_axis, permutation, accumulation_axis, dtype);
     wip_tensor = ttnn::prim::accumulation(
-
         wip_tensor,
         accumulation_axis,
         dtype,

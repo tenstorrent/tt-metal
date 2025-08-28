@@ -29,7 +29,6 @@ void bind_ternary_backward(
     const std::string_view note = "") {
     auto doc = fmt::format(
         R"doc(
-
         {2}
 
         Args:
@@ -213,7 +212,6 @@ void bind_ternary_backward_optional_output(
     const std::string& supported_dtype = "BFLOAT16") {
     auto doc = fmt::format(
         R"doc(
-
         {2}
 
         Args:

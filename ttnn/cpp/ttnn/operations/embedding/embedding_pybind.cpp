@@ -21,7 +21,6 @@ void py_module(py::module& module) {
 
     const auto doc =
         R"doc(
-
         Retrieves word embeddings using input_tensor. The input_tensor is a list of indices, and the embedding matrix, and the output is the corresponding word embeddings.
 
         Args:

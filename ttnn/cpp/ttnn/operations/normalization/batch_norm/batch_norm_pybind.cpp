@@ -19,7 +19,6 @@ void bind_batch_norm_operation(py::module& module) {
         module,
         ttnn::batch_norm,
         R"doc(
-
         Applies batch norm over each channel on :attr:`input_tensor`.
         See `Spatial Batch Normalization <https://arxiv.org/abs/1502.03167>`_ for more details.
 

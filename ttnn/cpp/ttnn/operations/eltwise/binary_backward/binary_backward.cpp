@@ -84,11 +84,11 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteAddalphaBW::invoke(
         input_grad, other_grad, input, other, {are_required_outputs[0], are_required_outputs[1]});
 
     if (are_required_outputs[0]) {
-        ttnn::assigngrad, input_grad.value());
+        ttnn::assign(grad, input_grad.value());
         result[0] = input_grad;
     }
     if (are_required_outputs[1]) {
-        ttnn::multiplygrad, alpha, std::nullopt, output_mem_config, other_grad);
+        ttnn::multiply(grad, alpha, std::nullopt, output_mem_config, other_grad);
         result[1] = other_grad;
     }
     return result;
@@ -107,12 +107,12 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardSubAlpha::invoke(
     preallocated_tensors_check(
         input_grad, other_grad, input, other, {are_required_outputs[0], are_required_outputs[1]});
     if (are_required_outputs.at(0)) {
-        ttnn::assigngrad, input_grad.value());
+        ttnn::assign(grad, input_grad.value());
         result[0] = input_grad;
     }
     if (are_required_outputs.at(1)) {
-        ttnn::neggrad, output_mem_config, other_grad);
-        ttnn::multiplyother_grad.value(), alpha, std::nullopt, output_mem_config, other_grad);
+        ttnn::neg(grad, output_mem_config, other_grad);
+        ttnn::multiply(other_grad.value(), alpha, std::nullopt, output_mem_config, other_grad);
         result[1] = other_grad;
     }
 
@@ -127,7 +127,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     input_grad = input_grad.value_or(ttnn::empty_like(input));
-    ttnn::assigngrad, input_grad.value());
+    ttnn::assign(grad, input_grad.value());
     result.emplace_back(input_grad);
     return result;
 }
@@ -144,11 +144,11 @@ std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
     preallocated_tensors_check(
         input_grad, other_grad, input, other, {are_required_outputs[0], are_required_outputs[1]});
     if (are_required_outputs.at(0)) {
-        ttnn::assigngrad, input_grad.value());
+        ttnn::assign(grad, input_grad.value());
         result[0] = input_grad;
     }
     if (are_required_outputs.at(1)) {
-        ttnn::multiplygrad, 1.0f, std::nullopt, output_mem_config, other_grad);
+        ttnn::multiply(grad, 1.0f, std::nullopt, output_mem_config, other_grad);
         result[1] = other_grad;
     }
     return result;
@@ -180,7 +180,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
     std::optional<Tensor> input_grad) {
     std::vector<std::optional<Tensor>> result;
     input_grad = input_grad.value_or(ttnn::empty_like(input));
-    ttnn::assigngrad, input_grad.value());
+    ttnn::assign(grad, input_grad.value());
     result.emplace_back(input_grad);
     return result;
 }
@@ -484,7 +484,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
         ttnn::SmallVector<uint32_t> end_index = {
             input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
-        ttnn::slicegrad, start_index, end_index, step, std::nullopt, input_grad);
+        ttnn::slice(grad, start_index, end_index, step, std::nullopt, input_grad);
         grad_tensor[0] = input_grad;
     }
 
@@ -502,7 +502,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
         ttnn::SmallVector<uint32_t> end_index_2 = {
             grad.padded_shape()[0], grad.padded_shape()[1], grad.padded_shape()[2], grad.padded_shape()[3]};
         ttnn::SmallVector<uint32_t> step_2 = {1, 1, 1, 1};
-        ttnn::slicegrad, start_index_2, end_index_2, step_2, std::nullopt, other_grad);
+        ttnn::slice(grad, start_index_2, end_index_2, step_2, std::nullopt, other_grad);
         grad_tensor[1] = other_grad;
     }
 
@@ -521,11 +521,11 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardRsub::invoke(
 
     preallocated_tensors_check(input_grad, other_grad, grad, grad, {are_required_outputs[0], are_required_outputs[1]});
     if (are_required_outputs.at(0)) {
-        ttnn::neggrad, output_mem_config, input_grad);
+        ttnn::neg(grad, output_mem_config, input_grad);
         result[0] = input_grad;
     }
     if (are_required_outputs.at(1)) {
-        ttnn::assigngrad, other_grad.value());
+        ttnn::assign(grad, other_grad.value());
         result[1] = other_grad;
     }
     return result;
@@ -645,19 +645,19 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
         if (scalar == 0.0) {
             float t_nan = std::nanf("");
             where(
-                ttnn::eqzgrad, output_mem_config),
+                ttnn::eqz(grad, output_mem_config),
                 t_nan,
-                ttnn::multiply( ttnn::signgrad, output_mem_config), t_inf, std::nullopt, output_mem_config),
+                ttnn::multiply(ttnn::sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
                 output_mem_config,
                 input_grad);
             result.push_back(input_grad);
         } else {
             float inv_scalar = 1.0f / scalar;
-            ttnn::multiplygrad, inv_scalar, std::nullopt, output_mem_config, input_grad);
+            ttnn::multiply(grad, inv_scalar, std::nullopt, output_mem_config, input_grad);
             result.push_back(input_grad);
         }
     } else {
-        ttnn::zeros_likegrad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config, input_grad);
+        ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config, input_grad);
         result.push_back(input_grad);
     }
     return result;
@@ -687,12 +687,11 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
             ttnn::multiply(
                 grad, ttnn::reciprocal(other, output_mem_config), std::nullopt, output_mem_config, input_grad);
             ttnn::where(
-                ttnn::eqzother, output_mem_config),
+                ttnn::eqz(other, output_mem_config),
                 ttnn::where(
-                    ttnn::eqzgrad, output_mem_config),
+                    ttnn::eqz(grad, output_mem_config),
                     t_nan,
-                    ttnn::multiply(
-                 ttnn::sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
+                    ttnn::multiply(ttnn::sign(grad, output_mem_config), t_inf, std::nullopt, output_mem_config),
                     output_mem_config),
                 input_grad.value(),
                 output_mem_config);
@@ -700,33 +699,27 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
         }
         if (are_required_outputs.at(1)) {
             ttnn::multiply(
-                ttnn::neggrad, output_mem_config),
+                ttnn::neg(grad, output_mem_config),
                 (ttnn::multiply(
                     input,
-                    ttnn::reciprocalttnn::squareother, output_mem_config), output_mem_config),
+                    ttnn::reciprocal(ttnn::square(other, output_mem_config), output_mem_config),
                     std::nullopt,
                     output_mem_config)),
                 std::nullopt,
                 output_mem_config,
                 other_grad);
             ttnn::where(
-                ttnn::eqzother, output_mem_config),
+                ttnn::eqz(other, output_mem_config),
                 ttnn::where(
-                    ttnn::eqzgrad, output_mem_config),
+                    ttnn::eqz(grad, output_mem_config),
                     t_nan,
                     ttnn::where(
-
-                        ttnn::eqzinput, output_mem_config),
+                        ttnn::eqz(input, output_mem_config),
                         t_nan,
                         ttnn::multiply(
-
                             ttnn::multiply(
-
-                                ttnn::signinput, output_mem_config),
-                                neg_inf,
-                                std::nullopt,
-                                output_mem_config),
-                            ttnn::signgrad, output_mem_config),
+                                ttnn::sign(input, output_mem_config), neg_inf, std::nullopt, output_mem_config),
+                            ttnn::sign(grad, output_mem_config),
                             std::nullopt,
                             output_mem_config),
                         output_mem_config),
@@ -737,11 +730,11 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
         }
     } else {
         if (are_required_outputs.at(0)) {
-            ttnn::zeros_likegrad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config, input_grad);
+            ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config, input_grad);
             result[0] = input_grad;
         }
         if (are_required_outputs.at(1)) {
-            ttnn::zeros_likegrad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config, other_grad);
+            ttnn::zeros_like(grad, grad.dtype(), grad.layout(), std::nullopt, output_mem_config, other_grad);
             result[1] = other_grad;
         }
     }
@@ -797,7 +790,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardMul::invoke(
     if (!input_grad.has_value()) {
         input_grad = ttnn::empty_like(grad);
     }
-    ttnn::multiplygrad, scalar, std::nullopt, output_mem_config, input_grad);
+    ttnn::multiply(grad, scalar, std::nullopt, output_mem_config, input_grad);
     result.push_back(input_grad);
     return result;
 }
@@ -830,11 +823,11 @@ std::vector<std::optional<Tensor>> ExecuteBackwardMul::invoke(
         input_grad, other_grad, input, other, {are_required_outputs[0], are_required_outputs[1]});
 
     if (are_required_outputs.at(0)) {
-        ttnn::multiplygrad, other, std::nullopt, output_mem_config, input_grad);
+        ttnn::multiply(grad, other, std::nullopt, output_mem_config, input_grad);
         result[0] = input_grad;
     }
     if (are_required_outputs.at(1)) {
-        ttnn::multiplygrad, input, std::nullopt, output_mem_config, other_grad);
+        ttnn::multiply(grad, input, std::nullopt, output_mem_config, other_grad);
         result[1] = other_grad;
     }
     return result;

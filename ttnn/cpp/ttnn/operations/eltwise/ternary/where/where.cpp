@@ -43,9 +43,8 @@ Tensor where_impl(
     };
 
     return ttnn::add(
-
-        get_multiplied(ttnn::gtzpredicate, memory_config), value_true),
-        get_multiplied(ttnn::lezpredicate, memory_config), value_false),
+        get_multiplied(ttnn::gtz(predicate, memory_config), value_true),
+        get_multiplied(ttnn::lez(predicate, memory_config), value_false),
         dtype,
         memory_config,
         output,

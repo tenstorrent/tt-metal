@@ -85,7 +85,6 @@ Tensor ExecuteMinimum::invoke(
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperationSfpu<operations::binary::BinaryOpType::MINIMUM>::invoke(
-
         input_tensor_a,
         input_tensor_b,
         std::nullopt,
@@ -127,7 +126,6 @@ Tensor ExecuteMaximum::invoke(
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperationSfpu<operations::binary::BinaryOpType::MAXIMUM>::invoke(
-
         input_tensor_a,
         input_tensor_b,
         std::nullopt,
@@ -236,11 +234,11 @@ Tensor ExecuteDiv::invoke(
         (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     output_tensor = output_tensor.value_or(ttnn::zeros_like(input));
-    ttnn::multiplyinput, (1.0f / value), std::nullopt, output_mem_config, output_tensor);
+    ttnn::multiply(input, (1.0f / value), std::nullopt, output_mem_config, output_tensor);
     if (round_mode == "trunc") {
-        ttnn::truncoutput_tensor.value(), output_mem_config, output_tensor);
+        ttnn::trunc(output_tensor.value(), output_mem_config, output_tensor);
     } else if (round_mode == "floor") {
-        ttnn::flooroutput_tensor.value(), output_mem_config, output_tensor);
+        ttnn::floor(output_tensor.value(), output_mem_config, output_tensor);
     }
     return output_tensor.value();
 }
@@ -288,24 +286,20 @@ Tensor ExecuteDiv::invoke(
 
     // No accurate_mode for FP32 div as inf/nan are handled at kernel level
     if (is_fp32) {
-        result = ttnn::divideinput_a, input_b, std::nullopt, output_mem_config, output_tensor);
+        result = ttnn::divide(input_a, input_b, std::nullopt, output_mem_config, output_tensor);
     } else {
-        Tensor a = typecastinput_a, DataType::FLOAT32);
-        Tensor b = typecastinput_b, DataType::FLOAT32);
+        Tensor a = typecast(input_a, DataType::FLOAT32);
+        Tensor b = typecast(input_b, DataType::FLOAT32);
 
         // Div operation without inf/nan handling as reciprocal(0) = 1.7014118346046923e+38 not inf/nan
-        result = ttnn::multiply(
-            a,
-            ttnn::reciprocalb, output_mem_config),
-            std::nullopt,
-            output_mem_config,
-            output_tensor);
+        result =
+            ttnn::multiply(a, ttnn::reciprocal(b, output_mem_config), std::nullopt, output_mem_config, output_tensor);
     }
 
     if (round_mode == "trunc") {
-        result = ttnn::truncresult, output_mem_config, output_tensor);
+        result = ttnn::trunc(result, output_mem_config, output_tensor);
     } else if (round_mode == "floor") {
-        result = ttnn::floorresult, output_mem_config, output_tensor);
+        result = ttnn::floor(result, output_mem_config, output_tensor);
     }
 
     if (is_fp32) {
@@ -315,7 +309,7 @@ Tensor ExecuteDiv::invoke(
     // Accurate mode: handles division by zero (inf/nan cases) for non-fp32 inputs
     if (accurate_mode) {
         float t_nan = std::nanf("");
-        result = typecastresult, input_dtype, std::nullopt, output_tensor);
+        result = typecast(result, input_dtype, std::nullopt, output_tensor);
         Tensor is_b_zero = ttnn::eqz(input_b, output_mem_config);
         result = ttnn::where(
             ttnn::logical_and(is_b_zero, ttnn::eqz(input_a, output_mem_config)),
@@ -334,7 +328,7 @@ Tensor ExecuteDiv::invoke(
         }
     }
 
-    return typecastresult, input_dtype, std::nullopt, output_tensor);
+    return typecast(result, input_dtype, std::nullopt, output_tensor);
 }
 
 Tensor _div_no_nan_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
@@ -609,7 +603,6 @@ Tensor ExecuteGCD::invoke(
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperationSfpu<operations::binary::BinaryOpType::GCD>::invoke(
-
         input_tensor_a,
         input_tensor_b,
         std::nullopt,
@@ -632,7 +625,6 @@ Tensor ExecuteLCM::invoke(
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperationSfpu<operations::binary::BinaryOpType::LCM>::invoke(
-
         input_tensor_a,
         input_tensor_b,
         std::nullopt,
@@ -654,33 +646,24 @@ Tensor ExecutePower::invoke(
     const uint32_t exponent_floor = static_cast<uint32_t>(std::floor(exponent));
     if (static_cast<float>(exponent_floor) == exponent) {
         if (output_tensor.has_value()) {
-            ttnn::powerinput_a, exponent_floor, output_mem_config, output_tensor);
+            ttnn::power(input_a, exponent_floor, output_mem_config, output_tensor);
             return output_tensor.value();
         }
-        return ttnn::powerinput_a, exponent_floor, output_mem_config);
+        return ttnn::power(input_a, exponent_floor, output_mem_config);
     }
     const float exponent_trunc = exponent - static_cast<float>(exponent_floor);
-    Tensor pow_trunc_log = ttnn::multiply(
-
-        ttnn::loginput_a, true, output_mem_config),
-        exponent_trunc,
-        std::nullopt,
-        output_mem_config);
-    Tensor pow_frac = ttnn::exppow_trunc_log, false, output_mem_config);
+    Tensor pow_trunc_log =
+        ttnn::multiply(ttnn::log(input_a, true, output_mem_config), exponent_trunc, std::nullopt, output_mem_config);
+    Tensor pow_frac = ttnn::exp(pow_trunc_log, false, output_mem_config);
     pow_trunc_log.deallocate();
     float t_nan = std::nanf("");
     Tensor result = ttnn::multiply(
-
-        ttnn::powerinput_a, exponent_floor, output_mem_config),
-        pow_frac,
-        std::nullopt,
-        output_mem_config);
+        ttnn::power(input_a, exponent_floor, output_mem_config), pow_frac, std::nullopt, output_mem_config);
     // To handle negative inputs:
     // in torch For -ve inputs with float exponent power returns nan
     auto output_memory_config = output_tensor.has_value() ? output_tensor.value().memory_config()
                                                           : output_mem_config.value_or(input_a.memory_config());
-    result = ttnn::where(
-        ttnn::ltzinput_a, output_mem_config), t_nan, result, output_memory_config, output_tensor);
+    result = ttnn::where(ttnn::ltz(input_a, output_mem_config), t_nan, result, output_memory_config, output_tensor);
     return result;
 }
 
@@ -690,7 +673,7 @@ Tensor ExecutePower::invoke(
     uint32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& output_tensor) {
-    return ttnn::powerinput, exponent, output_mem_config, output_tensor);
+    return ttnn::power(input, exponent, output_mem_config, output_tensor);
 }
 
 // power - tensor exponent
@@ -705,7 +688,6 @@ Tensor ExecutePower::invoke(
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperationSfpu<operations::binary::BinaryOpType::POWER>::invoke(
-
         input,
         exponent,
         std::nullopt,
@@ -733,7 +715,6 @@ Tensor ExecutePower::invoke(
 
     Tensor input = ttnn::full_like(exponent, input_a);
     return ExecutePower::invoke(
-
         input,
         exponent,
         std::nullopt,
@@ -756,7 +737,6 @@ Tensor ExecuteRsub::invoke(
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     std::optional<bool> use_legacy) {
     return BinaryOperation<operations::binary::BinaryOpType::RSUB>::invoke(
-
         input_tensor_a,
         input_tensor_b,
         output_dtype,
@@ -833,7 +813,6 @@ Tensor ExecuteBitwiseAnd::invoke(
     }
 
     return BinaryOperationSfpu<operations::binary::BinaryOpType::BITWISE_AND>::invoke(
-
         input_tensor_a,
         input_tensor_b,
         std::nullopt,

@@ -402,8 +402,8 @@ std::vector<Tensor> split_tensor_for_glu(
     ttnn::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
 
     auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
-    Tensor t_a = ttnn::sliceinput_a, s_a, e_a, step, output_mem_config);
-    Tensor t_b = ttnn::sliceinput_a, s_b, e_b, step, output_mem_config);
+    Tensor t_a = ttnn::slice(input_a, s_a, e_a, step, output_mem_config);
+    Tensor t_b = ttnn::slice(input_a, s_b, e_b, step, output_mem_config);
 
     t_split.emplace_back(t_a);
     t_split.emplace_back(t_b);
@@ -531,8 +531,8 @@ Tensor ExecuteRdiv::invoke(
         (round_mode == std::nullopt || round_mode == "trunc" || round_mode == "floor"),
         "Incorrect rounding mode (expected None, 'trunc', or 'floor')");
     float t_inf = std::numeric_limits<float>::infinity();
-    Tensor recip_result = ttnn::reciprocalinput_tensor, memory_config, optional_output_tensor);
-    Tensor result = ttnn::multiplyrecip_result, value, std::nullopt, memory_config, optional_output_tensor);
+    Tensor recip_result = ttnn::reciprocal(input_tensor, memory_config, optional_output_tensor);
+    Tensor result = ttnn::multiply(recip_result, value, std::nullopt, memory_config, optional_output_tensor);
 
     if (round_mode == "trunc") {
         result = ttnn::trunc(result);
@@ -540,7 +540,7 @@ Tensor ExecuteRdiv::invoke(
         result = ttnn::floor(result);
     }
     return ttnn::where(
-        ttnn::eqzinput_tensor, memory_config), t_inf * value, result, memory_config, optional_output_tensor);
+        ttnn::eqz(input_tensor, memory_config), t_inf * value, result, memory_config, optional_output_tensor);
 }
 
 // logit(input, eps)=log(input / 1 - input)

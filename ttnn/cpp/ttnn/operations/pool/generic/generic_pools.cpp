@@ -196,7 +196,6 @@ static Tensor pool2d_invoke(
 
     // Call the halo uop
     auto haloed_tensor = ttnn::halo(
-
         input_tensor_sharded,
         sliding_window_config,
         get_bf16_pool_init_value(pool_type),  // pad_val
@@ -218,7 +217,6 @@ static Tensor pool2d_invoke(
         haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
     auto output_tensor = ttnn::prim::pool2d(
-
         haloed_tensor,
         sliding_window_config,
         pool_type,
@@ -252,7 +250,6 @@ Tensor MaxPool2DOp::invoke(
     bool deallocate_input,
     bool reallocate_halo_output) {
     return pool2d_invoke(
-
         input_tensor,
         Pool2DType::MAX_POOL2D,
         batch_size,
@@ -291,7 +288,6 @@ Tensor AvgPool2DOp::invoke(
     bool deallocate_input,
     bool reallocate_halo_output) {
     return pool2d_invoke(
-
         input_tensor,
         Pool2DType::AVG_POOL2D,
         batch_size,

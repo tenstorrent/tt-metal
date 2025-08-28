@@ -15,7 +15,6 @@ namespace ttnn::operations::reduction::detail {
 void bind_reduction_argmax_operation(py::module& module) {
     auto doc =
         R"doc(
-
             Returns the indices of the maximum value of elements in the :attr:`input_tensor`.
             If no :attr:`dim` is provided, it will return the indices of maximum value of all elements in given :attr:`input_tensor`.
 

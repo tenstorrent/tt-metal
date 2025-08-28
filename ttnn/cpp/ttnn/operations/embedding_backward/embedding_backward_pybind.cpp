@@ -16,7 +16,6 @@ namespace py = pybind11;
 void py_bind_embedding_backward(py::module& module) {
     const auto doc =
         R"doc(
-
         Returns the input gradients of the output gradients tensor with respect to the input indices.
 
 
