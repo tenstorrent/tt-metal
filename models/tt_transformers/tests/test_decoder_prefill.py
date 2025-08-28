@@ -95,12 +95,12 @@ def test_decoder_inference(
         theta=model_args.rope_theta,
         rope_scaling=model_args.rope_scaling,
     )
-    if model_args.rope_local_theta is not None:
+    if model_args.rope_theta_local is not None:
         rot_mats_local = get_rot_mats(
             head_dim=model_args.head_dim,
             device=mesh_device,
             seq_len=max_seq_len,
-            theta=model_args.rope_local_theta,
+            theta=model_args.rope_theta_local,
             rope_scaling=None,
         )
     else:
@@ -182,10 +182,10 @@ def test_decoder_inference(
         attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
         ref_output = reference_model(
-            pt_decode_input.to(dtype=torch.bfloat16),
+            pt_decode_input,
             positions[0],
             freqs_cis_i,
-            mask=attn_mask_torch.to(dtype=torch.bfloat16),
+            mask=attn_mask_torch,
         ).unsqueeze(0)
         # Run TT model
         tt_out = tt_model(
@@ -204,8 +204,6 @@ def test_decoder_inference(
         tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(
             batch_size, max_seq_len, -1
         )  # [ batch_size, seq, hidden_dim]
-        print("ref_output ", ref_output)
-        print("tt_output_torch ", tt_output_torch)
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 
         logger.info(comp_allclose(ref_output, tt_output_torch))

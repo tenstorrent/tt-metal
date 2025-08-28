@@ -90,13 +90,13 @@ def test_decoder_inference(
         model_args.rope_scaling,
     )
 
-    if model_args.rope_local_theta is not None:
+    if model_args.rope_theta_local is not None:
         rope_setup_local = RotarySetup(
             mesh_device,
             model_args.max_batch_size,
             model_args.head_dim,
             model_args.max_seq_len,
-            model_args.rope_local_theta,
+            model_args.rope_theta_local,
             None,
         )
     else:
@@ -212,9 +212,7 @@ def test_decoder_inference(
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0) if freqs_cis is not None else None
 
         # Reference model
-        ref_output = reference_model(pt_decode_input.to(dtype=torch.bfloat16), current_pos[0], freqs_cis_i, mask=None)
-        print("ref_output ", ref_output)
-        print("tt_output_torch ", tt_output_torch)
+        ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
 
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
 
