@@ -359,4 +359,13 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveTopologyOrConnections) {
                 ::testing::HasSubstr("Graph descriptor must have either graph_topology or connections defined (Graph: G1)"))));
 }
 
+TEST(MeshGraphDescriptorTests, TestInstanceCreation) {
+    const std::filesystem::path text_proto_file_path =
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto";
+
+    // Sample file should parse successfully; unknown fields are allowed.
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto_file_path));
+
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests

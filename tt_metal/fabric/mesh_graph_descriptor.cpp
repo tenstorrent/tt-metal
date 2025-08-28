@@ -77,6 +77,10 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) {
     TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
 
     proto_ = std::make_unique<proto::MeshGraphDescriptor>(temp_proto);
+
+    save_descriptor_refs();
+
+    construct_graph_instances();
 }
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::filesystem::path& text_proto_file_path) :
@@ -146,6 +150,12 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshG
         all_errors.insert(all_errors.end(), errs3.begin(), errs3.end());
         auto errs4 = validate_graph_topology_and_connections(proto);
         all_errors.insert(all_errors.end(), errs4.begin(), errs4.end());
+        if (!all_errors.empty()) return all_errors;
+    }
+
+    {
+        auto errs = validate_legacy_requirements(proto);
+        all_errors.insert(all_errors.end(), errs.begin(), errs.end());
         if (!all_errors.empty()) return all_errors;
     }
 
@@ -478,6 +488,103 @@ std::vector<std::string> MeshGraphDescriptor::validate_graph_topology_and_connec
 
     return error_messages;
 }
+
+std::vector<std::string> MeshGraphDescriptor::validate_legacy_requirements(const proto::MeshGraphDescriptor& proto) {
+    std::vector<std::string> error_messages;
+
+    // Validate that channels count must all be exactly the same
+    uint32_t first_channels_count = proto.mesh_descriptors(0).channels().count();
+    for (const auto& mesh : proto.mesh_descriptors()) {
+        if (mesh.channels().count() != first_channels_count) {
+            error_messages.push_back( 
+                fmt::format( "Channel count must all be exactly the same (Mesh: {})", mesh.name()
+            ));
+        }
+    }
+
+    // Validate that device topology must all be exactly the same
+    
+
+    return error_messages;
+}
+
+void MeshGraphDescriptor::save_descriptor_refs() {
+    // Save the mesh descriptors
+    for (const auto& mesh : proto_->mesh_descriptors()) {
+        mesh_descriptors_[mesh.name()] = &mesh;
+    }
+    // Save the graph descriptors
+    for (const auto& graph : proto_->graph_descriptors()) {
+        graph_descriptors_[graph.name()] = &graph;
+    }
+}
+
+void MeshGraphDescriptor::construct_graph_instances() {
+    auto top_inst = construct_graph_instance(proto_->top_level_instance());
+    auto top_gid = top_inst->global_id;
+
+    node_instances_[top_gid] = std::move(top_inst);
+
+    top_level_instance_ = node_instances_[top_gid].get();
+}
+
+std::unique_ptr<MeshGraphDescriptor::NodeInstance> MeshGraphDescriptor::construct_graph_instance(const proto::NodeRef& node_ref) {
+    if (node_ref.has_mesh()) {
+        // Check the the mesh descriptor exists
+        auto it = mesh_descriptors_.find(node_ref.mesh().mesh_descriptor());
+        TT_FATAL(it != mesh_descriptors_.end(),
+            "Mesh descriptor {} not found",
+            node_ref.mesh().mesh_descriptor());
+
+        const auto& mesh_descriptor = it->second;
+
+        std::vector<uint32_t> dimensions;
+        for (const auto& dim : mesh_descriptor->device_topology().dims()) {
+            dimensions.push_back(dim);
+        }
+
+        MeshInstance mesh_instance(
+            node_ref.mesh().mesh_descriptor(),
+            node_ref.mesh().mesh_id(),
+            dimensions
+        );
+
+        return std::make_unique<MeshInstance>(mesh_instance);
+
+    } else if (node_ref.has_graph()) {
+
+        auto it = graph_descriptors_.find(node_ref.graph().graph_descriptor());
+
+        auto it2 = graph_descriptors_.find("G2");
+
+        TT_FATAL(it != graph_descriptors_.end(),
+            "Graph descriptor {} not found", 
+            node_ref.graph().graph_descriptor());
+
+        const auto& graph_descriptor = it->second;
+
+        GraphInstance graph_instance(
+            node_ref.graph().graph_descriptor(),
+            node_ref.graph().graph_id()
+        );
+
+        for (const auto& instance : graph_descriptor->instances()) {
+            auto sub_instance = construct_graph_instance(instance);
+            auto sub_gid = sub_instance->global_id;
+
+            node_instances_[sub_gid] = std::move(sub_instance);
+
+            auto [it, inserted] = graph_instance.node_ids.insert(sub_gid);
+            TT_FATAL(inserted, "Node ID {} already exists in graph instance", sub_gid);
+        }
+
+        return std::make_unique<GraphInstance>(graph_instance);
+    }
+
+    return {};
+}
+
+    
 
 // Dynamic checks to implement
 // Check that all instances have been defined somewhere
