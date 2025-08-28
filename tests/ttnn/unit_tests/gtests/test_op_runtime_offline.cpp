@@ -36,7 +36,7 @@
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
 // Include the interface for get_runtime_from_model
-#ifdef BUILD_MLP_OP_PERF
+#ifdef BUILD_TTNN_OP_RUNTIME_PREDICTOR
 #include "interface.hpp"
 #endif
 
@@ -90,14 +90,14 @@ const ttnn::TensorSpec TTNNFixtureWithOfflineModel::m_interleaved_2048_2048_0_0_
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
-#ifdef BUILD_MLP_OP_PERF
+#ifdef BUILD_TTNN_OP_RUNTIME_PREDICTOR
 
 // ============================================================================
 // Unary Exp Op test using get_runtime_from_model
 // ============================================================================
 
-// Utility function to create serialized tensor in the format expected by mlp-op-perf
-// This matches the format used in the mlp-op-perf test_interface.cpp
+// Utility function to create serialized tensor in the format expected by ttnn-op-runtime-predictor
+// This matches the format used in the ttnn-op-runtime-predictor test_interface.cpp
 nlohmann::json create_serialized_tensor(const std::vector<int>& dimensions, const int& dtype, const int& buffer_type) {
     nlohmann::json tensor_json = {
         {"tensor_spec",
@@ -226,7 +226,7 @@ INSTANTIATE_TEST_SUITE_P(
         TestExpOpQueryOpRuntime::m_interleaved_32_512_512_0_tiled,
         TestExpOpQueryOpRuntime::m_interleaved_2048_2048_0_0_tiled));
 
-#endif //BUILD_MLP_OP_PERF
+#endif //BUILD_TTNN_OP_RUNTIME_PREDICTOR
 
 TEST(TypeNameUtils, GetTypeNameForOps) {
     // Test get_type_name for several ttnn op types

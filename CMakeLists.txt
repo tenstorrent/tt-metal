@@ -116,8 +116,7 @@ message(STATUS "Build with LTO: ${TT_LTO_ENABLED}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
 message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRACE}")
 message(STATUS "Build with Multihost Distributed Compute: ${ENABLE_DISTRIBUTED}")
-
-message(STATUS "Build with Offline Models from Mlp-Op-Perf: ${BUILD_MLP_OP_PERF}")
+message(STATUS "Build with TTNN-Op-Runtime-Predictor: ${BUILD_TTNN_OP_RUNTIME_PREDICTOR}")
 
 ############################################################################################################################
 
