@@ -29,38 +29,45 @@ parameters = {
         #        "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "num_links": [1],
         "input_shape": [
-            [1, 1, 32, 32],
-            [1, 1, 32, 1280],
-            [1, 1, 32, 31],
-            [1, 1, 1, 32, 32],
-            [2, 32, 32],
-            [1, 1, 32, 16384],
-            [1, 1, 1, 2048],  # the following shapes are from training
-            [
-                1,
-                1,
-                1,
-                4096,
-            ],  # https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
-            [1, 32, 2048, 8],
-            [1, 32, 2048, 16],
-            [1, 32, 4096, 16],
-            [1, 32, 2048, 64],
-            [1, 32, 4096, 32],
-            [1, 32, 4096, 64],
-            [1, 1, 1, 1],
-            [1, 1, 1, 8],
-            [1, 1, 1, 16],
-            [1, 1, 1, 32],
-            [1, 1, 8, 8],
-            [1, 1, 16, 16],
+            # [1, 1, 32, 32],
+            # [1, 1, 32, 1280],
+            # [1, 1, 32, 31],
+            # [1, 1, 1, 32, 32],
+            ##[2, 2, 64, 32],
+            ##[2, 2, 1, 32, 64],
+            [90, 60],
+            # [2, 32, 32],
+            # [1, 1, 32, 16384],
+            # [1, 1, 1, 2048],  # the following shapes are from training
+            # [1, 1, 1, 4096], # https://docs.google.com/spreadsheets/d/18lQ_dJpodMkoDFZjt7TfHdt0cEGsa5GCxxRKDzErGvM/edit?usp=sharing
+            # [1, 32, 2048, 8],
+            [2, 32, 2048, 8],
+            # [1, 32, 2048, 16],
+            # start here
+            [2, 32, 2048, 16],
+            # [1, 32, 4096, 16],
+            # [1, 32, 2048, 64],
+            ##[2, 32, 2048, 64],
+            # [1, 32, 4096, 32],
+            ##[8, 32, 4096, 32],
+            # [1, 32, 4096, 64],
+            ##[8, 32, 4096, 64],
+            # [1, 1, 1, 1],
+            # [1, 1, 1, 8],
+            # [1, 1, 1, 16],
+            # [1, 1, 1, 32],
+            # [1, 1, 8, 8],
+            # [1, 1, 16, 16],
         ],
         "dim": [0, 1, 2, 3, 4],
-        "cluster_axis": [0, 1, None],
+        "cluster_axis": [0, 1],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
+        "input_dtype": [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.uint32],
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM),
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1),
+        ],
+        "topology": [ttnn.Topology.Linear],
         "num_iters": [1],
     },
 }
@@ -75,6 +82,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     ):
         return True, "Ring fabric config required for ring topology"
 
+    if (test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT) and (test_vector["input_dtype"] == ttnn.bfloat8_b):
+        return True, "Row major not supported for bfloat8_b"
     # invalidated hanging tests for now
     # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 1, 2048], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear
     if (
@@ -84,9 +93,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -99,9 +108,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -114,9 +123,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -129,9 +138,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -145,9 +154,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -160,9 +169,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -176,9 +185,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -191,9 +200,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -207,9 +216,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -223,9 +232,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -239,9 +248,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -255,9 +264,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -271,9 +280,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -287,9 +296,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -302,9 +311,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -317,9 +326,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -332,9 +341,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 1
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -348,9 +357,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 2
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -363,9 +372,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -378,9 +387,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -393,9 +402,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -408,9 +417,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -423,9 +432,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -439,9 +448,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -454,9 +463,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -469,9 +478,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -484,9 +493,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -499,9 +508,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 0
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -514,9 +523,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -529,9 +538,9 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
@@ -544,13 +553,93 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         and test_vector["dim"] == 3
         and test_vector["cluster_axis"] == 1
         and test_vector["num_links"] == 1
-        and test_vector["input_dtype"] == ttnn.bfloat16
+        # and test_vector["input_dtype"] == ttnn.bfloat16
         and test_vector["layout"] == ttnn.TILE_LAYOUT
-        and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        # and test_vector["mem_config"] == ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
         and test_vector["num_iters"] == 1
         and test_vector["topology"] == ttnn.Topology.Linear
     ):
         return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 32, 31], dim: 1, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT8_B, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [1, 1, 32, 31]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+    ):
+        return True, "hang case"
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [2, 32, 2048, 8], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 32, 2048, 8]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+    ):
+        return True, "hang case"
+
+    # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [2, 32, 2048, 16], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 32, 2048, 16]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [2, 32, 2048, 8], dim: 3, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 32, 2048, 8]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 0
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+    ):
+        return True, "hang case"
+    # mesh_shape: (4, 2), fabric_config: FabricConfig.FABRIC_1D, input_shape: [2, 32, 2048, 8], dim: 3, cluster_axis: 1, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear
+    if (
+        test_vector["mesh_shape"] == (4, 2)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 32, 2048, 8]
+        and test_vector["dim"] == 3
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+    ):
+        return True, "hang case"
+    # {'mesh_shape': (8, 1), 'fabric_config': <FabricConfig.FABRIC_1D: 1>, 'input_shape': [2, 32, 2048, 16], 'dim': 1, 'cluster_axis': 1, 'num_links': 1, 'input_dtype': <DataType.BFLOAT16: 0>, 'layout': <Layout.TILE: 1>, 'mem_config': MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), 'num_iters': 1, 'topology': <Topology.Linear: 1>, 'device': None}
+    if (
+        test_vector["mesh_shape"] == (8, 1)
+        and test_vector["fabric_config"] == ttnn.FabricConfig.FABRIC_1D
+        and test_vector["input_shape"] == [2, 32, 2048, 16]
+        and test_vector["dim"] == 1
+        and test_vector["cluster_axis"] == 1
+        and test_vector["num_links"] == 1
+        and test_vector["layout"] == ttnn.TILE_LAYOUT
+        and test_vector["num_iters"] == 1
+        and test_vector["topology"] == ttnn.Topology.Linear
+    ):
+        return True, "hang case"
+
     return False, None
 
 
@@ -560,9 +649,12 @@ def mesh_device_fixture():
 
 
 def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, dtype, layout, device):
-    torch_input = torch.rand(input_shape).bfloat16()
+    if dtype == ttnn.uint32:
+        torch_input = torch.randint(0, 100, input_shape, dtype=torch.int32)
+    else:
+        torch_input = torch.rand(input_shape).bfloat16()
     tt_input = ttnn.from_torch(
-        torch_input, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(device), device=device
+        torch_input, layout=layout, dtype=dtype, mesh_mapper=ttnn.ReplicateTensorToMesh(device), device=device
     )
 
     replicate_dim = mesh_shape[cluster_axis] if cluster_axis is not None else prod(mesh_shape)

@@ -24,7 +24,7 @@ NUM_DEVICES = ttnn.get_num_devices()
 parameters = {
     "suite_1": {
         "mesh_shape": mesh_shape_iterator(NUM_DEVICES),
-        "fabric_config": [ttnn.FabricConfig.FABRIC_1D],
+        "fabric_config": [ttnn.FabricConfig.FABRIC_1D],  # , ttnn.FabricConfig.FABRIC_1D_RING]
         # TODO this seem to reliably cause hangs, and we can't recover from hangs right now
         # "fabric_config": [ttnn.FabricConfig.FABRIC_1D, ttnn.FabricConfig.FABRIC_1D_RING, ttnn.FabricConfig.FABRIC_2D],
         "num_links": [1],
@@ -33,14 +33,43 @@ parameters = {
             [1, 1, 32, 248],
             [1, 1, 1, 32, 256],
             [2, 32, 256],
+            [2, 2, 64, 32],
+            [2, 2, 1, 32, 64],
+            [90, 60],
             [1, 1, 32, 16384],
+            # [1, 1, 1, 2048],
+            # [1, 1, 1, 4],
+            # [1, 1, 1, 8],
+            # [1, 32, 2048, 8],
+            # [8, 32, 2048, 8],
+            # [1, 32, 2048, 16],
+            # [8, 32, 2048, 16],
+            # [1, 32, 2048, 64],
+            # [8, 32, 2048, 64],
+            # [1, 1, 8, 8],
+            # [1, 1, 16, 16],
+            # [1, 1, 32, 32],
+            # [1, 1, 1, 4096],
+            # [1, 1, 1, 8],
+            # [1, 1, 1, 16],
+            # [1, 1, 1, 32],
+            # [1, 32, 4096, 16],
+            # [8, 32, 4096, 16],
+            # [1, 32, 4096, 32],
+            # [8, 32, 4096, 32],
+            # [1, 32, 4096, 64],
+            # [8, 32, 4096, 64],
+            # [1, 1, 16, 16],
+            # [1, 1, 32, 32]
         ],
         "dim": [0, 1, 2, 3, 4],
         "cluster_axis": [0, 1, None],
         "math_op": [ttnn.ReduceType.Sum],
         "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
-        "input_dtype": [ttnn.bfloat16],
-        "mem_config": [ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)],
+        "input_dtype": [ttnn.bfloat16],  # ttnn.bfloat8_b, ttnn.uint32_t],
+        "mem_config": [
+            ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM)
+        ],  # ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1)],
         "topology": [ttnn.Topology.Linear],  # , ttnn.Topology.Ring],
         "num_iters": [1],
     },
@@ -61,6 +90,8 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         return True, "Ring fabric config required for ring topology"
     if not _valid_cluster_div(**test_vector):
         return True, "Shape at given dim not divisible by cluster devices"
+    if (test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT) and (test_vector["dtype"] == ttnn.bfloat8_b):
+        return True, "Row major not supported for bfloat8_b"
 
     # invalidate tests that hang or crash for now
     # mesh_shape: (8, 1), fabric_config: FabricConfig.FABRIC_1D, input_shape: [1, 1, 32, 256], dim: 2, cluster_axis: 0, num_links: 1, input_dtype: DataType.BFLOAT16, layout: Layout.TILE, mem_config: MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt,nd_shard_spec=std::nullopt,created_with_nd_shard_spec=0), num_iters: 1, topology: Topology.Linear, math_op: ReduceType.Sum
@@ -680,7 +711,10 @@ def _reference_map_op(math_op):
 def _get_tensors(input_shape, mesh_shape, dim, cluster_axis, math_op, dtype, layout, device):
     assert _valid_cluster_div(input_shape, dim, cluster_axis, mesh_shape)
 
-    torch_input = torch.randn(input_shape).bfloat16()
+    if dtype == ttnn.uint32:
+        torch_input = torch.randint(0, 100, input_shape, dtype=torch.int32)
+    else:
+        torch_input = torch.rand(input_shape).bfloat16()
     tt_input = ttnn.from_torch(
         torch_input, layout=layout, mesh_mapper=ttnn.ReplicateTensorToMesh(device), device=device
     )
