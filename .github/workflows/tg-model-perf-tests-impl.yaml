@@ -71,7 +71,7 @@ jobs:
           {
             name: "Galaxy Sentence Bert tests",
             arch: wormhole_b0,
-            cmd: 'pytest models/demos/tg/sentence_bert/tests/device_perf_test.py --pipeline-type tg_sentence_bert_model_perf_tg_device --dispatch-mode ""',
+            cmd: 'pytest models/demos/tg/sentence_bert/tests/device_perf_test.py --pipeline-type tg_sentence_bert_model_perf_tg_device',
             timeout: 30,
             owner_id: U088413NP0Q, # Ashai Reddy
           }
