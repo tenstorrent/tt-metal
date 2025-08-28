@@ -15,6 +15,8 @@ Conv2dSliceConfig = ttnn._ttnn.operations.conv.Conv2dSliceConfig
 Conv2dDRAMSliceHeight = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.DRAMSliceHeight
 Conv2dDRAMSliceWidth = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.DRAMSliceWidth
 Conv2dL1Full = ttnn._ttnn.operations.conv.Conv2dSliceConfig.SliceTypeEnum.L1Full
+Conv2dL1FullSliceConfig = Conv2dSliceConfig(slice_type=Conv2dL1Full)
+
 
 OptimizedConvParallelizationConfig = ttnn._ttnn.operations.conv.OptimizedConvParallelizationConfig
 OptimizedConvBlockConfig = ttnn._ttnn.operations.conv.OptimizedConvBlockConfig

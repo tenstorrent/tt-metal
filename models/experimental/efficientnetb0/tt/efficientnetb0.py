@@ -89,6 +89,7 @@ class EfficientNetb0Conv2D:
             groups=self.groups,
             return_weights_and_bias=True,
             return_output_dim=True,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
         )
 
         return x
