@@ -127,8 +127,7 @@ void MAIN {
 
                     // Accumulate mean and variance
                     welford_init();
-                    welford(
-                        dst0, dst1, dst2, /*start_N*/ (wt + j) * tile_width, /*end_N*/ W, /*last_run*/ wt + j == Wt);
+                    welford(dst0, dst1, dst2, /*start_N*/ (wt + j) * tile_width, /*end_N*/ W);
                 }
             } else {
                 // RMS: Calculate (∑x^2)/n
