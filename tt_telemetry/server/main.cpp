@@ -28,7 +28,7 @@
 
 // Function prototype for sysfs metrics discovery
 void print_sysfs_metrics();
-
+void test_umd();
 
 /**************************************************************************************************
  Main
@@ -93,7 +93,23 @@ static void test_print_link_health() {
     }
 }
 
+// static void test_1() {
+//     const tt::tt_metal::MetalContext &instance = tt::tt_metal::MetalContext::instance();
+//     const tt::Cluster &cluster = instance.get_cluster();
+//     auto endpoint_by_chip = get_ethernet_endpoints_by_chip(cluster);
+//     for (auto &[chip_id, endpoints]: endpoint_by_chip) {
+//         std::cout << chip_id << ":" << std::endl;
+//         for (auto &endpoint: endpoints) {
+//             std::cout << "  " << endpoint << std::endl;
+//         }
+//     }
+// }
+
 int main(int argc, char* argv[]) {
+    // test_1();
+    // test_umd();
+    // return 0;
+
     // Parse command line arguments
     cxxopts::Options options("tt_telemetry_server", "TT-Metal Telemetry Server");
 
