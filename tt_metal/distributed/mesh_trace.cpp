@@ -30,6 +30,7 @@
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
 #include "mesh_trace_id.hpp"
+#include "dispatch/device_command_calculator.hpp"
 #include "dispatch/system_memory_manager.hpp"
 #include "trace/trace_buffer.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
@@ -125,7 +126,11 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
     MeshCoordinateRange bcast_device_range(mesh_device->shape());
     std::vector<uint32_t> exec_buf_end = {};
 
-    DeviceCommand command_sequence(MetalContext::instance().hal().get_alignment(HalMemType::HOST));
+    DeviceCommandCalculator calc;
+    calc.add_prefetch_exec_buf_end();
+
+    fmt::println("Command sequence size: {}", calc.write_offset_bytes());
+    DeviceCommand command_sequence(calc.write_offset_bytes());
     command_sequence.add_prefetch_exec_buf_end();
 
     exec_buf_end.reserve(command_sequence.size_bytes() / sizeof(uint32_t));

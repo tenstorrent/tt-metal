@@ -100,8 +100,9 @@ struct CQPrefetchRelayLinearHCmd {
     uint8_t pad1;
     uint16_t pad2;
     uint32_t noc_xy_addr;
-    uint32_t addr;
+    uint64_t addr;
     uint32_t length;  // Length must be <= min(scratch_db_size, max command size) - sizeof(CQPrefetchHToPrefetchDHeader)
+    uint8_t pad[32-20];
 } __attribute__((packed));
 
 constexpr uint32_t CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK = 0xff;
