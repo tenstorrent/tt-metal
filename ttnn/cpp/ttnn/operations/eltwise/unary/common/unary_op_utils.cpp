@@ -423,9 +423,12 @@ std::pair<std::string, std::string> get_op_init_and_func_parameterized(
             std::string where_call;
             if (input_dtype == DataType::INT32) {
                 where_call = fmt::format("where_int32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
+                where_call = fmt::format("where_int32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             } else if (input_dtype == DataType::FLOAT32) {
                 where_call = fmt::format("where_fp32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
+                where_call = fmt::format("where_fp32_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             } else {
+                where_call = fmt::format("where_tile({0}, {1}, {2}, {0});", idst, 1, 2);
                 where_call = fmt::format("where_tile({0}, {1}, {2}, {0});", idst, 1, 2);
             }
             op_init_and_name = std::make_pair("where_tile_init();", where_call);
@@ -586,8 +589,6 @@ std::pair<std::string, std::string> get_op_init_and_func_default(
                 input_dtype.has_value(), "Missing input dtype: Expected a valid input dtype, but none was provided.");
             if (input_dtype.value() == DataType::INT32) {
                 op_init_and_name = {"mul_int32_tile_init();", fmt::format("mul_int32_tile({0}, {0}, {0});", idst)};
-            } else if (input_dtype.value() == DataType::UINT16) {
-                op_init_and_name = {"mul_int_tile_init();", fmt::format("mul_uint16_tile({0}, {0}, {0});", idst)};
             } else {
                 op_init_and_name = {"square_tile_init();", fmt::format("square_tile({});", idst)};
             }
