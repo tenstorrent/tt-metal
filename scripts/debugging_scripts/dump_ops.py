@@ -477,10 +477,21 @@ def run(args, context: Context):
         device_ops = dump_ops(device, dispatcher_data, mapping_file, max_width, verbose)
         all_ops_data.extend(device_ops)
 
-    # The table will automatically be printed by the triage system
-
     return all_ops_data
 
 
 if __name__ == "__main__":
+    import docopt
+    import sys
+
+    # Parse arguments to check if mapping file is provided
+    args = docopt.docopt(__doc__)
+    mapping_file = args["--mapping-file"]
+
+    # Run the main triage script
     run_script()
+
+    # If mapping file was provided, show the tip
+    if mapping_file:
+        print("\nTIP: Generate tests for the operations above:")
+        print("  python scripts/debugging_scripts/generate_tests.py generated/inspector/ops/ops.yaml")

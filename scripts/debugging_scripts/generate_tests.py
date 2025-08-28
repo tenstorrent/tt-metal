@@ -309,7 +309,12 @@ def process_yaml_file(yaml_file_path):
         if not isinstance(entry, dict) or "callstack" not in entry:
             continue
 
-        operation_id = entry["operation_id"]
+        operation_id = entry["device_operation_id"]
+
+        # Skip host operations (device_operation_id: none)
+        if operation_id == "none":
+            continue
+
         operation = extract_operation(entry["callstack"])
 
         # Skip conv2d operations entirely - too hard to implement reliably
@@ -346,9 +351,9 @@ def main():
 
     try:
         generated_files = process_yaml_file(yaml_file)
-        print(f"\nSuccessfully generated {len(generated_files)} test files:")
+        print(f"\nSuccessfully generated {len(generated_files)} test files. Run them with:")
         for f in generated_files:
-            print(f"  - {f}")
+            print(f"  - pytest {f}")
     except Exception as e:
         print(f"Error processing {yaml_file}: {e}")
         sys.exit(1)
