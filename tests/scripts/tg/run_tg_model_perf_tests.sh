@@ -33,6 +33,13 @@ run_tg_llama_70b_model_perf_tests() {
   fi
 }
 
+run_tg_sentence_bert_tests() {
+
+  echo "LOG_METAL: Running run_tg_sentence_bert_tests"
+
+  pytest models/demos/tg/sentence_bert/tests/device_perf_test.py ; fail+=$?
+}
+
 run_tg_llama_70b_prefill_model_perf_tests() {
 
   # Llama3.3-70B
@@ -90,8 +97,10 @@ main() {
     run_tg_llama_70b_model_perf_tests
   elif [[ "$pipeline_type" == "tg_llama_prefill_model_perf_tg_device" ]]; then
     run_tg_llama_70b_prefill_model_perf_tests
+  elif [[ "$pipeline_type" == "tg_sentence_bert_model_perf_tg_device" ]]; then
+    run_tg_sentence_bert_tests
   else
-    echo "$pipeline_type is invalid (supported: [cnn_model_perf_tg_device, tg_llama_model_perf_tg_device])" 2>&1
+    echo "$pipeline_type is invalid (supported: [cnn_model_perf_tg_device, tg_llama_model_perf_tg_device, tg_sentence_bert_model_perf_tg_device])" 2>&1
     exit 1
   fi
 }

@@ -23,24 +23,6 @@ run_tg_llama3.3-70b_tests() {
   fi
 }
 
-run_tg_sentence_bert_tests() {
-  # Record the start time
-  fail=0
-  start_time=$(date +%s)
-
-  echo "LOG_METAL: Running run_tg_sentence_bert_tests"
-
-  pytest models/demos/tg/sentence_bert/tests/device_perf_test.py ; fail+=$?
-
-  # Record the end time
-  end_time=$(date +%s)
-  duration=$((end_time - start_time))
-  echo "LOG_METAL: run_tg_sentence_bert_tests $duration seconds to complete"
-  if [[ $fail -ne 0 ]]; then
-    exit 1
-  fi
-}
-
 run_tg_distributed_op_tests() {
   # Record the start time
   fail=0
@@ -106,9 +88,6 @@ run_tg_tests() {
 
   elif [[ "$1" == "distributed-runtime" ]]; then
     ./build/test/tt_metal/distributed/distributed_unit_tests
-
-  elif [[ "$1" == "sentence-bert" ]]; then
-    run_tg_sentence_bert_tests
 
   else
     echo "LOG_METAL: Unknown model type: $1"
