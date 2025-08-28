@@ -153,16 +153,35 @@ def export_suite_vectors(module_name, suite_name, vectors):
 
 
 # Generate one or more sets of test vectors depending on module_name
-def generate_tests(module_name):
+def generate_tests(module_name, skip_modules=None):
+    skip_modules_set = set()
+    if skip_modules:
+        skip_modules_set = {name.strip() for name in skip_modules.split(",")}
+        logger.info(f"Skipping modules: {', '.join(skip_modules_set)}")
+
     if not module_name:
         for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
             module_name = str(pathlib.Path(file_name).relative_to(SWEEP_SOURCES_DIR))[:-3].replace("/", ".")
+            if module_name in skip_modules_set:
+                logger.info(f"Skipping module {module_name} (in skip list).")
+                continue
             logger.info(f"Generating test vectors for module {module_name}.")
-            generate_vectors(module_name)
-            logger.info(f"Finished generating test vectors for module {module_name}.\n\n")
+            try:
+                generate_vectors(module_name)
+                logger.info(f"Finished generating test vectors for module {module_name}.\n\n")
+            except Exception as e:
+                logger.error(f"Failed to generate vectors for module {module_name}: {e}")
+                logger.info(f"Skipping module {module_name} due to import/generation error.\n\n")
     else:
+        if module_name in skip_modules_set:
+            logger.info(f"Skipping module {module_name} (in skip list).")
+            return
         logger.info(f"Generating test vectors for module {module_name}.")
-        generate_vectors(module_name)
+        try:
+            generate_vectors(module_name)
+        except Exception as e:
+            logger.error(f"Failed to generate vectors for module {module_name}: {e}")
+            raise
 
 
 def clean_module(module_name):
@@ -217,6 +236,11 @@ if __name__ == "__main__":
         action="store_true",
         help="If set, dumps the results to disk in JSON instead of using ES",
     )
+    parser.add_argument(
+        "--skip-modules",
+        required=False,
+        help="Comma-separated list of module names to skip during generation",
+    )
 
     args = parser.parse_args(sys.argv[1:])
 
@@ -246,4 +270,4 @@ if __name__ == "__main__":
     elif args.clean:
         clean_module(args.module_name)
 
-    generate_tests(args.module_name)
+    generate_tests(args.module_name, args.skip_modules)
