@@ -46,14 +46,8 @@ public:
         Sender sender;
         uint8_t tag;
 #ifdef FABRIC_2D
-        uint16_t eth_dir;
         uint16_t dst_dev_id;
         uint16_t dst_mesh_id;
-        union {
-            uint16_t num_hops;
-            uint16_t start;
-        };
-        uint16_t range;
 #endif
     };
 
@@ -90,11 +84,6 @@ public:
         mgr.ew_dim = get_arg_val<uint32_t>(arg_idx++);
         mgr.my_chip_id = get_arg_val<uint32_t>(arg_idx++);
         mgr.my_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-        for (uint32_t i = 0; i < num_connections_to_build; i++) {
-            auto& conn = mgr.slots_[i];
-            conn.start = get_arg_val<uint32_t>(arg_idx++);  // == num_hops
-            conn.range = get_arg_val<uint32_t>(arg_idx++);
-        }
         for (uint32_t i = 0; i < num_connections_to_build; i++) {
             auto& conn = mgr.slots_[i];
             conn.dst_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
