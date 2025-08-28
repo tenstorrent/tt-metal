@@ -1291,6 +1291,45 @@ inline __attribute__((always_inline)) void noc_read_with_state(
     }
 }
 
+// Same as above, but with src_noc_addr giving the source NOC address separately. This allows 64 bit addresses within the NOC transactions.
+// clang-format on
+template <
+    uint8_t noc_mode = DM_DEDICATED_NOC,
+    uint32_t cmd_buf,
+    enum CQNocFlags flags,
+    enum CQNocSend send = CQ_NOC_SEND,
+    enum CQNocWait wait = CQ_NOC_WAIT>
+inline __attribute__((always_inline)) void noc_read_with_state(
+    uint32_t noc, uint32_t src_noc_addr, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+    if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+        inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+    }
+
+    if constexpr (wait) {
+        while (!noc_cmd_buf_ready(noc, cmd_buf));
+    }
+    if constexpr (flags & CQ_NOC_FLAG_SRC) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, (uint32_t)src_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_DST) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, dst_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_NOC) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_addr);
+    }
+    if constexpr (flags & CQ_NOC_FLAG_LEN) {
+        // TODO: Runtime assert for size < MAX_BURST_SIZE
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, size);
+    }
+    if constexpr (send) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    }
+
+    if constexpr (noc_mode == DM_DEDICATED_NOC) {
+        noc_reads_num_issued[noc] += 1;
+    }
+}
+
 // clang-format off
 /**
  * Initializes the stateful registers for NOC write operations using a specific command buffer.
