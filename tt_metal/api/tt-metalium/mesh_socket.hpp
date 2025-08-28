@@ -53,8 +53,8 @@ struct SocketConfig {
     SocketMemoryConfig socket_mem_config;
     // Specifies the ranks of the sender and receiver hosts in a multi-host context.
     // Used for inital handshaking and validation of the socket configs.
-    multihost::Rank sender_rank{0};
-    multihost::Rank receiver_rank{0};
+    tt::tt_fabric::MeshId sender_mesh_id{0};
+    tt::tt_fabric::MeshId receiver_mesh_id{0};
     std::shared_ptr<multihost::DistributedContext> distributed_context = nullptr;
 };
 

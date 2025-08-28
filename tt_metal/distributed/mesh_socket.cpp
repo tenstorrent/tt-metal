@@ -39,23 +39,23 @@ void point_to_point_barrier(
 
 MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketConfig& config) : config_(config) {
     auto context = config.distributed_context ? config.distributed_context : DistributedContext::get_current_world();
-
-    if (!(context->rank() == config.sender_rank || context->rank() == config.receiver_rank)) {
+    // METODO: fix this to translate into rank
+    if (!(*(context->rank()) == *config.sender_mesh_id || *(context->rank()) == *config.receiver_mesh_id)) {
         log_warning(
             LogMetal,
             "Creating a null socket on host rank {} with sender rank {} and receiver rank {}.",
             *context->rank(),
-            *config.sender_rank,
-            *config.receiver_rank);
+            *config.sender_mesh_id,
+            *config.receiver_mesh_id);
         return;
     }
 
     TT_FATAL(
-        config.sender_rank != config.receiver_rank,
-        "{} must only be used for communication between different host ranks, not within the same rank.",
+        config.sender_mesh_id != config.receiver_mesh_id,
+        "{} must only be used for communication between different meshes, not within the same mesh",
         __func__);
 
-    bool is_sender = context->rank() == config.sender_rank;
+    bool is_sender = *(context->rank()) == *config.sender_mesh_id;
     if (is_sender) {
         socket_endpoint_type_ = SocketEndpoint::SENDER;
         config_buffer_ = create_socket_config_buffer(device, config, socket_endpoint_type_);
@@ -86,7 +86,8 @@ void MeshSocket::connect_with_peer(std::shared_ptr<multihost::DistributedContext
         fabric_node_id_map_ = generate_fabric_node_id_map(config_, remote_endpoint_desc, local_endpoint_desc);
     }
     write_socket_configs(config_buffer_, local_endpoint_desc, remote_endpoint_desc, socket_endpoint_type_);
-    point_to_point_barrier({config_.sender_rank, config_.receiver_rank}, context);
+    point_to_point_barrier(
+        {multihost::Rank{*config_.sender_mesh_id}, multihost::Rank{*config_.receiver_mesh_id}}, context);
 }
 
 std::pair<MeshSocket, MeshSocket> MeshSocket::create_socket_pair(
@@ -156,8 +157,8 @@ std::size_t hash<tt::tt_metal::distributed::SocketConfig>::operator()(
     return tt::stl::hash::hash_objects_with_default_seed(
         config.socket_connection_config,
         config.socket_mem_config,
-        config.sender_rank,
-        config.receiver_rank,
+        config.sender_mesh_id,
+        config.receiver_mesh_id,
         distributed_context_rank,
         distributed_context_size);
 }

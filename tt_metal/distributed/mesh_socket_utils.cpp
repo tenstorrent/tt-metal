@@ -377,7 +377,8 @@ SocketPeerDescriptor generate_local_endpoint_descriptor(
     const auto& config = socket_endpoint.get_config();
     bool is_sender = socket_endpoint.get_socket_endpoint_type() == SocketEndpoint::SENDER;
 
-    auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
+    // METODO: fix this to translate into rank
+    auto peer_rank = is_sender ? multihost::Rank{*config.receiver_mesh_id} : multihost::Rank{*config.sender_mesh_id};
     SocketPeerDescriptor local_endpoint_desc = {
         .config = config,
         .config_buffer_address = socket_endpoint.get_config_buffer()->address(),
@@ -400,7 +401,7 @@ void forward_descriptor_to_peer(
     const std::shared_ptr<const multihost::DistributedContext>& context) {
     const auto& config = desc.config;
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
-    auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
+    auto peer_rank = is_sender ? multihost::Rank{*config.receiver_mesh_id} : multihost::Rank{*config.sender_mesh_id};
     // Serialize the local endpoint descriptor
     std::vector<uint8_t> serialized_local_desc = serialize_to_bytes(desc);
     // Send size of serialized descriptor first, so that the peer knows the amount of data to expect
@@ -424,7 +425,7 @@ SocketPeerDescriptor receive_and_verify_descriptor_from_peer(
     const std::shared_ptr<const multihost::DistributedContext>& context) {
     const auto& config = desc.config;
     bool is_sender = socket_endpoint_type == SocketEndpoint::SENDER;
-    auto peer_rank = is_sender ? config.receiver_rank : config.sender_rank;
+    auto peer_rank = is_sender ? multihost::Rank{*config.receiver_mesh_id} : multihost::Rank{*config.sender_mesh_id};
 
     // Query the size of the serialized descriptor first (this is the only element in the header)
     auto msg_header_size = context->snoop_incoming_msg_size(Rank{peer_rank}, desc.exchange_tag);

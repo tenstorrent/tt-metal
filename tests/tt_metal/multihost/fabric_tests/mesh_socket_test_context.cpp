@@ -207,8 +207,8 @@ tt::tt_metal::distributed::SocketConfig MeshSocketTestContext::convert_to_socket
     tt::tt_metal::distributed::SocketConfig config{
         .socket_connection_config = connections,
         .socket_mem_config = socket_mem_config,
-        .sender_rank = test_socket_config.sender_rank,
-        .receiver_rank = test_socket_config.receiver_rank,
+        .sender_mesh_id = tt::tt_fabric::MeshId{*test_socket_config.sender_rank},
+        .receiver_mesh_id = tt::tt_fabric::MeshId{*test_socket_config.receiver_rank},
         .distributed_context = distributed_context_};
 
     return config;

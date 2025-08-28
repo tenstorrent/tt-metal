@@ -21,10 +21,10 @@ void BidirectionalFabricSocket::recv(ttnn::Tensor& tensor) { ttnn::experimental:
 
 tt::tt_metal::distributed::multihost::Rank BidirectionalFabricSocket::get_rank() const {
     auto socket_config = send_socket_.get_config();
-    if (socket_config.distributed_context->rank() != socket_config.sender_rank) {
-        return send_socket_.get_config().sender_rank;
+    if (*(socket_config.distributed_context->rank()) != *socket_config.sender_mesh_id) {
+        return tt::tt_metal::distributed::multihost::Rank{*send_socket_.get_config().sender_mesh_id};
     } else {
-        return send_socket_.get_config().receiver_rank;
+        return tt::tt_metal::distributed::multihost::Rank{*send_socket_.get_config().receiver_mesh_id};
     }
 }
 
@@ -38,19 +38,19 @@ std::unique_ptr<BidirectionalFabricSocket> BidirectionalFabricSocket::create(
     tt::tt_metal::distributed::multihost::Rank rank,
     tt::tt_metal::distributed::SocketConfig socket_config) {
     auto sender_socket_config = socket_config;
-    sender_socket_config.sender_rank = socket_config.distributed_context->rank();
-    sender_socket_config.receiver_rank = rank;
+    sender_socket_config.sender_mesh_id = tt::tt_fabric::MeshId{*(socket_config.distributed_context->rank())};
+    sender_socket_config.receiver_mesh_id = tt::tt_fabric::MeshId{*rank};
 
     auto recv_socket_config = socket_config;
-    recv_socket_config.sender_rank = rank;
-    recv_socket_config.receiver_rank = socket_config.distributed_context->rank();
+    recv_socket_config.sender_mesh_id = tt::tt_fabric::MeshId{*rank};
+    recv_socket_config.receiver_mesh_id = tt::tt_fabric::MeshId{*(socket_config.distributed_context->rank())};
 
-    if (sender_socket_config.sender_rank == sender_socket_config.receiver_rank) {
+    if (sender_socket_config.sender_mesh_id == sender_socket_config.receiver_mesh_id) {
         throw std::runtime_error("Sender and receiver ranks cannot be the same for bidirectional socket.");
     }
 
     // this ensures that sockets can perform handshake in correct order
-    if (sender_socket_config.sender_rank < recv_socket_config.sender_rank) {
+    if (sender_socket_config.sender_mesh_id < recv_socket_config.sender_mesh_id) {
         auto send_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, sender_socket_config);
         auto recv_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, recv_socket_config);
         return std::make_unique<BidirectionalFabricSocket>(send_socket, recv_socket);

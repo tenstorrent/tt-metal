@@ -16,13 +16,13 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 bool check_if_send_socket(const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     const auto& socket_config = mesh_socket.get_config();
     auto expected_sender_rank = socket_config.distributed_context->rank();
-    return (socket_config.sender_rank == expected_sender_rank);
+    return (socket_config.sender_mesh_id == tt::tt_fabric::MeshId{*expected_sender_rank});
 }
 
 bool check_if_recv_socket(const tt::tt_metal::distributed::MeshSocket& mesh_socket) {
     const auto& socket_config = mesh_socket.get_config();
     auto expected_receiver_rank = socket_config.distributed_context->rank();
-    return (socket_config.receiver_rank == expected_receiver_rank);
+    return (socket_config.receiver_mesh_id == tt::tt_fabric::MeshId{*expected_receiver_rank});
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -46,9 +46,9 @@ void FabricSocket::recv(ttnn::Tensor& tensor) {
 tt::tt_metal::distributed::multihost::Rank FabricSocket::get_rank() const {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (check_if_send_socket(mesh_socket_)) {
-        return mesh_socket_.get_config().sender_rank;
+        return tt::tt_metal::distributed::multihost::Rank{*mesh_socket_.get_config().sender_mesh_id};
     } else if (check_if_recv_socket(mesh_socket_)) {
-        return mesh_socket_.get_config().receiver_rank;
+        return tt::tt_metal::distributed::multihost::Rank{*mesh_socket_.get_config().receiver_mesh_id};
     }
 
     TT_THROW(
@@ -66,8 +66,8 @@ std::unique_ptr<FabricSocket> FabricSocket::create(
     tt::tt_metal::distributed::multihost::Rank sender_rank,
     tt::tt_metal::distributed::multihost::Rank receiver_rank,
     tt::tt_metal::distributed::SocketConfig socket_config) {
-    socket_config.sender_rank = sender_rank;
-    socket_config.receiver_rank = receiver_rank;
+    socket_config.sender_mesh_id = tt::tt_fabric::MeshId{*sender_rank};
+    socket_config.receiver_mesh_id = tt::tt_fabric::MeshId{*receiver_rank};
     auto mesh_socket = tt::tt_metal::distributed::MeshSocket(mesh_device, socket_config);
     return std::make_unique<FabricSocket>(mesh_socket);
 }
