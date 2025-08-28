@@ -23,7 +23,7 @@ from models.demos.llama3_70b_galaxy.demo.demo_decode import LlamaOptimizations
 
 
 DECODER_OP_START_INDEX = 4
-DECODER_OP_END_INDEX = -22
+DECODER_OP_END_INDEX = -23
 NUM_OPS_IN_SAMPLING = 12
 
 DECODER_PREFIX = "model"
@@ -385,6 +385,10 @@ def test_llama_TG_perf_device(
     reset_seeds,
     galaxy_type,
 ):
+    # export TT_METAL_DEVICE_PROFILER=1
+    import os
+
+    os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
     perf_targets = load_perf_targets(galaxy_type)
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
@@ -421,6 +425,7 @@ def test_llama_TG_perf_device(
     df_layers_compilation = df_model_compilation[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     df_layers_trace = df_model_trace[DECODER_OP_START_INDEX:DECODER_OP_END_INDEX]
     # Use layers 2-9 for verifying against targets for more stability
+    print(f"len(df_layers_compilation): {len(df_layers_compilation)}")
     assert len(df_layers_compilation) % num_layers == 0
 
     # first decoder layer

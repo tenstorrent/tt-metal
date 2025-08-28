@@ -61,9 +61,14 @@ void kernel_main() {
         volatile tt_l1_ptr uint32_t* fused_op_receiver_signal_semaphore_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 fused_op_receiver_signal_semaphore_addr[chunk_indices[istep]]);
-
-        noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 1);
-        noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, 0);
-        cb_push_back(cb_id_in0, multicast_chunk_size_in_tiles);
+        {
+            DeviceZoneScopedN("data waiting in0");
+            noc_semaphore_wait_min(fused_op_receiver_signal_semaphore_addr_ptr, 1);
+            noc_semaphore_set(fused_op_receiver_signal_semaphore_addr_ptr, 0);
+        }
+        {
+            // DeviceZoneScopedN("data pushing in0");
+            cb_push_back(cb_id_in0, multicast_chunk_size_in_tiles);  // put zone scopes here
+        }
     }
 }

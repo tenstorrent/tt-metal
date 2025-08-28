@@ -106,7 +106,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, reset_seeds):
             prefetcher_setup.get_input_tensors(),
             num_layers=1,
             global_cb=prefetcher_setup.global_circular_buffer,
-            num_blocks_per_tensor=[24, 24, 4],
+            num_blocks_per_tensor=[24, 24, 20],
         )
         mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
 

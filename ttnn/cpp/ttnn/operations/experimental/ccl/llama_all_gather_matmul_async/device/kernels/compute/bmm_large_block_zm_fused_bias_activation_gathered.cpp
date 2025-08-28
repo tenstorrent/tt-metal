@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
-
+#include "dataflow_api.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/pack_untilize.h"
 #include "compute_kernel_api/tile_move_copy.h"
@@ -230,8 +230,12 @@ void MAIN {
         }
 
         // Wait to receive in1
-        cb_wait_front(sync_cb2, 1);
-        cb_pop_front(sync_cb2, 1);
+        // DeviceZoneScopedN("data waiting in1 compute kernel");
+        {
+            DeviceZoneScopedN("data waiting in1 compute kernel");
+            cb_wait_front(sync_cb2, 1);
+            cb_pop_front(sync_cb2, 1);
+        }
 
         uint32_t curr_ring_idx = ring_idx;
         for (uint32_t block = 0; block < num_blocks; block++) {
@@ -264,7 +268,11 @@ void MAIN {
 #endif
 
             // Wait to receive in0 block
-            cb_wait_front(input0_cb_id, in0_block_num_tiles);
+            // DeviceZoneScopedN("data waiting in0 compute kernel");
+            {
+                DeviceZoneScopedN("data waiting in0 compute kernel");
+                cb_wait_front(input0_cb_id, in0_block_num_tiles);
+            }
 #ifdef ENABLE_GLOBAL_CB
             UNPACK((calculate_next_block_index_and_update_rd_ptr(
                 in1_cb_id,

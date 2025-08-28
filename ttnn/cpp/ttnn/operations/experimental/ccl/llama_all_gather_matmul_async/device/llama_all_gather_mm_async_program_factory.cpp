@@ -257,10 +257,10 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
          0,           // core id, corresponds to the id of which device it expect data from, will be reset later
          ring_index,  // device id
          aggregated_tensor.buffer()->address(),
-         static_cast<uint32_t>(bbox_physical_start_core.x),
-         static_cast<uint32_t>(bbox_physical_start_core.y),
          static_cast<uint32_t>(bbox_physical_end_core.x),
          static_cast<uint32_t>(bbox_physical_end_core.y),
+         static_cast<uint32_t>(bbox_physical_start_core.x),
+         static_cast<uint32_t>(bbox_physical_start_core.y),
          static_cast<uint32_t>(bbox.size()),
          intermediate_tensor_shard_num_pages,
          0,    // mm_core_offset
@@ -287,10 +287,10 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
              i,
              ring_index,
              aggregated_tensor.buffer()->address(),
-             static_cast<uint32_t>(bbox_physical_start_core.x),
-             static_cast<uint32_t>(bbox_physical_start_core.y),
              static_cast<uint32_t>(bbox_physical_end_core.x),
              static_cast<uint32_t>(bbox_physical_end_core.y),
+             static_cast<uint32_t>(bbox_physical_start_core.x),
+             static_cast<uint32_t>(bbox_physical_start_core.y),
              static_cast<uint32_t>(bbox.size()),
              intermediate_tensor_shard_num_pages,
              mm_core_offset,

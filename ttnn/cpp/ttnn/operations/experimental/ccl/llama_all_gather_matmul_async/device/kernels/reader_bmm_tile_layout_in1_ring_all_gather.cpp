@@ -127,10 +127,16 @@ void kernel_main() {
     for (uint32_t b = 0; b < batch; ++b) {
         cb_reserve_back(sync_cb2, 1);
 #ifdef ENABLE_GLOBAL_CB
-        experimental::remote_cb_wait_front(remote_cb_id, num_blocks);
+        {
+            DeviceZoneScopedN("data waiting in1");
+            experimental::remote_cb_wait_front(remote_cb_id, num_blocks);  // zonescope here
+        }
 #endif
 
-        cb_push_back(sync_cb2, 1);
+        {
+            // DeviceZoneScopedN("data pushing in1");
+            cb_push_back(sync_cb2, 1);  // zonescope here
+        }
 
         if constexpr (in1_is_dram_interleaved) {
             for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -173,7 +179,10 @@ void kernel_main() {
                 }
 
                 noc_async_read_barrier();
-                cb_push_back(cb_id_in1, in1_block_num_tiles);
+                {
+                    // DeviceZoneScopedN("data pushing in1 dram sharded");
+                    cb_push_back(cb_id_in1, in1_block_num_tiles);  // zonescope here
+                }
             }
         }
 
