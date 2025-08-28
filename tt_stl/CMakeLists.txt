@@ -15,14 +15,12 @@ target_sources(
         BASE_DIRS .
         FILES
             tt_stl/aligned_allocator.hpp
-            tt_stl/any_range.hpp
             tt_stl/cleanup.hpp
             tt_stl/concepts.hpp
             tt_stl/indestructible.hpp
             tt_stl/optional_reference.hpp
             tt_stl/overloaded.hpp
             tt_stl/reflection.hpp
-            tt_stl/slotmap.hpp
             tt_stl/small_vector.hpp
             tt_stl/llvm/llvm_small_vector.hpp
             tt_stl/span.hpp
