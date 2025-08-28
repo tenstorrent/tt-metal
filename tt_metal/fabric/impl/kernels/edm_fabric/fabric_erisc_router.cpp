@@ -529,33 +529,11 @@ template <uint8_t rx_channel_id, eth_chan_directions... DIRECTIONS, uint8_t DOWN
 FORCE_INLINE bool downstreams_have_space(
     std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0) {
-    return (... && ((DIRECTIONS == my_direction ? true : [&]() {
-                const auto edm_index = get_downstream_edm_interface_index<rx_channel_id, DIRECTIONS>();
-                return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
-            }())));
-}
-
-template <
-    uint8_t rx_channel_id,
-    eth_chan_directions... DIRECTIONS,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
-FORCE_INLINE bool downstreams_have_space(
-    std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
-        downstream_edm_interfaces_vc0,
-    tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1) {
-    return (... && ((DIRECTIONS == my_direction ? true : [&]() {
-                const auto edm_index = get_downstream_edm_interface_index<rx_channel_id, DIRECTIONS>();
-                if constexpr (enable_deadlock_avoidance) {
-                    if (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
-                        return downstream_edm_interface_vc1.edm_has_space_for_packet();
-                    } else {
-                        return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
-                    }
-                } else {
-                    return downstream_edm_interfaces_vc0[edm_index].edm_has_space_for_packet();
-                }
-            }())));
+    return (
+        ... && ((DIRECTIONS == my_direction
+                     ? true
+                     : downstream_edm_interfaces_vc0[get_downstream_edm_interface_index<rx_channel_id, DIRECTIONS>()]
+                           .edm_has_space_for_packet())));
 }
 
 template <uint8_t rx_channel_id, uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>
