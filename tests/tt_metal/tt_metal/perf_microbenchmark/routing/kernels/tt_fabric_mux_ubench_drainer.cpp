@@ -7,7 +7,7 @@
 #include "debug/dprint.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 
@@ -25,9 +25,9 @@ constexpr size_t channel_base_address = get_compile_time_arg_val(7);
 constexpr size_t my_eth_channel_id = get_compile_time_arg_val(8);
 
 namespace tt::tt_fabric {
-using DrainerChannelBuffer = EthChannelBuffer<NUM_BUFFERS>;
+using DrainerChannelBuffer = EthChannelBuffer<PACKET_HEADER_TYPE, NUM_BUFFERS>;
 using DrainerChannelClientLocationInfo = EDMChannelWorkerLocationInfo;
-using DrainerChannelWorkerInterface = EdmChannelWorkerInterface<NUM_BUFFERS>;
+using DrainerChannelWorkerInterface = EdmChannelWorkerInterface<tt::tt_fabric::worker_handshake_noc, NUM_BUFFERS>;
 using DrainerStatus = EDMStatus;
 }  // namespace tt::tt_fabric
 

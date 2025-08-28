@@ -199,7 +199,7 @@ Or this sharded tensor copy, which should be more efficient, since it uses an it
 ```c++
 for (uint32_t i = 0; i < num_shards; ++i) {
     uint32_t shard_id = first_shard_id + i * num_cores;
-    auto shard_pages_src = tensor_accessor_src.shard_pages(shard_id);
+    auto shard_pages_src = tensor_accessor_src.shard_pages(shard_id, /*start_page_offset=*/0);
     auto shard_pages_dst = tensor_accessor_dst.shard_pages(shard_id);
     auto page_dst = shard_pages_dst.begin();
     for (const auto& page_src : shard_pages_src) {
@@ -207,6 +207,23 @@ for (uint32_t i = 0; i < num_shards; ++i) {
         noc_async_writes_flushed();
         ++page_dst;
     }
+}
+
+```
+
+**Pages iterator**
+
+Similar to *Shard pages iterator*, but iterates over all pages in the tensor. Also, it works only for sharded tensor right now.
+
+Similar example of using the page iterator
+```c++
+auto pages_src = tensor_accessor_src.pages(/*start_page_id=*/0);
+auto pages_dst = tensor_accessor_dst.pages();
+auto page_dst = shard_pages_dst.begin();
+for (const auto& page_src : shard_pages_src) {
+    noc_async_read(page_src.get_noc_addr(), page_dst->get_noc_addr(), page_size);
+    noc_async_writes_flushed();
+    ++page_dst;
 }
 
 ```

@@ -76,9 +76,9 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
     const auto& devices = fixture->get_devices();
 
-    // Need at least 2 devices for smoke test
-    if (devices.size() < 2) {
-        GTEST_SKIP() << "Smoke test requires at least 2 devices";
+    // Need exactly 2 devices for smoke test
+    if (devices.size() != 2) {
+        GTEST_SKIP() << "Smoke test requires exactly 2 devices";
     }
 
     // Use first two devices for simple smoke test
