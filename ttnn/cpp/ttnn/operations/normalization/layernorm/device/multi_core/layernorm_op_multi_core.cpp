@@ -1100,7 +1100,7 @@ operation::ProgramWithCallbacks layernorm_multi_core_sharded(
     // writer defines
     std::map<std::string, std::string> writer_defines;
     if (rms_norm) {
-        writer_defines["RMSNORM"] = 1;
+        writer_defines["RMSNORM"] = "1";
     }
     if (skip_write_back) {
         writer_defines["SKIP_WRITE_BACK"] = "1";
