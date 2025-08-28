@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_recip.h"
-
+#include "llk_defs.h"
 using namespace sfpi;
 namespace ckernel {
 namespace sfpu {

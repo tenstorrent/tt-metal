@@ -7,13 +7,13 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-
+#include "llk_defs.h"
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_mask() {
     const bool exponent_size_8 = true;
     const int mask_val_idx = 32;
@@ -26,7 +26,7 @@ inline void calculate_mask() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_int_mask() {
     const int mask_idx = 32;
 #pragma GCC unroll 8
@@ -38,7 +38,7 @@ inline void calculate_int_mask() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_mask_posinf() {
     const bool exponent_size_8 = true;
     const int mask_val_idx = 32;
