@@ -143,8 +143,7 @@ class TtHighResolutionNet(nn.Module):
 
         # Classification Head
         self.incre_modules, self.downsamp_modules, self.final_layer = self._make_head(pre_stage_channels)
-        # Using TTNN adaptive average pooling instead of fallback operation
-        self.output_size = (1, 1)
+        self.avg_pool2d = fallback_ops.AdaptiveAvgPool2d(1)
         self.linear_weight = torch_to_tt_tensor_rm(
             self.state_dict[f"classifier.weight"],
             self.device,
@@ -414,19 +413,7 @@ class TtHighResolutionNet(nn.Module):
         for module in self.final_layer:
             y = module(y)
 
-        # Get input dimensions for TTNN adaptive pooling
-        batch, c, h, w = y.padded_shape
-
-        # Convert tensor format for TTNN adaptive pooling (expects NHWC format)
-        y = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
-        y = ttnn.adaptive_avg_pool2d(
-            input_tensor=y,
-            batch_size=batch,
-            input_h=h,
-            input_w=w,
-            channels=c,
-            output_size=self.output_size,
-        )
+        y = self.avg_pool2d(y)
         y = ttnn.permute(y, (0, 3, 2, 1))
         y = self.classifier(y)
 

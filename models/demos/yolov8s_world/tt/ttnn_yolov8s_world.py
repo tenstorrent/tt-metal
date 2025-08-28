@@ -571,7 +571,7 @@ class TtImagePoolingAttn:
             )
             for i, in_channels in enumerate(ch)
         ]
-        # No longer needed since we're using adaptive pooling directly
+
         self.ec = ec
         self.nh = nh
         self.nf = nf
@@ -588,7 +588,6 @@ class TtImagePoolingAttn:
         x = [
             ttnn.to_layout(
                 ttnn.reshape(
-                    # Replace adaptive-to-max pooling hack with proper TTNN adaptive pooling
                     ttnn.adaptive_max_pool2d(
                         input_tensor=ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT),
                         batch_size=1,
