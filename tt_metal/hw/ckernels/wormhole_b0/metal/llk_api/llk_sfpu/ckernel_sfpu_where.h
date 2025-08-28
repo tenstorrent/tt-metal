@@ -5,6 +5,7 @@
 #pragma once
 
 #include "sfpi.h"
+#include "llk_defs.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -17,7 +18,7 @@ Index 64 ( Tile 2 ) -> false tensor
 
 */
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_where_int32() {
     constexpr uint dst_tile_size = 32;
 

@@ -6,11 +6,11 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-
+#include "llk_defs.h"
 namespace ckernel {
 namespace sfpu {
 
-template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool IS_MAX_OP = true, ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min(uint value) {
     // Load value param to lreg2
     TT_SFPLOADI(p_sfpu::LREG2, 10, value & 0xFFFF);
@@ -37,7 +37,7 @@ inline void calculate_unary_max_min(uint value) {
     }
 }
 
-template <bool IS_MAX_OP = true, bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <bool IS_MAX_OP = true, ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_unary_max_min_int32(uint value) {
     // Load value param to lreg2 and cast 2's complement to sign + magnitude format
     _sfpu_load_imm32_(p_sfpu::LREG2, value);

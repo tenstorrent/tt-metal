@@ -8,7 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_conversions.h"
 #include "sfpi.h"
-
+#include "llk_defs.h"
 using namespace sfpi;
 
 namespace ckernel {
@@ -148,7 +148,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_(sfpi::vFloat base, sfpi::vFloat pow
     return y;
 }
 
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
+template <ApproximationMode APPROX_MODE, BinaryOp BINOP, int ITERATIONS = 8, bool is_fp32_dest_acc_en = false>
 inline void calculate_sfpu_binary(const uint dst_offset) {
     if constexpr (BINOP == BinaryOp::POW) {
         for (int d = 0; d < ITERATIONS; d++) {
@@ -162,18 +162,18 @@ inline void calculate_sfpu_binary(const uint dst_offset) {
             sfpi::dst_reg++;
         }
     } else {
-        _calculate_sfpu_binary_<APPROXIMATION_MODE, BINOP, ITERATIONS>(dst_offset);
+        _calculate_sfpu_binary_<APPROX_MODE, BINOP, ITERATIONS>(dst_offset);
     }
 }
 
-template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
+template <ApproximationMode APPROX_MODE /*unused*/, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::POW) {
         sfpi::vConstFloatPrgm0 = 1.442695f;
         sfpi::vConstFloatPrgm1 = -127.0f;
         sfpi::vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
     } else {
-        _sfpu_binary_init_<APPROXIMATION_MODE, BINOP>();
+        _sfpu_binary_init_<APPROX_MODE, BINOP>();
     }
 }
 

@@ -11,17 +11,18 @@
 #include "sfpu/ckernel_sfpu_converter.h"
 
 #include "sfpi.h"
+#include "llk_defs.h"
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void rsub_init() {
     ;
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_rsub(uint value) {
     vFloat arg2 = Converter::as_float(value);
 
