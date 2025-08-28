@@ -137,6 +137,6 @@ tests:
       data_size: 8192
       num_transactions: 20
     pattern_expansions:
-      - type: "all_hosts_random_sockets"
+      - type: "all_to_all_devices"
         num_sockets: 2
         core_coord: [0, 0]
