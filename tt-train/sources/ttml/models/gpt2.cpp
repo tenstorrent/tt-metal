@@ -31,10 +31,8 @@ static std::vector<float> pad_rows_flat(
     if (rows >= target_rows) {
         return flat;
     }
-    std::vector<float> out;
-    out.reserve(static_cast<size_t>(target_rows * cols));
-    out.insert(out.end(), flat.begin(), flat.end());
-    out.insert(out.end(), static_cast<size_t>((target_rows - rows) * cols), 0.0f);
+    std::vector<float> out(static_cast<size_t>(target_rows * cols), 0.0f);
+    std::copy(flat.begin(), flat.end(), out.begin());
     return out;
 }
 }  // namespace

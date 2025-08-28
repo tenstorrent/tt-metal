@@ -32,7 +32,7 @@ private:
 
 public:
     explicit DistributedTransformer(const TransformerConfig& config);
-
+    virtual ~DistributedTransformer() = default;
     ttml::autograd::TensorPtr operator()(
         const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) override;
 };

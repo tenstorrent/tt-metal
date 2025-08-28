@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <memory>
 #include <nlohmann/json.hpp>
 #include <span>
 #include <stdexcept>
@@ -20,8 +20,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "autograd/auto_context.hpp"
-#include "core/tt_tensor_utils.hpp"
+#include <tt_stl/cleanup.hpp>
+
 #include "safetensors.hpp"
 
 namespace ttml::serialization {
@@ -32,56 +32,23 @@ uint64_t le64(const unsigned char* p) {
     return v;
 }
 
-struct UniqueFd {
-    int fd{-1};
-
-    UniqueFd() = default;
-    explicit UniqueFd(int f) noexcept : fd(f) {
-    }
-    ~UniqueFd() {
-        if (fd >= 0)
-            ::close(fd);
-    }
-
-    UniqueFd(UniqueFd&& other) noexcept : fd(std::exchange(other.fd, -1)) {
-    }
-    UniqueFd& operator=(UniqueFd&& other) noexcept {
-        if (this != &other) {
-            reset();
-            fd = std::exchange(other.fd, -1);
-        }
-        return *this;
-    }
-
-    void reset(int f = -1) noexcept {
-        if (fd >= 0)
-            ::close(fd);
-        fd = f;
-    }
-    int get() const noexcept {
-        return fd;
-    }
-    explicit operator bool() const noexcept {
-        return fd >= 0;
-    }
-    int release() noexcept {
-        return std::exchange(fd, -1);
-    }
-};
-
 void SafetensorSerialization::visit_safetensors_file(const std::filesystem::path& path, const TensorCallback& cb) {
     if (!std::filesystem::exists(path)) {
         throw std::runtime_error("file does not exist: " + path.string());
     }
 
-    UniqueFd fd(::open(path.c_str(), O_RDONLY | O_CLOEXEC));
+    auto fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        throw std::runtime_error(fmt::format("open failed: {}: {}", path.string(), std::strerror(errno)));
+    }
+    ttsl::make_cleanup([fd]() { ::close(fd); });
     struct stat st{};
-    if (fstat(fd.get(), &st) != 0) {
+    if (fstat(fd, &st) != 0) {
         throw std::system_error(errno, std::generic_category(), "fstat");
     }
     const size_t file_size = size_t(st.st_size);
-
-    if (file_size < 8) {
+    constexpr size_t header_size = 8;
+    if (file_size < header_size) {
         throw std::runtime_error("file too small for safetensors");
     }
 
@@ -91,13 +58,16 @@ void SafetensorSerialization::visit_safetensors_file(const std::filesystem::path
         }
     };
 
-    std::unique_ptr<void, decltype(mmap_deleter)> map(
-        mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd.get(), 0), mmap_deleter);
+    auto map = mmap(nullptr, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
+    if (map == MAP_FAILED) {
+        throw std::runtime_error(fmt::format("mmap failed: {}", std::strerror(errno)));
+    }
+    ttsl::make_cleanup([map, file_size]() { munmap(map, file_size); });
 
-    auto* base = reinterpret_cast<const unsigned char*>(map.get());
+    auto* base = reinterpret_cast<const unsigned char*>(map);
 
     const uint64_t header_len = le64(base);
-    if (8 + header_len > file_size) {
+    if (header_size + header_len > file_size) {
         throw std::runtime_error("header length out of range");
     }
 
@@ -133,8 +103,8 @@ void SafetensorSerialization::visit_safetensors_file(const std::filesystem::path
         }
         const uint64_t len = end - begin;
 
-        if (begin > data_size || len > data_size || begin + len > data_size) {
-            throw std::runtime_error(fmt::format("data_offsets out of range: {} > {}", begin + len, data_size));
+        if (end > data_size) {
+            throw std::runtime_error(fmt::format("data_offsets out of range: {} > {}", end, data_size));
         }
 
         TensorInfo info{it.key(), dtype, ttnn::Shape(std::span(shape.data(), shape.size()))};
@@ -152,9 +122,7 @@ std::vector<float> SafetensorSerialization::bytes_to_floats_copy(std::span<const
     }
     const std::size_t n = bytes.size_bytes() / sizeof(float);
     std::vector<float> out(n);
-    if (n) {
-        std::memcpy(out.data(), bytes.data(), n * sizeof(float));
-    }
+    std::memcpy(out.data(), bytes.data(), n * sizeof(float));
     return out;
 }
 }  // namespace ttml::serialization
