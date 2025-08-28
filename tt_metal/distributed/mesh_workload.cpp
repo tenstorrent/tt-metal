@@ -79,9 +79,7 @@ MeshWorkloadImpl::MeshWorkloadImpl() : id(get_next_counter()) {
     Inspector::mesh_workload_created(this);
 }
 
-MeshWorkloadImpl::~MeshWorkloadImpl() {
-    Inspector::mesh_workload_destroyed(this);
-}
+MeshWorkloadImpl::~MeshWorkloadImpl() { Inspector::mesh_workload_destroyed(this); }
 
 void MeshWorkloadImpl::add_program(const MeshCoordinateRange& device_range, Program&& program) {
     ZoneScoped;
@@ -217,7 +215,7 @@ void MeshWorkloadImpl::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     bool use_prefetcher_cache =
         this->max_program_kernels_sizeB_ and this->max_program_kernels_sizeB_ <= prefetcher_cache_sizeB;
     for (auto& [device_range, program] : programs_) {
-        program.generate_dispatch_commands(mesh_device, use_prefetcher_cache);
+        program.impl().generate_dispatch_commands(mesh_device, use_prefetcher_cache);
     }
     this->use_prefetcher_cache_ = use_prefetcher_cache;
 }
