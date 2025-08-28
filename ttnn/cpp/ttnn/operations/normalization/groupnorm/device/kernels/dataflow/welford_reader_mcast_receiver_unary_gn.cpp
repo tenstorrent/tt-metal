@@ -231,35 +231,46 @@ void kernel_main() {
 
                 if (cur_read_iteration == 0) {
                     cb_reserve_back(cb_ex_global, 2);
-
                     cb_wait_front(cb_ex_partial, 2);
 
-                    auto mean_ptr = get_read_ptr(cb_ex_partial);
-                    auto var_ptr = mean_ptr + single_tile_size_bytes;
                     // Read mean and variance arrays from cb_ex_partial, then combine using Welford
-                    // Assume mean_ptr and var_ptr are uint32_t L1 addresses; cast to float* for access
-                    float* means = reinterpret_cast<float*>(mean_ptr);
-                    float* vars = reinterpret_cast<float*>(var_ptr);
-                    WelfordStats result = combine_welford(32, means, vars, 1);
-                    float mean = result.mean;
-                    float var = result.variance;
+                    auto p_local_means = reinterpret_cast<volatile uint16_t*>(get_read_ptr(cb_ex_partial));
+                    auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
+
+                    // TODO: Make transpose work to avoid having to do this manually here
+                    // Doing this for two faces,  face 0 is the first 16 values, face 2 is the last 16 values
+                    for (uint32_t face_h = 0; face_h < 2; ++face_h) {
+                        auto face_mean_addr = p_local_means + face_h * (single_tile_size_bytes >> 2);
+                        auto face_var_addr = p_local_vars + face_h * (single_tile_size_bytes >> 2);
+                        // Copy 16 values from face_addr to p_local_means and p_local_vars
+                        for (uint32_t i = 0; i < 16; i++) {
+                            p_local_means[(face_h << 4) + i] = face_mean_addr[i << 4];
+                            p_local_vars[(face_h << 4) + i] = face_var_addr[i << 4];
+                        }
+                    }
+
+                    auto local_result = combine_welford<32, 1, 1>(p_local_means, p_local_vars);
+                    DPRINT << "local mean: " << local_result.mean << " local var: " << local_result.variance << " local count: " << local_result.count << ENDL();
 
                     // Write this to cb_ex_global
-                    auto result_ptr = get_write_ptr(cb_ex_global);
-                    float* result_fptr = reinterpret_cast<float*>(result_ptr);
-                    result_fptr[0] = mean;
-                    result_fptr[1] = var;
-                    cb_push_back(cb_ex_global, 2);
+                    auto p_global_means = reinterpret_cast<volatile uint16_t*>(get_write_ptr(cb_ex_global));
+                    auto p_global_vars = p_global_means + TILE_WIDTH * TILE_HEIGHT;
+                    p_global_means[0] = local_result.mean;
+                    p_global_vars[0] = local_result.variance;
 
                     // Signal to sender that our partial data is ready
                     noc_semaphore_inc(reduce_receiver_semaphore_noc_addr, 1);
-                    // Wait for sender to signal that it has received our partial data
-                    noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
-                    noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
-                    cb_pop_front(cb_ex_partial, 2);
 
                     // Wait for sender to signal that it has sent the global data
                     noc_semaphore_wait(reduce_sender_semaphore_addr_ptr, VALID);
+                    noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
+
+                    // Print the entire tile
+                    DPRINT << "global mean: " << p_global_means[0] << " global var: " << p_global_vars[0] << ENDL();
+
+                    cb_pop_front(cb_ex_partial, 2);
+                    cb_push_back(cb_ex_global, 2);
+
                 }
             }
 
