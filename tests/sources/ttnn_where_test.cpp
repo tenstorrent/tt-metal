@@ -109,7 +109,7 @@ void run_kernel()
 
     constexpr int iterations = 32;
 
-    ckernel::sfpu::_calculate_where_<false, static_cast<DataFormat>(UNPACK_A_IN), iterations>();
+    ckernel::sfpu::_calculate_where_<false, static_cast<DataFormat>(UNPACK_A_IN), iterations>(0, 1, 2, 0);
 
     _llk_math_eltwise_ternary_sfpu_done_();
 

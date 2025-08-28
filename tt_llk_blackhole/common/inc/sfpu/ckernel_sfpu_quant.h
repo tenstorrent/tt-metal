@@ -15,19 +15,23 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool SIGN_MAGNITUDE_FORMAT>
-inline void _quant_int32_(const uint dst_offset)
+inline void _quant_int32_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out)
 {
-// Operand A is input (fp32)
-// Operand B is scaling factor (fp32)
-// Operand C is zero-point constant (fp32)
-// Output is int32 scaled to int8 range
+    // Operand A is input (fp32)
+    // Operand B is scaling factor (fp32)
+    // Operand C is zero-point constant (fp32)
+    // Output is int32 scaled to int8 range
+
+    // size of each tile in Dest is 64 rows
+    constexpr uint dst_tile_size = 64;
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
         // operand A - fp32
-        TTI_SFPLOAD(0, 3, ADDR_MOD_7, 0);
+        TT_SFPLOAD(0, 3, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
         // operand B - fp32 scaler
-        TT_SFPLOAD(1, 3, ADDR_MOD_7, dst_offset * 64);
+        TT_SFPLOAD(1, 3, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
         // D(A) = A*B+C, LREG[2] = zero_point
         TTI_SFPMAD(0, 1, 2, 0, 0);
         // MAD has a 2-cycle pipeline latency so we need one cycle latency until next instr can consume the result
@@ -41,23 +45,27 @@ inline void _quant_int32_(const uint dst_offset)
             // Required after cast due to a bug in Blackhole RTL.
             TTI_SFPSETSGN(0, 4, 0, 0);
         }
-        TTI_SFPSTORE(0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, 0);
+        TT_SFPSTORE(0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, dst_index_out * dst_tile_size);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool SIGN_MAGNITUDE_FORMAT>
-inline void _requant_int32_(const uint dst_offset)
+inline void _requant_int32_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out)
 {
-// Operand A is input to requant (int32)
-// Operand B is scaling factor (fp32)
-// Operand C is zero-point constant (fp32)
-// Output is int32 scaled to int8 range
+    // Operand A is input to requant (int32)
+    // Operand B is scaling factor (fp32)
+    // Operand C is zero-point constant (fp32)
+    // Output is int32 scaled to int8 range
+
+    // size of each tile in Dest is 64 rows
+    constexpr uint dst_tile_size = 64;
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
         // operand A - int32
-        TTI_SFPLOAD(0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, 0);
+        TT_SFPLOAD(0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
         if constexpr (SIGN_MAGNITUDE_FORMAT == false)
         {
             TTI_SFPCAST(0, 4, InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP);
@@ -65,7 +73,7 @@ inline void _requant_int32_(const uint dst_offset)
             TTI_SFPSETSGN(0, 4, 0, 0);
         }
         // operand B - fp32 scaler
-        TT_SFPLOAD(1, 3, ADDR_MOD_7, dst_offset * 64);
+        TT_SFPLOAD(1, 3, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
         // cast int32->fp32
         TTI_SFPCAST(0, 0, 0);
         // D(A) = A*B+C, LREG[2] = zero_point
@@ -81,23 +89,27 @@ inline void _requant_int32_(const uint dst_offset)
             // Required after cast due to a bug in Blackhole RTL.
             TTI_SFPSETSGN(0, 4, 0, 0);
         }
-        TTI_SFPSTORE(0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, 0);
+        TT_SFPSTORE(0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, dst_index_out * dst_tile_size);
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool SIGN_MAGNITUDE_FORMAT>
-inline void _dequant_int32_(const uint dst_offset)
+inline void _dequant_int32_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out)
 {
-// Operand A[LREG0] is input to dequant (int32)
-// Operand B[LREG1] is scaling factor (fp32)
-// Operand C[LREG2] is zero-point constant (fp32)
-// Output = (A + (-C)) * B (fp32)
+    // Operand A[LREG0] is input to dequant (int32)
+    // Operand B[LREG1] is scaling factor (fp32)
+    // Operand C[LREG2] is zero-point constant (fp32)
+    // Output = (A + (-C)) * B (fp32)
+
+    // size of each tile in Dest is 64 rows
+    constexpr uint dst_tile_size = 64;
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
         // operand A - int32
-        TTI_SFPLOAD(0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, 0);
+        TT_SFPLOAD(0, InstrModLoadStore::INT32_2S_COMP, ADDR_MOD_7, dst_index_in0 * dst_tile_size);
         if constexpr (SIGN_MAGNITUDE_FORMAT == false)
         {
             TTI_SFPCAST(0, 4, InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP);
@@ -105,7 +117,7 @@ inline void _dequant_int32_(const uint dst_offset)
             TTI_SFPSETSGN(0, 4, 0, 0);
         }
         // operand B - fp32 scaler
-        TT_SFPLOAD(1, 3, ADDR_MOD_7, dst_offset * 64);
+        TT_SFPLOAD(1, 3, ADDR_MOD_7, dst_index_in1 * dst_tile_size);
         // cast int32->fp32
         TTI_SFPCAST(0, 0, 0);
         // D(A)) = A+(-C), LREG[10] is 1, SFPADD = LREG_A*LREG_B+LREG_C
@@ -115,7 +127,7 @@ inline void _dequant_int32_(const uint dst_offset)
         TTI_SFPMUL(0, 1, 9, 0, 0);
         TTI_NOP;
         // LREG_0 -> dest as fp32
-        TTI_SFPSTORE(0, 3, ADDR_MOD_7, 0);
+        TT_SFPSTORE(0, 3, ADDR_MOD_7, dst_index_out * dst_tile_size);
         sfpi::dst_reg++;
     }
 }

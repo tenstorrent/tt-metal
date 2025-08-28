@@ -10,59 +10,49 @@
 namespace ckernel::sfpu
 {
 
-/*
-
-Expects following input in Dst register:
-Index 0 ( Tile 0 ) -> condition tensor
-Index 32 ( Tile 1 ) -> true tensor
-Index 64 ( Tile 2 ) -> false tensor
-
-*/
-
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_where_fp16_b_()
+inline void _calculate_where_fp16_b_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_in2, const uint dst_index_out)
 {
-    constexpr uint dst_tile_size_rows = 64;
-
-    sfpi::vFloat cond = sfpi::dst_reg[0];
+    // size of each tile in Dest is 64 rows
+    constexpr uint dst_tile_size = 64;
 
     for (int i = 0; i < ITERATIONS; i++)
     {
-        cond = sfpi::dst_reg[0];
+        // load conditional value
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
 
-        v_if (cond == 0.0f)
-        {
-            // output_tensor = false_tensor;
-            TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_3, 2 * dst_tile_size_rows);
-        }
-        v_else
-        {
-            // output_tensor = true_tensor;
-            TTI_SFPLOAD(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_3, dst_tile_size_rows);
-            v_endif;
-        }
-        // sfpi::dst_reg[0] = output_tensor;
-        TTI_SFPSTORE(p_sfpu::LREG3, InstrModLoadStore::LO16, ADDR_MOD_3, 0);
+        // if (cond != 0): load true value
+        TTI_SFPSETCC(0 /*imm12_math*/, p_sfpu::LREG0, 0 /*unused*/, 2 /*if non-zero*/);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
+        // else: load false value
+        TTI_SFPCOMPC(0 /*unused*/, 0 /*unused*/, 0 /*unused*/, 0 /*unused*/);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_3, dst_index_in2 * dst_tile_size);
+        // end if
+        TTI_SFPENCC(0 /*imm12_math*/, 0 /*unused*/, 0 /*unused*/, 0 /*reset cc*/);
+
+        // store result
+        TT_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::LO16, ADDR_MOD_3, dst_index_out * dst_tile_size);
 
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_where_fp32_()
+inline void _calculate_where_fp32_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_in2, const uint dst_index_out)
 {
-    constexpr uint dst_tile_size = 32;
+    // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+    constexpr uint dst_tile_size_sfpi = 32;
 
     sfpi::vFloat output_tensor = 0;
     sfpi::vFloat true_tensor   = 0;
     sfpi::vFloat false_tensor  = 0;
-    sfpi::vFloat cond          = sfpi::dst_reg[0];
+    sfpi::vFloat cond          = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
 
     for (int i = 0; i < ITERATIONS; i++)
     {
-        cond         = sfpi::dst_reg[0];
-        true_tensor  = sfpi::dst_reg[dst_tile_size];
-        false_tensor = sfpi::dst_reg[dst_tile_size * 2];
+        cond         = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        true_tensor  = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        false_tensor = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];
 
         v_if (cond != 0.0f)
         {
@@ -74,13 +64,13 @@ inline void _calculate_where_fp32_()
         }
         v_endif;
 
-        sfpi::dst_reg[0] = output_tensor;
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = output_tensor;
         sfpi::dst_reg++;
     }
 }
 
 template <bool APPROXIMATION_MODE, DataFormat data_format, int ITERATIONS>
-inline void _calculate_where_()
+inline void _calculate_where_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_in2, const uint dst_index_out)
 {
     // Add a compile-time check to ensure only supported formats are used.
     static_assert(
@@ -88,11 +78,11 @@ inline void _calculate_where_()
         "Unsupported data format for _calculate_where_(). Only Float32 and Float16_b are allowed.");
     if constexpr (data_format == DataFormat::Float32)
     {
-        _calculate_where_fp32_<APPROXIMATION_MODE, ITERATIONS>();
+        _calculate_where_fp32_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
     }
     else
     {
-        _calculate_where_fp16_b_<APPROXIMATION_MODE, ITERATIONS>();
+        _calculate_where_fp16_b_<APPROXIMATION_MODE, ITERATIONS>(dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out);
     }
 }
 

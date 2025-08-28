@@ -94,16 +94,17 @@ sfpi_inline sfpi::vFloat _calculate_sfpu_binary_power_(sfpi::vFloat base, sfpi::
 }
 
 template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8>
-inline void _calculate_sfpu_binary_(const uint dst_offset)
+inline void _calculate_sfpu_binary_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out)
 {
     static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
     {
-        constexpr uint dst_tile_size = 32;
-        sfpi::vFloat in0             = sfpi::dst_reg[0];
-        sfpi::vFloat in1             = sfpi::dst_reg[dst_offset * dst_tile_size];
-        sfpi::vFloat result          = 0.0f;
+        // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+        constexpr uint dst_tile_size_sfpi = 32;
+        sfpi::vFloat in0                  = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat in1                  = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        sfpi::vFloat result               = 0.0f;
 
         if constexpr (BINOP == BinaryOp::ADD)
         {
@@ -158,14 +159,14 @@ inline void _calculate_sfpu_binary_(const uint dst_offset)
             }
             v_else
             {
-                sfpi::dst_reg[0] = in1;
-                _calculate_log_body_<false>(0);
-                result = sfpi::dst_reg[0] * in0;
+                sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in1;
+                _calculate_log_body_<false>(0, dst_index_out);
+                result = sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] * in0;
             }
             v_endif;
         }
 
-        sfpi::dst_reg[0] = result;
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
         sfpi::dst_reg++;
     }
 }
