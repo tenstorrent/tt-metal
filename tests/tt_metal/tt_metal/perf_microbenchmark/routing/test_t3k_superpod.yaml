@@ -1,6 +1,11 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
+
+allocation_policies:
+    receiver:
+      max_configs_per_core: 1
+
 physical_mesh:
    mesh_descriptor_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_superpod_mgd.yaml"
    eth_coord_mapping: [
