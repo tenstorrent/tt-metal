@@ -106,6 +106,7 @@ void MAIN {
     bool wait_mask = true;
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
 #if FUSED_SCALE_MASK
+        DPRINT << "DOING FUSED_SCALE_MASK" << ENDL();
         reconfig_data_format(cb_in0, cb_fused_scale);
         pack_reconfig_data_format(cb_scale_mask);
         mul_tiles_bcast_scalar_init_short(cb_in0, cb_fused_scale);
@@ -253,11 +254,17 @@ void MAIN {
 
         ACQ();
         cb_reserve_back(cb_recipsumexps, onetile);
-        reduce_init(cb_exps, cb_bcast_scaler, cb_recipsumexps);
+        reduce_init<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
+
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
             constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
-            reduce_tile(cb_exps, cb_bcast_scaler, wt, bcast_scaler0, dst0);
+            reduce_tile<REDUCE_OP, REDUCE_DIM, ENABLE_FP32_DEST_ACC>(
+                /*iCB=*/cb_exps,
+                /*icb_scaler=*/cb_bcast_scaler,
+                /*itile=*/wt,
+                /*itile_scaler=*/bcast_scaler0,
+                /*idst0=*/dst0);
         }
         reduce_uninit();
         recip_tile_init();
