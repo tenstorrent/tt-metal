@@ -2,13 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
+#ifndef TT_METAL_COMPILE_TIME_ARGS_H
+#define TT_METAL_COMPILE_TIME_ARGS_H
 
 #include <array>
+#include <cstdint>
+#include <string_view>
 
-#ifndef FORCE_INLINE
-#define FORCE_INLINE inline __attribute__((always_inline))
-#endif
+#include "tt_metal/hw/inc/debug/assert.h"
 
 template <class T, class... Ts>
 FORCE_INLINE constexpr std::array<T, sizeof...(Ts)> make_array(Ts... values) {
@@ -27,25 +28,17 @@ constexpr uint32_t get_ct_arg() {
     return kernel_compile_time_args[Idx];
 }
 
-constexpr bool ct_streq(const char* a, const char* b) {
-    for (int i = 0;; ++i) {
-        if (a[i] != b[i]) {
-            return false;
-        }
-        if (a[i] == '\0') {
-            return true;
-        }
-    }
-}
-
-constexpr uint32_t get_named_arg(const char* name) {
+constexpr uint32_t get_named_arg(std::string_view name) {
 #ifdef KERNEL_COMPILE_TIME_ARG_MAP
-#define X(name_str, value)        \
-    if (ct_streq(name, name_str)) \
+#define X(name_str, value) \
+    if (name == name_str)  \
         return value;
     KERNEL_COMPILE_TIME_ARG_MAP
 #undef X
 #endif
+    // This should never be reached if the named argument is defined in KERNEL_COMPILE_TIME_ARG_MAP.
+    // Upon reaching this point, compilation should fail, but it currently does not.
+    ASSERT(false, "Named argument not found in KERNEL_COMPILE_TIME_ARG_MAP");
     return 0;
 }
 
@@ -75,4 +68,7 @@ constexpr uint32_t get_named_arg(const char* name) {
  * | arg_name              | The name of the argument           | string literal        | defined names | True   |
  */
 // clang-format on
-#define get_compile_time_arg_val_by_name(arg_name) get_named_arg(arg_name)
+// #define get_compile_time_arg_val_by_name(arg_name) get_named_arg(arg_name)
+constexpr uint32_t get_named_compile_time_arg_val(std::string_view name) { return get_named_arg(name); }
+
+#endif  // TT_METAL_COMPILE_TIME_ARGS_H
