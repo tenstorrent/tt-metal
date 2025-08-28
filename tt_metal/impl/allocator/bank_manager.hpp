@@ -39,10 +39,14 @@ public:
             bool operator!=(const StateId& other) const noexcept { return value != other.value; }
         };
 
-        tt::stl::SmallVector<tt::stl::SmallVector<StateId>> adjacency{};
+        struct Hasher {
+            size_t operator()(const StateId& s) const noexcept { return std::hash<uint32_t>{}(s.value); }
+        };
+
+        std::unordered_map<StateId, tt::stl::SmallVector<StateId>, Hasher> adjacency{};
 
         StateDependencies();
-        explicit StateDependencies(const std::unordered_map<StateId, tt::stl::SmallVector<StateId>>& deps);
+        explicit StateDependencies(const std::unordered_map<StateId, tt::stl::SmallVector<StateId>, Hasher>& deps);
 
         uint32_t num_states() const;
     };

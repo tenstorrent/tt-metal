@@ -23,24 +23,26 @@ namespace tt {
 namespace tt_metal {
 
 // --- StateDependencies impl ---
-BankManager::StateDependencies::StateDependencies() : adjacency(1) {}
-
-BankManager::StateDependencies::StateDependencies(
-    const std::unordered_map<StateId, tt::stl::SmallVector<StateId>>& deps) {
-    uint32_t max_index = 0;
-    for (const auto& kv : deps) {
-        max_index = std::max(max_index, kv.first.value);
-        for (const auto d : kv.second) {
-            max_index = std::max(max_index, d.value);
-        }
-    }
-    adjacency.clear();
-    adjacency.resize(max_index + 1);
-    for (const auto& kv : deps) {
-        adjacency[kv.first.value] = kv.second;
-    }
+BankManager::StateDependencies::StateDependencies() : adjacency() {
+    // Default: single state with no dependencies
+    adjacency.emplace(StateId{0}, tt::stl::SmallVector<StateId>{});
 }
 
+BankManager::StateDependencies::StateDependencies(
+    const std::unordered_map<StateId, tt::stl::SmallVector<StateId>, Hasher>& deps) {
+    adjacency.clear();
+    for (const auto& kv : deps) {
+        adjacency.emplace(kv.first, kv.second);
+    }
+    // Ensure states that appear only as dependencies are present as keys
+    for (const auto& kv : deps) {
+        for (const auto dep_state : kv.second) {
+            if (adjacency.find(dep_state) == adjacency.end()) {
+                adjacency.emplace(dep_state, tt::stl::SmallVector<StateId>{});
+            }
+        }
+    }
+}
 uint32_t BankManager::StateDependencies::num_states() const { return static_cast<uint32_t>(adjacency.size()); }
 
 void BankManager::init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset, uint32_t state) {
