@@ -38,6 +38,8 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`.
             in_place_halo (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
+            deallocate_input (bool, optional): whether to deallocate the input tensor. Defaults to `False`.
+            reallocate_output (bool, optional): whether to reallocate the output tensor. Defaults to `True`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
@@ -77,6 +79,8 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool in_place_halo,
+               bool deallocate_input,
+               bool reallocate_output,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
@@ -88,7 +92,9 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
                     output_size,
                     memory_config,
                     applied_shard_scheme,
-                    in_place_halo);
+                    in_place_halo,
+                    deallocate_input,
+                    reallocate_output);
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
@@ -100,6 +106,8 @@ void bind_adaptive_avg_pool2d_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
             py::arg("in_place_halo") = false,
+            py::arg("deallocate_input") = false,
+            py::arg("reallocate_output") = true,
             py::arg("queue_id") = DefaultQueueId});
 }
 
@@ -124,6 +132,8 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): the memory configuration for the output tensor. Defaults to `None`.
             applied_shard_scheme (ttnn.TensorMemoryLayout, optional): the sharding scheme to apply to a non-pre-sharded input tensor. Defaults to `None`.
             in_place_halo (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
+            deallocate_input (bool, optional): whether to deallocate the input tensor. Defaults to `False`.
+            reallocate_output (bool, optional): whether to reallocate the output tensor. Defaults to `True`.
             queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
@@ -163,6 +173,8 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool in_place_halo,
+               bool deallocate_input,
+               bool reallocate_output,
                QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
@@ -174,7 +186,9 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
                     output_size,
                     memory_config,
                     applied_shard_scheme,
-                    in_place_halo);
+                    in_place_halo,
+                    deallocate_input,
+                    reallocate_output);
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
@@ -186,6 +200,8 @@ void bind_adaptive_max_pool2d_operation(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("applied_shard_scheme") = std::nullopt,
             py::arg("in_place_halo") = false,
+            py::arg("deallocate_input") = false,
+            py::arg("reallocate_output") = true,
             py::arg("queue_id") = DefaultQueueId});
 }
 

@@ -168,19 +168,12 @@ def run_adaptive_pool2d(in_n, in_c, in_h, in_w, out_h, out_w, pool_type, dtype, 
             allclose
         ), f"Reference and output tensor are not close. Input: {input_shape}, Output size: {output_size}, Pool type: {pool_type}"
 
-    print(f"Adaptive {pool_type} pool2d - Input: {input_shape}, Output size: {output_size}")
-
     # Get the actual tolerance values used in the test
     test_atol, test_rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
     if pool_type == "avg":
         test_rtol = 0.01  # Updated rtol for avg pool
     if dtype == ttnn.bfloat8_b:
         test_atol = 0.35
-
-    # Detailed element-by-element comparison for debugging
-    print(f"\n=== ELEMENTS EXCEEDING TEST TOLERANCES ===")
-    print(f"Test tolerances: atol={test_atol:.6f}, rtol={test_rtol:.6f}")
-    print(f"Output shape: {torch_output_tensor.shape}")
 
     # Flatten for easier comparison
     torch_flat = torch_output_tensor.flatten()
@@ -194,40 +187,11 @@ def run_adaptive_pool2d(in_n, in_c, in_h, in_w, out_h, out_w, pool_type, dtype, 
 
     failing_indices = torch.nonzero(exceeds_tolerance).flatten()
 
-    if len(failing_indices) > 0:
-        print(f"\n{len(failing_indices)} elements exceed tolerances:")
-        print(f"{'Index':<8} {'PyTorch':<14} {'TTNN':<14} {'Abs Diff':<14} {'Threshold':<14} {'Excess':<14}")
-        print(f"{'-'*8} {'-'*14} {'-'*14} {'-'*14} {'-'*14} {'-'*14}")
-
-        for idx in failing_indices[:20]:  # Show first 20 failing elements
-            i = idx.item()
-            torch_val = torch_flat[i].item()
-            ttnn_val = ttnn_flat[i].item()
-            abs_diff = diff_flat[i].item()
-            threshold = tolerance_threshold[i].item()
-            excess = abs_diff - threshold
-
-            print(f"{i:<8} {torch_val:<14.8f} {ttnn_val:<14.8f} {abs_diff:<14.8f} {threshold:<14.8f} {excess:<14.8f}")
-
-        if len(failing_indices) > 20:
-            print(f"... ({len(failing_indices) - 20} more failing elements)")
-    else:
-        print("✅ All elements are within test tolerances!")
-
     # Statistics
     mean_diff = torch.mean(diff_flat).item()
     max_diff = torch.max(diff_flat).item()
     std_diff = torch.std(diff_flat).item()
     max_threshold = torch.max(tolerance_threshold).item()
-
-    print(f"\nTOLERANCE ANALYSIS:")
-    print(f"Mean absolute difference: {mean_diff:.8f}")
-    print(f"Max absolute difference:  {max_diff:.8f}")
-    print(f"Max tolerance threshold:  {max_threshold:.8f}")
-    print(f"Max excess over tolerance: {torch.max(diff_flat - tolerance_threshold).item():.8f}")
-    print(
-        f"Elements within tolerance: {len(torch_flat) - len(failing_indices)}/{len(torch_flat)} ({100*(len(torch_flat) - len(failing_indices))/len(torch_flat):.1f}%)"
-    )
 
     # Check results
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
