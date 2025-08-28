@@ -168,9 +168,11 @@
 #define MEM_BANK_TO_NOC_SCRATCH (MEM_TRISC3_INIT_LOCAL_L1_BASE_SCRATCH + MEM_DM_LOCAL_SIZE)
 #define MEM_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
 
-// Scratch area for logical to translated coordinate mapping. Size is largest chip size * sizeof uint16_t.
+// Scratch area for logical to translated coordinate mapping.
+// This size must match the firmware noc_size_x & noc_size Y. Size is largest chip (X + Y) * sizeof uint16_t.
+// Chip sizes must round up to even numbers to deal with uint32_t alignment for L1 to local copies.
 #define MEM_LOGICAL_TO_TRANSLATED_SCRATCH (MEM_BANK_TO_NOC_SCRATCH + MEM_BANK_TO_NOC_SIZE)
-#define MEM_LOGICAL_TO_TRANSLATED_SIZE (17 * 12 * sizeof(uint16_t))
+#define MEM_LOGICAL_TO_TRANSLATED_SIZE ((18 + 12) * sizeof(uint16_t))
 
 /////////////
 // Stack info
