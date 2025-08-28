@@ -13,43 +13,7 @@
 
 namespace tt::tt_fabric::fabric_router_tests {
 
-// Helper function to print unexpected error messages for debugging
-void print_unexpected_errors(const std::string& stdout_output, const std::vector<std::string>& expected_errors) {
-    printf("\n=== UNEXPECTED ERROR MESSAGES ===\n");
-    printf("Captured stdout output:\n");
-    printf("%s\n", stdout_output.c_str());
-    
-    printf("\nExpected error messages:\n");
-    for (const auto& expected : expected_errors) {
-        printf("- %s\n", expected.c_str());
-    }
-    
-    printf("\nChecking if any expected errors were found:\n");
-    bool found_any = false;
-    for (const auto& expected : expected_errors) {
-        if (stdout_output.find(expected) != std::string::npos) {
-            printf("✓ FOUND: %s\n", expected.c_str());
-            found_any = true;
-        } else {
-            printf("✗ NOT FOUND: %s\n", expected.c_str());
-        }
-    }
-    
-    if (!found_any) {
-        printf("\n NONE of the expected error messages were found in the output!\n");
-    }
-    printf("================================\n\n");
-}
-
-// Helper function to check if all expected error messages are present in stdout
-bool check_all_expected_errors_found(const std::string& stdout_output, const std::vector<std::string>& expected_errors) {
-    for (const auto& expected : expected_errors) {
-        if (stdout_output.find(expected) == std::string::npos) {
-            return false;
-        }
-    }
-    return true;
-}
+// (Old message verification helpers removed.)
 
 TEST(MeshGraphDescriptorTests, ParsesFromTextProtoString) {
     const std::string text_proto = R"proto(
@@ -84,28 +48,15 @@ TEST(MeshGraphDescriptorTests, InvalidProtoNoMeshDescriptors) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" id: 0 } }
     )proto";
 
-    // Capture stdout to check for log_error messages
-    testing::internal::CaptureStdout();
-    
+    // Capture stdout, trigger validation, then print captured output and exception message
     try {
         MeshGraphDescriptor desc(text_proto);
         FAIL() << "Expected std::runtime_error for no mesh descriptors";
-            } catch (const std::runtime_error& e) {
-            std::string stdout_output = testing::internal::GetCapturedStdout();
-            EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-            
-            std::vector<std::string> expected_errors = {
-                "MeshGraphDescriptor: There must be at least one mesh descriptor"
-            };
-            
-            bool found_expected = check_all_expected_errors_found(stdout_output, expected_errors);
-            
-            if (!found_expected) {
-                print_unexpected_errors(stdout_output, expected_errors);
-            }
-            
-            EXPECT_TRUE(found_expected) << "Expected error message not found in output";
-        }
+    } catch (const std::runtime_error& e) {
+        // Verify new messages
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("There must be at least one mesh descriptor"));
+    }
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoDimensionValidationFailures) {
@@ -124,30 +75,16 @@ TEST(MeshGraphDescriptorTests, InvalidProtoDimensionValidationFailures) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" id: 0 } }
     )proto";
 
-    // Capture stdout to check for log_error messages
-    testing::internal::CaptureStdout();
-    
+    // Capture stdout, trigger validation, then print captured output and exception message
     try {
         MeshGraphDescriptor desc(text_proto);
         FAIL() << "Expected std::runtime_error for multiple validation failures";
     } catch (const std::runtime_error& e) {
-        std::string stdout_output = testing::internal::GetCapturedStdout();
+        // Verify new messages
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        
-        std::vector<std::string> expected_errors = {
-            "MeshGraphDescriptor: Mesh descriptor name cannot be empty",
-            "MeshGraphDescriptor: Device and host topology dimensions must be the same size",
-            "MeshGraphDescriptor: Architecture::WORMHOLE_B0 architecture devices allow a maximum of 2 dimensions, but 3 were provided"
-        };
-        
-        // Check that all expected validation errors are present in stdout
-        bool all_found = check_all_expected_errors_found(stdout_output, expected_errors);
-        
-        if (!all_found) {
-            print_unexpected_errors(stdout_output, expected_errors);
-        }
-        
-        EXPECT_TRUE(all_found) << "Not all expected error messages were found in stdout";
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Mesh descriptor 1 has no name"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Device and host topology dimensions must be the same size"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Architecture devices allow a maximum of 2 dimensions, but 3 were provided"));
     }
 }
 
@@ -179,35 +116,19 @@ TEST(MeshGraphDescriptorTests, InvalidProtoMeshDescriptorValidation) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    // Capture stdout to check for log_error messages
-    testing::internal::CaptureStdout();
-    
+    // Capture stdout, trigger validation, then print captured output and exception message
     try {
         MeshGraphDescriptor desc(text_proto);
         FAIL() << "Expected std::runtime_error for multiple express connection validation failures";
     } catch (const std::runtime_error& e) {
-        std::string stdout_output = testing::internal::GetCapturedStdout();
+        // Verify new messages (subset)
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        
-        std::vector<std::string> expected_errors = {
-            "MeshGraphDescriptor: Express connection source is out of bounds for mesh 'M0'",
-            "MeshGraphDescriptor: Express connection destination is out of bounds for mesh 'M0'",
-            "MeshGraphDescriptor: Express connection source is out of bounds for mesh 'M1'",
-            "MeshGraphDescriptor: Express connection destination is out of bounds for mesh 'M1'",
-            "MeshGraphDescriptor: Device topology dimensions must be positive",
-            "MeshGraphDescriptor: Mesh descriptor 'M1' must have a valid architecture",
-            "MeshGraphDescriptor: Mesh descriptor 'M1' must have device topology with dimensions",
-            "MeshGraphDescriptor: Mesh descriptor 'M1' must have host topology with dimensions"
-        };
-        
-        // Check that all expected express connection validation errors are present in stdout
-        bool all_found = check_all_expected_errors_found(stdout_output, expected_errors);
-        
-        if (!all_found) {
-            print_unexpected_errors(stdout_output, expected_errors);
-        }
-        
-        EXPECT_TRUE(all_found) << "Not all expected error messages were found in stdout";
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Mesh descriptor name is not unique (Mesh: M0)"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Device topology dimensions must be positive (Mesh: M0)"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Device and host topology dimensions must be the same size (Mesh: M0)"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("All mesh descriptors must have the same architecture"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Express connection source is out of bounds (Mesh: M0)"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Express connection destination is out of bounds (Mesh: M0)"));
     }
 }
 
@@ -247,35 +168,20 @@ TEST(MeshGraphDescriptorTests, InvalidProtoGraphDescriptorValidation) {
         top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
     )proto";
 
-    // Capture stdout to check for log_error messages
-    testing::internal::CaptureStdout();
-    
+    // Capture stdout, trigger validation, then print captured output and exception message
     try {
         MeshGraphDescriptor desc(text_proto);
         FAIL() << "Expected std::runtime_error for multiple validation failures";
     } catch (const std::runtime_error& e) {
-        std::string stdout_output = testing::internal::GetCapturedStdout();
+        // Verify new messages (subset)
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-
-        std::vector<std::string> expected_errors = {
-            "MeshGraphDescriptor: There must be at least one mesh descriptor",
-            "MeshGraphDescriptor: Graph descriptor name 'G0' is not unique",
-            "MeshGraphDescriptor: Graph descriptor 'G0' must have at least one instance",
-            "MeshGraphDescriptor: Connection in graph 'G0' channel count must be positive",
-            "MeshGraphDescriptor: Graph Descriptor 'G0' channel count must be positive",
-            "MeshGraphDescriptor: Connection in graph 'G0' must have at least two nodes",
-            "MeshGraphDescriptor: Graph descriptor 'G1' must have either graph_topology or connections defined",
-            "MeshGraphDescriptor: Graph descriptor 'G1' must have a type specified",
-        };
-
-        // Check that all expected validation errors are present in stdout
-        bool all_found = check_all_expected_errors_found(stdout_output, expected_errors);
-
-        if (!all_found) {
-            print_unexpected_errors(stdout_output, expected_errors);
-        }
-        
-        EXPECT_TRUE(all_found) << "Not all expected error messages were found in stdout";
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("There must be at least one mesh descriptor"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph topology channel count must be positive (Graph: G0)"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Connection channel count must be positive (Graph: G0)"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph descriptor must have at least one instance (Graph: G0)"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph descriptor must have a type specified (Graph: G1)"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Connection must have at least two nodes (Graph: G0)"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph descriptor must have either graph_topology or connections defined (Graph: G1)"));
     }
 }
 

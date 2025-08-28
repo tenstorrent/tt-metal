@@ -8,10 +8,13 @@
 #include <filesystem>
 #include <algorithm>
 #include <set>
+#include <iomanip>
+#include <unordered_map>
+#include <unordered_set>
 #include "assert.hpp"
 
-#include "tt-metalium/mesh_graph_descriptor.hpp"
 #include "protobuf/mesh_graph_descriptor.pb.h"
+#include "tt-metalium/mesh_graph_descriptor.hpp"
 
 #include <google/protobuf/text_format.h>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
@@ -34,11 +37,28 @@ uint32_t get_max_dimensions_for_architecture(proto::Architecture arch) {
     switch (arch) {
         case proto::Architecture::WORMHOLE_B0: return 2;
         case proto::Architecture::BLACKHOLE: return 3;
-        default: log_error(LogFabric, "Invalid architecture"); return 0;
+        case proto::Architecture::INVALID_ARCHITECTURE: return 0;
+        default: return 0;
     }
 }
 
 }  // namespace
+
+std::string MeshGraphDescriptor::get_validation_report() const {
+    if (error_messages_.empty()) {
+        return "No validation errors found.\n";
+    }
+
+    std::ostringstream report;
+    report << "=== MeshGraphDescriptor Validation Report ===\n\n";
+    report << "Errors:\n";
+    for (const auto& error : error_messages_) {
+        report << "  - " << error << "\n";
+    }
+    report << "\n";
+    
+    return report.str();
+}
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) {
     proto::MeshGraphDescriptor temp_proto;
@@ -54,7 +74,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) {
     set_defaults(temp_proto);
 
     // Validate the proto
-    TT_FATAL(static_validate(temp_proto), "Failed to validate MeshGraphDescriptor textproto");
+    TT_FATAL(static_validate(temp_proto), "Failed to validate MeshGraphDescriptor textproto\n{}", get_validation_report());
 
     proto_ = std::make_unique<proto::MeshGraphDescriptor>(temp_proto);
 }
@@ -100,185 +120,224 @@ void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
 bool MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& proto) {
     bool success = true;
 
-    // ============================================================================
-    // BASIC STRUCTURE VALIDATION
-    // ============================================================================
-    
+    // Clear any previous errors
+    error_messages_.clear();
+
+    // Run all validation methods
+    success &= validate_basic_structure(proto);
+    success &= validate_names(proto);
+    success &= validate_mesh_topology(proto);
+    success &= validate_architecture_consistency(proto);
+    success &= validate_channels(proto);
+    success &= validate_policies(proto);
+    success &= validate_express_connections(proto);
+    success &= validate_graph_descriptors(proto);
+    success &= validate_graph_topology_and_connections(proto);
+
+    return success;
+}
+
+bool MeshGraphDescriptor::validate_basic_structure(const proto::MeshGraphDescriptor& proto) {
+    bool success = true;
+
     // There has to exist at least one mesh or graph descriptor
     if (proto.mesh_descriptors_size() == 0) {
-        log_error(LogFabric, "MeshGraphDescriptor: There must be at least one mesh descriptor");
+        error_messages_.push_back("There must be at least one mesh descriptor");
         success = false;
     }
 
-    // ============================================================================
-    // MESH DESCRIPTOR VALIDATION
-    // ============================================================================
-    
-    // Validate basic mesh properties (names and dimensions)
+    // There has to be at least one top_level_instance
+    if (!proto.has_top_level_instance()) {
+        error_messages_.push_back("Top level instance is required");
+        success = false;
+    }
+
+    return success;
+}
+
+
+
+bool MeshGraphDescriptor::validate_names(const proto::MeshGraphDescriptor& proto) {
+    bool success = true;
+
+    unsigned int counter = 0;
+
+    // Check that all mesh descriptors have a unique name
+    std::unordered_set<std::string> mesh_names;
     for (const auto& mesh : proto.mesh_descriptors()) {
-        // Check that the name is not empty
+        counter++;
         if (mesh.name().empty()) {
-            log_error(LogFabric, "MeshGraphDescriptor: Mesh descriptor name cannot be empty");
+            error_messages_.push_back(
+                fmt::format(
+                    "Mesh descriptor {} has no name",
+                    counter
+                )
+            );
+            success = false;
+            continue;
+        }
+        if (mesh_names.find(mesh.name()) != mesh_names.end()) {
+            error_messages_.push_back(
+                fmt::format(
+                    "Mesh descriptor name is not unique (Mesh: {})", 
+                    mesh.name()
+                )
+            );
             success = false;
         }
+        mesh_names.insert(mesh.name());
+    }
 
+    counter = 0;
+
+    // Check that all graph descriptors have a unique name
+    std::unordered_set<std::string> names;
+    for (const auto& graph : proto.graph_descriptors()) {
+        counter++;
+        if (graph.name().empty()) {
+            error_messages_.push_back(
+                fmt::format(
+                    "Graph descriptor {} has no name",
+                    counter
+                )
+            );
+            success = false;
+            continue;
+        }
+        if (mesh_names.find(graph.name()) != mesh_names.end()) {
+            error_messages_.push_back(
+                fmt::format(
+                    "Graph descriptor name is not unique (Graph: {})", 
+                    graph.name()
+                )
+            );
+            success = false;
+        }
+        names.insert(graph.name());
+    }
+
+    return success;
+}
+
+
+bool MeshGraphDescriptor::validate_mesh_topology(const proto::MeshGraphDescriptor& proto) {
+    bool success = true;
+
+    // Validate basic mesh properties (names and dimensions)
+    for (const auto& mesh : proto.mesh_descriptors()) {
         // Check that all dims are positive
         for (const auto& dim : mesh.device_topology().dims()) {
             if (dim <= 0) {
-                log_error(LogFabric, "MeshGraphDescriptor: Device topology dimensions must be positive");
+                error_messages_.push_back(
+                    fmt::format(
+                        "Device topology dimensions must be positive (Mesh: {})", 
+                        mesh.name()
+                    )
+                );
                 success = false;
+                continue;
             }
         }
 
         // Check that device topology dimensions and types are the same size
         if (mesh.device_topology().dim_types_size() > 0) {
             if (mesh.device_topology().dims_size() != mesh.device_topology().dim_types_size()) {
-                log_error(LogFabric, "MeshGraphDescriptor: Device topology dimensions and types must be the same size");
+                error_messages_.push_back(
+                    fmt::format(
+                        "Device topology dimensions and types must be the same size (Mesh: {})", 
+                        mesh.name()
+                    )
+                );
                 success = false;
+                continue;
             }
         }
-    }
 
-    // ============================================================================
-    // TOPOLOGY VALIDATION
-    // ============================================================================
-    
-    // Validate topology consistency between device and host
-    for (const auto& mesh : proto.mesh_descriptors()) {
         // Check that the device and host topology dimensions are the same size
         if (mesh.device_topology().dims_size() != mesh.host_topology().dims_size()) {
-            log_error(LogFabric, "MeshGraphDescriptor: Device and host topology dimensions must be the same size");
+            error_messages_.push_back(
+                fmt::format(
+                    "Device and host topology dimensions must be the same size (Mesh: {})", 
+                    mesh.name()
+                )
+            );
             success = false;
+            continue;
         }
     }
 
-    // Validate architecture and dimension limits
-    for (const auto& mesh : proto.mesh_descriptors()) {
-        uint32_t max_num_dims = get_max_dimensions_for_architecture(mesh.arch());
-        if (max_num_dims == 0) {
-            log_error(LogFabric, "MeshGraphDescriptor: Invalid architecture");
-            success = false;
-        }
-        
-        // Check that the number of dimensions is not greater than the maximum allowed for the architecture
-        if (mesh.device_topology().dims_size() > max_num_dims) {
-            log_error(
-                LogFabric,
-                "MeshGraphDescriptor: {} architecture devices allow a maximum of {} dimensions, but {} were provided",
-                mesh.arch(),
-                max_num_dims,
-                mesh.device_topology().dims_size());
-            success = false;
-        }
-    }
+    return success;
+}
 
-    // Set dim_types to LINE if not specified for each dimension
-    // Note: This is handled during parsing/processing, not validation
-    // The validation here is to ensure dim_types are valid when specified
-    for (const auto& mesh : proto.mesh_descriptors()) {
-        for (const auto& dim_type : mesh.device_topology().dim_types()) {
-            if (dim_type == proto::TorusTopology::INVALID_TYPE) {
-                log_error(LogFabric, "MeshGraphDescriptor: Mesh descriptor '{}' has invalid dimension type", mesh.name());
-                success = false;
-            }
-        }
-    }
+bool MeshGraphDescriptor::validate_architecture_consistency(const proto::MeshGraphDescriptor& proto) {
+    bool success = true;
 
-    // ============================================================================
-    // REQUIRED FIELDS VALIDATION
-    // ============================================================================
-    
-    // Verify that arch, device and host topology must exist in mesh descriptors
-    for (const auto& mesh : proto.mesh_descriptors()) {
-        if (mesh.arch() == proto::Architecture::INVALID_ARCHITECTURE) {
-            log_error(LogFabric, "MeshGraphDescriptor: Mesh descriptor '{}' must have a valid architecture", mesh.name());
-            success = false;
-        }
-        
-        if (!mesh.has_device_topology() || mesh.device_topology().dims_size() == 0) {
-            log_error(LogFabric, "MeshGraphDescriptor: Mesh descriptor '{}' must have device topology with dimensions", mesh.name());
-            success = false;
-        }
-        
-        if (!mesh.has_host_topology() || mesh.host_topology().dims_size() == 0) {
-            log_error(LogFabric, "MeshGraphDescriptor: Mesh descriptor '{}' must have host topology with dimensions", mesh.name());
-            success = false;
-        }
-    }
-
-    // ============================================================================
-    // ARCHITECTURE CONSISTENCY VALIDATION
-    // ============================================================================
-    
     // Check all architectures are the same
     if (proto.mesh_descriptors_size() > 0) {
         proto::Architecture first_arch = proto.mesh_descriptors(0).arch();
-        for (const auto& mesh : proto.mesh_descriptors()) {
-            if (mesh.arch() != first_arch) {
-                log_error(LogFabric, "MeshGraphDescriptor: All mesh descriptors must have the same architecture");
-                success = false;
-            }
+        if (!std::all_of(proto.mesh_descriptors().begin(), proto.mesh_descriptors().end(),
+                        [first_arch](const auto& mesh) { return mesh.arch() == first_arch; })) {
+            error_messages_.push_back("All mesh descriptors must have the same architecture");
+            return false;
         }
     }
 
-    // Check that all mesh descriptors have the same architecture (if they reference meshes)
-    // NOTE: In the future we might allow for different architectures in the same graph
-    std::set<proto::Architecture> architectures;
+// Verify that arch, device and host topology must exist in mesh descriptors
     for (const auto& mesh : proto.mesh_descriptors()) {
-        architectures.insert(mesh.arch());
-    }
-    if (architectures.size() > 1) {
-        log_error(LogFabric, "MeshGraphDescriptor: All mesh descriptors must have the same architecture");
-        success = false;
-    }
+        if (mesh.arch() == proto::Architecture::INVALID_ARCHITECTURE) {
+            error_messages_.push_back( 
+                fmt::format(
+                    "Mesh descriptor must have a valid architecture (Mesh: {})", 
+                    mesh.name()
+                )
+            );
+            success = false;
+            continue;
+        }
 
-    // ============================================================================
-    // UNIQUENESS VALIDATION
-    // ============================================================================
-    
-    // Check that all mesh descriptors have a unique name
-    std::set<std::string> mesh_names;
-    for (const auto& mesh : proto.mesh_descriptors()) {
-        if (mesh.name().empty()) {
-            log_error(LogFabric, "MeshGraphDescriptor: Mesh descriptor name cannot be empty");
+        // Validate architecture and dimension limits
+        uint32_t max_num_dims = get_max_dimensions_for_architecture(mesh.arch());
+        if (max_num_dims == 0) {
+            error_messages_.push_back( 
+                fmt::format(
+                    "Invalid architecture (Mesh: {})", 
+                    mesh.name()
+                )
+            );
             success = false;
+            continue;
         }
-        if (mesh_names.find(mesh.name()) != mesh_names.end()) {
-            log_error(LogFabric, "MeshGraphDescriptor: Mesh descriptor name '{}' is not unique", mesh.name());
-            success = false;
-        }
-        mesh_names.insert(mesh.name());
-    }
 
-    // Check that all graph descriptors have a unique name
-    std::set<std::string> names;
-    for (const auto& graph : proto.graph_descriptors()) {
-        if (graph.name().empty()) {
-            log_error(LogFabric, "MeshGraphDescriptor: Graph descriptor name cannot be empty");
+        // Check that the number of dimensions is not greater than the maximum allowed for the architecture
+        if (mesh.device_topology().dims_size() > max_num_dims) {
+            error_messages_.push_back(
+                fmt::format(
+                    "Architecture devices allow a maximum of {} dimensions, but {} were provided (Mesh: {})", 
+                    max_num_dims, 
+                    mesh.device_topology().dims_size(), 
+                    mesh.name()
+                )
+            );
             success = false;
+            continue;
         }
-        if (names.find(graph.name()) != names.end()) {
-            log_error(LogFabric, "MeshGraphDescriptor: Graph descriptor name '{}' is not unique", graph.name());
-            success = false;
-        }
-        names.insert(graph.name());
     }
-    for (const auto& mesh : proto.mesh_descriptors()) {
-        if (names.find(mesh.name()) != names.end()) {
-            log_error(LogFabric, "MeshGraphDescriptor: Mesh descriptor name '{}' is not unique", mesh.name());
-            success = false;
-        }
-        names.insert(mesh.name());
-    }
+        
+    return success;
+}
 
-    // ============================================================================
-    // CHANNEL VALIDATION
-    // ============================================================================
-    
+bool MeshGraphDescriptor::validate_channels(const proto::MeshGraphDescriptor& proto) {
+    bool success = true;
+
     // Check all channel counts > 0
     for (const auto& mesh : proto.mesh_descriptors()) {
         if (mesh.channels().count() <= 0) {
-            log_error(LogFabric, "MeshGraphDescriptor: Channel count must be positive");
+            error_messages_.push_back( 
+                fmt::format(
+                    "Channel count must be positive (Mesh: {})", 
+                    mesh.name()
+                )
+            );
             success = false;
         }
     }
@@ -286,7 +345,12 @@ bool MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& prot
     // Check that channels in graph topology are positive
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.has_graph_topology() && graph.graph_topology().channels().count() <= 0) {
-            log_error(LogFabric, "MeshGraphDescriptor: Graph Descriptor '{}' channel count must be positive", graph.name());
+            error_messages_.push_back( 
+                fmt::format(
+                    "Graph topology channel count must be positive (Graph: {})", 
+                    graph.name()
+                )
+            );
             success = false;
         }
     }
@@ -296,66 +360,82 @@ bool MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& prot
         // Check connection-level channels and validate connection nodes
         for (const auto& connection : graph.connections()) {
             if (connection.channels().count() <= 0) {
-                log_error(LogFabric, "MeshGraphDescriptor: Connection in graph '{}' channel count must be positive", graph.name());
-                success = false;
-            }
-            // Check there is at least one node in the connection
-            if (connection.nodes_size() < 2) {
-                log_error(LogFabric, "MeshGraphDescriptor: Connection in graph '{}' must have at least two nodes", graph.name());
+                error_messages_.push_back( 
+                    fmt::format(
+                        "Connection channel count must be positive (Graph: {})", 
+                        graph.name()
+                    )
+                );
                 success = false;
             }
         }
     }
 
-    // ============================================================================
-    // POLICY VALIDATION
-    // ============================================================================
-    
-    // Set the default for channel policy to strict if not specified
-    // Note: This is handled during parsing/processing, not validation
-    // The validation here is to ensure channels have valid policies when specified
+    return success;
+}
+
+bool MeshGraphDescriptor::validate_policies(const proto::MeshGraphDescriptor& proto) {
+    bool success = true;
+
+    // Validate policies in mesh descriptors
     for (const auto& mesh : proto.mesh_descriptors()) {
         if (mesh.has_channels() && mesh.channels().has_policy()) {
-            if (mesh.channels().policy() == proto::Policy::INVALID_POLICY) {
-                log_error(LogFabric, "MeshGraphDescriptor: Mesh descriptor '{}' has invalid channel policy", mesh.name());
+            if (mesh.channels().policy() != proto::Policy::STRICT && 
+                mesh.channels().policy() != proto::Policy::RELAXED) {
+                error_messages_.push_back( 
+                    fmt::format(
+                        "Invalid policy in mesh channels (Mesh: {})", 
+                        mesh.name()
+                    )
+                );
                 success = false;
             }
         }
     }
-    
+
+    // Validate policies in graph descriptors
     for (const auto& graph : proto.graph_descriptors()) {
-        // Check graph topology channels policy
+        // Check graph topology policies
         if (graph.has_graph_topology() && graph.graph_topology().has_channels() && 
             graph.graph_topology().channels().has_policy()) {
-            if (graph.graph_topology().channels().policy() == proto::Policy::INVALID_POLICY) {
-                log_error(LogFabric, "MeshGraphDescriptor: Graph descriptor '{}' graph topology has invalid channel policy", graph.name());
+            if (graph.graph_topology().channels().policy() != proto::Policy::STRICT && 
+                graph.graph_topology().channels().policy() != proto::Policy::RELAXED) {
+                error_messages_.push_back( 
+                    fmt::format(
+                        "Invalid policy in graph topology channels (Graph: {})", 
+                        graph.name()
+                    )
+                );
                 success = false;
             }
         }
-        
-        // Check connection channels policy
+
+        // Check connection policies
         for (const auto& connection : graph.connections()) {
             if (connection.has_channels() && connection.channels().has_policy()) {
-                if (connection.channels().policy() == proto::Policy::INVALID_POLICY) {
-                    log_error(LogFabric, "MeshGraphDescriptor: Connection in graph '{}' has invalid channel policy", graph.name());
+                if (connection.channels().policy() != proto::Policy::STRICT && 
+                    connection.channels().policy() != proto::Policy::RELAXED) {
+                    error_messages_.push_back( 
+                        fmt::format(
+                            "Invalid policy in connection channels (Graph: {})", 
+                            graph.name()
+                        )
+                    );
                     success = false;
                 }
             }
         }
     }
 
-    // ============================================================================
-    // EXPRESS CONNECTIONS VALIDATION
-    // ============================================================================
-    
+    return success;
+}
+
+bool MeshGraphDescriptor::validate_express_connections(const proto::MeshGraphDescriptor& proto) {
+    bool success = true;
+
     // Validate express connections
     for (const auto& mesh : proto.mesh_descriptors()) {
-        uint32_t max_num_dims = get_max_dimensions_for_architecture(mesh.arch());
-        if (max_num_dims == 0) {
-            log_error(LogFabric, "MeshGraphDescriptor: Invalid architecture");
-            success = false;
-        }
-        uint32_t num_dims = std::min(static_cast<uint32_t>(mesh.device_topology().dims_size()), max_num_dims);
+        uint32_t num_dims = mesh.device_topology().dims_size();
 
         // Calculate the number of devices in the mesh
         uint32_t num_devices = 1;
@@ -366,24 +446,41 @@ bool MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& prot
         // Check that express connections are valid and have the right number of devices
         for (const auto& express_connection : mesh.express_connections()) {
             if (express_connection.src() < 0 || express_connection.src() >= num_devices) {
-                log_error(LogFabric, "MeshGraphDescriptor: Express connection source is out of bounds for mesh '{}'", mesh.name());
+                error_messages_.push_back( 
+                    fmt::format(
+                        "Express connection source is out of bounds (Mesh: {})", 
+                        mesh.name()
+                    )
+                );
                 success = false;
             }
             if (express_connection.dst() < 0 || express_connection.dst() >= num_devices) {
-                log_error(LogFabric, "MeshGraphDescriptor: Express connection destination is out of bounds for mesh '{}'", mesh.name());
+                error_messages_.push_back( 
+                    fmt::format(
+                        "Express connection destination is out of bounds (Mesh: {})", 
+                        mesh.name()
+                    )
+                );
                 success = false;
             }
         }
     }
 
-    // ============================================================================
-    // GRAPH DESCRIPTOR VALIDATION
-    // ============================================================================
-    
+    return success;
+}
+
+bool MeshGraphDescriptor::validate_graph_descriptors(const proto::MeshGraphDescriptor& proto) {
+    bool success = true;
+
     // Check that there is at least one instance in the graph and validate references
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.instances_size() == 0) {
-            log_error(LogFabric, "MeshGraphDescriptor: Graph descriptor '{}' must have at least one instance", graph.name());
+            error_messages_.push_back( 
+                fmt::format(
+                    "Graph descriptor must have at least one instance (Graph: {})", 
+                    graph.name()
+                )
+            );
             success = false;
         }
     }
@@ -391,36 +488,70 @@ bool MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& prot
     // Verify that type is set in graph descriptors
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.type().empty()) {
-            log_error(LogFabric, "MeshGraphDescriptor: Graph descriptor '{}' must have a type specified", graph.name());
+            error_messages_.push_back( 
+                fmt::format(
+                    "Graph descriptor must have a type specified (Graph: {})", 
+                    graph.name()
+                )
+            );
             success = false;
         }
     }
 
-    // ============================================================================
-    // GRAPH TOPOLOGY AND CONNECTIONS VALIDATION
-    // ============================================================================
-    
-    // Check that there is a graph topology or connections for each graph descriptor       
+    return success;
+}
+
+bool MeshGraphDescriptor::validate_graph_topology_and_connections(const proto::MeshGraphDescriptor& proto) {
+    bool success = true;
+
+    // Combine all checks into a single loop over graph_descriptors
     for (const auto& graph : proto.graph_descriptors()) {
+        // Check that there is a graph topology or connections for each graph descriptor
         if (!graph.has_graph_topology() && graph.connections_size() == 0) {
-            log_error(LogFabric, "MeshGraphDescriptor: Graph descriptor '{}' must have either graph_topology or connections defined", graph.name());
+            error_messages_.push_back( 
+                fmt::format(
+                    "Graph descriptor must have either graph_topology or connections defined (Graph: {})", 
+                    graph.name()
+                )
+            );
             success = false;
+            continue;
         }
-    }
 
-    // Check that when graph_topology is used, connections aren't defined
-    for (const auto& graph : proto.graph_descriptors()) {
+        // Check that both graph_topology and connections are not defined at the same time
         if (graph.has_graph_topology() && graph.connections_size() > 0) {
-            log_error(LogFabric, "MeshGraphDescriptor: Graph descriptor '{}' cannot have both graph_topology and connections defined", graph.name());
+            error_messages_.push_back( 
+                fmt::format(
+                    "Graph descriptor cannot have both graph_topology and connections defined (Graph: {})", 
+                    graph.name()
+                )
+            );
             success = false;
+            continue;
         }
-    }
 
-    // Check that when connections are used, graph_topology isn't defined
-    for (const auto& graph : proto.graph_descriptors()) {
         if (graph.connections_size() > 0 && graph.has_graph_topology()) {
-            log_error(LogFabric, "MeshGraphDescriptor: Graph descriptor '{}' cannot have both connections and graph_topology defined", graph.name());
+            error_messages_.push_back( 
+                fmt::format(
+                    "Graph descriptor cannot have both connections and graph_topology defined (Graph: {})", 
+                    graph.name()
+                )
+            );
             success = false;
+            continue;
+        }
+
+        // Check connections have at least 2 nodes
+        for (const auto& connection : graph.connections()) {
+            if (connection.nodes_size() < 2) {
+                error_messages_.push_back( 
+                    fmt::format(
+                        "Connection must have at least two nodes (Graph: {})", 
+                        graph.name()
+                    )
+                );
+                success = false;
+            }
         }
     }
 
