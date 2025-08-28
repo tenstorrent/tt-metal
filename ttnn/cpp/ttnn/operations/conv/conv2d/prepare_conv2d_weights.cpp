@@ -63,7 +63,8 @@ public:
     }
 
     template <typename Func>
-    static void parallel_for_channels(uint32_t out_ch, uint32_t in_ch, uint32_t min_work_per_thread, Func&& work_func) {
+    static void parallel_for_channels(
+        uint32_t out_ch, uint32_t in_ch, uint32_t min_work_per_thread, const Func& work_func) {
         auto cfg = calculate_thread_config(out_ch, in_ch, min_work_per_thread);
 
         if (cfg.out_threads == 1 && cfg.in_threads == 1) {
@@ -83,7 +84,7 @@ public:
                 uint32_t i_start = it * cfg.in_per_thread;
                 uint32_t i_end = (it == cfg.in_threads - 1) ? cfg.in_total : i_start + cfg.in_per_thread;
 
-                threads.emplace_back([=, &exception_caught, work_func = std::forward<Func>(work_func)] {
+                threads.emplace_back([=, &exception_caught] {
                     try {
                         work_func(ot, it, o_start, o_end, i_start, i_end);
                     } catch (...) {
