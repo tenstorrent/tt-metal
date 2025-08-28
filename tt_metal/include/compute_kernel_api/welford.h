@@ -14,8 +14,15 @@
 #endif
 
 namespace ckernel {
-ALWI void welford(uint32_t dst0, uint32_t dst1, uint32_t dst3, uint32_t start_N, uint32_t end_N, uint32_t last_run) {
-    MATH(llk_math_welfords_sfpu(dst0, dst1, dst3, start_N, end_N, last_run));
+ALWI void welford(
+    uint32_t dst0,
+    uint32_t dst1,
+    uint32_t dst2,
+    uint32_t current_sample,
+    uint32_t final_sample,
+    uint32_t reformat_dst = 1,
+    uint32_t skip_n_samples = 0) {
+    MATH(llk_math_welfords_sfpu(dst0, dst1, dst2, current_sample, final_sample, reformat_dst, skip_n_samples));
 }
 
 /**
