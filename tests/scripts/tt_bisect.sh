@@ -13,11 +13,17 @@ else
   echo "Not running inside Docker"
 fi
 
+# Deactivate current virtual environment if active
 if [ -n "$VIRTUAL_ENV" ]; then
-    echo "You are in a Python virtual environment: $VIRTUAL_ENV"
-else
-    echo "You are NOT in a Python virtual environment."
+    deactivate
 fi
+
+# Run your environment creation script (adjust path as needed)
+./create_venv.sh
+echo "Virtual environment created $PYTHON_ENV_DIR"
+
+# Source the new environment (adjust path as needed)
+source $PYTHON_ENV_DIR/bin/activate
 
 : << 'END'
 Usage:
