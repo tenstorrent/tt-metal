@@ -9,6 +9,8 @@ from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d, ParameterDic
 
 from ttnn.device import is_wormhole_b0
 
+L1FullSliceConfig = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dL1Full)
+
 
 def nearest_16(x):
     return math.ceil(x / 16) * 16
@@ -234,6 +236,7 @@ class UNetConv2D:
             weight_tensor=self.weight,
             bias_tensor=self.bias,
             compute_config=self.compute_config,
+            slice_config=L1FullSliceConfig,
             return_output_dim=False,
             return_weights_and_bias=True,
             **self.get_conv2d_kwargs(),
