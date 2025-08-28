@@ -206,12 +206,12 @@ uint32_t dump_dispatch_cmd(CQDispatchCmd* cmd, uint32_t cmd_addr, std::ofstream&
                 cq_file << fmt::format(" (num_words={})", val(cmd->set_go_signal_noc_data.num_words));
                 break;
             // These commands don't have any additional data to dump.
-            case CQ_DISPATCH_CMD_ILLEGAL: break;
-            case CQ_DISPATCH_CMD_SINK: break;
-            case CQ_DISPATCH_CMD_EXEC_BUF_END: break;
-            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL: break;
-            case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL: break;
-            case CQ_DISPATCH_CMD_TERMINATE: break;
+            case CQ_DISPATCH_CMD_ILLEGAL:
+            case CQ_DISPATCH_CMD_SINK:
+            case CQ_DISPATCH_CMD_EXEC_BUF_END:
+            case CQ_DISPATCH_CMD_SEND_GO_SIGNAL:
+            case CQ_DISPATCH_NOTIFY_SUBORDINATE_GO_SIGNAL:
+            case CQ_DISPATCH_CMD_TERMINATE:
             case CQ_DISPATCH_CMD_SET_WRITE_OFFSET: break;
             default: TT_THROW("Unrecognized dispatch command: {}", cmd_id); break;
         }
