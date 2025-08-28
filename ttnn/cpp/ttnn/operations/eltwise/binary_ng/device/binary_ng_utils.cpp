@@ -533,8 +533,8 @@ uint32_t pack_scalar_runtime_arg(const float scalar, const DataType dtype, const
     if (dtype == DataType::UINT32) {
         return std::bit_cast<uint32_t>(scalar);
     }
-    uint16_t bf16_bits = (*reinterpret_cast<const uint32_t*>(&scalar)) >> 16;
-    return pack_two_bfloat16_into_uint32({bf16_bits, bf16_bits});
+    auto scalar_bf16 = bfloat16::truncate(scalar);
+    return pack_two_bfloat16_into_uint32({scalar_bf16, scalar_bf16});
 }
 
 template OpConfig::OpConfig(BinaryOpType binary_op_type, std::in_place_type_t<FpuBinaryOp>);
