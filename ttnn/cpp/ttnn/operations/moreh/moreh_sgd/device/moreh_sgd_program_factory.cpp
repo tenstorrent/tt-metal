@@ -89,28 +89,28 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
     std::map<std::string, std::string> compute_defines;
 
     if (weight_decay != 0) {
-        reader_defines["WEIGHT_DECAY"] = 1;
-        compute_defines["WEIGHT_DECAY"] = 1;
+        reader_defines["WEIGHT_DECAY"] = "1";
+        compute_defines["WEIGHT_DECAY"] = "1";
     }
 
     if (momentum != 0) {
-        reader_defines["MOMENTUM"] = 1;
-        compute_defines["MOMENTUM"] = 1;
-        writer_defines["MOMENTUM"] = 1;
+        reader_defines["MOMENTUM"] = "1";
+        compute_defines["MOMENTUM"] = "1";
+        writer_defines["MOMENTUM"] = "1";
     }
 
     if (momentum_initialized) {
-        reader_defines["MOMENTUM_INITIALIZED"] = 1;
-        compute_defines["MOMENTUM_INITIALIZED"] = 1;
+        reader_defines["MOMENTUM_INITIALIZED"] = "1";
+        compute_defines["MOMENTUM_INITIALIZED"] = "1";
     }
 
     if (nesterov) {
-        reader_defines["NESTEROV"] = 1;
-        compute_defines["NESTEROV"] = 1;
+        reader_defines["NESTEROV"] = "1";
+        compute_defines["NESTEROV"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
         compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 

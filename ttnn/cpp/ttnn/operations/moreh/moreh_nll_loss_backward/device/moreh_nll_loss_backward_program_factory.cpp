@@ -82,17 +82,17 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = 1;
-        compute_defines["WEIGHT"] = 1;
+        reader_defines["WEIGHT"] = "1";
+        compute_defines["WEIGHT"] = "1";
     }
     if (divisor_has_value) {
-        reader_defines["DIVISOR"] = 1;
-        compute_defines["DIVISOR"] = 1;
+        reader_defines["DIVISOR"] = "1";
+        compute_defines["DIVISOR"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     const auto reader_kernel_file =
@@ -253,17 +253,17 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = 1;
-        compute_defines["WEIGHT"] = 1;
+        reader_defines["WEIGHT"] = "1";
+        compute_defines["WEIGHT"] = "1";
     }
     if (divisor_has_value) {
-        reader_defines["DIVISOR"] = 1;
-        compute_defines["DIVISOR"] = 1;
+        reader_defines["DIVISOR"] = "1";
+        compute_defines["DIVISOR"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     const auto reader_kernel_file =
@@ -427,17 +427,17 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     std::map<std::string, std::string> compute_defines{};
 
     if (weight_has_value) {
-        reader_defines["WEIGHT"] = 1;
-        compute_defines["WEIGHT"] = 1;
+        reader_defines["WEIGHT"] = "1";
+        compute_defines["WEIGHT"] = "1";
     }
     if (divisor_has_value) {
-        reader_defines["DIVISOR"] = 1;
-        compute_defines["DIVISOR"] = 1;
+        reader_defines["DIVISOR"] = "1";
+        compute_defines["DIVISOR"] = "1";
     }
 
     if (fp32_dest_acc_en) {
-        reader_defines["FP32_DEST_ACC_EN"] = 1;
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        reader_defines["FP32_DEST_ACC_EN"] = "1";
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
 
     const auto reader_kernel_file =

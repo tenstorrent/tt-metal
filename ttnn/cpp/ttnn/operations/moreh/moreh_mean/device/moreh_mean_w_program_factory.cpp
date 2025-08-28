@@ -110,7 +110,7 @@ MorehMeanOperation::MorehMeanWFactory::cached_program_t MorehMeanOperation::More
     auto reduce_dim = ReduceOpDim::W;
     std::map<std::string, std::string> compute_defines = reduce_op_utils::get_defines(reduce_op, reduce_dim);
     if (fp32_dest_acc_en) {
-        compute_defines["FP32_DEST_ACC_EN"] = 1;
+        compute_defines["FP32_DEST_ACC_EN"] = "1";
     }
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         units_per_core_group_1,  // Ht
