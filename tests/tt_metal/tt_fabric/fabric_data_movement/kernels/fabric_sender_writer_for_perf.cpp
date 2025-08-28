@@ -1,145 +1,142 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+
 #include "dataflow_api.h"
 #include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
+#include "tt_metal/fabric/hw/inc/noc_addr.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"  // InterleavedAddrGen, safe_get_noc_addr
-#include "debug/dprint.h"
 
-using namespace tt;
-using namespace tt::tt_fabric;
+struct unicast_mode {
+    uint8_t distance;
+};
+struct mcast_mode {
+    uint8_t distance;
+    uint8_t range;
+};
 
-// >>> ADD: quick hexdump of the first words of the header as a last resort
-static inline void dump_header_words(const volatile tt_l1_ptr PACKET_HEADER_TYPE* h, const char* tag) {
-    const volatile tt_l1_ptr uint32_t* w = reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(h);
-    DPRINT << "[WR] header w[0..15] ="
-           << " " << (uint32_t)w[0] << " " << (uint32_t)w[1] << " " << (uint32_t)w[2] << " " << (uint32_t)w[3] << " "
-           << (uint32_t)w[4] << " " << (uint32_t)w[5] << " " << (uint32_t)w[6] << " " << (uint32_t)w[7] << " "
-           << (uint32_t)w[8] << " " << (uint32_t)w[9] << " " << (uint32_t)w[10] << " " << (uint32_t)w[11] << " "
-           << (uint32_t)w[12] << " " << (uint32_t)w[13] << " " << (uint32_t)w[14] << " " << (uint32_t)w[15] << " "
-           << (uint32_t)w[16] << " " << (uint32_t)w[17] << " " << (uint32_t)w[18] << " " << (uint32_t)w[19] << " "
-           << (uint32_t)w[20] << " " << (uint32_t)w[21] << " " << (uint32_t)w[22] << " " << (uint32_t)w[23] << " "
-           << (uint32_t)w[24] << " " << (uint32_t)w[25] << " " << (uint32_t)w[26] << " " << (uint32_t)w[27] << " "
-           << (uint32_t)w[28] << " " << (uint32_t)w[29] << " " << (uint32_t)w[30] << " " << (uint32_t)w[31] << "\n";
-}
+union transmit_config {
+    unicast_mode unicast;
+    mcast_mode mcast;
+};
 
-// CT args:
-//   0: TOTAL_PAGES
-//   1: PAGE_SIZE
-//
-// RT args (must match host):
-//   0: dst_base       (u32)  // receiver buffer base (L1 offset or DRAM base)
-//   1: dst_is_dram    (u32)  // 0=L1, 1=DRAM
-//   2: dst_mesh_id    (u32)  // logical (truncated to u16)
-//   3: dst_dev_id     (u32)  // logical (truncated to u16)
-//   4: rx_noc_x       (u32)  // receiver worker XY
-//   5: rx_noc_y       (u32)
-//   6: sem_l1_addr    (u32)  // receiver L1 semaphore address
-//   [then]: append_fabric_connection_rt_args(...)
-
+// Worker core - Data Movement Writer -> Sends to Erisc Data Mover (sender side).
+// -> takes input from local cb and pushes to erisc L1
 void kernel_main() {
-    constexpr uint32_t TOTAL_PAGES = get_compile_time_arg_val(0);
-    constexpr uint32_t PAGE_SIZE = get_compile_time_arg_val(1);
-    constexpr uint32_t CB_ID = tt::CBIndex::c_0;
+    // Test doesn't support multiple pages per send yet since we are writing
+    // to interleaved which will never have subsequent pages on the same core
+    // (and hence, able to share a packet header)
+    constexpr uint32_t total_pages_to_send = get_compile_time_arg_val(0);
+    constexpr uint32_t page_size = get_compile_time_arg_val(1);
+    constexpr bool dest_is_dram = get_compile_time_arg_val(2) != 0;
+    constexpr bool mcast_mode = get_compile_time_arg_val(3) == 1;
+    constexpr bool write_scatter_mode = get_compile_time_arg_val(4) == 1;
+    constexpr uint32_t num_pages_per_send = (write_scatter_mode ? 2 : 1);
 
-    size_t idx = 0;
-    const uint32_t dst_base = get_arg_val<uint32_t>(idx++);
-    const bool dst_is_dram = (get_arg_val<uint32_t>(idx++) != 0);
-    const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
-    const uint16_t dst_dev_id = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
-    const uint32_t rx_noc_x = get_arg_val<uint32_t>(idx++);
-    const uint32_t rx_noc_y = get_arg_val<uint32_t>(idx++);
-    const uint32_t sem_l1_addr = get_arg_val<uint32_t>(idx++);
+    DPRINT << "sws: args " << "\n\tnum_pages_to_send=" << total_pages_to_send << "\n\tpage_size="
+           << page_size
+           //    << "\n\tnum_buffers_per_channel=" << num_buffers_per_channel
+           << "\n\tdest_is_dram=" << (dest_is_dram ? "T" : "F") << "\n\tmcast_mode=" << (mcast_mode ? "T" : "F")
+           << "\n\twrite_scatter_mode=" << (write_scatter_mode ? "T" : "F") << "\n";
 
-    // Build fabric connection from remaining RT args
-    auto sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
+    size_t arg_idx = 0;
+    size_t dest_addr = get_arg_val<uint32_t>(arg_idx++);
+    // For global semaphore, we get the address directly (not a semaphore ID)
+    volatile uint32_t* const last_message_semaphore_address =
+        reinterpret_cast<volatile uint32_t* const>(get_arg_val<uint32_t>(arg_idx++));
 
-    // Reusable packet header in L1
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* header = PacketHeaderPool::allocate_header();
-    zero_l1_buf((uint32_t*)header, sizeof(PACKET_HEADER_TYPE));
+    ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(writer_send_sem_addr));
+    ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(worker_teardown_sem_addr));
+    ASSERT(worker_buffer_index_semaphore_addr != reinterpret_cast<size_t>(last_message_semaphore_address));
 
-    // >>> ADD: print the inputs we’re about to stamp
-    DPRINT << "[WR] route-intent dst_mesh=" << (uint32_t)dst_mesh_id << " dst_dev=" << (uint32_t)dst_dev_id
-           << " rx_xy=(" << rx_noc_x << "," << rx_noc_y << ")\n";
+    auto sender = tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(arg_idx);
 
-    // Fabric header (2D dynamic routing): route to (dst_mesh_id, dst_dev_id)
-    auto mh = reinterpret_cast<volatile tt_l1_ptr MeshPacketHeader*>(header);
-    fabric_set_unicast_route(
-        mh,
-        eth_chan_directions::EAST,  // ignored for dynamic routing
-        /*my_dev_id*/ 0,            // ignored by dynamic route
-        /*dst_dev_id*/ dst_dev_id,
-        /*dst_mesh_id*/ dst_mesh_id,
-        /*ew_dim*/ 0);
+    transmit_config config;
+    if (mcast_mode) {
+        config.mcast.distance = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
+        config.mcast.range = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
+    } else {
+        config.unicast.distance = static_cast<uint8_t>(get_arg_val<uint32_t>(arg_idx++));
+    }
 
-    // >>> ADD: show what we actually wrote into the mesh header
-    DPRINT << "[WR] send_type(write)=" << (uint32_t)header->noc_send_type << "\n";
-    dump_header_words(header, "[WR] header words after set");
+    // Get receiver NOC coordinates for global semaphore signaling
+    const uint32_t receiver_noc_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t receiver_noc_y = get_arg_val<uint32_t>(arg_idx++);
+
+    const InterleavedAddrGen<dest_is_dram> dest_addr_gen = {.bank_base_address = dest_addr, .page_size = page_size};
 
     sender.open<true>();
 
-    DPRINT << "[WR] open conn dst_dev=" << dst_dev_id << " dst_mesh=" << dst_mesh_id << " total_pages=" << TOTAL_PAGES
-           << "\n";
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
 
-    for (uint32_t i = 0; i < TOTAL_PAGES; ++i) {
-        cb_wait_front(CB_ID, 1);
-        const uint32_t src_l1_addr = get_read_ptr(CB_ID);
+    // We need to normalize all noc addresses to be for a consistent noc ID
+    // so the remote sender core can correctly send the packet. In the future
+    // we can decide if it's better for the noc index to be embedded in the packet
+    // header (for now we don't do that)
+    constexpr size_t NORMALIZED_NOC_INDEX = 0;
+
+    uint32_t buffer_index = 0;
+    cb_wait_front(cb_id_in0, 1);
+
+    auto* packet_header = PacketHeaderPool::allocate_header();
+    for (uint32_t p = 0; p < total_pages_to_send; p += num_pages_per_send) {
+        uint32_t pages_to_send = std::min<uint32_t>(num_pages_per_send, total_pages_to_send - p);
 
         sender.wait_for_empty_write_slot();
 
-        // Compute destination NOC address (DRAM interleaved vs L1 + XY)
-        uint64_t dest_noc_addr;
-        if (dst_is_dram) {
-            const InterleavedAddrGen<true> gen{.bank_base_address = dst_base, .page_size = PAGE_SIZE};
-            dest_noc_addr = get_noc_addr(/*page_idx=*/i, gen);  // uses this kernel’s NoC
+        cb_wait_front(cb_id_in0, pages_to_send);
+
+        // bit of a hack to extract X/Y
+        const auto dest_noc_address = get_noc_addr(p, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
+        auto payload_addr = get_read_ptr(cb_id_in0);
+        if constexpr (mcast_mode) {
+            packet_header
+                ->to_chip_multicast(
+                    tt::tt_fabric::MulticastRoutingCommandHeader{config.mcast.distance, config.mcast.range})
+                ->to_noc_unicast_write(
+                    tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         } else {
-            const uint32_t l1_off = dst_base + i * PAGE_SIZE;
-            dest_noc_addr = safe_get_noc_addr(rx_noc_x, rx_noc_y, l1_off);  // uses this kernel’s NoC
+            if (write_scatter_mode && pages_to_send == 2) {
+                uint64_t dest_noc_address2 = get_noc_addr(p + 1, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
+                packet_header->to_chip_unicast(config.unicast.distance)
+                    ->to_noc_unicast_scatter_write(
+                        tt::tt_fabric::NocUnicastScatterCommandHeader{
+                            {dest_noc_address, dest_noc_address2}, (uint16_t)page_size},
+                        (pages_to_send * page_size));
+            } else {
+                packet_header->to_chip_unicast(config.unicast.distance)
+                    ->to_noc_unicast_write(
+                        tt::tt_fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
+            }
         }
 
-        // Build the NOC header for this page
-        header->to_noc_unicast_write(NocUnicastCommandHeader{dest_noc_addr}, PAGE_SIZE);
+        sender.send_payload_without_header_non_blocking_from_address(payload_addr, pages_to_send * page_size);
+        sender.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 
-        DPRINT << "[WR] page " << i << " noc_lo=0x" << (uint32_t)(dest_noc_addr & 0xffffffffu) << " noc_hi=0x"
-               << (uint32_t)(dest_noc_addr >> 32) << " rx_xy=(" << rx_noc_x << "," << rx_noc_y << ")\n";
-
-        // >>> ADD: minimally confirm send_type after stamping write command
-        DPRINT << "[WR] send_type(write)=" << (uint32_t)header->noc_send_type << "\n";
-
-        // 1) send payload (no header)
-        sender.send_payload_without_header_non_blocking_from_address(src_l1_addr, PAGE_SIZE);
-        // 2) send header (completes the packet)
-        sender.send_payload_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
-
-        cb_pop_front(CB_ID, 1);
-        DPRINT << "[WR] page " << i << " sent\n";
+        noc_async_writes_flushed();
+        cb_pop_front(cb_id_in0, pages_to_send);
     }
 
-    noc_async_writes_flushed();
-
-    // Final signal: bump receiver semaphore so the receiver kernel exits
-    if (sem_l1_addr != 0) {
-        const uint64_t sem_noc = safe_get_noc_addr(rx_noc_x, rx_noc_y, sem_l1_addr);
-        uint32_t sem_lo = (uint32_t)(sem_noc & 0xffffffffull);
-        uint32_t sem_hi = (uint32_t)(sem_noc >> 32);
-
-        header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader(sem_noc, /*inc=*/1, /*width_bits=*/32));
-
-        // >>> ADD: confirm the sem-inc command & route still look right
-        DPRINT << "[WR] sem-inc dst noc_hi=0x" << sem_hi << " noc_lo=0x" << sem_lo << " rx_xy=(" << rx_noc_x << ","
-               << rx_noc_y << ")\n";
-        DPRINT << "[WR] send_type(seminc)=" << (uint32_t)header->noc_send_type << "\n";
-        dump_header_words(header, "[WR] header words before sem-inc send");
-
-        sender.wait_for_empty_write_slot();
-        sender.send_payload_flush_non_blocking_from_address((uint32_t)header, sizeof(PACKET_HEADER_TYPE));
-        DPRINT << "[WR] sem bump sent\n";
+    // Send completion signal to receiver on remote device
+    // Note: We no longer initialize or wait for the semaphore here
+    // The receiver will initialize and wait for it
+    // Compute the NOC address of the global semaphore on the receiver device
+    uint64_t last_message_semaphore_noc0_addr =
+        safe_get_noc_addr(receiver_noc_x, receiver_noc_y, (uint32_t)last_message_semaphore_address, 0);
+    if constexpr (!mcast_mode) {
+        packet_header->to_chip_unicast(config.unicast.distance);
+    } else {
+        packet_header->to_chip_unicast(config.mcast.distance + config.mcast.range - 1);
     }
-    DPRINT << "[WR] close conn\n";
+    packet_header->to_noc_unicast_atomic_inc(
+        tt::tt_fabric::NocUnicastAtomicIncCommandHeader(last_message_semaphore_noc0_addr, 1, 32));
+
+    sender.wait_for_empty_write_slot();
+    sender.send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+
     sender.close();
 }

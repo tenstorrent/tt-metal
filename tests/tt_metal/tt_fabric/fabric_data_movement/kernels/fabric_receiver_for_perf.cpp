@@ -1,40 +1,29 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"
 
-// CT (compile-time) args:
-//   none
-// RT (runtime) args:
-//   0: completion_sem_addr   (u32)  // L1 address of the global semaphore on receiver
-//   1: expected_value        (u32)  // e.g. number of pages, or just 1
-
+// Receiver worker kernel - waits for signal from sender that all data has been received
 void kernel_main() {
-    size_t idx = 0;
-    const uint32_t sem_addr = get_arg_val<uint32_t>(idx++);
-    const uint32_t expected_value = get_arg_val<uint32_t>(idx++);
+    // Runtime args
+    // For global semaphore, we get the address directly (not a semaphore ID)
+    volatile uint32_t* const completion_semaphore_address =
+        reinterpret_cast<volatile uint32_t* const>(get_arg_val<uint32_t>(0));
+    const uint32_t expected_num_signals = get_arg_val<uint32_t>(1);
 
-    volatile tt_l1_ptr uint32_t* sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
+    DPRINT << "receiver_signal_wait: Starting. Waiting for " << expected_num_signals
+           << " signals at global semaphore addr: " << (uint32_t)completion_semaphore_address << "\n";
 
-    const uint64_t expected_noc = safe_get_noc_addr(my_x[0], my_y[0], sem_addr);
+    // Wait for the sender to signal completion
+    noc_semaphore_wait(completion_semaphore_address, expected_num_signals);
 
-    uint32_t exp_lo = (uint32_t)(expected_noc & 0xffffffffull);
-    uint32_t exp_hi = (uint32_t)(expected_noc >> 32);
+    DPRINT << "receiver_signal_wait: Received completion signal. All data has been received.\n";
 
-    DPRINT << "[RX] wait sem=0x" << (uint32_t)sem_addr << " noc=0x" << (uint32_t)exp_hi << "_" << (uint32_t)exp_lo
-           << " expect=" << expected_value << " core=(" << (uint32_t)my_x[0] << "," << (uint32_t)my_y[0] << ")\n";
+    // Reset the global semaphore to 0 before exit for potential reuse
+    *completion_semaphore_address = 0;
 
-    /* Debug spam: prove prints are flowing from this BR core */
-    for (uint32_t i = 0; i < 1000; ++i) {
-        if ((i & 0x3F) == 0) {
-            DPRINT << "[RX] alive i=" << i << "\n";
-        }
-    }
-
-    noc_semaphore_wait(sem_ptr, expected_value);
-    DPRINT << "[RX] done; sem >= " << expected_value << "\n";
+    DPRINT << "receiver_signal_wait: Reset global semaphore to 0. Exiting.\n";
 }
