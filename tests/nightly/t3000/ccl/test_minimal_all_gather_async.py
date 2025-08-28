@@ -254,7 +254,7 @@ def run_all_gather_impl(
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
 )
-def test_all_gather_async_base(
+def test_all_gather_async(
     t3k_mesh_device,
     num_devices,
     ag_output_shape,
