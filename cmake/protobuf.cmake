@@ -26,21 +26,27 @@ function(GENERATE_PROTO_FILES PROTO_FILE)
     file(MAKE_DIRECTORY ${PROTO_GENERATED_DIR})
 
     set(GENERATED_CC ${PROTO_GENERATED_DIR}/${PROTO_FILE_NAME}.pb.cc)
-    set(GENERATED_H  ${PROTO_GENERATED_DIR}/${PROTO_FILE_NAME}.pb.h)
+    set(GENERATED_H ${PROTO_GENERATED_DIR}/${PROTO_FILE_NAME}.pb.h)
 
     add_custom_command(
-        OUTPUT ${GENERATED_CC} ${GENERATED_H}
-        COMMAND $<TARGET_FILE:protobuf::protoc>
-            --experimental_allow_proto3_optional
-            --cpp_out=${PROTO_GENERATED_DIR}
-            -I ${PROTO_DIR}
+        OUTPUT
+            ${GENERATED_CC}
+            ${GENERATED_H}
+        COMMAND
+            $<TARGET_FILE:protobuf::protoc> --experimental_allow_proto3_optional --cpp_out=${PROTO_GENERATED_DIR} -I
+            ${PROTO_DIR} ${PROTO_FILE}
+        DEPENDS
+            protobuf::protoc
             ${PROTO_FILE}
-        DEPENDS protobuf::protoc ${PROTO_FILE}
         VERBATIM
     )
 
     # Set the generated files in parent scope
-    set(PROTO_SRCS ${GENERATED_CC} ${GENERATED_H} PARENT_SCOPE)
+    set(PROTO_SRCS
+        ${GENERATED_CC}
+        ${GENERATED_H}
+        PARENT_SCOPE
+    )
 
     # Add to all_generated_files target if it exists
     if(TARGET all_generated_files)
