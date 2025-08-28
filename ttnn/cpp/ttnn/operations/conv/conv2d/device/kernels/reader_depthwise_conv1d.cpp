@@ -25,12 +25,12 @@ void kernel_main() {
     constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
 
     uint32_t i = 0;
-    uint32_t noop = get_arg_val<uint32_t>(i);
-    i += 1;
+    // uint32_t noop = get_arg_val<uint32_t>(i);
+    // i += 1;
 
-    if (noop) {
-        return;
-    }
+    // if (noop) {
+    //     return;
+    // }
 
     // LOOP TO FILL READER OFFSETS
     /* We can add another loop to read chunks of a stick as well.
