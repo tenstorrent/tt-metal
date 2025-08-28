@@ -145,8 +145,7 @@ class TtEfficientNet(torch.nn.Module):
         )
 
         self.features = torch.nn.Sequential(*layers)
-        # Using TTNN adaptive average pooling instead of fallback operation
-        self.output_size = (1, 1)
+        self.avgpool = fallback_ops.AdaptiveAvgPool2d(1)
 
         self.classifier_weight = torch2tt_tensor(
             state_dict["fc.weight" if is_lite else "classifier.1.weight"],
@@ -169,24 +168,9 @@ class TtEfficientNet(torch.nn.Module):
 
     def forward(self, x):
         x = self.features(x)
+        x = self.avgpool(x)
 
-        # Get input dimensions for TTNN adaptive pooling
-        batch, c, h, w = x.padded_shape
-
-        # Convert tensor format for TTNN adaptive pooling (expects NHWC format)
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.adaptive_avg_pool2d(
-            input_tensor=x,
-            batch_size=batch,
-            input_h=h,
-            input_w=w,
-            channels=c,
-            output_size=self.output_size,
-        )
-
-        # After adaptive pooling, output size is 1x1
-        out_h, out_w = self.output_size
-        last_shape = c * out_h * out_w
+        last_shape = x.padded_shape[-1] * x.padded_shape[-2] * x.padded_shape[-3]
         # ttnn.reshape_on_device won't work here since input tensor is of shape [1, n, 1, 1]
         x = fallback_ops.reshape(x, x.padded_shape[0], 1, 1, last_shape)
 

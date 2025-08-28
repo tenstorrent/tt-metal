@@ -5,6 +5,7 @@
 import torch
 import ttnn
 
+from tt_lib.fallback_ops import fallback_ops
 from models.experimental.efficientnet.tt.efficientnet_conv import TtEfficientnetConv2d
 
 
@@ -30,8 +31,7 @@ class TtEfficientnetSqueezeExcitation(torch.nn.Module):
     ):
         super().__init__()
 
-        # Using TTNN adaptive average pooling instead of fallback operation
-        self.output_size = (1, 1)
+        self.avgpool = fallback_ops.AdaptiveAvgPool2d(1)
 
         self.fc1 = TtEfficientnetConv2d(
             state_dict=state_dict,
@@ -55,19 +55,7 @@ class TtEfficientnetSqueezeExcitation(torch.nn.Module):
         self.scale_activation = ttnn.sigmoid
 
     def _scale(self, x):
-        # Get input dimensions for TTNN adaptive pooling
-        batch, c, h, w = x.padded_shape
-
-        # Convert tensor format for TTNN adaptive pooling (expects NHWC format)
-        scale = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        scale = ttnn.adaptive_avg_pool2d(
-            input_tensor=scale,
-            batch_size=batch,
-            input_h=h,
-            input_w=w,
-            channels=c,
-            output_size=self.output_size,
-        )
+        scale = self.avgpool(x)
         scale = self.fc1(scale)
         scale = self.activation(scale)
         scale = self.fc2(scale)
