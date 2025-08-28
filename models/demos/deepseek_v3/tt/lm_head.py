@@ -239,7 +239,6 @@ class LMHead(AbstractModule):
     def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL1D) -> ModelState:
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "mesh_scatter": {},
         }
 
     @classmethod
