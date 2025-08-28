@@ -10,25 +10,37 @@ function(GENERATE_PROTO_FILES PROTO_FILE)
 
     get_filename_component(PROTO_FILE_NAME ${PROTO_FILE} NAME_WE)
 
-    # Set default output directory if not specified
+    # Compute output directory; always generate into a 'protobuf' subfolder
     if(PROTO_ARGS_OUTPUT_DIR)
-        set(PROTO_GENERATED_DIR "${PROTO_ARGS_OUTPUT_DIR}")
+        set(PROTO_GENERATED_BASE "${PROTO_ARGS_OUTPUT_DIR}")
     else()
-        set(PROTO_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/protobuf")
+        set(PROTO_GENERATED_BASE "${CMAKE_CURRENT_BINARY_DIR}")
     endif()
+    set(PROTO_GENERATED_DIR "${PROTO_GENERATED_BASE}/protobuf")
 
-    # Generate protobuf files using the standard protobuf_generate function
-    protobuf_generate(
-        LANGUAGE cpp
-        OUT_VAR PROTO_SRCS
-        PROTOC_OPTIONS --experimental_allow_proto3_optional
-        PROTOS ${PROTO_FILE}
-        GENERATE_EXTENSIONS .pb.h .pb.cc
-        PROTOC_OUT_DIR ${PROTO_GENERATED_DIR}
+    # Generate protobuf files by invoking protoc directly. This avoids depending on
+    # the CMake-provided protobuf_generate() macro, which may be unavailable when
+    # using protobuf via CPM.
+    get_filename_component(PROTO_DIR ${PROTO_FILE} DIRECTORY)
+
+    file(MAKE_DIRECTORY ${PROTO_GENERATED_DIR})
+
+    set(GENERATED_CC ${PROTO_GENERATED_DIR}/${PROTO_FILE_NAME}.pb.cc)
+    set(GENERATED_H  ${PROTO_GENERATED_DIR}/${PROTO_FILE_NAME}.pb.h)
+
+    add_custom_command(
+        OUTPUT ${GENERATED_CC} ${GENERATED_H}
+        COMMAND $<TARGET_FILE:protobuf::protoc>
+            --experimental_allow_proto3_optional
+            --cpp_out=${PROTO_GENERATED_DIR}
+            -I ${PROTO_DIR}
+            ${PROTO_FILE}
+        DEPENDS protobuf::protoc ${PROTO_FILE}
+        VERBATIM
     )
 
     # Set the generated files in parent scope
-    set(PROTO_SRCS ${PROTO_SRCS} PARENT_SCOPE)
+    set(PROTO_SRCS ${GENERATED_CC} ${GENERATED_H} PARENT_SCOPE)
 
     # Add to all_generated_files target if it exists
     if(TARGET all_generated_files)

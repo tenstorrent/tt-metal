@@ -63,8 +63,6 @@ endforeach()
 target_sources(fabric PRIVATE ${GENERATED_FBS_HEADERS})
 
 # Include helper functions and generate headers from protobuf schemas
-#set(Protobuf_USE_STATIC_LIBS ON)
-find_package(Protobuf REQUIRED)
 include(protobuf)
 set(PROTO_SCHEMAS ${CMAKE_CURRENT_SOURCE_DIR}/protobuf/mesh_graph_descriptor.proto)
 
