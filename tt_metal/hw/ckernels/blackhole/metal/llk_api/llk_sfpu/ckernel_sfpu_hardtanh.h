@@ -6,12 +6,13 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 
 namespace ckernel::sfpu {
 
 // Hardtanh(x) = max_val if x > max_val, min_val if x < min_val, else x
 // Equivalent to: clamp(x, min_val, max_val) = min(max(x, min_val), max_val)
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_hardtanh(uint param0, uint param1) {
     // Load both params outside the loop for better performance
     // param0 = min_val -> LREG2, param1 = max_val -> LREG3

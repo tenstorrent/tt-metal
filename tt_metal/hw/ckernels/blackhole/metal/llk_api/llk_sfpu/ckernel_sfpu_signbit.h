@@ -5,13 +5,14 @@
 #pragma once
 
 #include "ckernel.h"
-#include "sfpi.h"
+#include "sfpi.h" 
+#include "llk_defs.h"
 using namespace sfpi;
 
 namespace ckernel::sfpu {
 
 // TODO: Implement using bitwise comparision
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_signbit() {
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat val = dst_reg[0];
@@ -24,7 +25,7 @@ inline void calculate_signbit() {
     }
 }
 
-template <bool APPROXIMATION_MODE, int ITERATIONS>
+template <ApproximationMode APPROX_MODE, int ITERATIONS>
 inline void calculate_signbit_int32() {
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, INT32, ADDR_MOD_7, 0);
