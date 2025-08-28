@@ -47,9 +47,6 @@ struct pair_hash {
     }
 };
 
-constexpr uint32_t TRACE_RISC_ID = 6;
-constexpr uint32_t ERISC_RISC_ID = 5;
-
 class FabricRoutingLookup;
 
 struct SyncInfo {
@@ -169,7 +166,7 @@ private:
         const std::string& op_name,
         chip_id_t device_id,
         const CoreCoord& physical_core,
-        int risc_num,
+        tracy::RiscType risc_type,
         uint64_t data,
         uint32_t timer_id,
         uint64_t timestamp);
@@ -202,8 +199,8 @@ public:
     // Number of bytes reserved in each DRAM bank for storing device profiling data
     uint32_t profile_buffer_bank_size_bytes{};
 
-    // Device markers grouped by (physical core, risc index)
-    std::map<CoreCoord, std::map<uint32_t, std::set<tracy::TTDeviceMarker>>> device_markers_per_core_risc_map;
+    // Device markers grouped by (physical core, risc type)
+    std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>> device_markers_per_core_risc_map;
 
     std::set<tracy::TTDeviceMarker> device_sync_markers;
 
@@ -263,7 +260,8 @@ public:
 // Thread safety warning: device_markers_per_core_risc_map MUST NOT be modified (no insertions, deletions, or rehashing)
 // while these references are in use, as this could invalidate the references and cause undefined behavior.
 std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
-    const std::map<CoreCoord, std::map<uint32_t, std::set<tracy::TTDeviceMarker>>>& device_markers_per_core_risc_map);
+    const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
+        device_markers_per_core_risc_map);
 
 bool useFastDispatch(IDevice* device);
 

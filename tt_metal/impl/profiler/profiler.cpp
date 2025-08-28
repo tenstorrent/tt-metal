@@ -54,23 +54,12 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 
 tracy::TTDeviceMarkerType get_marker_type_from_packet_type(kernel_profiler::PacketTypes packet_type) {
     switch (packet_type) {
-        case kernel_profiler::PacketTypes::ZONE_START: return tracy::TTDeviceMarkerType::START;
-        case kernel_profiler::PacketTypes::ZONE_END: return tracy::TTDeviceMarkerType::END;
-        case kernel_profiler::PacketTypes::ZONE_TOTAL: return tracy::TTDeviceMarkerType::TOTAL;
+        case kernel_profiler::PacketTypes::ZONE_START: return tracy::TTDeviceMarkerType::ZONE_START;
+        case kernel_profiler::PacketTypes::ZONE_END: return tracy::TTDeviceMarkerType::ZONE_END;
+        case kernel_profiler::PacketTypes::ZONE_TOTAL: return tracy::TTDeviceMarkerType::ZONE_TOTAL;
         case kernel_profiler::PacketTypes::TS_DATA: return tracy::TTDeviceMarkerType::TS_DATA;
         case kernel_profiler::PacketTypes::TS_EVENT: return tracy::TTDeviceMarkerType::TS_EVENT;
         default: TT_THROW("Invalid packet type");
-    }
-}
-
-kernel_profiler::PacketTypes get_packet_type_from_marker_type(tracy::TTDeviceMarkerType marker_type) {
-    switch (marker_type) {
-        case tracy::TTDeviceMarkerType::START: return kernel_profiler::PacketTypes::ZONE_START;
-        case tracy::TTDeviceMarkerType::END: return kernel_profiler::PacketTypes::ZONE_END;
-        case tracy::TTDeviceMarkerType::TOTAL: return kernel_profiler::PacketTypes::ZONE_TOTAL;
-        case tracy::TTDeviceMarkerType::TS_DATA: return kernel_profiler::PacketTypes::TS_DATA;
-        case tracy::TTDeviceMarkerType::TS_EVENT: return kernel_profiler::PacketTypes::TS_EVENT;
-        default: TT_THROW("Invalid marker type");
     }
 }
 
@@ -202,7 +191,8 @@ void mergeSortedDeviceMarkerChunks(
 }
 
 std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
-    const std::map<CoreCoord, std::map<uint32_t, std::set<tracy::TTDeviceMarker>>>& device_markers_per_core_risc_map) {
+    const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
+        device_markers_per_core_risc_map) {
     ZoneScoped;
 
     uint32_t total_num_markers = 0;
@@ -214,7 +204,7 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
         if (core == middle->first) {
             middle_index = total_num_markers;
         }
-        for (const auto& [risc, markers] : risc_map) {
+        for (const auto& [_, markers] : risc_map) {
             device_markers_chunk_offsets.push_back(total_num_markers);
             total_num_markers += markers.size();
         }
@@ -229,7 +219,7 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
     std::thread t([&device_markers_vec, &device_markers_per_core_risc_map, middle, middle_index]() {
         uint32_t i = middle_index;
         for (auto it = middle; it != device_markers_per_core_risc_map.end(); ++it) {
-            for (const auto& [risc, markers] : it->second) {
+            for (const auto& [_, markers] : it->second) {
                 for (const tracy::TTDeviceMarker& marker : markers) {
                     device_markers_vec[i] = std::cref(marker);
                     ++i;
@@ -240,7 +230,7 @@ std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDevice
 
     uint32_t i = 0;
     for (auto it = device_markers_per_core_risc_map.begin(); it != middle; ++it) {
-        for (const auto& [risc, markers] : it->second) {
+        for (const auto& [_, markers] : it->second) {
             for (const tracy::TTDeviceMarker& marker : markers) {
                 device_markers_vec[i] = std::cref(marker);
                 ++i;
@@ -301,8 +291,8 @@ CoreCoord getPhysicalAddressFromVirtual(chip_id_t device_id, const CoreCoord& c)
 }
 
 bool isMarkerAZoneEndpoint(const tracy::TTDeviceMarker& marker) {
-    return marker.marker_type == tracy::TTDeviceMarkerType::START ||
-           marker.marker_type == tracy::TTDeviceMarkerType::END;
+    return marker.marker_type == tracy::TTDeviceMarkerType::ZONE_START ||
+           marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END;
 }
 
 bool isMarkerATimestampedDatapoint(const tracy::TTDeviceMarker& marker) {
@@ -355,7 +345,7 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
     // Pass 1: separate out start/end zones and noc events from markers and group by runtime id
     for (const tracy::TTDeviceMarker& marker : device_markers) {
         if (isMarkerAZoneEndpoint(marker)) {
-            if ((tracy::riscName[marker.risc] == "BRISC" || tracy::riscName[marker.risc] == "NCRISC") &&
+            if ((marker.risc == tracy::RiscType::BRISC || marker.risc == tracy::RiscType::NCRISC) &&
                 (marker.marker_name.starts_with("TRUE-KERNEL-END") || marker.marker_name.ends_with("-KERNEL"))) {
                 markers_by_opname[marker.runtime_host_id].push_back(marker);
             }
@@ -367,8 +357,8 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
     // Pass 2: sort noc events in each opname group by x, y, proc, and then timestamp
     for (auto& [runtime_id, markers] : markers_by_opname) {
         std::sort(markers.begin(), markers.end(), [](const auto& a, const auto& b) {
-            return std::tie(a.core_x, a.core_y, tracy::riscName[a.risc], a.timestamp) <
-                   std::tie(b.core_x, b.core_y, tracy::riscName[b.risc], b.timestamp);
+            return std::tie(a.core_x, a.core_y, a.risc, a.timestamp) <
+                   std::tie(b.core_x, b.core_y, b.risc, b.timestamp);
         });
     }
 
@@ -380,7 +370,7 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
         for (tracy::TTDeviceMarker& marker : markers) {
             // if -KERNEL::begin event is found, reset the reference timestamp
             std::string zone = marker.marker_name;
-            if (zone.ends_with("-KERNEL") && marker.marker_type == tracy::TTDeviceMarkerType::START) {
+            if (zone.ends_with("-KERNEL") && marker.marker_type == tracy::TTDeviceMarkerType::ZONE_START) {
                 reference_timestamp = marker.timestamp;
             }
 
@@ -518,13 +508,14 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                 auto device_marker = std::get<tracy::TTDeviceMarker>(marker);
 
                 if (isMarkerAZoneEndpoint(device_marker)) {
-                    tracy::TTDeviceMarkerType zone_phase = (device_marker.marker_type == tracy::TTDeviceMarkerType::END)
-                                                               ? tracy::TTDeviceMarkerType::END
-                                                               : tracy::TTDeviceMarkerType::START;
+                    tracy::TTDeviceMarkerType zone_phase =
+                        (device_marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END)
+                            ? tracy::TTDeviceMarkerType::ZONE_END
+                            : tracy::TTDeviceMarkerType::ZONE_START;
                     json_events_by_opname[runtime_id].push_back(nlohmann::ordered_json{
                         {"run_host_id", device_marker.runtime_host_id},
                         {"op_name", device_marker.op_name},
-                        {"proc", tracy::riscName[device_marker.risc]},
+                        {"proc", enchantum::to_string(device_marker.risc)},
                         {"zone", device_marker.marker_name},
                         {"zone_phase", enchantum::to_string(zone_phase)},
                         {"sx", device_marker.core_x},
@@ -537,7 +528,7 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                     nlohmann::ordered_json data = {
                         {"run_host_id", device_marker.runtime_host_id},
                         {"op_name", device_marker.op_name},
-                        {"proc", tracy::riscName[device_marker.risc]},
+                        {"proc", enchantum::to_string(device_marker.risc)},
                         {"noc", enchantum::to_string(local_noc_event.noc_type)},
                         {"vc", int(local_noc_event.noc_vc)},
                         {"src_device_id", device_marker.chip_id},
@@ -624,7 +615,7 @@ std::unordered_map<RuntimeID, nlohmann::json::array_t> convertNocTracePacketsToJ
                 nlohmann::ordered_json fabric_event_json = {
                     {"run_host_id", local_noc_write_marker.runtime_host_id},
                     {"op_name", local_noc_write_marker.op_name},
-                    {"proc", tracy::riscName[local_noc_write_marker.risc]},
+                    {"proc", enchantum::to_string(local_noc_write_marker.risc)},
                     {"noc", enchantum::to_string(local_noc_write_event.noc_type)},
                     {"vc", int(local_noc_write_event.noc_vc)},
                     {"src_device_id", local_noc_write_marker.chip_id},
@@ -790,7 +781,8 @@ void writeCSVHeader(std::ofstream& log_file_ofs, tt::ARCH device_architecture, i
 }
 
 void dumpDeviceResultsToCSV(
-    const std::map<CoreCoord, std::map<uint32_t, std::set<tracy::TTDeviceMarker>>>& device_markers_per_core_risc_map,
+    const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
+        device_markers_per_core_risc_map,
     tt::ARCH device_arch,
     int device_core_frequency,
     const std::filesystem::path& log_path) {
@@ -826,13 +818,13 @@ void dumpDeviceResultsToCSV(
                     marker.chip_id,
                     marker.core_x,
                     marker.core_y,
-                    tracy::riscName[marker.risc],
-                    marker.marker_id & 0xFFFF,
+                    enchantum::to_string(marker.risc),
+                    marker.marker_id,
                     marker.timestamp,
                     marker.data,
                     marker.runtime_host_id,
                     marker.marker_name,
-                    enchantum::to_string(get_packet_type_from_marker_type(marker.marker_type)),
+                    enchantum::to_string(marker.marker_type),
                     marker.line,
                     marker.file,
                     meta_data_str);
@@ -1127,7 +1119,7 @@ void DeviceProfiler::readRiscProfilerResults(
         riscCount = 5;
     }
 
-    std::map<uint32_t, std::set<tracy::TTDeviceMarker>>& device_markers_for_core =
+    std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>& device_markers_for_core =
         device_markers_per_core_risc_map[phys_coord];
 
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
@@ -1136,13 +1128,13 @@ void DeviceProfiler::readRiscProfilerResults(
             // Just grab the device end index
             bufferEndIndex = control_buffer[riscEndIndex + kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER];
         }
-        uint32_t riscType;
+        tracy::RiscType riscType;
         if (rtoptions.get_profiler_trace_only() && CoreType == HalProgrammableCoreType::TENSIX) {
-            riscType = TRACE_RISC_ID;
+            riscType = tracy::RiscType::CORE_AGG;
         } else if (CoreType == HalProgrammableCoreType::TENSIX) {
-            riscType = riscEndIndex;
+            riscType = static_cast<tracy::RiscType>(riscEndIndex);
         } else {
-            riscType = ERISC_RISC_ID;
+            riscType = tracy::RiscType::ERISC;
         }
         if (bufferEndIndex > 0) {
             uint32_t bufferRiscShift = riscEndIndex * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC + startIndex;
@@ -1159,7 +1151,7 @@ void DeviceProfiler::readRiscProfilerResults(
                     device_id,
                     worker_core.x,
                     worker_core.y,
-                    tracy::riscName[riscEndIndex],
+                    enchantum::to_string(static_cast<tracy::RiscType>(riscEndIndex)),
                     bufferEndIndex);
                 TracyMessageC(warningMsg.c_str(), warningMsg.size(), tracy::Color::Tomato3);
                 log_warning(tt::LogMetal, "{}", warningMsg);
@@ -1325,7 +1317,7 @@ void DeviceProfiler::readDeviceMarkerData(
     const std::string& op_name,
     chip_id_t device_id,
     const CoreCoord& physical_core,
-    int risc_num,
+    tracy::RiscType risc_type,
     uint64_t data,
     uint32_t timer_id,
     uint64_t timestamp) {
@@ -1340,7 +1332,7 @@ void DeviceProfiler::readDeviceMarkerData(
         device_id,
         physical_core.x,
         physical_core.y,
-        risc_num,
+        risc_type,
         timer_id,
         timestamp,
         data,
@@ -1397,7 +1389,7 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
         if (isMarkerAZoneEndpoint(marker)) {
             if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only() &&
-                marker.risc == TRACE_RISC_ID) {
+                marker.risc == tracy::RiscType::CORE_AGG) {
                 if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
                         tracy::MarkerDetails::MarkerNameKeyword::BRISC_FW)] ||
                     marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
@@ -1435,16 +1427,16 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                 TT_FATAL(
                     !start_marker_stack.empty(),
                     "End marker {} found without a corresponding start marker",
-                    marker.marker_id & 0xFFFF);
+                    marker.marker_id);
 
                 const auto& start_marker_it = start_marker_stack.top();
 
                 if (!tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
                     TT_FATAL(
-                        (start_marker_it->marker_id & 0xFFFF) == (marker.marker_id & 0xFFFF),
+                        start_marker_it->marker_id == marker.marker_id,
                         "Start {} and end {} markers do not match",
-                        start_marker_it->marker_id & 0xFFFF,
-                        marker.marker_id & 0xFFFF);
+                        start_marker_it->marker_id,
+                        marker.marker_id);
 
                     if (start_marker_it->marker_name != marker.marker_name) {
                         marker.marker_name = start_marker_it->marker_name;
@@ -1464,13 +1456,13 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
         } else if (isMarkerATimestampedDatapoint(marker)) {
             if (!start_marker_stack.empty()) {
                 auto curr_zone_start_marker_it = start_marker_stack.top();
-                TT_ASSERT(curr_zone_start_marker_it->marker_type == tracy::TTDeviceMarkerType::START);
+                TT_ASSERT(curr_zone_start_marker_it->marker_type == tracy::TTDeviceMarkerType::ZONE_START);
 
                 // Check if we are in a Tensix Dispatch zone. If so, we could have gotten dispatch meta data packets
                 // These packets can amend parent zone's info
                 const tracy::MarkerDetails curr_zone_start_marker_details =
                     getMarkerDetails(curr_zone_start_marker_it->marker_id);
-                if ((tracy::riscName[marker.risc] == "BRISC" || tracy::riscName[marker.risc] == "NCRISC") &&
+                if ((marker.risc == tracy::RiscType::BRISC || marker.risc == tracy::RiscType::NCRISC) &&
                     curr_zone_start_marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
                         tracy::MarkerDetails::MarkerNameKeyword::DISPATCH)]) {
                     if (marker_details.marker_name_keyword_flags[static_cast<uint16_t>(
@@ -1498,7 +1490,7 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                     }
 
                     std::string new_marker_name = current_dispatch_meta_data.cmd_type;
-                    if (tracy::riscName[marker.risc] == "BRISC") {
+                    if (marker.risc == tracy::RiscType::BRISC) {
                         if (current_dispatch_meta_data.cmd_subtype != "") {
                             new_marker_name = fmt::format(
                                 "{}:{}",
@@ -1798,9 +1790,9 @@ void DeviceProfiler::pushTracyDeviceResults(
         const tracy::TTDeviceMarker& marker_to_push = marker_to_push_ref.get();
         std::pair<chip_id_t, CoreCoord> device_core = {
             marker_to_push.chip_id, (CoreCoord){marker_to_push.core_x, marker_to_push.core_y}};
-        if (marker_to_push.marker_type == tracy::TTDeviceMarkerType::START) {
+        if (marker_to_push.marker_type == tracy::TTDeviceMarkerType::ZONE_START) {
             TracyTTPushStartMarker(device_tracy_contexts[device_core], marker_to_push);
-        } else if (marker_to_push.marker_type == tracy::TTDeviceMarkerType::END) {
+        } else if (marker_to_push.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
             TracyTTPushEndMarker(device_tracy_contexts[device_core], marker_to_push);
         }
     }
