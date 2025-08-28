@@ -14,6 +14,7 @@ else
 fi
 
 # Run your environment creation script (adjust path as needed)
+export PYTHON_ENV_DIR="/work/python_env"
 ./create_venv.sh
 echo "Virtual environment created $PYTHON_ENV_DIR"
 
