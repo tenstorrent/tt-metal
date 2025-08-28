@@ -22,6 +22,91 @@ namespace tt {
 
 namespace tt_metal {
 
+// --- BankManager::Overlay impl ---
+void BankManager::Overlay::add(DeviceAddr start, DeviceAddr end) {
+    if (start >= end) {
+        return;
+    }
+    delta[start] += 1;
+    delta[end] -= 1;
+    if (delta[start] == 0) {
+        delta.erase(start);
+    }
+    if (delta[end] == 0) {
+        delta.erase(end);
+    }
+}
+
+void BankManager::Overlay::remove(DeviceAddr start, DeviceAddr end) {
+    if (start >= end) {
+        return;
+    }
+    delta[start] -= 1;
+    delta[end] += 1;
+    if (delta[start] == 0) {
+        delta.erase(start);
+    }
+    if (delta[end] == 0) {
+        delta.erase(end);
+    }
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::Overlay::occupied() const {
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> res;
+    int64_t acc = 0;
+    bool in_seg = false;
+    DeviceAddr seg_start = 0;
+    for (const auto& kv : delta) {
+        DeviceAddr x = kv.first;
+        int64_t next = acc + kv.second;
+        if (acc <= 0 && next > 0) {
+            seg_start = x;
+            in_seg = true;
+        } else if (acc > 0 && next <= 0) {
+            if (in_seg && seg_start < x) {
+                res.emplace_back(seg_start, x);
+            }
+            in_seg = false;
+        }
+        acc = next;
+    }
+    return res;
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::Overlay::subtract(
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& free_ranges) const {
+    auto occ = occupied();
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> out;
+    size_t j = 0;
+    for (const auto& fr : free_ranges) {
+        DeviceAddr fs = fr.first, fe = fr.second;
+        if (fs >= fe) {
+            continue;
+        }
+        while (j < occ.size() && occ[j].second <= fs) {
+            j++;
+        }
+        DeviceAddr cur = fs;
+        size_t jj = j;
+        while (jj < occ.size() && occ[jj].first < fe) {
+            DeviceAddr os = occ[jj].first, oe = occ[jj].second;
+            if (os > cur) {
+                out.emplace_back(cur, std::min(fe, os));
+            }
+            if (oe >= fe) {
+                cur = fe;
+                break;
+            }
+            cur = std::max(cur, oe);
+            jj++;
+        }
+        if (cur < fe) {
+            out.emplace_back(cur, fe);
+        }
+    }
+    return out;
+}
+
 // --- StateDependencies impl ---
 BankManager::StateDependencies::StateDependencies() : adjacency() {
     // Default: single state with no dependencies
