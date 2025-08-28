@@ -15,6 +15,7 @@ usage()
     echo "[--no-distributed]          Don't install distributed compute dependencies (OpenMPI)"
     echo "[--hugepages]               Install hugepages dependency"
     echo "[--sfpi]                    Install only SFPI package (minimal installation)"
+    echo "[--source-only]             Loads functions into shell"
     exit 1
 }
 
@@ -484,76 +485,82 @@ cleanup() {
     fi
 }
 
-# Alright, lets run some things!
+main() {
+    # Alright, lets run some things!
 
-if [ "$EUID" -ne 0 ]; then
-    echo "This script must be run as root. Please use sudo."
-    usage
-fi
+    if [ "$EUID" -ne 0 ]; then
+        echo "This script must be run as root. Please use sudo."
+        usage
+    fi
 
-VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
+    VERSION=`grep '^VERSION_ID=' /etc/os-release | awk -F= '{print $2}' | tr -d '"'`
 
-# Initialize OS detection and validation
-detect_os
+    # Initialize OS detection and validation
+    detect_os
 
-if ! is_supported_os; then
-    echo "Error: $OS_ID is not currently supported."
-    echo "Supported distributions: Ubuntu, Debian, Fedora, CentOS, RHEL, Rocky Linux, AlmaLinux"
-    exit 1
-fi
+    if ! is_supported_os; then
+        echo "Error: $OS_ID is not currently supported."
+        echo "Supported distributions: Ubuntu, Debian, Fedora, CentOS, RHEL, Rocky Linux, AlmaLinux"
+        exit 1
+    fi
 
-validate=0
-docker=0
-distributed=1
-hugepages=0
-sfpi_only=0
+    validate=0
+    docker=0
+    distributed=1
+    hugepages=0
+    sfpi_only=0
 
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --help|-h)
-            usage
-            ;;
-        --validate|-v)
-            validate=1
-            shift
-            ;;
-        --docker|-d)
-            docker=1
-            shift
-            ;;
-        --no-distributed)
-            distributed=0
-            shift
-            ;;
-        --hugepages)
-            hugepages=1
-            shift
-            ;;
-        --sfpi)
-            sfpi_only=1
-            shift
-            ;;
-        *)
-            echo "Unknown option: $1"
-            usage
-            ;;
-    esac
-done
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --help|-h)
+                usage
+                ;;
+            --validate|-v)
+                validate=1
+                shift
+                ;;
+            --docker|-d)
+                docker=1
+                shift
+                ;;
+            --no-distributed)
+                distributed=0
+                shift
+                ;;
+            --hugepages)
+                hugepages=1
+                shift
+                ;;
+            --sfpi)
+                sfpi_only=1
+                shift
+                ;;
+            *)
+                echo "Unknown option: $1"
+                usage
+                ;;
+        esac
+    done
 
-init_packages
+    init_packages
 
-if [ "$sfpi_only" -eq 1 ]; then
-    install_sfpi_only
-elif [ "$validate" -eq 1 ]; then
-    validate_packages
-else
-    install
-fi
+    if [ "$sfpi_only" -eq 1 ]; then
+        install_sfpi_only
+    elif [ "$validate" -eq 1 ]; then
+        validate_packages
+    else
+        install
+    fi
 
-cleanup
+    cleanup
 
-if [ "$sfpi_only" -eq 1 ]; then
-    echo "[INFO] SFPI installation completed successfully!"
-else
-    echo "[INFO] TT-Metalium dependencies installed successfully!"
+    if [ "$sfpi_only" -eq 1 ]; then
+        echo "[INFO] SFPI installation completed successfully!"
+    else
+        echo "[INFO] TT-Metalium dependencies installed successfully!"
+    fi
+}
+
+if [ "${1}" != "--source-only" ]; then
+    main "${@}"
 fi
