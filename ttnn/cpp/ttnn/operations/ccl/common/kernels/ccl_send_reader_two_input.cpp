@@ -13,7 +13,6 @@
 
 #include "ttnn/operations/ccl/common/kernels/command_processor.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 

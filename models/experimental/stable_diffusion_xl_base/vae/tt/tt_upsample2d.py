@@ -2,16 +2,16 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch.nn as nn
 import ttnn
 
+from models.common.lightweightmodule import LightweightModule
 from models.experimental.stable_diffusion_xl_base.tt.sdxl_utility import (
     prepare_conv_params,
 )
 from models.experimental.stable_diffusion_xl_base.vae.tt.vae_utility import get_DRAM_conv_config
 
 
-class TtUpsample2D(nn.Module):
+class TtUpsample2D(LightweightModule):
     def __init__(
         self,
         device,

@@ -180,12 +180,12 @@ tt::tt_metal::operation::MeshWorkloadWithCallbacks AllGatherAsync::create_mesh_w
 tt::tt_metal::operation::ProgramWithCallbacks AllGatherAsync::create_program_at(
     const MeshCoordinate& coord, const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     log_debug(tt::LogOp, "DEBUG: create_program_at is called");
-    auto mesh_device = input_tensors[0].mesh_device();
+    auto mesh_device = input_tensors[0].device();
     AllGatherAsyncVersion version = select_version(input_tensors[0]);
     IDevice* target_device = mesh_device ? mesh_device->get_device(coord) : input_tensors[0].device();
     std::vector<IDevice*> devices_to_use = {};
     if (this->cluster_axis.has_value()) {
-        const auto& mesh_view = input_tensors[0].mesh_device()->get_view();
+        const auto& mesh_view = input_tensors[0].device()->get_view();
         // User specified the cluster-axis. Derive devices based on the current coordinate
         // and the cluster-axis.
         devices_to_use = (this->cluster_axis.value() == 0) ? mesh_view.get_devices_on_column(coord[1])
@@ -292,6 +292,11 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
             this->output_mem_config,
             this->topology,
             this->cluster_axis,
+            this->sub_device_id.has_value(),
+            this->sub_device_id.has_value()
+                ? input_tensors[0].device()->worker_cores(
+                      tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+                : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
             input_shape,
             input_memory_layout,
             input_dtype,
@@ -305,6 +310,11 @@ tt::tt_metal::operation::Hash AllGatherAsync::compute_program_hash(const std::ve
         this->output_mem_config,
         this->topology,
         this->cluster_axis,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         this->barrier_semaphore.has_value(),
         this->using_persistent_buffers,
         this->chunks_per_sync,
@@ -399,7 +409,7 @@ Tensor all_gather_async_impl(
 
     uint32_t num_devices;
     if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.mesh_device();
+        auto mesh_device = input_tensor.device();
         TT_FATAL(mesh_device != nullptr, "Mesh device is required when cluster_axis is set");
         const auto& mesh_view = mesh_device->get_view();
         // Use the mesh dimensions to determine the ring size
