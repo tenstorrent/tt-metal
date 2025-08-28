@@ -47,7 +47,8 @@ public:
         std::unordered_map<StateId, tt::stl::SmallVector<StateId>, Hasher> adjacency{};
 
         StateDependencies();
-        explicit StateDependencies(const std::unordered_map<StateId, tt::stl::SmallVector<StateId>, Hasher>& deps);
+        explicit StateDependencies(
+            const std::unordered_map<StateId, tt::stl::SmallVector<StateId>, Hasher>& dependencies_map);
 
         uint32_t num_states() const;
     };
@@ -60,7 +61,6 @@ public:
         DeviceAddr alloc_offset = 0,
         bool disable_interleaved = false,
         const StateDependencies& dependencies = StateDependencies());
-    // Removed num_states-only ctor; use StateDependencies instead
     BankManager(
         const BufferType& buffer_type,
         const std::unordered_map<uint32_t, int64_t>& bank_id_to_descriptor,
@@ -70,14 +70,13 @@ public:
         DeviceAddr alloc_offset = 0,
         bool disable_interleaved = false,
         const StateDependencies& dependencies = StateDependencies());
-    // Removed num_states-only ctor; use StateDependencies instead
     BankManager&& operator=(BankManager&& that) noexcept;
     ~BankManager();
-    uint32_t num_banks(uint32_t state = 0) const;
+    uint32_t num_banks() const;
 
-    DeviceAddr bank_size(uint32_t state = 0) const;
+    DeviceAddr bank_size() const;
 
-    int64_t bank_offset(uint32_t bank_id, uint32_t state = 0) const;
+    int64_t bank_offset(uint32_t bank_id) const;
 
     DeviceAddr allocate_buffer(
         DeviceAddr size,
@@ -85,26 +84,30 @@ public:
         bool bottom_up,
         const CoreRangeSet& compute_grid,
         std::optional<uint32_t> num_shards,
-        uint32_t state = 0);
+        StateDependencies::StateId state = StateDependencies::StateId{0});
 
-    void deallocate_buffer(DeviceAddr address, uint32_t state = 0);
-    void deallocate_all(uint32_t state = 0);
+    void deallocate_buffer(DeviceAddr address, StateDependencies::StateId state = StateDependencies::StateId{0});
+    void deallocate_all(StateDependencies::StateId state = StateDependencies::StateId{0});
 
-    void clear(uint32_t state = 0);
+    void clear(StateDependencies::StateId state = StateDependencies::StateId{0});
 
-    std::optional<DeviceAddr> lowest_occupied_address(uint32_t bank_id, uint32_t state = 0) const;
+    std::optional<DeviceAddr> lowest_occupied_address(
+        uint32_t bank_id, StateDependencies::StateId state = StateDependencies::StateId{0}) const;
 
-    Statistics get_statistics(uint32_t state = 0) const;
+    Statistics get_statistics(StateDependencies::StateId state = StateDependencies::StateId{0}) const;
 
-    void dump_blocks(std::ofstream& out, uint32_t state = 0) const;
+    void dump_blocks(std::ofstream& out, StateDependencies::StateId state = StateDependencies::StateId{0}) const;
 
-    MemoryBlockTable get_memory_block_table(uint32_t state = 0) const;
+    MemoryBlockTable get_memory_block_table(StateDependencies::StateId state = StateDependencies::StateId{0}) const;
 
-    void shrink_size(DeviceAddr shrink_size, bool bottom_up = true, uint32_t state = 0);
-    void reset_size(uint32_t state = 0);
+    void shrink_size(
+        DeviceAddr shrink_size,
+        bool bottom_up = true,
+        StateDependencies::StateId state = StateDependencies::StateId{0});
+    void reset_size(StateDependencies::StateId state = StateDependencies::StateId{0});
 
 private:
-    void deallocate_buffer_(DeviceAddr address, uint32_t state);
+    void deallocate_buffer_(DeviceAddr address, StateDependencies::StateId state);
 
     // Dependencies between states (also encodes number of states)
     StateDependencies dependencies_{};
@@ -135,8 +138,8 @@ private:
     };
     std::vector<Overlay> overlays_{};
 
-    void validate_bank_id(uint32_t bank_id, uint32_t state) const;
-    void assert_valid_state(uint32_t state) const;
+    void validate_bank_id(uint32_t bank_id) const;
+    void assert_valid_state(StateDependencies::StateId state) const;
 
     void init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset, uint32_t state);
     static DeviceAddr align_up(DeviceAddr addr, DeviceAddr alignment) {

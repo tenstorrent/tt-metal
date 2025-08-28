@@ -235,15 +235,11 @@ BankManager::BankManager(
 
 // Removed num_states-only overload
 
-uint32_t BankManager::num_banks(uint32_t state) const {
-    this->assert_valid_state(state);
-    return bank_id_to_bank_offset_.size();
-}
+uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size(); }
 
-DeviceAddr BankManager::bank_size(uint32_t state) const {
-    this->assert_valid_state(state);
-    TT_ASSERT(bool(allocators_[state]), "Allocator not initialized!");
-    DeviceAddr max_size_bytes_u64 = allocators_[state]->max_size_bytes();
+DeviceAddr BankManager::bank_size() const {
+    TT_ASSERT(bool(allocators_[0]), "Allocator not initialized!");
+    DeviceAddr max_size_bytes_u64 = allocators_[0]->max_size_bytes();
     if (max_size_bytes_u64 > std::numeric_limits<DeviceAddr>::max()) {
         TT_THROW("Bank size {} overflows DeviceAddr", max_size_bytes_u64);
     }
@@ -251,13 +247,12 @@ DeviceAddr BankManager::bank_size(uint32_t state) const {
     return max_size_bytes;
 }
 
-int64_t BankManager::bank_offset(uint32_t bank_id, uint32_t state) const {
-    this->assert_valid_state(state);
-    this->validate_bank_id(bank_id, state);
+int64_t BankManager::bank_offset(uint32_t bank_id) const {
+    this->validate_bank_id(bank_id);
     return bank_id_to_bank_offset_.at(bank_id);
 }
 
-void BankManager::validate_bank_id(uint32_t bank_id, uint32_t state) const {
+void BankManager::validate_bank_id(uint32_t bank_id) const {
     TT_FATAL(
         bank_id_to_bank_offset_.find(bank_id) != bank_id_to_bank_offset_.end(),
         "Expected bank {} to be tracked!",
@@ -265,8 +260,12 @@ void BankManager::validate_bank_id(uint32_t bank_id, uint32_t state) const {
         bank_id_to_bank_offset_.size());
 }
 
-void BankManager::assert_valid_state(uint32_t state) const {
-    TT_FATAL(state < dependencies_.num_states(), "Invalid state {} (num_states={})", state, dependencies_.num_states());
+void BankManager::assert_valid_state(BankManager::StateDependencies::StateId state) const {
+    TT_FATAL(
+        state.value < dependencies_.num_states(),
+        "Invalid state {} (num_states={})",
+        state.value,
+        dependencies_.num_states());
 }
 
 uint64_t BankManager::allocate_buffer(
@@ -275,9 +274,9 @@ uint64_t BankManager::allocate_buffer(
     bool bottom_up,
     const CoreRangeSet& compute_grid,
     std::optional<uint32_t> num_shards,
-    uint32_t state) {
+    BankManager::StateDependencies::StateId state) {
     this->assert_valid_state(state);
-    uint32_t num_banks = this->num_banks(state);
+    uint32_t num_banks = this->num_banks();
     bool is_sharded = false;
     if (num_shards.has_value()) {
         auto num_compute_banks = compute_grid.num_cores();
@@ -295,13 +294,13 @@ uint64_t BankManager::allocate_buffer(
         address_limit = interleaved_address_limit_;
         TT_FATAL(address_limit > 0, "Address limit {} needs to be larger than zero.", address_limit);
     }
-    TT_ASSERT(bool(allocators_[state]), "Allocator not initialized!");
+    TT_ASSERT(bool(allocators_[state.value]), "Allocator not initialized!");
 
     // Compute candidate ranges from allocator and subtract overlay
-    auto free_local = allocators_[state]->available_addresses(size_per_bank);
+    auto free_local = allocators_[state.value]->available_addresses(size_per_bank);
     std::vector<std::pair<DeviceAddr, DeviceAddr>> free_abs;
     free_abs.reserve(free_local.size());
-    DeviceAddr base_off = allocator_offsets_[state];
+    DeviceAddr base_off = allocator_offsets_[state.value];
     for (auto r : free_local) {
         DeviceAddr s = r.first + base_off;
         DeviceAddr e = r.second + base_off;
@@ -312,7 +311,7 @@ uint64_t BankManager::allocate_buffer(
             free_abs.emplace_back(s, e);
         }
     }
-    auto allowed = overlays_[state].subtract(free_abs);
+    auto allowed = overlays_[state.value].subtract(free_abs);
 
     // Choose a start according to bottom_up
     std::optional<DeviceAddr> chosen;
@@ -346,14 +345,14 @@ uint64_t BankManager::allocate_buffer(
             size_per_bank);
     }
 
-    auto address = allocators_[state]->allocate_at_address(chosen.value(), size_per_bank);
+    auto address = allocators_[state.value]->allocate_at_address(chosen.value(), size_per_bank);
     if (!address.has_value()) {
         TT_THROW("Allocator failed to place at chosen address {}", chosen.value());
     }
 
     // Track allocation and update dependents' overlays
-    allocated_buffers_[state][address.value()] = size_per_bank;
-    auto dep_it = dependents_.find(state);
+    allocated_buffers_[state.value][address.value()] = size_per_bank;
+    auto dep_it = dependents_.find(state.value);
     if (dep_it != dependents_.end()) {
         for (auto y : dep_it->second) {
             overlays_[y].add(address.value(), address.value() + size_per_bank);
@@ -363,32 +362,32 @@ uint64_t BankManager::allocate_buffer(
     return address.value();
 }
 
-void BankManager::deallocate_buffer_(DeviceAddr address, uint32_t state) {
+void BankManager::deallocate_buffer_(DeviceAddr address, BankManager::StateDependencies::StateId state) {
     // Helper: update overlays and delegate to allocator
-    auto it = allocated_buffers_[state].find(address);
-    if (it != allocated_buffers_[state].end()) {
+    auto it = allocated_buffers_[state.value].find(address);
+    if (it != allocated_buffers_[state.value].end()) {
         DeviceAddr size_per_bank = it->second;
-        auto dep_it = dependents_.find(state);
+        auto dep_it = dependents_.find(state.value);
         if (dep_it != dependents_.end()) {
             for (auto y : dep_it->second) {
                 overlays_[y].remove(address, address + size_per_bank);
             }
         }
-        allocated_buffers_[state].erase(it);
+        allocated_buffers_[state.value].erase(it);
     }
-    allocators_[state]->deallocate(address);
+    allocators_[state.value]->deallocate(address);
 }
 
-void BankManager::deallocate_buffer(DeviceAddr address, uint32_t state) {
+void BankManager::deallocate_buffer(DeviceAddr address, BankManager::StateDependencies::StateId state) {
     this->assert_valid_state(state);
     this->deallocate_buffer_(address, state);
 }
 
-void BankManager::deallocate_all(uint32_t state) {
+void BankManager::deallocate_all(BankManager::StateDependencies::StateId state) {
     this->assert_valid_state(state);
     std::vector<DeviceAddr> addrs;
-    addrs.reserve(allocated_buffers_[state].size());
-    for (const auto& kv : allocated_buffers_[state]) {
+    addrs.reserve(allocated_buffers_[state.value].size());
+    for (const auto& kv : allocated_buffers_[state.value]) {
         addrs.push_back(kv.first);
     }
     for (DeviceAddr addr : addrs) {
@@ -396,10 +395,10 @@ void BankManager::deallocate_all(uint32_t state) {
     }
 }
 
-void BankManager::clear(uint32_t state) {
+void BankManager::clear(BankManager::StateDependencies::StateId state) {
     this->assert_valid_state(state);
-    if (allocators_[state]) {
-        allocators_[state]->clear();
+    if (allocators_[state.value]) {
+        allocators_[state.value]->clear();
     }
 }
 
@@ -427,52 +426,53 @@ BankManager&& BankManager::operator=(BankManager&& that) noexcept {
     return std::move(*this);
 }
 
-std::optional<DeviceAddr> BankManager::lowest_occupied_address(uint32_t bank_id, uint32_t state) const {
+std::optional<DeviceAddr> BankManager::lowest_occupied_address(
+    uint32_t bank_id, BankManager::StateDependencies::StateId state) const {
     this->assert_valid_state(state);
-    if (not allocators_[state]) {
+    if (not allocators_[state.value]) {
         return std::nullopt;
     }
-    auto lowest_address = allocators_[state]->lowest_occupied_address();
+    auto lowest_address = allocators_[state.value]->lowest_occupied_address();
     if (not lowest_address.has_value()) {
         return lowest_address;
     }
-    DeviceAddr adjusted_abs_addr = lowest_address.value() + this->bank_offset(bank_id, state);
+    DeviceAddr adjusted_abs_addr = lowest_address.value() + this->bank_offset(bank_id);
     return adjusted_abs_addr;
 }
 
-Statistics BankManager::get_statistics(uint32_t state) const {
+Statistics BankManager::get_statistics(BankManager::StateDependencies::StateId state) const {
     this->assert_valid_state(state);
-    return allocators_[state] ? allocators_[state]->get_statistics() : Statistics();
+    return allocators_[state.value] ? allocators_[state.value]->get_statistics() : Statistics();
 }
 
-void BankManager::dump_blocks(std::ofstream& out, uint32_t state) const {
+void BankManager::dump_blocks(std::ofstream& out, BankManager::StateDependencies::StateId state) const {
     this->assert_valid_state(state);
-    if (allocators_[state]) {
-        allocators_[state]->dump_blocks(out);
+    if (allocators_[state.value]) {
+        allocators_[state.value]->dump_blocks(out);
     }
 }
 
-MemoryBlockTable BankManager::get_memory_block_table(uint32_t state) const {
+MemoryBlockTable BankManager::get_memory_block_table(BankManager::StateDependencies::StateId state) const {
     this->assert_valid_state(state);
-    if (allocators_[state]) {
-        return allocators_[state]->get_memory_block_table();
+    if (allocators_[state.value]) {
+        return allocators_[state.value]->get_memory_block_table();
     }
 
     log_warning(tt::LogAlways, "allocator is not initialized, cannot get block table for memory");
     return {};
 }
 
-void BankManager::shrink_size(DeviceAddr shrink_size, bool bottom_up, uint32_t state) {
+void BankManager::shrink_size(DeviceAddr shrink_size, bool bottom_up, BankManager::StateDependencies::StateId state) {
     this->assert_valid_state(state);
-    if (allocators_[state]) {
-        allocators_[state]->shrink_size(shrink_size, bottom_up);
+    if (allocators_[state.value]) {
+        allocators_[state.value]->shrink_size(shrink_size, bottom_up);
     }
 }
 
-void BankManager::reset_size(uint32_t state) {
+void BankManager::reset_size(BankManager::StateDependencies::StateId state) {
     this->assert_valid_state(state);
-    if (allocators_[state]) {
-        allocators_[state]->reset_size();
+    if (allocators_[state.value]) {
+        allocators_[state.value]->reset_size();
     }
 }
 
