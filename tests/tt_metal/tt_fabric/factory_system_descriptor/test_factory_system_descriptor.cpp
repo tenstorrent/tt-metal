@@ -161,7 +161,7 @@ struct Warp100Connector : public LinearConnector {};
 
 struct Warp400Connector : public Connector<Warp400Connector> {
     static std::vector<AsicChannelPair> get_port_mapping(
-        std::vector<AsicChannel> start_channels, std::vector<AsicChannel> end_channels) {
+        const std::vector<AsicChannel>& start_channels, const std::vector<AsicChannel>& end_channels) {
         assert(start_channels.size() == end_channels.size());
         assert(start_channels.size() % 2 == 0);
         std::vector<AsicChannelPair> port_mapping;
@@ -179,7 +179,7 @@ struct Warp400Connector : public Connector<Warp400Connector> {
 };
 
 std::vector<AsicChannelPair> get_asic_channel_connections(
-    PortType port_type, std::vector<AsicChannel> start_channels, std::vector<AsicChannel> end_channels) {
+    PortType port_type, const std::vector<AsicChannel>& start_channels, const std::vector<AsicChannel>& end_channels) {
     switch (port_type) {
         case PortType::QSFP: return QSFPConnector::get_port_mapping(start_channels, end_channels);
         case PortType::WARP100: return Warp100Connector::get_port_mapping(start_channels, end_channels);
@@ -244,14 +244,14 @@ public:
         const tt::deployment::DeploymentDescriptor& deployment_descriptor,
         const std::map<uint32_t, std::map<uint32_t, uint32_t>>& host_ids_map_param) :
         host_ids_map(host_ids_map_param) {
+        // Store deployment hosts and populate hostname map
+        deployment_hosts.assign(deployment_descriptor.hosts().begin(), deployment_descriptor.hosts().end());
+
         // Build cluster with all connections and port validation
         build_cluster_from_descriptor(cluster_descriptor);
 
         // Populate the boards_by_host_tray map
         populate_boards_by_host_tray();
-
-        // Store deployment hosts and populate hostname map
-        deployment_hosts.assign(deployment_descriptor.hosts().begin(), deployment_descriptor.hosts().end());
 
         // Generate all logical chip connections
         generate_logical_chip_connections();
@@ -400,9 +400,24 @@ private:
         for (const auto& pod_item : superpod_descriptor.pods().pod()) {
             uint32_t pod_id = pod_item.pod_id();
             const std::string& pod_type = pod_item.pod_type();
+            uint32_t host_id = pod_host_ids.at(pod_id);
+
+            // Validate deployment pod type if specified
+            if (host_id < deployment_hosts.size()) {
+                const auto& deployment_host = deployment_hosts[host_id];
+                if (!deployment_host.pod_type().empty() && deployment_host.pod_type() != pod_type) {
+                    throw std::runtime_error(
+                        "Pod type mismatch for host " + deployment_host.host() + " (host_id " +
+                        std::to_string(host_id) + "): " + "deployment specifies '" + deployment_host.pod_type() + "' " +
+                        "but cluster configuration expects '" + pod_type + "'");
+                }
+            } else {
+                throw std::runtime_error("Host ID " + std::to_string(host_id) + " not found in deployment");
+            }
+
             auto pod_descriptor = load_descriptor_from_textproto<tt::fsd::proto::PodDescriptor>(
                 "tests/tt_metal/tt_fabric/factory_system_descriptor/cabling_descriptors/" + pod_type + ".textproto");
-            superpod.pods[pod_id] = build_pod(pod_descriptor, pod_host_ids.at(pod_id));
+            superpod.pods[pod_id] = build_pod(pod_descriptor, host_id);
         }
 
         // Add inter-pod connections and validate/mark ports
