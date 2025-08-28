@@ -331,6 +331,7 @@ struct Tanh {
 }  // namespace unary
 }  // namespace operations
 
+// NOLINTBEGIN(bugprone-macro-parentheses)
 #define REGISTER_UNARY_OPERATION(operation_name, operation_type) \
     constexpr auto operation_name = ttnn::register_operation<    \
         "ttnn::" #operation_name,                                \
@@ -378,6 +379,7 @@ struct Tanh {
         ttnn::operations::unary::ExecuteUnaryWithOptionalIntegerParameter<                                  \
             ttnn::operations::unary::UnaryOpType::operation_type,                                           \
             data_type>>();
+// NOLINTEND(bugprone-macro-parentheses)
 
 REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
