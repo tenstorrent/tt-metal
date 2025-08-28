@@ -214,11 +214,12 @@ class TtDeepLabV3PlusHead(nn.Module):
         y = stage["project_conv"](x)
         if debug_stage == "aspp_out":
             return y
-
+        y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
         # --- Subsequent Fusion Stages (e.g., 'res3', then 'res2') ---
         # We loop through the remaining, higher-resolution features.
 
         for i, f_key in enumerate(feature_keys[1:]):  # Start from the second feature
+            previous_y = y
             x = features[f_key]
             stage = self.decoder[f_key]
 
@@ -226,6 +227,7 @@ class TtDeepLabV3PlusHead(nn.Module):
             proj_x = stage["project_conv"](x)
             proj_x = stage["project_norm"](proj_x)
             proj_x = self.activation(proj_x)
+            proj_x = ttnn.to_memory_config(proj_x, ttnn.DRAM_MEMORY_CONFIG)
             if debug_stage == "proj_x_out":
                 return proj_x
 
@@ -241,28 +243,43 @@ class TtDeepLabV3PlusHead(nn.Module):
             y_upsampled = ttnn.to_memory_config(y_upsampled, ttnn.DRAM_MEMORY_CONFIG)
             y_upsampled = ttnn.to_layout(y_upsampled, ttnn.TILE_LAYOUT)
 
-            print("THIS IS Y_UPSAMPLED")
-            print(y_upsampled)
-
-            print("THIS IS PROJ_X")
-            print(proj_x)
+            # PRINT MEMORY CONFIGS AND SEE IF EVERYTHING IS IN DRAM TO FIX BANK MANAGER
+            print("THIS IS Y_UPSAMPLED MEMORY CONFIG")
+            print(y_upsampled.memory_config())
+            print("THIS IS PROJ_X MEMORY CONFIG")
+            print(proj_x.memory_config())
 
             if debug_stage == "upsample_out":
                 return y_upsampled
 
+            # proj_x.deallocate()
+            # proj_x_dram.deallocate()
+            # y_upsampled.deallocate()
+            # y_upsampled_dram.deallocate()
+            # previous_y.deallocate()
             # 3. Fuse the features by concatenating along the channel dimension (dim=3 for NHWC).
             y = ttnn.concat([proj_x, y_upsampled], dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if debug_stage == "concat_out":
                 return y
 
-            # 4. Apply the two 3x3 fuse convolutions, each followed by Norm and Activation.
-            y = stage["fuse_conv_0"](y)
-            y = stage["fuse_norm_0"](y)
-            y = self.activation(y)
+            # previous_y.deallocate()
+            proj_x.deallocate()
+            y_upsampled.deallocate()
 
-            y = stage["fuse_conv_1"](y)
+            y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
+
+            # 4. Apply the two 3x3 fuse convolutions, each followed by Norm and Activation.
+            # After each normalization and activation
+            y = stage["fuse_conv_0"](y)  # Input `y` is now gone
+            y = stage["fuse_norm_0"](y)
+            # Activation is fused, so no separate call.
+
+            y = stage["fuse_conv_1"](y)  # Input `y` is now gone
             y = stage["fuse_norm_1"](y)
-            y = self.activation(y)
+            # Activation is fused.
+
+            # 7. Convert the final result of the block back to DRAM for the next stage.
+            y = ttnn.to_memory_config(y, ttnn.DRAM_MEMORY_CONFIG)
 
             # 5. Check for debug hooks after each full fusion stage.
             # i=0 is the first fusion stage (e.g., 'res3')
