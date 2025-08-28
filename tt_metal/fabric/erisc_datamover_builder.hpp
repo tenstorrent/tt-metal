@@ -622,7 +622,8 @@ public:
 private:
     // Shared helper for setting up VC connections
     template <typename BuilderType>
-    void setup_downstream_vc_connection(BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id);
+    void setup_downstream_vc_connection(
+        BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1);
 };
 
 }  // namespace tt::tt_fabric
