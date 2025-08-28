@@ -124,7 +124,7 @@ void kernel_main() {
         // This issues a flush barrier
         if (shard_tile_id + num_tiles_to_read_this_core >= num_tiles_per_core ||
             tiles_read + num_tiles_to_read_this_core >= num_tiles_to_read) {
-            fused_write_atomic_and_advance_local_read_address_for_fabric_write(
+            l1_only_fused_write_atomic_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
                 pkt_hdr_forward,
                 pkt_hdr_backward,
@@ -137,7 +137,7 @@ void kernel_main() {
                 false);
             noc_async_writes_flushed();
         } else {
-            write_and_advance_local_read_address_for_fabric_write(
+            l1_only_write_and_advance_local_read_address_for_fabric_write(
                 noc0_dest_noc_addr,
                 pkt_hdr_forward,
                 pkt_hdr_backward,
