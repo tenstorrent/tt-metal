@@ -123,12 +123,6 @@ run_tg_falcon7b_tests() {
   fi
 }
 
-
-run_tg_sentence_bert_tests() {
-  # Sentence BERT demo test
-  pytest models/demos/tg/sentence_bert/demo/demo.py
-}
-
 run_tg_sd35_demo_tests() {
   fail=0
 
@@ -156,8 +150,6 @@ run_tg_demo_tests() {
     run_tg_llama3_70b_dp_tests
   elif [[ "$1" == "sd35" ]]; then
     run_tg_sd35_demo_tests
-  elif [[ "$1" == "sentence_bert" ]]; then
-    run_tg_sentence_bert_tests
   else
     echo "LOG_METAL: Unknown model type: $1"
     return 1

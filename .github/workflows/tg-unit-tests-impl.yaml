@@ -84,6 +84,7 @@ jobs:
           { name: "Galaxy DRAM Prefetcher unit tests", arch: wormhole_b0, model: prefetcher, timeout: 30, owner_id: U071CKL4AFK}, # Ammar Vora, Yu Gao
           { name: "Galaxy distributed ops tests", arch: wormhole_b0, model: distributed-ops, timeout: 15, owner_id: U044T8U8DEF},  # Johanna Rock
           { name: "Galaxy distributed runtime tests", arch: wormhole_b0, model: distributed-runtime, timeout: 45, owner_id: U03NG0A5ND7},  # Aditya Saigal
+          { name: "Galaxy Sentence Bert tests", arch: wormhole_b0, model: sentence-bert, timeout: 30, owner_id: U088413NP0Q},  # Ashai Reddy
         ]
     name: ${{ matrix.test-group.name }}
     runs-on:
