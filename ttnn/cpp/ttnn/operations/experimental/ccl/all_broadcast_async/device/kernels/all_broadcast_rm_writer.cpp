@@ -155,12 +155,6 @@ void kernel_main() {
                 l1_read_addr,
                 packet_size,
                 offset);
-            if constexpr (dynamic_alternate) {
-                std::swap(
-                    pkt_hdr_forward->routing_fields.value,
-                    pkt_hdr_backward->routing_fields
-                        .value);  // alternate the packet header distance for better balancing
-            }
             offset += packet_size;  // advance the noc address for the next packet
         }
         row_id++;
