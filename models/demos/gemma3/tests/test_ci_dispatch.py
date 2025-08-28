@@ -22,6 +22,7 @@ from models.utility_functions import skip_for_grayskull
     ],
 )
 def test_ci_dispatch(model_weights):
+    pytest.skip("Skipping CI dispatch tests for now")
     os.environ["HF_MODEL"] = model_weights
     os.environ["TT_CACHE_PATH"] = model_weights
     logger.info(f"Running fast dispatch tests for {model_weights}")

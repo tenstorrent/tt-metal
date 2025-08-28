@@ -24,7 +24,7 @@ from models.tt_transformers.tt.common import (
     num_to_core_range_set,
     rope_scaling_model_factory,
 )
-from models.tt_transformers.tt.load_checkpoints import (
+from models.demos.gemma3.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_meta_to_hf,
     convert_vision_hf_to_meta,
@@ -145,7 +145,7 @@ class ModelOptimizations:
         All models use bfp4 in FF1 and FF3 MLPs in this configuration
         """
         base_model_name = get_base_model_name(model_name)
-        if base_model_name == "Qwen2.5-7B":
+        if base_model_name in ["Qwen2.5-7B"]:
             logger.info(
                 f"Model {model_name} is degraded under standard high-performance settings, using BF16 attention and BFP8 MLP"
             )
@@ -239,7 +239,7 @@ class ModelOptimizations:
                 TensorGroup.WO: PrecisionSetting.BFP8,
                 TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
                 # Activation across whole model
-                TensorGroup.ACTIVATION: None,  # this signals that original dtype should be used
+                TensorGroup.ACTIVATION: None,
             },
             "OpFidelity": {
                 # MLP linear operators - BFP8 with FP16 accumulation to save L1
@@ -555,7 +555,8 @@ class ModelArgs:
         if max_prefill_chunk_size_div1024 is None:
             # TODO Improve this to be more general to more devices and models
             MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
-                "gemma-3-4b": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "Llama-3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128, "P150x4": 128},
@@ -590,7 +591,7 @@ class ModelArgs:
         self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
 
         if (
-            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-4b"]
+            self.base_model_name in ["Llama-3.1-8B", "Llama-3.2-11B", "Mistral-7B", "gemma-3-27b", "gemma-3-4b"]
             and self.device_name == "N150"
         ) or (self.base_model_name in ["Qwen2.5-7B"] and self.device_name == "N300"):
             logger.info(f"Reducing prefill_len_cutoff to 512 for {self.model_name} on {self.device_name}")
@@ -625,7 +626,6 @@ class ModelArgs:
         self.model_config.update({f"{key}_TILE": ttnn.TILE_LAYOUT for key in self.OP_KEYS if "LAYOUT" in key})
 
         self.tokenizer = None if dummy_weights else self.create_tokenizer()
-        self.processor = None if dummy_weights else self.create_processor()
 
         if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
@@ -872,8 +872,7 @@ class ModelArgs:
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    1,
-                    8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
+                    1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8)  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
                     self.qkv_size / self.cluster_shape[1] / 32 / dram_shard_grid_width
@@ -1250,7 +1249,7 @@ class ModelArgs:
 
             self.model_config["XATTN_KV_PREFILL_MEM_CFG"] = _get_xattn_kv_prefill_mem_cfg
 
-            if self.is_multimodal:
+            if self.is_vision():
                 self.VISION_MAX_MM_SEQ = (
                     self.vision_chunk_ntok if "gemma-3" in self.base_model_name else nearest_32(self.vision_chunk_ntok)
                 )
@@ -1275,6 +1274,10 @@ class ModelArgs:
                 ),
             )
 
+            self.model_config["LM_HEAD_OUTPUT_MEMCFG"] = (
+                ttnn.DRAM_MEMORY_CONFIG if "gemma-3" in self.model_name else ttnn.L1_MEMORY_CONFIG
+            )
+            self.lm_head_dtype = ttnn.bfloat16 if "gemma-3" in self.model_name else None
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1
@@ -1399,9 +1402,6 @@ class ModelArgs:
         else:
             return ""
 
-    def _get_vision_prefix(self):
-        return "visual."
-
     def _get_hidden_activation_type(self, config):
         activation_map = {
             "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, 0.0),
@@ -1453,6 +1453,7 @@ class ModelArgs:
         self.vocab_size = text_config["vocab_size"]
         self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
+        self.rope_local_theta = text_config.get("rope_local_base_freq", None)
         if is_hf:
             self.max_context_len = text_config.get("max_position_embeddings")
         else:
@@ -1528,11 +1529,27 @@ class ModelArgs:
         # Configurable MLP activation type
         self.mlp_activation_type = self._get_hidden_activation_type(text_config)
 
-        self._set_vision_params(config)
-        self.is_multimodal = "vision_config" in config or self.is_vision()
+        # Vision params (Meta-specific)
+        self.vision_chunk_size = config.get("vision_chunk_size", -1)
+        self.vision_max_num_chunks = config.get("vision_max_num_chunks", 4)
+        self.vision_num_cross_attention_layers = config.get("vision_num_cross_attention_layers", -1)
+
+        # Vision constants
+        # self.vision_dim = 1280
+        # self.vision_mlp_ratio = 4
+        # self.vision_hidden_dim = int(self.vision_dim * self.vision_mlp_ratio)
+        # self.vision_act_layer = ttnn.UnaryOpType.GELU
+        # self.vision_dropout = 0.0
+        # self.vision_attn_n_heads = 16
+        # self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
+        # self.vision_n_layers = 32
+        # self.vision_n_global_layers = 8
+        # self.vision_max_num_tiles = 4
+        # self.vision_patch_size = 14
+        # self.vision_in_channels = 3
 
         self.state_dict_text_prefix = self._get_text_prefix()
-        self.state_dict_vision_prefix = self._get_vision_prefix()
+        self.is_multimodal = "vision_config" in config or self.is_vision()
 
         self._set_model_specific_params()
 
@@ -1605,14 +1622,25 @@ class ModelArgs:
             else None
         )
 
-    def _set_vision_params(self, config):
-        vision_config = config.get("vision_config", config)
+    # def _set_vision_params(self, vision_config):
+    #     self.vision_dim = vision_config.get("hidden_size", 1280)
+    #     self.vision_mlp_ratio = vision_config.get("intermediate_size", self.vision_dim * 4) // self.vision_dim
+    #     self.vision_hidden_dim = vision_config.get("intermediate_size", self.vision_dim * self.vision_mlp_ratio)
+    #     self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
+    #     self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
+    #     self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
+    #     self.vision_patch_size = vision_config.get("patch_size", 14)
+    #     self.vision_in_channels = vision_config.get("num_channels", 3)
+    #     self.vision_act_layer = ttnn.UnaryOpType.GELU  # or read from config if variable
+    #     self.vision_dropout = vision_config.get("attention_dropout", 0.0)
+    #     self.vision_max_num_tiles = 4
+    #     self.vision_n_global_layers = 8
 
-        self.vision_chunk_size = vision_config.get("vision_chunk_size", -1)
-        self.image_size = vision_config.get("image_size", 896)
+    def _set_vision_params(self, vision_config):
+        self.vision_chunk_size = vision_config.get("vision_chunk_size", 896)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", 4)
-        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", -1)
-        self.vision_dim = vision_config.get("hidden_size", 1280)
+        self.vision_num_cross_attention_layers = vision_config.get("vision_num_cross_attention_layers", 8)
+        self.vision_dim = vision_config.get("hidden_size", 1152)
 
         intermediate_size = vision_config.get("intermediate_size", self.vision_dim * 4)
         self.vision_mlp_ratio = intermediate_size // self.vision_dim
@@ -1620,7 +1648,7 @@ class ModelArgs:
         self.vision_attn_n_heads = vision_config.get("num_attention_heads", 16)
         self.vision_head_dim = self.vision_dim // self.vision_attn_n_heads
 
-        self.vision_n_layers = vision_config.get("num_hidden_layers", 32)
+        self.vision_n_layers = vision_config.get("num_hidden_layers", 27)
         self.vision_patch_size = vision_config.get("patch_size", 14)
         self.vision_in_channels = vision_config.get("num_channels", 3)
 
@@ -1636,10 +1664,26 @@ class ModelArgs:
         }.get(act_layer, ttnn.UnaryOpType.GELU)
 
         # Optional tuning knobs
-        self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
+        # self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
         self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
 
+        # # Optional Meta-specific knobs
+        # self.vision_max_num_chunks = vision_config.get("max_num_chunks", 4)
+        # self.vision_num_cross_attention_layers = vision_config.get("num_cross_attention_layers", -1)
+
     def _set_hf_params(self, checkpoint_dir):
+        def merge_text_config(base_config):
+            text_config = base_config.get("text_config", {})
+            # Merge non-nested keys into text_config
+            text_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
+            return text_config
+
+        def merge_vision_config(base_config):
+            vision_config = base_config.get("vision_config", {})
+            # Merge non-nested keys into vision_config
+            vision_config.update({k: v for k, v in base_config.items() if k not in ["text_config", "vision_config"]})
+            return vision_config
+
         if self.from_hf_url:
             # Special case Qwen2.5-VL models until they are fully integrated into a HF release
             if "Qwen/Qwen2.5-VL" in self.model_name:
@@ -1651,16 +1695,30 @@ class ModelArgs:
                 logger.info(
                     f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
                 )
-                self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name]).to_dict()
             else:
-                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR)
-            config = self.hf_config.to_dict()
+                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
+
+            if "text_config" in self.hf_config or "vision_config" in self.hf_config:
+                if "gemma-3" in self.base_model_name:
+                    self._set_params_from_dict(self.hf_config, is_hf=True)
+                    if "vision_config" in self.hf_config:
+                        merged_vision_config = merge_vision_config(self.hf_config)
+                        self._set_vision_params(merged_vision_config)
+                else:
+                    merged_text_config = merge_text_config(self.hf_config)
+                    self._set_params_from_dict(merged_text_config, is_hf=True)
+                    if "vision_config" in self.hf_config:
+                        merged_vision_config = merge_vision_config(self.hf_config)
+                        self._set_vision_params(merged_vision_config)
+            else:
+                self._set_params_from_dict(self.hf_config, is_hf=True)
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
             with open(config_file, "r") as f:
                 config = json.load(f)
-        self._set_params_from_dict(config, is_hf=True)
+            self._set_params_from_dict(config, is_hf=True)
 
     def __repr__(self):
         return f"""ModelArgs(
@@ -1681,17 +1739,25 @@ class ModelArgs:
     vision_num_cross_attention_layers={self.vision_num_cross_attention_layers}
 )"""
 
-    # TODO: Rename to is_llama_vision
     def is_vision(self):
         return self.vision_chunk_size > 0
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
-        text_prefix = self.state_dict_text_prefix
-        vision_prefix = self.state_dict_vision_prefix
+        if "gemma-3" in self.model_name:
+            if is_vision:
+                text_prefix = "model.vision_tower.vision_model.encoder."
+
+            else:
+                # text_prefix = "model.language_model."
+
+                text_prefix = ""
+
+        else:
+            text_prefix = self.state_dict_text_prefix
 
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
 
-        text_module_map = {
+        module_map = {
             "MLP": "feed_forward",
             "Attention": "attention",
             "TransformerBlock": "",
@@ -1705,10 +1771,9 @@ class ModelArgs:
             "": "",
         }
 
-        module_map = vision_module_map if is_vision else text_module_map
-        prefix = vision_prefix if is_vision else text_prefix
+        module_map = vision_module_map if is_vision else module_map
 
-        return prefix + layer_prefix + module_map[module_name]
+        return text_prefix + layer_prefix + module_map[module_name]
 
     def weight_cache_path(self, dtype):
         # Keep the weight cache separate for generative and instruct weights
@@ -1758,7 +1823,7 @@ class ModelArgs:
 
                 model = AutoModelForCausalLM.from_pretrained(
                     self.CKPT_DIR,
-                    torch_dtype="auto",
+                    torch_dtype="auto"
                     # Note that the default setting is torch.dtype.float32, but model weights are
                     # may come in any dtype. If the model's weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
                     # unnecessary cast.
@@ -1771,8 +1836,10 @@ class ModelArgs:
 
         if self.checkpoint_type == CheckpointType.HuggingFace:
             if self.is_multimodal:
-                state_dict = standardize_hf_keys_multimodal(state_dict)
-                state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+                if "gemma-3" in self.model_name:
+                    state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+                else:
+                    state_dict = standardize_hf_keys_multimodal(state_dict)
             else:
                 state_dict = standardize_hf_keys(state_dict)
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim)
@@ -2114,7 +2181,6 @@ class ModelArgs:
             # Mapping of base model names to their known tokenizer paths
             # These are the original models that have proper tokenizers
             base_model_tokenizer_mapping = {
-                "gemma-3-4b-it": "google/gemma-3-4b-it",
                 "Qwen2.5-0.5B": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
                 "Qwen2.5-1.5B": "Qwen/Qwen2.5-1.5B-Instruct",
                 "Qwen2.5-3B": "Qwen/Qwen2.5-3B-Instruct",
@@ -2190,19 +2256,6 @@ class ModelArgs:
                 tokenizer.stop_tokens = self.eos_token_id if self.eos_token_id is not None else [tokenizer.eos_token_id]
             return tokenizer
 
-    def create_processor(self):
-        processor = None
-        if self.checkpoint_type == CheckpointType.HuggingFace:
-            from transformers import AutoProcessor
-
-            try:
-                processor = AutoProcessor.from_pretrained(self.TOKENIZER_PATH)
-                logger.info(f"Successfully loaded processor from {self.TOKENIZER_PATH}")
-            except Exception as e:
-                logger.warning(f"Failed to load processor from {self.TOKENIZER_PATH}: {e}")
-
-        return processor
-
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
         if self.checkpoint_type == CheckpointType.Meta:
             if instruct:
@@ -2243,11 +2296,8 @@ class ModelArgs:
             # Special case Qwen2.5-VL models until they are fully integrated into a HF release
             if "Qwen/Qwen2.5-VL" in self.model_name:
                 from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                )
             else:
-                from transformers import AutoConfig, AutoModelForCausalLM
+                from transformers import AutoConfig, AutoModel
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
@@ -2255,22 +2305,16 @@ class ModelArgs:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+                model = AutoModel.from_config(config)
             else:
-                if "gemma-3" in self.model_name:
-                    from transformers import Gemma3ForConditionalGeneration
-
-                    model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR, device_map="auto")
-                    model = model
+                if self.cache_hf_flag and self.cached_hf_model is None:
+                    model = AutoModel.from_pretrained(self.CKPT_DIR)
+                    self.cached_hf_model = model
+                elif self.cache_hf_flag and self.cached_hf_model is not None:
+                    model = self.cached_hf_model
                 else:
-                    if self.cache_hf_flag and self.cached_hf_model is None:
-                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                        self.cached_hf_model = model
-                    elif self.cache_hf_flag and self.cached_hf_model is not None:
-                        model = self.cached_hf_model
-                    else:
-                        # No caching - load fresh each time
-                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
+                    # No caching - load fresh each time
+                    model = AutoModel.from_pretrained(self.CKPT_DIR)
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
                     model.model = model.language_model
@@ -2296,15 +2340,18 @@ class ModelArgs:
         # layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
         return layer
 
-    def reference_rms_norm(self):
+    def reference_rms_norm(self, i=0):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import RMSNorm
 
             return RMSNorm(self.dim, self.norm_eps)
         else:
             model = self.reference_transformer(wrap=False)
-            layer = model.model.norm
+            layer = model.model.layers[i].self_attn.q_norm
             layer._load_state_dict = layer.load_state_dict
+            import pdb
+
+            pdb.set_trace()
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
 
@@ -2439,20 +2486,22 @@ class ModelArgs:
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
 
-    def reference_decoder(self):
+    def reference_decoder(self, i=0):
         if self.checkpoint_type == CheckpointType.Meta:
             from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
 
-            return TransformerBlock(layer_id=0, args=self)
+            return TransformerBlock(layer_id=i, args=self)
         else:
             model = self.reference_transformer(wrap=False)
-            layer = model.model.layers[0]
-            model_name_env = os.getenv("HF_MODEL")
-            if hasattr(model.model, "rotary_emb_local"):
+            layer = model.model.layers[i]
+            rotary_emb = model.model.rotary_emb
+
+            if "gemma-3" in self.model_name:
                 rotary_emb_local = model.model.rotary_emb_local
+                wrapper = HfGemmaDecoderWrapper(layer, self.head_dim, rotary_emb, rotary_emb_local)
             else:
-                rotary_emb_local = None
-            wrapper = HfDecoderWrapper(layer, self.head_dim, model.model.rotary_emb, rotary_emb_local)
+                wrapper = HfDecoderWrapper(layer, self.head_dim, rotary_emb)
+
             return wrapper
 
     def reference_attention(self):
@@ -2463,7 +2512,7 @@ class ModelArgs:
         else:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[0].self_attn
-            use_position_embeddings = self.from_hf_url or layer.__class__.__name__ in (
+            use_position_embeddings = layer.__class__.__name__ in (
                 "Qwen3Attention",
                 "MistralAttention",
                 "Gemma3Attention",
@@ -2632,14 +2681,17 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
-        position_embeddings = self.rotary_emb(x, position_ids)
+        model_name_env = os.getenv("HF_MODEL")
+        if "gemma-3" in model_name_env.lower():
+            position_embeddings = self.rotary_emb(x, position_ids)
+            position_embeddings_local = self.rotary_emb_local(x, position_ids)
+        else:
+            position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
-
         if self.rotary_emb_local is not None:
-            position_embeddings_local = self.rotary_emb_local(x, position_ids)
             result = self.decoder.forward(
                 x,
                 position_embeddings_global=position_embeddings,
@@ -2658,7 +2710,44 @@ class HfDecoderWrapper:
                 position_ids=position_ids,
                 attention_mask=mask,
             )
+        output = result[0]
+        return output
 
+    def __call__(self, *args, **kwargs):
+        return self.forward(*args, **kwargs)
+
+    def load_state_dict(self, state_dict):
+        return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim))
+
+
+class HfGemmaDecoderWrapper:
+    def __init__(self, decoder, head_dim, rotary_emb, rotary_emb_local):
+        from transformers import DynamicCache
+
+        self.decoder = decoder
+        self.head_dim = head_dim
+        self.rotary_emb = rotary_emb
+        self.rotary_emb_local = rotary_emb_local
+        self.past_key_values = DynamicCache()
+
+    def forward(self, x, start_pos, freqs_cis_i, mask=None):
+        position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+        # TODO: Generalize for other HF models
+
+        position_embeddings_global = self.rotary_emb(x, position_ids)
+        position_embeddings_local = self.rotary_emb_local(x, position_ids)
+        if mask is not None:
+            while len(mask.shape) < 4:
+                mask = mask.unsqueeze(0)
+        result = self.decoder.forward(
+            x,
+            position_embeddings_global=position_embeddings_global,
+            position_embeddings_local=position_embeddings_local,
+            past_key_value=self.past_key_values,
+            use_cache=True,
+            position_ids=position_ids,
+            attention_mask=mask,
+        )
         output = result[0]
         return output
 

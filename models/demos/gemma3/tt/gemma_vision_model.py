@@ -9,8 +9,8 @@ This involves vision followed by MultiModalProjector processing
 
 
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.multimodal.gemma.gemma_vision_block import TtSiglipGemmaVisionModel
-from models.tt_transformers.tt.multimodal.gemma.multi_modal_projector import TtGemma3MultiModalProjector
+from models.demos.gemma3.tt.gemma_vision_block import TtSiglipGemmaVisionModel
+from models.demos.gemma3.tt.multi_modal_projector import TtGemma3MultiModalProjector
 
 
 class TtGemmaTransformerVision(LightweightModule):
