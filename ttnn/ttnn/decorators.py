@@ -76,6 +76,7 @@ PRE_OPERATION_HOOKS = []
 set_current_command_queue_id = ttnn._ttnn.core.set_current_command_queue_id
 get_current_command_queue_id = ttnn._ttnn.core.get_current_command_queue_id
 
+
 @contextmanager
 def register_pre_operation_hook(hook):
     """
