@@ -6,13 +6,13 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-
+#include "llk_defs.h"
 using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp(uint exponent_size_8) {
     const vFloat zero = 0.0f;
     const vFloat one = 1.0f;
@@ -66,7 +66,7 @@ inline void calculate_comp(uint exponent_size_8) {
     }
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_int() {
     for (int d = 0; d < ITERATIONS; d++) {
         vInt v = dst_reg[0];
@@ -119,7 +119,7 @@ inline void calculate_comp_int() {
     }
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_uint16() {
     static_assert((COMP_MODE == SfpuType::equal_zero) or (COMP_MODE == SfpuType::not_equal_zero));
     constexpr int check = ((COMP_MODE == SfpuType::equal_zero) ? SFPSETCC_MOD1_LREG_EQ0 : SFPSETCC_MOD1_LREG_NE0);
@@ -171,7 +171,7 @@ inline void calculate_nez_uint32() {
     }
 }
 
-template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
 inline void calculate_comp_unary_int(int scalar) {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
