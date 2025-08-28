@@ -328,7 +328,16 @@ jobs:
           run_args: pytest -n auto models/experimental/efficientnetb0/tests/perf/ -m models_performance_bare_metal
         if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
       - name: Merge all the generated reports
-        run: env python3 models/perf/merge_perf_results.py
+        timeout-minutes: 10
+        uses: ./.github/actions/docker-run
+        with:
+          docker_image: ${{ inputs.docker-image }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: ${{ env.DOCKER_OPTS }}
+          run_args: |
+            # Merge all the generated reports
+            export PYTHONPATH=$(pwd) && env python3 models/perf/merge_perf_results.py CHECK
+        #run: export PYTHONPATH=$(pwd) && env python3 models/perf/merge_perf_results.py CHECK
         if: ${{ !cancelled() }}
       # - name: Run performance regressions
       #   timeout-minutes: ${{ matrix.test-info.timeout }}
