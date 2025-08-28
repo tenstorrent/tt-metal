@@ -10,6 +10,7 @@
     defined(COMPILE_FOR_IDLE_ERISC)
 #include "risc_common.h"
 #include "dataflow_api_addrgen.h"
+#include "accessor/tensor_accessor.h"
 #else
 #include "ckernel.h"
 #endif
