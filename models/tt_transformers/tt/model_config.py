@@ -27,6 +27,7 @@ from models.tt_transformers.tt.common import (
 )
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
+    convert_hf_to_meta_mllama,
     convert_meta_to_hf,
     convert_vision_hf_to_meta,
     convert_vision_meta_to_hf,
@@ -1445,7 +1446,7 @@ class ModelArgs:
 
     def _set_params_from_dict(self, config, is_hf=False):
         eos_token_id = config.get("eos_token_id", None)
-        self.image_token_index = config.get("image_token_index", 262144)
+        self.image_token_index = config.get("image_token_index", None)
 
         # Try to get text_config, if it doesn't exist everything is text config
         text_config = config.get("text_config", config)
@@ -1636,7 +1637,7 @@ class ModelArgs:
         vision_config = config.get("vision_config", config)
 
         self.vision_chunk_size = vision_config.get("vision_chunk_size", vision_config.get("image_size", -1))
-        self.image_size = vision_config.get("image_size", 896)
+        self.image_size = vision_config.get("image_size", -1)
         self.vision_max_num_chunks = vision_config.get("vision_max_num_chunks", vision_config.get("max_num_tiles", 4))
         self.vision_num_cross_attention_layers = vision_config.get(
             "vision_num_cross_attention_layers", vision_config.get("num_global_layers", -1)
@@ -1654,7 +1655,7 @@ class ModelArgs:
         self.vision_in_channels = vision_config.get("num_channels", 3)
 
         self.vision_dropout = vision_config.get("attention_dropout", 0.0)
-        self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", 256)
+        self.mm_tokens_per_image = vision_config.get("mm_tokens_per_image", config.get("mm_tokens_per_image", 256))
 
         # Optional vision activation layer, defaults to GELU
         act_layer = vision_config.get("act_layer", "gelu").lower()
@@ -1666,7 +1667,7 @@ class ModelArgs:
 
         # Optional tuning knobs
         self.vision_max_num_tiles = vision_config.get("max_num_tiles", 4)
-        self.vision_n_global_layers = vision_config.get("n_global_layers", 8)
+        self.vision_n_global_layers = vision_config.get("n_global_layers", vision_config.get("num_global_layers", 8))
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
@@ -1776,15 +1777,7 @@ class ModelArgs:
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
-                # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-                if "Qwen2.5-VL" in self.model_name:
-                    from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                        Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                    )
-
-                    print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
-                else:
-                    from transformers import AutoModelForCausalLM, AutoModelForVision2Seq
+                from transformers import AutoModelForCausalLM, AutoModelForVision2Seq
 
                 if self.is_vision():
                     model_cls = AutoModelForVision2Seq
@@ -1808,14 +1801,13 @@ class ModelArgs:
         if self.checkpoint_type == CheckpointType.HuggingFace:
             if self.is_multimodal:
                 state_dict = standardize_hf_keys_multimodal(state_dict)
-                state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
+                if "llama" in self.CKPT_DIR.lower():
+                    state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
+                else:
+                    state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
             else:
                 state_dict = standardize_hf_keys(state_dict)
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim)
-            # if self.is_multimodal and "llama" in self.CKPT_DIR.lower():
-            #     state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
-            # else:
-            #     state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -2149,7 +2141,7 @@ class ModelArgs:
             return Tokenizer(self.tokenizer_path)
         else:
             # Create a HuggingFace AutoTokenizer
-            from transformers import AutoProcessor
+            from transformers import AutoTokenizer
 
             # Mapping of base model names to their known tokenizer paths
             # These are the original models that have proper tokenizers
@@ -2178,7 +2170,7 @@ class ModelArgs:
             try:
                 # Try to load tokenizer from the original model path
                 # If there is no Processor, it will return Tokenizer (useful for multimodal models)
-                tokenizer = AutoProcessor.from_pretrained(
+                tokenizer = AutoTokenizer.from_pretrained(
                     self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
                 )
                 logger.info(f"Successfully loaded tokenizer from {self.TOKENIZER_PATH}")
@@ -2219,7 +2211,7 @@ class ModelArgs:
                 if fallback_tokenizer_path:
                     logger.info(f"Attempting to use fallback tokenizer: {fallback_tokenizer_path}")
                     try:
-                        tokenizer = AutoProcessor.from_pretrained(
+                        tokenizer = AutoTokenizer.from_pretrained(
                             fallback_tokenizer_path, local_files_only=os.getenv("CI") == "true"
                         )
                         logger.info(f"Successfully loaded fallback tokenizer from {fallback_tokenizer_path}")
@@ -2241,7 +2233,9 @@ class ModelArgs:
             from transformers import AutoProcessor
 
             try:
-                processor = AutoProcessor.from_pretrained(self.TOKENIZER_PATH)
+                processor = AutoProcessor.from_pretrained(
+                    self.TOKENIZER_PATH, local_files_only=os.getenv("CI") == "true"
+                )
                 logger.info(f"Successfully loaded processor from {self.TOKENIZER_PATH}")
             except Exception as e:
                 logger.warning(f"Failed to load processor from {self.TOKENIZER_PATH}: {e}")
@@ -2286,42 +2280,29 @@ class ModelArgs:
                 model.load_state_dict(self.load_state_dict())
             return model
         else:
-            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
-            if "Qwen/Qwen2.5-VL" in self.model_name:
-                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
-                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
-                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
-                )
-            else:
-                from transformers import AutoConfig, AutoModelForCausalLM
+            from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
+                config = AutoConfig.from_pretrained(
+                    self.LOCAL_HF_PARAMS[self.model_name], local_files_only=os.getenv("CI") == "true"
+                )
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
-                if "gemma-3" in self.model_name:
-                    from transformers import Gemma3ForConditionalGeneration
+                model_cls = AutoModelForVision2Seq if self.is_multimodal else AutoModelForCausalLM
 
-                    model = Gemma3ForConditionalGeneration.from_pretrained(
-                        self.CKPT_DIR, device_map="auto", local_files_only=os.getenv("CI") == "true"
-                    )
+                if self.cache_hf_flag and self.cached_hf_model is None:
+                    model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
+                    self.cached_hf_model = model
+                elif self.cache_hf_flag and self.cached_hf_model is not None:
+                    model = self.cached_hf_model
                 else:
-                    if self.cache_hf_flag and self.cached_hf_model is None:
-                        model = AutoModelForCausalLM.from_pretrained(
-                            self.CKPT_DIR, local_files_only=os.getenv("CI") == "true"
-                        )
-                        self.cached_hf_model = model
-                    elif self.cache_hf_flag and self.cached_hf_model is not None:
-                        model = self.cached_hf_model
-                    else:
-                        # No caching - load fresh each time
-                        model = AutoModelForCausalLM.from_pretrained(
-                            self.CKPT_DIR, local_files_only=os.getenv("CI") == "true"
-                        )
+                    # No caching - load fresh each time
+                    model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
+
                 # HACK: Assume that we want the language model layers only
                 if hasattr(model, "language_model"):
                     model.model = model.language_model
@@ -2361,7 +2342,7 @@ class ModelArgs:
 
     def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
         if self.checkpoint_type == CheckpointType.HuggingFace:
-            from transformers import AutoConfig, AutoModelForCausalLM
+            from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq
 
             if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
@@ -2369,18 +2350,15 @@ class ModelArgs:
                 config.num_hidden_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
-                if "gemma-3" in self.model_name:
-                    from transformers import Gemma3ForConditionalGeneration
+                model_cls = AutoModelForVision2Seq if self.is_multimodal else AutoModelForCausalLM
 
-                    model = Gemma3ForConditionalGeneration.from_pretrained(self.CKPT_DIR)
-                    model = model
+                if self.cached_hf_model is None:
+                    model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
+                    self.cached_hf_model = model
                 else:
-                    if self.cached_hf_model is None:
-                        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
-                        self.cached_hf_model = model
-                    else:
-                        model = self.cached_hf_model
-                    model.model.layers = model.model.layers[: self.n_layers]
+                    model = self.cached_hf_model
+                model.model.layers = model.model.layers[: self.n_layers]
+
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
                 return wrapper
