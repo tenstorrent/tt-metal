@@ -54,7 +54,7 @@ public:
     // Always sets the LSB to 1 to ensure the key is valid.
     Key(T idx, T ver) : value((idx << VERSION_BITS) | ver | 1) {
         // assert bit counts
-        assert(((idx << VERSION_BITS) & INDEX_MASK) == idx << VERSION_BITS);
+        assert(((idx << VERSION_BITS) & INDEX_MASK) == idx << VERSION_BITS);  // NOLINT(bugprone-assert-side-effect)
         assert((ver & VERSION_MASK) == ver);
     }
 
