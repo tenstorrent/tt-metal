@@ -2,6 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import glob
+import os
+import time
+
 import pytest
 from loguru import logger
 
@@ -62,3 +66,17 @@ def test_perf_device_bare_metal_sentence_bert_tg(batch_size, expected_perf, test
         expected_results=expected_results,
         comments=test.replace("/", "_"),
     )
+
+    today = time.strftime("%Y_%m_%d")
+    expected_filename = f"device_perf_ttnn_sentence_bert_tg_{batch_size}_{test.replace('/', '_')}_{today}.csv"
+    logger.info(f"Expected performance file: {expected_filename}")
+
+    # Check if file exists
+    if os.path.exists(expected_filename):
+        logger.info(f"Performance file created successfully: {expected_filename}")
+        logger.info(f"File size: {os.path.getsize(expected_filename)} bytes")
+    else:
+        logger.warning(f"Performance file not found: {expected_filename}")
+        # List all CSV files in current directory
+        csv_files = glob.glob("*.csv")
+        logger.info(f"Available CSV files: {csv_files}")
