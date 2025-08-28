@@ -1567,11 +1567,11 @@ size_t detail::ProgramImpl::num_kernels() const {
     return count;
 }
 
-const std::vector<std::shared_ptr<CircularBuffer>>& detail::ProgramImpl::circular_buffers() const {
+std::span<const std::shared_ptr<CircularBuffer>> detail::ProgramImpl::circular_buffers() const {
     return circular_buffers_;
 }
 
-const std::vector<std::shared_ptr<CircularBuffer>>& Program::circular_buffers() const {
+std::span<const std::shared_ptr<CircularBuffer>> Program::circular_buffers() const {
     return internal_->circular_buffers();
 }
 

@@ -192,7 +192,7 @@ public:
     Program::id_t get_runtime_id() const;
     Program::id_t get_id() const;
     std::size_t num_kernels() const;
-    const std::vector<std::shared_ptr<CircularBuffer>>& circular_buffers() const;
+    std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
     const std::vector<Semaphore>& semaphores() const;
     KernelGroup* kernels_on_core(const CoreCoord& core, uint32_t programmable_core_type_index);
     std::vector<std::shared_ptr<KernelGroup>>& get_kernel_groups(uint32_t programmable_core_type_index);

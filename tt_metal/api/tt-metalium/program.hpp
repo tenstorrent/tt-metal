@@ -6,7 +6,7 @@
 
 #include <cstdint>
 #include <memory>
-#include <vector>
+#include <span>
 
 #include <tt-metalium/kernel_types.hpp>
 
@@ -39,11 +39,10 @@ public:
 
     //////////////////////////////
     // ID related functions:
+    // These are often used in tracing and testing.
     //////////////////////////////
 
-    // Extensively used by tests
     void set_runtime_id(id_t id);
-    // Both used in tracing
     id_t get_id() const;
     id_t get_runtime_id() const;
 
@@ -52,16 +51,16 @@ public:
     //////////////////////////////
 
     // Used in ops.
-    const std::vector<std::shared_ptr<CircularBuffer>>& circular_buffers() const;
+    std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
 
     //////////////////////////////
     // Kernel related functions:
     //////////////////////////////
 
-    // Used in tests, fabric, CaptureCreateKernel, light metal, etc.
+    // Used in fabric, CaptureCreateKernel, light metal.
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
-    // debug/test/internal usage
+    // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }
     const detail::ProgramImpl& impl() const { return *internal_; }
 
