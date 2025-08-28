@@ -135,6 +135,10 @@ Tests:
     fabric_setup:
       topology: Mesh
       routing_type: Dynamic
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc]
+
     defaults:
       ftype: unicast
       ntype: unicast_write
