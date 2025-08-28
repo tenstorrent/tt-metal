@@ -6,6 +6,7 @@
 #include <core/ttnn_all_includes.hpp>
 #include <csignal>
 #include <cstdint>
+#include <numeric>
 #include <ttnn/distributed/create_socket.hpp>
 #include <ttnn/tensor/tensor.hpp>
 #include <wandbcpp.hpp>
@@ -29,6 +30,7 @@
 #include "optimizers/adamw.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
+#include "ttnn/operations/reduction/sampling/sampling.hpp"
 #include "utils.hpp"
 
 namespace {
@@ -279,6 +281,7 @@ void generate(
 
     // Prepare a padded buffer for the prompt
     std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, pad_token_id);
+    std::vector<float> padded_logits_vector(max_sequence_length, 0.0);
 
     fmt::print("Generated text:\n");
     fmt::print("*******************\n");
@@ -322,19 +325,47 @@ void generate(
         auto logits_ptr = output_vector.data() + offset;
 
         // Now we do advanced sampling from these logits
-        uint32_t next_token_id = sample_with_strategy(
-            std::span<float>(logits_ptr, original_vocab_size),
-            prompt_tokens,  // entire history for repetition penalty
-            temperature,
-            repetition_penalty,
-            top_k,
-            top_p);
+        // uint32_t next_token_id = sample_with_strategy(
+        // std::span<float>(logits_ptr, original_vocab_size), // logits_span
+        // prompt_tokens,  // history
+        //     temperature,
+        //     repetition_penalty,
+        //     top_k,
+        //     top_p);
+
+        std::copy(logits_ptr, logits_ptr + original_vocab_size, padded_logits_vector.begin());
+        std::fill(padded_logits_vector.begin() + original_vocab_size, padded_logits_vector.end(), 0.0);
+        auto input_idx_vector = std::vector<uint32_t>(padded_logits_vector.size());
+        std::iota(input_idx_vector.begin(), input_idx_vector.end(), 0);
+
+        auto logits_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+            padded_logits_vector, ttnn::Shape({1, 1, 1, 256}), device);
+
+        auto idx_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+            input_idx_vector, ttnn::Shape({1, 1, 1, 256}), device, ttnn::Layout::ROW_MAJOR);
+        auto repeats = ttnn::Shape({32, 1, 1, 1});
+        logits_tensor = ttnn::repeat(logits_tensor, repeats);
+        idx_tensor = ttnn::repeat(idx_tensor, repeats);
+
+        auto top_k_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+            std::vector<uint32_t>(32, top_k), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
+        auto top_p_tensor = ttml::core::from_vector<float, ttnn::DataType::BFLOAT16>(
+            std::vector<float>(32, top_p), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
+        auto temp_tensor = ttml::core::from_vector(
+            std::vector<float>(32, temperature), ttnn::Shape({32}), device, ttnn::Layout::ROW_MAJOR);
+
+        auto next_token_id = ttnn::sampling(
+            logits_tensor, idx_tensor, top_k_tensor, top_p_tensor, temp_tensor
+
+        );
+
+        auto next_token_vector = next_token_id.to_vector<uint32_t>();
 
         // Append the new token
-        prompt_tokens.push_back(next_token_id);
+        prompt_tokens.push_back(next_token_vector[0]);
 
         // Decode and print
-        fmt::print("{}", tokenizer.decode({next_token_id}));
+        fmt::print("{}", tokenizer.decode({next_token_id.item<uint32_t>()}));
 
         // Reset the autograd graph if needed
         ttml::autograd::ctx().reset_graph();
