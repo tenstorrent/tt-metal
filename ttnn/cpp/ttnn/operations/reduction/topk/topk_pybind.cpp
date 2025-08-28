@@ -93,16 +93,16 @@ void bind_reduction_topk_operation(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::CoreRangeSet>& sub_core_grids,
                const std::optional<ttnn::Tensor>& indices_tensor) {
-            return self(
-                input_tensor,
-                k,
-                dim,
-                largest,
-                sorted,
-                memory_config,
-                sub_core_grids,
-                indices_tensor,
-                optional_output_tensors);
+                return self(
+                    input_tensor,
+                    k,
+                    dim,
+                    largest,
+                    sorted,
+                    memory_config,
+                    sub_core_grids,
+                    indices_tensor,
+                    optional_output_tensors);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("k") = 32,
@@ -113,7 +113,7 @@ void bind_reduction_topk_operation(py::module& module) {
             py::arg("out") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("sub_core_grids") = std::nullopt,
-            py::arg("indices_tensor") = std::nullopt);
+            py::arg("indices_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::detail

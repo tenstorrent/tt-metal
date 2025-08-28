@@ -269,15 +269,15 @@ void bind_ternary_backward_optional_output(
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& input_a_grad,
                const std::optional<ttnn::Tensor>& input_b_grad) -> std::vector<std::optional<ttnn::Tensor>> {
-            return self(
-                grad_tensor,
-                input_tensor_a,
-                input_tensor_b,
-                input_tensor_c,
-                memory_config,
-                are_required_outputs,
-                input_a_grad,
-                input_b_grad);
+                return self(
+                    grad_tensor,
+                    input_tensor_a,
+                    input_tensor_b,
+                    input_tensor_c,
+                    memory_config,
+                    are_required_outputs,
+                    input_a_grad,
+                    input_b_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
@@ -287,7 +287,7 @@ void bind_ternary_backward_optional_output(
             py::arg("memory_config") = std::nullopt,
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
             py::arg("input_a_grad") = std::nullopt,
-            py::arg("input_b_grad") = std::nullopt);
+            py::arg("input_b_grad") = std::nullopt});
 }
 }  // namespace
 

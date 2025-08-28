@@ -67,10 +67,6 @@ concept HasInvoke = requires {
     { Op::invoke(std::declval<Args>()...) };
 };
 
-template <typename T, typename... Args>
-concept FirstArgIs =
-    sizeof...(Args) > 0 && std::same_as<std::decay_t<std::tuple_element_t<0, std::tuple<Args&&...>>>, T>;
-
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
     static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
@@ -86,30 +82,10 @@ struct registered_operation_t {
         return detail::python_fully_qualified_name(std::string{cpp_fully_qualified_name});
     }
 
-    // --- operator() Overloads ---
-
-    // (1) Overload when the first argument is a QueueId.
-    template <typename First, typename... Rest>
-        requires std::same_as<std::decay_t<First>, QueueId>
-    auto operator()(First&& first, Rest&&... rest) const {
-        return traced_invoke(std::forward<First>(first), std::forward<Rest>(rest)...);
-    }
-
-    // (2a) Overload when no QueueId is provided AND the operation is invocable without a QueueId.
     template <typename... Args>
-        requires(sizeof...(Args) == 0 || (!FirstArgIs<QueueId, Args...> && HasInvoke<operation_t, Args && ...>))
+        requires(HasInvoke<operation_t, Args && ...>)
     auto operator()(Args&&... args) const {
         return traced_invoke(std::forward<Args>(args)...);
-    }
-
-    // (2b) Overload when no QueueId is provided but the operation is NOT invocable without a QueueId,
-    // so we inject DefaultQueueId.
-    template <typename... Args>
-        requires(
-            sizeof...(Args) == 0 || (!FirstArgIs<QueueId, Args...> && !HasInvoke<operation_t, Args && ...> &&
-                                     HasInvoke<operation_t, QueueId, Args && ...>))
-    auto operator()(Args&&... args) const {
-        return traced_invoke(DefaultQueueId, std::forward<Args>(args)...);
     }
 
 private:
@@ -127,20 +103,14 @@ private:
 
     template <typename... args_t>
         requires PrimitiveOperationConcept<operation_t>
-    auto invoke(QueueId queue_id, args_t&&... args) const {
+    auto invoke(args_t&&... args) const {
         static_assert(
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement invoke() method to be invoked.");
         ZoneScopedN("Run primitive ttnn operation");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data), cpp_fully_qualified_name.size());
         auto [operation_attributes, tensors_args] = operation_t::invoke(std::forward<decltype(args)>(args)...);
-        return ttnn::device_operation::detail::invoke<operation_t>(queue_id, operation_attributes, tensors_args);
-    }
-
-    template <typename... args_t>
-        requires(PrimitiveOperationConcept<operation_t>)
-    auto invoke(args_t&&... args) const {
-        return invoke(DefaultQueueId, std::forward<args_t>(args)...);
+        return ttnn::device_operation::detail::invoke<operation_t>(operation_attributes, tensors_args);
     }
 
     template <typename... args_t>

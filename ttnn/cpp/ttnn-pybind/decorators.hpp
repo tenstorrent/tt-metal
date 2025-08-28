@@ -47,8 +47,8 @@ constexpr auto resolve_primitive_operation_call_method(F) {
     using traits = function_traits<F>;
 
     return []<typename TSelf, typename... TArgs>(arg_traits<TSelf, TArgs...>) {
-        return [](TSelf self, TArgs... args, QueueId queue_id) ->
-               typename traits::return_t { return self(queue_id, static_cast<decltype(args)&&>(args)...); };
+        return [](TSelf self, TArgs... args) ->
+               typename traits::return_t { return self(static_cast<decltype(args)&&>(args)...); };
     }(typename traits::arg_tuple{});
 }
 
@@ -86,11 +86,7 @@ template <
 void def_call_operator(py_operation_t& py_operation, const pybind_overload_t<function_t, py_args_t...>& overload) {
     std::apply(
         [&py_operation, &overload](auto... args) {
-            py_operation.def(
-                "__call__",
-                resolve_primitive_operation_call_method(overload.function),
-                args...,
-                py::arg("queue_id") = DefaultQueueId);
+            py_operation.def("__call__", resolve_primitive_operation_call_method(overload.function), args...);
         },
         overload.args.value);
 }

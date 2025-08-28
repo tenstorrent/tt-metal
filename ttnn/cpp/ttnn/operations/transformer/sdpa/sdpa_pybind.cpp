@@ -190,18 +190,18 @@ void py_bind_sdpa(py::module& module) {
                SDPAProgramConfig program_config,
                std::optional<float> scale,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-            auto outputs = self(
-                input_tensor_q,
-                input_tensor_k,
-                input_tensor_v,
-                joint_tensor_q,
-                joint_tensor_k,
-                joint_tensor_v,
-                joint_strategy,
-                program_config,
-                scale,
-                compute_kernel_config);
-            return outputs;
+                auto outputs = self(
+                    input_tensor_q,
+                    input_tensor_k,
+                    input_tensor_v,
+                    joint_tensor_q,
+                    joint_tensor_k,
+                    joint_tensor_v,
+                    joint_strategy,
+                    program_config,
+                    scale,
+                    compute_kernel_config);
+                return outputs;
             },
             py::arg("input_tensor_q").noconvert(),
             py::arg("input_tensor_k").noconvert(),
@@ -213,9 +213,9 @@ void py_bind_sdpa(py::module& module) {
             py::arg("joint_strategy"),
             py::arg("program_config").noconvert(),
             py::arg("scale").noconvert() = std::nullopt,
-            py::arg("compute_kernel_config").noconvert() = std::nullopt);
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 
-            auto ring_joint_doc = R"doc(
+    auto ring_joint_doc = R"doc(
         RingJointAttention operation that efficiently performs non-causal attention over two
         sets of query, key, and value tensors, where the first set is sharded across devices in the sequence dimension.
         Internally, these are concatenated in the sequence dimension (joint_strategy = "rear"),
@@ -260,7 +260,7 @@ void py_bind_sdpa(py::module& module) {
               - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L) x 1]
         )doc";
 
-            using RingJointOperationType = decltype(ttnn::transformer::ring_joint_scaled_dot_product_attention);
+    using RingJointOperationType = decltype(ttnn::transformer::ring_joint_scaled_dot_product_attention);
 
     ttnn::bind_registered_operation(
         module,
@@ -334,10 +334,10 @@ void py_bind_sdpa(py::module& module) {
             py::arg("mesh_device"),
             py::arg("topology"),
             py::arg("subdevice_id") = std::nullopt,
-            py::arg("ccl_core_grid_offset"));
+            py::arg("ccl_core_grid_offset")});
 
-            auto mla_doc =
-                R"doc(
+    auto mla_doc =
+        R"doc(
         Causal MLA attention."
 
         Accepts a `SDPAProgramConfig` which specifies the grid size and chunk tiles in the Q and K sequence lengths. The op parallelizes over `b`, `nqh`, and Q's `s` dimension.
@@ -361,46 +361,46 @@ void py_bind_sdpa(py::module& module) {
 
         )doc";
 
-            using MLAOperationType = decltype(ttnn::transformer::flash_mla_prefill);
-            ttnn::bind_registered_operation(
-                module,
-                ttnn::transformer::flash_mla_prefill,
-                mla_doc,
-                ttnn::pybind_overload_t{
-                    [](const MLAOperationType& self,
-                       const ttnn::Tensor& input_tensor_q,
-                       const ttnn::Tensor& input_tensor_k,
-                       const uint32_t head_dim_v,
-                       std::optional<ttnn::Tensor> attn_mask,
-                       bool is_causal,
-                       std::optional<float> scale,
-                       const std::optional<MemoryConfig>& memory_config,
-                       std::optional<SDPAProgramConfig> program_config,
-                       std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-                        return self(
-                            input_tensor_q,
-                            input_tensor_k,
-                            head_dim_v,
-                            attn_mask,
-                            is_causal,
-                            scale,
-                            memory_config,
-                            program_config,
-                            compute_kernel_config);
-                    },
-                    py::arg("input_tensor_q").noconvert(),
-                    py::arg("input_tensor_k").noconvert(),
-                    py::arg("head_dim_v").noconvert(),
-                    py::kw_only(),
-                    py::arg("attn_mask").noconvert() = std::nullopt,
-                    py::arg("is_causal").noconvert() = true,
-                    py::arg("scale").noconvert() = std::nullopt,
-                    py::arg("memory_config").noconvert() = std::nullopt,
-                    py::arg("program_config").noconvert() = std::nullopt,
-                    py::arg("compute_kernel_config").noconvert() = std::nullopt});
+    using MLAOperationType = decltype(ttnn::transformer::flash_mla_prefill);
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::transformer::flash_mla_prefill,
+        mla_doc,
+        ttnn::pybind_overload_t{
+            [](const MLAOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const uint32_t head_dim_v,
+               std::optional<ttnn::Tensor> attn_mask,
+               bool is_causal,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SDPAProgramConfig> program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+                return self(
+                    input_tensor_q,
+                    input_tensor_k,
+                    head_dim_v,
+                    attn_mask,
+                    is_causal,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            py::arg("input_tensor_q").noconvert(),
+            py::arg("input_tensor_k").noconvert(),
+            py::arg("head_dim_v").noconvert(),
+            py::kw_only(),
+            py::arg("attn_mask").noconvert() = std::nullopt,
+            py::arg("is_causal").noconvert() = true,
+            py::arg("scale").noconvert() = std::nullopt,
+            py::arg("memory_config").noconvert() = std::nullopt,
+            py::arg("program_config").noconvert() = std::nullopt,
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 
-            auto chunked_mla_doc =
-                R"doc(
+    auto chunked_mla_doc =
+        R"doc(
         Chunked causal scaled dot product attention for processing long sequences in chunks.
         This variant allows processing of sequences longer than the maximum supported length
         by splitting the input into chunks and maintaining KV cache state.
@@ -424,42 +424,42 @@ void py_bind_sdpa(py::module& module) {
 
         )doc";
 
-            using MLAChunkedOperationType = decltype(ttnn::transformer::chunked_flash_mla_prefill);
-            ttnn::bind_registered_operation(
-                module,
-                ttnn::transformer::chunked_flash_mla_prefill,
-                chunked_mla_doc,
-                ttnn::pybind_overload_t{
-                    [](const MLAChunkedOperationType& self,
-                       const ttnn::Tensor& input_tensor_q,
-                       const ttnn::Tensor& input_tensor_k,
-                       const uint32_t head_dim_v,
-                       const ttnn::Tensor& page_table_tensor,
-                       int64_t chunk_start_idx,
-                       std::optional<float> scale,
-                       const std::optional<MemoryConfig>& memory_config,
-                       std::optional<SDPAProgramConfig> program_config,
-                       std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-                        return self(
-                            input_tensor_q,
-                            input_tensor_k,
-                            head_dim_v,
-                            page_table_tensor,
-                            chunk_start_idx,
-                            scale,
-                            memory_config,
-                            program_config,
-                            compute_kernel_config);
-                    },
-                    py::arg("input_tensor_q").noconvert(),
-                    py::arg("input_tensor_k").noconvert(),
-                    py::arg("head_dim_v").noconvert(),
-                    py::arg("page_table_tensor").noconvert(),
-                    py::arg("chunk_start_idx"),
-                    py::kw_only(),
-                    py::arg("scale").noconvert() = std::nullopt,
-                    py::arg("memory_config").noconvert() = std::nullopt,
-                    py::arg("program_config").noconvert() = std::nullopt,
-                    py::arg("compute_kernel_config").noconvert() = std::nullopt});
+    using MLAChunkedOperationType = decltype(ttnn::transformer::chunked_flash_mla_prefill);
+    ttnn::bind_registered_operation(
+        module,
+        ttnn::transformer::chunked_flash_mla_prefill,
+        chunked_mla_doc,
+        ttnn::pybind_overload_t{
+            [](const MLAChunkedOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const uint32_t head_dim_v,
+               const ttnn::Tensor& page_table_tensor,
+               int64_t chunk_start_idx,
+               std::optional<float> scale,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SDPAProgramConfig> program_config,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+                return self(
+                    input_tensor_q,
+                    input_tensor_k,
+                    head_dim_v,
+                    page_table_tensor,
+                    chunk_start_idx,
+                    scale,
+                    memory_config,
+                    program_config,
+                    compute_kernel_config);
+            },
+            py::arg("input_tensor_q").noconvert(),
+            py::arg("input_tensor_k").noconvert(),
+            py::arg("head_dim_v").noconvert(),
+            py::arg("page_table_tensor").noconvert(),
+            py::arg("chunk_start_idx"),
+            py::kw_only(),
+            py::arg("scale").noconvert() = std::nullopt,
+            py::arg("memory_config").noconvert() = std::nullopt,
+            py::arg("program_config").noconvert() = std::nullopt,
+            py::arg("compute_kernel_config").noconvert() = std::nullopt});
 }
 }  // namespace ttnn::operations::transformer

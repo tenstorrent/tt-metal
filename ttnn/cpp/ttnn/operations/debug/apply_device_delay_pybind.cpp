@@ -44,8 +44,8 @@ void py_bind_apply_device_delay(py::module& module) {
     module.def(
         "apply_device_delay",
         [](MeshDevice& mesh_device,
-           const std::vector<std::vector<uint32_t>>& const delays
-               std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+           const std::vector<std::vector<uint32_t>>& delays,
+           std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
             ttnn::operations::debug::apply_device_delay(mesh_device, delays, subdevice_id);
         },
         py::arg("mesh_device"),

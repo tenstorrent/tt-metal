@@ -19,7 +19,7 @@
 namespace ttnn::operations::core {
 
 void py_module_types(py::module& module) {
-    py::enum_<ttnn::operations::compute_throttle_utils::ThrottleLevel>(module, "ThrottleLevel", R"doc(
+    py::enum_<compute_throttle_utils::ThrottleLevel>(module, "ThrottleLevel", R"doc(
         Enum for controlling compute throttling.
 
         Higher levels insert NOP instructions to reduce compute throughput:
@@ -31,12 +31,12 @@ void py_module_types(py::module& module) {
 
         Used to prevent di/dt (power supply current) issues on large core counts.
     )doc")
-        .value("NO_THROTTLE", ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
-        .value("LEVEL_1", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_1)
-        .value("LEVEL_2", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_2)
-        .value("LEVEL_3", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_3)
-        .value("LEVEL_4", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_4)
-        .value("LEVEL_5", ttnn::operations::compute_throttle_utils::ThrottleLevel::LEVEL_5);
+        .value("NO_THROTTLE", compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
+        .value("LEVEL_1", compute_throttle_utils::ThrottleLevel::LEVEL_1)
+        .value("LEVEL_2", compute_throttle_utils::ThrottleLevel::LEVEL_2)
+        .value("LEVEL_3", compute_throttle_utils::ThrottleLevel::LEVEL_3)
+        .value("LEVEL_4", compute_throttle_utils::ThrottleLevel::LEVEL_4)
+        .value("LEVEL_5", compute_throttle_utils::ThrottleLevel::LEVEL_5);
 
     py::class_<DeviceComputeKernelConfig>(module, "DeviceComputeKernelConfig");
 
@@ -60,7 +60,7 @@ void py_module_types(py::module& module) {
             py::arg("fp32_dest_acc_en") = false,
             py::arg("packer_l1_acc") = false,
             py::arg("dst_full_sync_en") = false,
-            py::arg("throttle_level") = ttnn::operations::compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
+            py::arg("throttle_level") = compute_throttle_utils::ThrottleLevel::NO_THROTTLE)
         .def_readwrite("math_fidelity", &WormholeComputeKernelConfig::math_fidelity)
         .def_readwrite("math_approx_mode", &WormholeComputeKernelConfig::math_approx_mode)
         .def_readwrite("fp32_dest_acc_en", &WormholeComputeKernelConfig::fp32_dest_acc_en)

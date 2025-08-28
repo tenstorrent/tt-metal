@@ -87,8 +87,8 @@ void bind_reduction_argmax_operation(py::module& module) {
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor> optional_output_tensor) {
-            return self(
-                input_tensor, dim, keepdim, sub_core_grids, use_multicore, memory_config, optional_output_tensor);
+                return self(
+                    input_tensor, dim, keepdim, sub_core_grids, use_multicore, memory_config, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim") = std::nullopt,
@@ -97,7 +97,7 @@ void bind_reduction_argmax_operation(py::module& module) {
             py::arg("sub_core_grids") = std::nullopt,
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt);
+            py::arg("output_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::detail

@@ -143,14 +143,14 @@ void bind_ternary_where(py::module& module, const ternary_operation_t& operation
                const std::variant<float, Tensor>& false_value,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> output_tensor) {
-            return self(predicate, true_value, false_value, memory_config, output_tensor);
+                return self(predicate, true_value, false_value, memory_config, output_tensor);
             },
             py::arg("predicate"),
             py::arg("true_value"),
             py::arg("false_value"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt);
+            py::arg("output_tensor") = std::nullopt});
 }
 
 template <typename ternary_operation_t>

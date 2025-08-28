@@ -72,15 +72,15 @@ void py_module(py::module& module) {
                const std::optional<const DataType> dtype,
                std::optional<ttnn::Tensor>& optional_output_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config) {
-            return self(
-                input_tensor,
-                weight,
-                padding_idx,
-                layout,
-                embeddings_type,
-                dtype,
-                memory_config,
-                optional_output_tensor);
+                return self(
+                    input_tensor,
+                    weight,
+                    padding_idx,
+                    layout,
+                    embeddings_type,
+                    dtype,
+                    memory_config,
+                    optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("weight").noconvert(),
@@ -90,7 +90,7 @@ void py_module(py::module& module) {
             py::arg("embeddings_type").noconvert() = EmbeddingsType::GENERIC,
             py::arg("dtype").noconvert() = std::nullopt,
             py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("memory_config") = std::nullopt);
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::embedding

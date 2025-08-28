@@ -100,22 +100,22 @@ void bind_max_pool2d_operation(py::module& module) {
                bool in_place_halo,
                bool deallocate_input,
                bool reallocate_halo_output) -> ttnn::Tensor {
-            return self(
-                input_tensor,
-                batch_size,
-                input_h,
-                input_w,
-                channels,
-                kernel_size,
-                stride,
-                padding,
-                dilation,
-                ceil_mode,
-                memory_config,
-                applied_shard_scheme,
-                in_place_halo,
-                deallocate_input,
-                reallocate_halo_output);
+                return self(
+                    input_tensor,
+                    batch_size,
+                    input_h,
+                    input_w,
+                    channels,
+                    kernel_size,
+                    stride,
+                    padding,
+                    dilation,
+                    ceil_mode,
+                    memory_config,
+                    applied_shard_scheme,
+                    in_place_halo,
+                    deallocate_input,
+                    reallocate_halo_output);
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
@@ -132,7 +132,7 @@ void bind_max_pool2d_operation(py::module& module) {
             py::arg("applied_shard_scheme") = std::nullopt,
             py::arg("in_place_halo") = false,
             py::arg("deallocate_input") = false,
-            py::arg("reallocate_halo_output") = true);
+            py::arg("reallocate_halo_output") = true});
 }
 
 void bind_avg_pool2d_operation(py::module& module) {

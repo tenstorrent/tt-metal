@@ -227,7 +227,7 @@ Tensors run_with_autoformat(
     const std::vector<Layout>& output_layouts,
     const OptionalConstTensors& optional_input_tensors,
     const std::vector<std::optional<FormatParams>>& optional_input_formatting,
-    const OptionalTensors& optional_output_tensors {
+    const OptionalTensors& optional_output_tensors) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     distributed::MeshDevice* device = detail::get_device(input_tensors, optional_input_tensors);

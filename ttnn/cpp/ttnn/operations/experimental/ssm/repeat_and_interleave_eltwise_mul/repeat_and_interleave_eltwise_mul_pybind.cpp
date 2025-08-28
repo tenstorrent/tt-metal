@@ -32,13 +32,14 @@ void bind_repeat_and_interleave_eltwise_mul(py::module& module) {
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<DataType> dtype,
                const std::optional<MathFidelity> math_fidelity) {
-            return self(a, b, memory_config, dtype, math_fidelity); },
+                return self(a, b, memory_config, dtype, math_fidelity);
+            },
             py::arg("a"),
             py::arg("b"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
-            py::arg("math_fidelity") = std::nullopt);
+            py::arg("math_fidelity") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::ssm::detail

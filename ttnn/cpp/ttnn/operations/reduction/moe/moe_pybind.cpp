@@ -87,7 +87,8 @@ void bind_reduction_moe_operation(py::module& module) {
                const uint16_t k,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor> optional_output_tensor) {
-            return self(input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, optional_output_tensor);
+                return self(
+                    input_tensor, expert_mask_tensor, topk_mask_tensor, k, memory_config, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("expert_mask_tensor").noconvert(),
@@ -95,7 +96,7 @@ void bind_reduction_moe_operation(py::module& module) {
             py::arg("k") = 32,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt);
+            py::arg("output_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::detail

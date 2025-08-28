@@ -102,6 +102,6 @@ void bind_batch_norm_operation(py::module& module) {
             py::arg("bias") = std::nullopt,
             py::arg("output") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("compute_kernel_config") = std::nullopt);
+            py::arg("compute_kernel_config") = std::nullopt});
 }
 }  // namespace ttnn::operations::normalization::detail

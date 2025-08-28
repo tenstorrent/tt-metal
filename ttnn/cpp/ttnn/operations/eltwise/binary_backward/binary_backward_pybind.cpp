@@ -175,7 +175,7 @@ void bind_binary_backward_concat(
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const std::optional<ttnn::Tensor>& other_grad, ) -> std::vector<std::optional<ttnn::Tensor>> {
+               const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
                     grad_tensor,
                     input_tensor_a,
@@ -278,9 +278,8 @@ void bind_binary_backward_addalpha(
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_a_grad,
-               const std::optional<ttnn::Tensor>& input_b_grad, ) -> std::vector<std::optional<ttnn::Tensor>> {
+               const std::optional<ttnn::Tensor>& input_b_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
-
                     grad_tensor,
                     input_tensor_a,
                     input_tensor_b,
@@ -316,7 +315,6 @@ void bind_binary_backward_bias_gelu(
     const std::string_view note = "") {
     auto doc = fmt::format(
         R"doc(
-
         {7}
 
         Args:
@@ -415,7 +413,6 @@ void bind_binary_backward_sub_alpha(
     const std::string_view supported_dtype = "BFLOAT16") {
     auto doc = fmt::format(
         R"doc(
-
         {5}
 
         Args:
@@ -475,9 +472,8 @@ void bind_binary_backward_sub_alpha(
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const std::optional<ttnn::Tensor>& other_grad, ) -> std::vector<std::optional<ttnn::Tensor>> {
+               const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
-
                     grad_tensor,
                     input_tensor,
                     other_tensor,
@@ -507,7 +503,6 @@ void bind_binary_backward_rsub(
     const std::string_view supported_dtype = "BFLOAT16") {
     auto doc = fmt::format(
         R"doc(
-
         {2}
 
         Args:
@@ -561,9 +556,8 @@ void bind_binary_backward_rsub(
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const std::optional<ttnn::Tensor>& other_grad, ) -> std::vector<std::optional<ttnn::Tensor>> {
+               const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
-
                     grad_tensor,
                     input_tensor,
                     other_tensor,
@@ -651,7 +645,7 @@ void bind_binary_bw_mul(
                const Tensor& input_tensor_a,
                const float scalar,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad, ) -> std::vector<std::optional<ttnn::Tensor>> {
+               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
@@ -671,9 +665,8 @@ void bind_binary_bw_mul(
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const std::optional<ttnn::Tensor>& other_grad, ) -> std::vector<std::optional<ttnn::Tensor>> {
+               const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
-
                     grad_tensor,
                     input_tensor,
                     other_tensor,
@@ -717,7 +710,6 @@ void bind_binary_bw(
     const std::string_view note = "") {
     auto doc = fmt::format(
         R"doc(
-
         {2}
         Supports broadcasting.
 
@@ -779,7 +771,7 @@ void bind_binary_bw(
                const Tensor& input_tensor_a,
                const float scalar,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad, ) -> std::vector<std::optional<ttnn::Tensor>> {
+               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
@@ -799,9 +791,8 @@ void bind_binary_bw(
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const std::optional<ttnn::Tensor>& other_grad, ) -> std::vector<std::optional<ttnn::Tensor>> {
+               const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
-
                     grad_tensor,
                     input_tensor,
                     other_tensor,
@@ -846,7 +837,6 @@ void bind_binary_bw_div(
     const std::string_view supported_dtype = "BFLOAT16") {
     auto doc = fmt::format(
         R"doc(
-
         {2}
 
         Args:
@@ -913,7 +903,7 @@ void bind_binary_bw_div(
                const float scalar,
                const std::optional<std::string> round_mode,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad, ) -> std::vector<std::optional<ttnn::Tensor>> {
+               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(grad_tensor, input_tensor_a, scalar, round_mode, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
@@ -935,9 +925,8 @@ void bind_binary_bw_div(
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const std::optional<ttnn::Tensor>& other_grad, ) -> std::vector<std::optional<ttnn::Tensor>> {
+               const std::optional<ttnn::Tensor>& other_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
-
                     grad_tensor,
                     input_tensor,
                     other_tensor,
@@ -983,7 +972,6 @@ void bind_binary_backward_overload(
     const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
-
         {2}
 
         Args:
@@ -1073,7 +1061,6 @@ void bind_binary_backward_assign(
     const std::string_view supported_dtype = "BFLOAT16") {
     auto doc = fmt::format(
         R"doc(
-
         {2}
 
         Args:
@@ -1127,7 +1114,7 @@ void bind_binary_backward_assign(
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& input_grad, ) -> std::vector<std::optional<ttnn::Tensor>> {
+               const std::optional<ttnn::Tensor>& input_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(grad_tensor, input_tensor, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
@@ -1146,9 +1133,8 @@ void bind_binary_backward_assign(
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_a_grad,
-               const std::optional<ttnn::Tensor>& input_b_grad, ) -> std::vector<std::optional<ttnn::Tensor>> {
+               const std::optional<ttnn::Tensor>& input_b_grad) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
-
                     grad_tensor,
                     input_tensor_a,
                     input_tensor_b,

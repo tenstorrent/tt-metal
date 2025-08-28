@@ -93,7 +93,7 @@ void bind_reduction_cumprod_operation(py::module& module) {
                const bool& reverse_order,
                std::optional<Tensor> optional_out,
                const std::optional<MemoryConfig>& memory_config) -> Tensor {
-            return self(input_tensor, dim, dtype, reverse_order, optional_out, memory_config);
+                return self(input_tensor, dim, dtype, reverse_order, optional_out, memory_config);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim"),
@@ -101,7 +101,7 @@ void bind_reduction_cumprod_operation(py::module& module) {
             py::arg("dtype") = std::nullopt,
             py::arg("reverse_order") = false,
             py::arg("out") = std::nullopt,
-            py::arg("memory_config") = std::nullopt);
+            py::arg("memory_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::accumulation::detail

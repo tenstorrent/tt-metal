@@ -233,16 +233,6 @@ struct FullLikeWith {
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
         return full_like_impl(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
     }
-
-    static Tensor invoke(
-        const Tensor& tensor,
-        const std::optional<DataType>& dtype = std::nullopt,
-        const std::optional<Layout>& layout = std::nullopt,
-        std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return full_like_impl(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
-    }
 };
 
 struct ZerosLike : FullLikeWith<0.0f> {};
@@ -319,42 +309,9 @@ struct Full {
             memory_config,
             optional_output_tensor);
     }
-
-    template <typename FillValueType>
-        requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
-    static Tensor invoke(
-        const ttnn::Shape& shape,
-        const FillValueType fill_value,
-        const std::optional<DataType>& dtype = std::nullopt,
-        const std::optional<Layout>& layout = std::nullopt,
-        std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return full_impl(
-            shape,
-            fill_value,
-            dtype,
-            layout,
-            device.has_value() ? &device->get() : nullptr,
-            memory_config,
-            optional_output_tensor);
-    }
 };
 
 struct FullLike {
-    template <typename FillValueType>
-        requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
-    static Tensor invoke(
-        const Tensor& tensor,
-        const FillValueType fill_value,
-        const std::optional<DataType>& dtype = std::nullopt,
-        const std::optional<Layout>& layout = std::nullopt,
-        std::optional<std::reference_wrapper<MeshDevice>> device = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return full_like_impl(tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
-    }
-
     template <typename FillValueType>
         requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
     static Tensor invoke(

@@ -147,8 +147,15 @@ void bind_reduction_sampling_operation(py::module& module) {
                const std::optional<uint32_t>& seed,
                const std::optional<CoreRangeSet>& sub_core_grids,
                std::optional<ttnn::Tensor> optional_output_tensor) {
-            return self(
-                input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, optional_output_tensor);
+                return self(
+                    input_values_tensor,
+                    input_indices_tensor,
+                    k,
+                    p,
+                    temp,
+                    seed,
+                    sub_core_grids,
+                    optional_output_tensor);
             },
             py::arg("input_values_tensor").noconvert(),
             py::arg("input_indices_tensor").noconvert(),
@@ -158,7 +165,7 @@ void bind_reduction_sampling_operation(py::module& module) {
             py::kw_only(),
             py::arg("seed").noconvert() = std::nullopt,
             py::arg("sub_core_grids") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt);
+            py::arg("output_tensor") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::reduction::detail

@@ -55,7 +55,8 @@ void bind_transpose(py::module& module) {
             py::arg("dim1"),
             py::arg("dim2"),
             py::kw_only(),
-            py::arg("memory_config") = std::nullopt py::arg("pad_value") = 0.0f,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("pad_value") = 0.0f,
         });
 }
 }  // namespace ttnn::operations::data_movement::detail

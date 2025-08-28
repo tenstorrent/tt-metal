@@ -50,12 +50,12 @@ void py_bind_broadcast_to(py::module& module) {
                const ttnn::Shape& output_shape,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-            return self(input, output_shape, memory_config, output_tensor);
+                return self(input, output_shape, memory_config, output_tensor);
             },
             py::arg("input"),
             py::arg("output_shape"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("output") = std::nullopt);
+            py::arg("output") = std::nullopt});
 }
 }  // namespace ttnn::operations::experimental::broadcast_to::detail
