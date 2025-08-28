@@ -927,7 +927,12 @@ void MetalContext::initialize_firmware(
     ZoneScoped;
 
     initialize_device_bank_to_noc_tables(device_id, core_type, virtual_core);
-    initialize_logical_to_translated_tables(device_id, core_type, virtual_core);
+
+    if (core_type == HalProgrammableCoreType::TENSIX) {
+        // Only need to generate logical to translated tables for Tensix cores, as only they run the firmware that
+        // requires it.
+        initialize_logical_to_translated_tables(device_id, core_type, virtual_core);
+    }
 
     uint32_t core_type_idx = hal_->get_programmable_core_type_index(core_type);
     uint32_t processor_class_count = hal_->get_processor_classes_count(core_type);
