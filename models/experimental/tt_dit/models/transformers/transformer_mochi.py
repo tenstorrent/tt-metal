@@ -386,7 +386,6 @@ class MochiTransformerBlock:
             1.0 + scale_mlp_11BD
         )
 
-        # TODO: Pass core_grid, compute_kernel_config for correctness check
         spatial_ff_1BND = self.ff(
             spatial_normed_1BND, core_grid=self.core_grid, compute_kernel_config=self.ff_compute_kernel_config
         )
