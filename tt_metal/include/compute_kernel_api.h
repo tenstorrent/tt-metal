@@ -585,10 +585,12 @@ ALWI void topk_tile_init() { MATH((llk_math_eltwise_unary_sfpu_topk_init<true>()
 
 // clang-format off
 /**
- * Performs MaxPool with indices algorithm on the data tile and index tile
- * that are pre-loaded in DST register. The DST register buffer must be in
- * acquired state via *acquire_dst* call. This call is blocking and is only
- * available on the compute engine.
+ * Performs column-wise MaxPool with indices algorithm on the data tile and index tile
+ * that are pre-loaded in DST register. The DST register buffer must be in acquired state
+ * via *acquire_dst* call. This call is blocking and is only available on the compute engine.
+ *
+ * The reduction outputs are placed in the first row of the data tile, and the indices of the
+ * max values are placed in the first row of the index tile.
  *
  * Only a reduction of 9 rows is supported at this time.
  *
