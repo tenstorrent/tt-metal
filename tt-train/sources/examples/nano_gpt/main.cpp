@@ -325,6 +325,7 @@ void generate(
         auto logits_ptr = output_vector.data() + offset;
 
         // Now we do advanced sampling from these logits
+
         // uint32_t next_token_id = sample_with_strategy(
         // std::span<float>(logits_ptr, original_vocab_size), // logits_span
         // prompt_tokens,  // history
@@ -334,7 +335,8 @@ void generate(
         //     top_p);
 
         std::copy(logits_ptr, logits_ptr + original_vocab_size, padded_logits_vector.begin());
-        std::fill(padded_logits_vector.begin() + original_vocab_size, padded_logits_vector.end(), 0.0);
+        float pad = *std::min_element(padded_logits_vector.begin(), padded_logits_vector.end()) - 1;
+        std::fill(padded_logits_vector.begin() + original_vocab_size, padded_logits_vector.end(), pad);
         auto input_idx_vector = std::vector<uint32_t>(padded_logits_vector.size());
         std::iota(input_idx_vector.begin(), input_idx_vector.end(), 0);
 
@@ -360,12 +362,20 @@ void generate(
         );
 
         auto next_token_vector = next_token_id.to_vector<uint32_t>();
+        uint32_t next_token = next_token_vector[0];
 
+        if (next_token >= original_vocab_size) {
+            // Handle out-of-vocabulary token
+            // next_token = tokenizer.unk_token_id();
+            next_token = 0;
+        }
         // Append the new token
-        prompt_tokens.push_back(next_token_vector[0]);
+        // prompt_tokens.push_back(next_token_vector[0]);
+        prompt_tokens.push_back(next_token);
 
         // Decode and print
-        fmt::print("{}", tokenizer.decode({next_token_id.item<uint32_t>()}));
+        // fmt::print("{}", tokenizer.decode({next_token_id.item<uint32_t>()}));
+        fmt::print("{}", tokenizer.decode({next_token}));
 
         // Reset the autograd graph if needed
         ttml::autograd::ctx().reset_graph();
