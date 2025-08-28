@@ -6,7 +6,7 @@ import pytest
 import ttnn
 
 from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
-from tests.ttnn.multidevice_perf_tests.sweep_all_gather_hyperparameters_T3K import get_max_chunks_per_sync
+from tests.ttnn.multidevice_perf_tests.sweep_all_gather_hyperparameters_t3000 import get_max_chunks_per_sync
 from models.utility_functions import skip_for_blackhole, skip_for_wormhole_b0
 
 

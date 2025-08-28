@@ -10,8 +10,8 @@ import time
 import pandas as pd
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf_detailed
-from tests.ttnn.multidevice_perf_tests.sweep_all_gather_hyperparameters_T3K import get_max_chunks_per_sync
-from tests.ttnn.multidevice_perf_tests.sweep_all_gather_hyperparameters_6U import (
+from tests.ttnn.multidevice_perf_tests.sweep_all_gather_hyperparameters_t3000 import (
+    get_max_chunks_per_sync,
     CONFIGS,
     CHUNKS_PER_SYNC,
     WORKERS_PER_LINK,
@@ -33,24 +33,20 @@ def test_all_gather_chunk_perf():
     rows = []
 
     subdir = "ag_perf"
-    file = f"pytest tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_6U.py"
+    num_links = 1
+    file = f"pytest tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_t3000.py"
 
     base_command = file + "::test_all_gather_chunks_per_sync"
 
     chunks_per_sync_list = CHUNKS_PER_SYNC
     num_workers_per_link_list = WORKERS_PER_LINK
-    topology_list = TOPOLOGY
+    topology_list = TOPOLOGY  # you may want to change this to ["linear"] or ["ring"] to run tests just for those.
     for topology in topology_list:
         for i, config in enumerate(CONFIGS):
-            ag_output_shape, cluster_axis, dim, num_links, layout, ag_input_dtype = config
+            num_devices, ag_output_shape, dim, layout, ag_input_dtype = config
             elements = total_elems(ag_output_shape)
             total_bytes = elements * 2
-            if cluster_axis == 0:
-                num_devices = 8
-            else:
-                num_devices = 4
             total_bytes_moved = total_bytes * ((num_devices - 1) / num_devices) / num_links
-
             data_size_bytes_gb = total_bytes / (10**9)
             data_size_bytes_mb = total_bytes / (10**6)
             data_moved_bytes_mb = total_bytes_moved / (10**6)
@@ -63,14 +59,9 @@ def test_all_gather_chunk_perf():
             best_num_workers_per_link = None
             for j, chunks_per_sync in enumerate(chunks_per_sync_list):
                 for k, num_workers_per_link in enumerate(num_workers_per_link_list):
-                    if chunks_per_sync == "MAX" and num_workers_per_link == 4:
-                        continue
-                    elif chunks_per_sync == 160 and num_workers_per_link == 1:
-                        continue
-
                     cols = ["DEVICE KERNEL"]
                     op_name = "AllGatherAsync"
-                    step_name = f"all_gather_chunk_perf_6U_{chunks_per_sync}_{num_workers_per_link}_{topology}_perf"
+                    step_name = f"all_gather_chunk_perf_T3K_{chunks_per_sync}_{num_workers_per_link}_{topology}_perf"
 
                     # Filter by both chunks_per_sync and shape
                     final_command = (
