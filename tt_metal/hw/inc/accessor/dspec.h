@@ -461,4 +461,16 @@ auto make_dspec_from_args(const Args& args) {
         Args::bank_coords_is_crta ? (uint16_t*)get_common_arg_addr(args.bank_coords_crta_offset()) : nullptr);
 }
 
+template <bool IsDram>
+auto make_interleaved_dspec() {
+    return DistributionSpec<
+        /*RankCT=*/0,
+        /*NumBanksCT=*/0,
+        /*TensorShapeWrapper=*/ArrayDynamicWrapper,
+        /*ShardShapeWrapper=*/ArrayDynamicWrapper,
+        /*BankCoordsWrapper=*/ArrayDynamicWrapper,
+        /*IsInterleaved=*/true,
+        IsDram>();
+}
+
 }  // namespace tensor_accessor

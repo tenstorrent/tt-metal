@@ -303,8 +303,10 @@ __attribute__((noinline)) void finish_profiler() {
             }
 
             if (do_noc) {
-                const InterleavedAddrGen<true> s = {
-                    .bank_base_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS], .page_size = pageSize};
+                auto s = TensorAccessor(
+                    tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+                    profiler_control_buffer[DRAM_PROFILER_ADDRESS],
+                    pageSize);
 
                 uint64_t dram_bank_dst_noc_addr =
                     s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
@@ -354,9 +356,10 @@ __attribute__((noinline)) void quick_push() {
         (HOST_BUFFER_END_INDEX_BR_ER + myRiscID) * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
         profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] * sizeof(uint32_t);
 
-    const InterleavedAddrGen<true> s = {
-        .bank_base_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS],
-        .page_size = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram};
+    const auto s = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+        profiler_control_buffer[DRAM_PROFILER_ADDRESS],
+        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram);
 
     uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
