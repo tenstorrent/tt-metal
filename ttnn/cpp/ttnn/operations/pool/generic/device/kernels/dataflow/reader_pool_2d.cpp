@@ -96,7 +96,16 @@ ALWI void read_window_with_top_left_index(
     constexpr uint32_t in_ntiles_c = in_c / TILE_WIDTH;
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (window_h * window_w) <= 16 && !last_tile_is_partial;
-    constexpr uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
+    uint32_t max_write_inc = wide_reduction ? MAX_BYTES_PER_REDUCTION : in_nbytes_leftover;
+#ifdef ARCH_BLACKHOLE
+    if constexpr (return_indices) {
+        static_assert(
+            MAX_TILES_PER_REDUCTION == 1, "MAX_TILES_PER_REDUCTION must be 1 for return indices ARCH_BLACKHOLE");
+        if (in_c <= FACE_WIDTH) {
+            max_write_inc = FACE_WIDTH * BYTES_PER_ELEM;
+        }
+    }
+#endif
 
     for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
         uint32_t read_bytes = in_nbytes_c;
@@ -117,6 +126,7 @@ ALWI void read_window_with_top_left_index(
                 const uint32_t stick_offset = ind + w_offset + h * dilation_h * in_w_padded;
                 const uint32_t read_offset =
                     in_l1_read_base_addr + (stick_offset * in_nbytes_c + c_i * MAX_BYTES_PER_REDUCTION);
+                // tt::data_movement::common::print_bf16_pages(get_noc_addr(read_offset), 8, 1);
                 noc_async_read_one_packet(get_noc_addr(read_offset), in_l1_write_addr, read_bytes * w_multiple);
                 // if compute is using tilize_reconfig we will only untilize the needed number of tiles rather
                 // than the entire MAX_TILES_PER_REDUCTION, thus we use a different offset for the write address
@@ -185,8 +195,10 @@ ALWI void read_window_with_top_left_index(
         }
         if constexpr (!is_large_kernel) {
             noc_async_read_barrier();
-            // DPRINT << "IN_CB " << ENDL();
-            // tt::data_movement::common::print_bf16_pages(get_read_ptr(in_cb_id), 32, 32);
+            // if (ind == 0) {
+            //     DPRINT << "IN_CB " << ENDL();
+            //     tt::data_movement::common::print_bf16_pages(get_read_ptr(in_cb_id), 32, 32);
+            // }
             cb_push_back(in_cb_id, 1);
             if constexpr (return_indices) {
                 // DPRINT << "IN_IDX_CB " << ENDL();

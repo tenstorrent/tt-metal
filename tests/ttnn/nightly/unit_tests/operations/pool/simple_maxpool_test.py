@@ -55,7 +55,6 @@ torch_input = torch.randn(tensor_shape, dtype=torch.bfloat16)
 #     for c in range(in_c):
 #         for h in range(in_h):
 #             for w in range(in_w):
-#                 coordinate_value = 1
 #                 torch_input[n, c, h, w] = 1
 
 ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
