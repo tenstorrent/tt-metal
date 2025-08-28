@@ -8,6 +8,8 @@ namespace ttnn::operations::experimental::detail {
 using namespace tt::constants;
 
 tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(
-    const Tensor& input, const std::optional<CoreRangeSet>& sub_core_grids);
+    const Tensor& input,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const std::optional<bool> skip_negative_entries);
 
 }  // namespace ttnn::operations::experimental::detail

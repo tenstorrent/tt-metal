@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
-
+#include <limits.h>
 #include "dataflow_api.h"
 
 void kernel_main() {
@@ -14,6 +14,7 @@ void kernel_main() {
     constexpr uint32_t stick_size = get_compile_time_arg_val(2);
     constexpr uint32_t W = get_compile_time_arg_val(3);
     constexpr uint32_t H = get_compile_time_arg_val(4);
+    constexpr bool skip_negative_entries = get_compile_time_arg_val(5);
 
     const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = stick_size};
 
@@ -27,9 +28,14 @@ void kernel_main() {
             noc_async_read_barrier();
         }
         for (uint32_t i = 0; i < W; i++) {
-            uint32_t val = stick[i];
-            stick[i] = val + 1;
-            // DPRINT << "val: " << val << ENDL();
+            int32_t val = stick[i];
+            if constexpr (skip_negative_entries) {
+                if (val < INT32_MAX) {
+                    stick[i] = val + 1;
+                }
+            } else {
+                stick[i] = val + 1;
+            }
         }
         if (src0_is_dram) {
             uint64_t dst_noc_addr = get_noc_addr(h, s0);
