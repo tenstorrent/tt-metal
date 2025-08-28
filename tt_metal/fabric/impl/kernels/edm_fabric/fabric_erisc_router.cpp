@@ -721,7 +721,10 @@ FORCE_INLINE void receiver_forward_packet(
         bool not_last_destination_device = cached_routing_fields.value != tt::tt_fabric::RoutingFields::LAST_MCAST_VAL;
         // disable when dprint enabled due to noc cmd buf usage of DPRINT
         if (not_last_destination_device) {
-            forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
+            forward_payload_to_downstream_edm<
+                enable_deadlock_avoidance,
+                vc1_has_different_downstream_dest,
+                ENABLE_STATEFUL_NOC_APIS>(
                 packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
         }
         if (start_distance_is_terminal_value) {
@@ -735,11 +738,17 @@ FORCE_INLINE void receiver_forward_packet(
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::FORWARD_ONLY:
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    ENABLE_STATEFUL_NOC_APIS>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 break;
             case tt::tt_fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, ENABLE_STATEFUL_NOC_APIS>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    ENABLE_STATEFUL_NOC_APIS>(
                     packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
                 break;
@@ -805,7 +814,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         ASSERT(downstream_channel != INVALID_DIRECTION);
         const auto downstream_direction = static_cast<eth_chan_directions>(port_direction_table[downstream_channel]);
         const auto edm_index = get_downstream_edm_interface_index<rx_channel_id>(downstream_direction);
-        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+        forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
             packet_start,
             payload_size_bytes,
             cached_routing_fields,
@@ -821,7 +830,10 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                         if (packet_start->mcast_params[SOUTH]) {
                             packet_start->mcast_params[SOUTH]--;
                             constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                            forward_payload_to_downstream_edm<
+                                enable_deadlock_avoidance,
+                                vc1_has_different_downstream_dest,
+                                false>(
                                 packet_start,
                                 payload_size_bytes,
                                 cached_routing_fields,
@@ -832,7 +844,10 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                         if (packet_start->mcast_params[NORTH]) {
                             packet_start->mcast_params[NORTH]--;
                             constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                            forward_payload_to_downstream_edm<
+                                enable_deadlock_avoidance,
+                                vc1_has_different_downstream_dest,
+                                false>(
                                 packet_start,
                                 payload_size_bytes,
                                 cached_routing_fields,
@@ -846,7 +861,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                         cached_routing_fields.value = packet_start->mcast_params[EAST] - 1;
                         // north/south hop counts will be cleared when making trunk->branch trun.
                         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                        forward_payload_to_downstream_edm<
+                            enable_deadlock_avoidance,
+                            vc1_has_different_downstream_dest,
+                            false,
+                            false>(
                             packet_start,
                             payload_size_bytes,
                             cached_routing_fields,
@@ -858,7 +877,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                         cached_routing_fields.value = (packet_start->mcast_params[WEST] - 1) << 16;
                         // north/south hop counts will be cleared when making trunk->branch trun.
                         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                        forward_payload_to_downstream_edm<
+                            enable_deadlock_avoidance,
+                            vc1_has_different_downstream_dest,
+                            false,
+                            false>(
                             packet_start,
                             payload_size_bytes,
                             cached_routing_fields,
@@ -870,7 +893,10 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                         // decrement west hop count
                         packet_start->mcast_params[WEST]--;
                         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                        forward_payload_to_downstream_edm<
+                            enable_deadlock_avoidance,
+                            vc1_has_different_downstream_dest,
+                            false>(
                             packet_start,
                             payload_size_bytes,
                             cached_routing_fields,
@@ -882,7 +908,10 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                         // decrement east hop count
                         packet_start->mcast_params[EAST]--;
                         constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                        forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                        forward_payload_to_downstream_edm<
+                            enable_deadlock_avoidance,
+                            vc1_has_different_downstream_dest,
+                            false>(
                             packet_start,
                             payload_size_bytes,
                             cached_routing_fields,
@@ -898,7 +927,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             const auto downstream_direction =
                 static_cast<eth_chan_directions>(port_direction_table[downstream_channel]);
             const auto edm_index = get_downstream_edm_interface_index<rx_channel_id>(downstream_direction);
-            forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+            forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
@@ -960,7 +989,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -973,7 +1002,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -984,7 +1013,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_EW:
             if constexpr (my_direction == WEST) {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -992,7 +1021,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     transaction_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1006,7 +1035,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1019,7 +1048,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id, rx_channel_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1030,7 +1059,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         case LowLatencyMeshRoutingFields::WRITE_AND_FORWARD_NS:
             if constexpr (my_direction == SOUTH) {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1038,7 +1067,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     transaction_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false>(
+                forward_payload_to_downstream_edm<enable_deadlock_avoidance, vc1_has_different_downstream_dest, false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1051,7 +1080,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.value++;
             if constexpr (my_direction == SOUTH) {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1059,7 +1092,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     transaction_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1069,7 +1106,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1079,7 +1120,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1092,7 +1137,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.value++;
             if constexpr (my_direction == SOUTH) {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1100,7 +1149,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     transaction_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1110,7 +1163,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1123,7 +1180,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.value++;
             if constexpr (my_direction == SOUTH) {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1131,7 +1192,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                     transaction_id);
             } else {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1141,7 +1206,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1154,7 +1223,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == SOUTH) {
                 cached_routing_fields.value++;
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1166,7 +1239,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1176,7 +1253,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1188,7 +1269,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == NORTH) {
                 cached_routing_fields.value++;
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1200,7 +1285,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1210,7 +1299,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1222,7 +1315,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == SOUTH) {
                 cached_routing_fields.value++;
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1234,7 +1331,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1246,7 +1347,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == SOUTH) {
                 cached_routing_fields.value++;
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, NORTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1258,7 +1363,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1270,7 +1379,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == NORTH) {
                 cached_routing_fields.value++;
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1282,7 +1395,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.hop_index = cached_routing_fields.branch_east_offset;
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, EAST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1294,7 +1411,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             if constexpr (my_direction == NORTH) {
                 cached_routing_fields.value++;
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, SOUTH>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
@@ -1306,7 +1427,11 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             cached_routing_fields.hop_index = cached_routing_fields.branch_west_offset;
             {
                 constexpr auto edm_index = get_downstream_edm_interface_index<rx_channel_id, WEST>();
-                forward_payload_to_downstream_edm<enable_deadlock_avoidance, false, false>(
+                forward_payload_to_downstream_edm<
+                    enable_deadlock_avoidance,
+                    vc1_has_different_downstream_dest,
+                    false,
+                    false>(
                     packet_start,
                     payload_size_bytes,
                     cached_routing_fields,
