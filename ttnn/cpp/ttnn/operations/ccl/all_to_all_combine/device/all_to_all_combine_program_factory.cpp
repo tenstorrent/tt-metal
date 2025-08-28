@@ -13,6 +13,7 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/fabric.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::ccl {
@@ -178,7 +179,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
 
     const uint32_t flat_mesh_idx = common::get_linearized_index(mesh_coordinate, mesh_view);
 
-    const std::vector<uint32_t> reader_compile_time_args = {
+    std::vector<uint32_t> reader_compile_time_args = {
         mapping_tensor_cb_id,
         local_experts_cb_id,
         metadata_cb_id,
@@ -192,11 +193,15 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         selected_experts_k,
         mapping_page_size_bytes,
         metadata_page_size_bytes,
-        input_is_dram,
-        mapping_is_dram,
-        metadata_is_dram,
         operation_attributes.locally_reduced,
     };
+
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate))
+        .append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate))
+        .append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(input_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate))
+        .append_to(reader_compile_time_args);
 
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1, .noc = NOC::NOC_1, .compile_args = reader_compile_time_args};
@@ -213,7 +218,7 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
     const uint32_t max_packet_size_bytes =
         input_dtype == DataType::BFLOAT16 ? std::bit_floor(fabric_max_packet_size_bytes) : fabric_max_packet_size_bytes;
 
-    const std::vector<uint32_t> writer_compile_time_args = {
+    std::vector<uint32_t> writer_compile_time_args = {
         metadata_cb_id,
         local_experts_cb_id,
         client_interface_cb_id,
@@ -226,7 +231,6 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         src_chip_id,
         input_page_size_bytes,
         l1_alignment,
-        output_is_dram,
         mesh_view.num_rows(),
         mesh_view.num_cols(),
         max_packet_size_bytes,
@@ -234,6 +238,9 @@ AllToAllCombineDeviceOperation::AllToAllCombineFromSparse::create_at(
         (uint32_t)topology,
         operation_attributes.locally_reduced,
     };
+
+    tt::tt_metal::TensorAccessorArgs(output_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate))
+        .append_to(writer_compile_time_args);
 
     // fabric routing info
     std::vector<uint32_t> dest_mesh_id, dest_chip_id, route;

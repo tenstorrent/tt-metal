@@ -19,6 +19,7 @@
 #include <tt-metalium/fabric.hpp>
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <limits>
 
 namespace ttnn::operations::ccl {
@@ -316,12 +317,6 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     std::vector<uint32_t> reader_compile_time_args = {
-        input_tensor.buffer()->is_dram(),
-        indices_tensor.buffer()->is_dram(),
-        mapping_tensor.buffer()->is_dram(),
-        output_tensor.buffer()->is_dram(),
-        metadata_tensor.buffer()->is_dram(),
-
         input_tensor_cb_id,
         indices_tensor_cb_id,
         mapping_tensor_cb_id,
@@ -369,7 +364,13 @@ AllToAllDispatchDeviceOperation::AllToAllDispatchSparse::create_at(
         linearized_mesh_coord,
     };
 
-    const auto& writer_compile_time_args = reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.buffer()).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(reader_compile_time_args);
+
+    auto writer_compile_time_args = reader_compile_time_args;
+    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
 
     std::map<std::string, std::string> reader_defines = {
         {"AXIS", std::to_string(operation_attributes.axis.has_value() ? operation_attributes.axis.value() : -1)},

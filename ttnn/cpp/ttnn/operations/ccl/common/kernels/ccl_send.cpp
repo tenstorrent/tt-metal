@@ -77,15 +77,8 @@ struct source_tensor_addrgen {
 };
 template <tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
 struct source_tensor_addrgen<TensorMemoryLayout::INTERLEAVED, buffer_type, page_layout> {
-    static constexpr bool is_dram = buffer_type == tt::tt_metal::BufferType::DRAM;
-    static constexpr char name[] = "InterleavedAddrGen(default)";
-    using type = InterleavedAddrGen<is_dram>;
-};
-template <tt::tt_metal::BufferType buffer_type>
-struct source_tensor_addrgen<TensorMemoryLayout::INTERLEAVED, buffer_type, tt::tt_metal::Layout::TILE> {
-    static constexpr bool is_dram = buffer_type == tt::tt_metal::BufferType::DRAM;
-    static constexpr char name[] = "InterleavedAddrGen(Tile)";
-    using type = InterleavedAddrGenFast<is_dram>;
+    static constexpr char name[] = "TensorAccessor";
+    using type = TensorAccessor;
 };
 template <tt::tt_metal::BufferType buffer_type, tt::tt_metal::Layout page_layout>
 struct source_tensor_addrgen<TensorMemoryLayout::WIDTH_SHARDED, buffer_type, page_layout> {
@@ -234,12 +227,9 @@ auto build_source_address_generator(
     using addrgen_type = typename source_tensor_addrgen<tensor_layout, buffer_type, page_layout>::type;
 
     if constexpr (tensor_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED) {
-        if constexpr (is_row_major_layout) {
-            return addrgen_type{.bank_base_address = tensor_address, .page_size = page_size};
-        } else {
-            return addrgen_type{
-                .bank_base_address = tensor_address, .page_size = page_size, .data_format = get_dataformat(cb_id_in0)};
-        }
+        constexpr uint32_t ct_args_offset = is_sharded_mode ? 5 + 7 : 5;
+        constexpr auto tensor_args = TensorAccessorArgs<ct_args_offset>();
+        return TensorAccessor(tensor_args, tensor_address, page_size);
     } else if constexpr (
         tensor_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
         tensor_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||

@@ -82,14 +82,10 @@ void kernel_main() {
     pkt_hdr->to_chip_unicast(1);
 
     // interleaved addrgen
-    constexpr bool output_is_dram = output_type == tt::tt_metal::BufferType::DRAM;
-    InterleavedAddrGenFast<output_is_dram> output_addrgens[num_inputs];
+    constexpr auto output_args = TensorAccessorArgs<15>();
+    TensorAccessor output_addrgens[num_inputs];
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
-        auto output_addrgen = InterleavedAddrGenFast<output_is_dram>{
-            .bank_base_address = output_addresses[input_idx],
-            .page_size = output_page_size,
-            .data_format = get_dataformat(cb_output_id)};
-        output_addrgens[input_idx] = output_addrgen;
+        output_addrgens[input_idx] = TensorAccessor(output_args, output_addresses[input_idx], output_page_size);
     }
 
     fabric_connection.open();

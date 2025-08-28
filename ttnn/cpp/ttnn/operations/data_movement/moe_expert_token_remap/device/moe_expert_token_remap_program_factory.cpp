@@ -137,7 +137,7 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
 
     // slightly abusing this functionality since here we also have a single page if any experts are activated
     constexpr bool local_reduce = true;
-    const std::vector<uint32_t> reader_ct_args = {
+    std::vector<uint32_t> reader_ct_args = {
         mapping_tensor_cb_id,
         local_experts_cb_id,
         metadata_cb_id,
@@ -151,10 +151,15 @@ MoeExpertTokenRemapDeviceOperation::Multicore::create_at(
         selected_experts_k,
         mapping_page_size_bytes,
         metadata_page_size_bytes,
-        topk_is_dram,
-        mapping_is_dram,
-        metadata_is_dram,
-        local_reduce};
+        local_reduce,
+    };
+
+    tt::tt_metal::TensorAccessorArgs(metadata_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate))
+        .append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(mapping_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate))
+        .append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(topk_tensor.mesh_buffer()->get_device_buffer(mesh_coordinate))
+        .append_to(reader_ct_args);
 
     tt::tt_metal::KernelHandle ternary_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,

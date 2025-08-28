@@ -79,9 +79,8 @@ void kernel_main() {
     auto fabric_connection = FabricConnectionManager::build_from_args(fab_idx);
 #else
     // interleaved addrgen
-    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+    constexpr auto tensor0_args = TensorAccessorArgs<9>();
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, tensor0_page_size);
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);
 
 #endif

@@ -25,6 +25,7 @@
 
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <sstream>
 #include <type_traits>
 #include <ranges>
@@ -202,6 +203,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         1,                                                 // direction
         fuse_op,                                           // fused op
     };
+    tt::tt_metal::TensorAccessorArgs(input_tensor[0].buffer())
+        .append_to(sender_reader_forward_kernel_config.compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor[0].buffer())
+        .append_to(sender_reader_forward_kernel_config.compile_args);
     auto worker_sender_reader_forward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
@@ -228,6 +233,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         num_inputs,                                        // num_inputs
         1,                                                 // direction
     };
+    tt::tt_metal::TensorAccessorArgs(output_tensor[0].buffer())
+        .append_to(sender_writer_forward_kernel_config.compile_args);
     auto worker_sender_writer_forward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
@@ -253,6 +260,10 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         0,                                                 // direction
         fuse_op,                                           // fused op
     };
+    tt::tt_metal::TensorAccessorArgs(input_tensor[0].buffer())
+        .append_to(sender_reader_backward_kernel_config.compile_args);
+    tt::tt_metal::TensorAccessorArgs(output_tensor[0].buffer())
+        .append_to(sender_reader_backward_kernel_config.compile_args);
     auto worker_sender_reader_backward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
@@ -279,6 +290,8 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_attention_all_gather_async_mu
         num_inputs,                                        // num_inputs
         0,                                                 // direction
     };
+    tt::tt_metal::TensorAccessorArgs(output_tensor[0].buffer())
+        .append_to(sender_writer_backward_kernel_config.compile_args);
     auto worker_sender_writer_backward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"

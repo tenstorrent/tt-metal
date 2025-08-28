@@ -112,11 +112,8 @@ void kernel_main() {
 
     arg_idx += rt_increment;
 #else
-    constexpr bool output_is_dram = output_type == tt::tt_metal::BufferType::DRAM;
-    const InterleavedAddrGenFast<output_is_dram> output_addrgen = {
-        .bank_base_address = output_address,
-        .page_size = output_page_size,
-        .data_format = get_dataformat(cb_output_id)};
+    constexpr auto output_args = TensorAccessorArgs<sharded_args_start_idx>();
+    const TensorAccessor output_addrgen(output_args, output_address, output_page_size);
 #endif
 
     tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle;

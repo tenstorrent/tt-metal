@@ -54,8 +54,8 @@ void kernel_main() {
         .bank_base_address = tensor_address0, .shard_array = mapping_table};
 #else
     // interleaved addrgen
-    auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+    constexpr auto tensor0_args = TensorAccessorArgs<4>();
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, tensor0_page_size);
 #endif
 
     uint32_t tile_id = tile_id_start;
