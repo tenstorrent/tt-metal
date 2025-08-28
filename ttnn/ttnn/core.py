@@ -359,8 +359,4 @@ def create_sharded_memory_config_(
 dump_memory_config = ttnn._ttnn.tensor.dump_memory_config
 load_memory_config = ttnn._ttnn.tensor.load_memory_config
 
-set_current_command_queue_id = ttnn._ttnn.core.set_current_command_queue_id
-get_current_command_queue_id = ttnn._ttnn.core.get_current_command_queue_id
-
-
 __all__ = []
