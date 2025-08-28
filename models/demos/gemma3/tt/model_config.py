@@ -5,7 +5,6 @@
 import json
 import math
 import os
-from enum import Enum, auto
 from pathlib import Path
 from typing import Tuple
 
@@ -13,17 +12,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.tt_transformers.tt.common import (
-    calculate_hidden_dim,
-    encode_prompt_hf,
-    encode_prompt_instruct,
-    get_base_model_name,
-    get_out_subblock_w,
-    nearest_multiple,
-    num_to_core_range_set,
-    rope_scaling_model_factory,
-)
 from models.demos.gemma3.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_meta_to_hf,
@@ -35,52 +23,29 @@ from models.demos.gemma3.tt.load_checkpoints import (
     standardize_hf_keys,
     standardize_hf_keys_multimodal,
 )
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
+from models.tt_transformers.tt.common import (
+    calculate_hidden_dim,
+    encode_prompt_hf,
+    encode_prompt_instruct,
+    get_base_model_name,
+    get_out_subblock_w,
+    nearest_multiple,
+    num_to_core_range_set,
+    rope_scaling_model_factory,
+)
+from models.tt_transformers.tt.model_config import (
+    CheckpointType,
+    MathFidelitySetting,
+    OpGroup,
+    PrecisionSetting,
+    TensorGroup,
+)
 from models.utility_functions import is_blackhole, is_wormhole_b0, nearest_32
 
 # file names for performance and accuracy mode override files
 PERFORMANCE_DECODER_CONFIG_FILENAME = "performance_decoder_config.json"
 ACCURACY_DECODER_CONFIG_FILENAME = "accuracy_decoder_config.json"
-
-
-class TensorGroup(Enum):
-    FF1_FF3 = "ff1_3"
-    FF2 = "ff2"
-    WQKV = "wqkv"
-    WO = "wo"
-    KV_CACHE = "kv_cache"
-    ACTIVATION = "activation"
-
-
-class PrecisionSetting(Enum):
-    BFP4 = "bfp4"
-    BFP8 = "bfp8"
-    BF16 = "bf16"
-
-
-class OpGroup(Enum):
-    """
-    LI_* are linear operator groups
-    SDPA_* are scaled_dot_product_attention operator groups
-    """
-
-    LI_FF1_FF3 = "li_ff1_3"
-    LI_FF2 = "li_ff2"
-    LI_QKV_DECODE = "li_qkv_decode"
-    LI_O_DECODE = "li_o_decode"
-    SDPA_DECODE = "sdpa_decode"
-    LI_QKV_PREFILL = "li_qkv_prefill"
-    LI_O_PREFILL = "li_o_prefill"
-    SDPA_PREFILL = "sdpa_prefill"
-    ACCURACY = "accuracy"  # This is a special group for accuracy mode, not an actual operator group
-
-
-class MathFidelitySetting(Enum):
-    LOFI = "lofi"
-    HIFI2 = "hifi2"
-    HIFI2_NA = "hifi2na"  # na specified `packer_l1_acc=False` and `fp32_dest_acc_en=False` in compute kernel config
-    HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
-    HIFI4 = "hifi4"
-    HIFI4_FP32 = "hifi4fp32"
 
 
 class ModelOptimizations:
@@ -372,11 +337,6 @@ def parse_decoder_json(json_file_path, default_optimization=ModelOptimizations.p
 
     except Exception as e:
         raise ValueError(f"Error loading JSON configuration: {e}")
-
-
-class CheckpointType(Enum):
-    Meta = auto()
-    HuggingFace = auto()
 
 
 class ModelArgs:
@@ -2349,9 +2309,6 @@ class ModelArgs:
             model = self.reference_transformer(wrap=False)
             layer = model.model.layers[i].self_attn.q_norm
             layer._load_state_dict = layer.load_state_dict
-            import pdb
-
-            pdb.set_trace()
             layer.load_state_dict = lambda x: layer._load_state_dict(convert_meta_to_hf(x, self.head_dim))
             return layer
 

@@ -303,6 +303,58 @@ def precompute_freqs(dim: int, end: int, theta, scale_factor, orig_context_len, 
     return torch.cos(freqs), torch.sin(freqs)
 
 
+def freqs_to_rotation_matrix(cos_freqs, sin_freqs):
+    """
+    Transform cos/sin frequencies to a rotation matrix.
+    """
+    emb_size, emb_dim = cos_freqs.shape
+    dhead = emb_dim * 2
+    rot_emb_matrix = torch.zeros(emb_size, dhead, dhead)
+    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(0, dhead, 2)] = cos_freqs.clone()
+    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(1, dhead, 2)] = cos_freqs.clone()
+    rot_emb_matrix[..., torch.arange(0, dhead, 2), torch.arange(1, dhead, 2)] = -sin_freqs.clone()
+    rot_emb_matrix[..., torch.arange(1, dhead, 2), torch.arange(0, dhead, 2)] = sin_freqs.clone()
+
+    rot_emb_matrix = rot_emb_matrix.transpose(-1, -2)  # Necessary for correct rotation when applied as (x @ R)
+    return rot_emb_matrix
+
+
+def gather_cos_sin(position_ids, cos, sin):
+    position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
+    cos = cos.gather(0, position_id_expanded)
+    sin = sin.gather(0, position_id_expanded)
+    cos = torch.stack([cos, cos], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    sin = torch.stack([sin, sin], dim=-1).flatten(-2).unsqueeze(0).unsqueeze(0)
+    return cos, sin
+
+
+def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, orig_context_len, start_pos=0):
+    cos, sin = precompute_freqs(
+        head_dim, seq_len * 2, theta=theta, scale_factor=scale_factor, orig_context_len=orig_context_len
+    )
+    cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
+    assert cos_gathered.size() == (1, 1, seq_len, head_dim)
+    assert sin_gathered.size() == (1, 1, seq_len, head_dim)
+
+    cos_gathereds = ttnn.from_torch(
+        cos_gathered,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    sin_gathereds = ttnn.from_torch(
+        sin_gathered,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    rot_mats = [cos_gathereds, sin_gathereds]
+    return rot_mats
+
+
 #  Add-Multiply method of rotary embeddings for prefill
 def get_rot_transformation_mat(dhead):
     # ROPE op uses a single tile
