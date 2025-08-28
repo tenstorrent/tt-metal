@@ -31,7 +31,8 @@ from transformers.modeling_outputs import ModelOutput
 
 import ttnn
 from models.tt_transformers.demo.simple_text_demo import prepare_generator_args
-from models.tt_transformers.tt.common import create_tt_model
+from models.tt_transformers.tt.common import create_tt_model, preprocess_inputs_prefill, sample_host
+from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import ModelArgs
 
 """
@@ -104,10 +105,11 @@ class LLama2OpenVLAArgs(ModelArgs):
             "rope_scaling": None,
             "rope_theta": 10000.0,
             "tie_word_embeddings": False,
-            "torch_dtype": "BFLOAT8_b",
+            "torch_dtype": "float16",
             "transformers_version": "4.38.0",
             "use_cache": True,
-            "vocab_size": 32064,
+            # TODO: change vocab size to 32064 when integrating openVLA weights
+            "vocab_size": 32000,
         }
         text_config = config.get("text_config", config)
         for key, value in text_config.items():
@@ -122,11 +124,11 @@ class LLama2OpenVLAArgs(ModelArgs):
 
 class OpenVLALanguageModel:
     def __init__(self, device):
-        generator_args_config = {
-            "num_devices": 1,
+        self.generator_args_config = {
+            "num_devices": device.get_num_devices() if isinstance(device, ttnn.MeshDevice) else 1,
             "data_parallel": 1,
             "mesh_device": device,
-            "instruct": True,
+            "instruct": False,
             "global_batch_size": 1,
             "optimizations": None,
             "max_seq_len": 1024,
@@ -134,10 +136,122 @@ class OpenVLALanguageModel:
             "paged_attention": True,
         }
         self.model_args, self.model, self.page_table, self.tt_kv_cache, self.tokenizer = prepare_generator_args(
-            **generator_args_config,
+            **self.generator_args_config,
             model_factory_fn=lambda *args, **kwargs: create_tt_model(*args, **kwargs, ModelArgsClass=LLama2OpenVLAArgs),
         )
-        print("DONE")
+        self.generator = Generator(self.model, self.model_args, device, self.tokenizer)
+
+    def predict_text(self, input_prompts, max_generated_tokens=200):
+        (
+            input_tokens_prefill_pt,
+            encoded_prompts,
+            decoding_pos,
+            prefill_lens,
+        ) = preprocess_inputs_prefill(
+            input_prompts,
+            self.tokenizer,
+            self.model_args,
+            self.generator_args_config["instruct"],
+            max_generated_tokens,
+            max_prefill_len=self.generator_args_config["max_seq_len"],
+        )
+        max_encoded_prompt_len = max(len(p) for p in encoded_prompts)
+        assert (
+            max_generated_tokens + max_encoded_prompt_len <= self.generator_args_config["max_seq_len"]
+        ), f"Prompt prefill tokens ({max_encoded_prompt_len}) + maximum number of decoded iterations ({max_generated_tokens}) needs to be <= than max_seq_len ({self.generator_args_config['max_seq_len']})"
+        paged_cache_max_seq_len = (
+            self.generator_args_config["page_params"]["page_block_size"]
+            * self.generator_args_config["page_params"]["page_max_num_blocks_per_dp"]
+            / self.generator_args_config["global_batch_size"]
+        )
+        assert (
+            max_generated_tokens + max_encoded_prompt_len <= paged_cache_max_seq_len
+        ), f"max_generated_tokens ({max_generated_tokens}) needs to be <= than paged_cache_max_seq_len ({paged_cache_max_seq_len})"
+        input_tokens_prefill_pt = torch.stack(input_tokens_prefill_pt).view(1, -1)
+        logits = self.generator.prefill_forward_text(
+            input_tokens_prefill_pt,
+            page_table=self.page_table,
+            kv_cache=self.tt_kv_cache,
+            prompt_lens=decoding_pos,
+        )
+        logits = self.generator.prefill_forward_text(
+            input_tokens_prefill_pt,
+            page_table=self.page_table,
+            kv_cache=self.tt_kv_cache,
+            prompt_lens=decoding_pos,
+        )
+        prefilled_token = torch.argmax(logits, dim=-1)
+
+        output = encoded_prompts[0][: prefill_lens[0]]
+        user_tok = int(prefilled_token[0].item())
+        output.append(user_tok)
+        prompt = input_prompts[0]
+
+        device_sampling_params = None
+        sampling_params = {"temperature": 0, "top_p": 0.08}
+        stop_at_eos = True
+        user_done = False
+        # Initial positions
+        current_pos = torch.tensor([decoding_pos[0]])
+
+        # Start decoding
+        iteration = 0
+        user_decoding = True
+
+        out_tok = prefilled_token
+        while user_decoding:
+            # Run decode forward
+            logits = self.generator.decode_forward_text(
+                out_tok,
+                current_pos,
+                page_table=self.page_table,
+                kv_cache=self.tt_kv_cache,
+                sampling_params=device_sampling_params,
+            )
+
+            # Get the next token
+            if device_sampling_params is not None:
+                out_tok = logits.unsqueeze(1)
+            else:
+                # TODO Fix use case with temperature > 0
+                _, out_tok = sample_host(
+                    logits,
+                    temperature=sampling_params["temperature"],
+                    top_p=sampling_params["top_p"],
+                    on_host=True,
+                )
+
+            current_pos += 1
+            # Save output token to print out later
+            user_tok = out_tok.item()
+            if (
+                user_tok not in self.tokenizer.stop_tokens and not user_done
+            ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
+                output.append(user_tok)
+            else:
+                if (
+                    stop_at_eos
+                ):  # For performance gathering in CI, we want to sometimes force decoding for a fixed number of iterations
+                    user_done = True
+                    user_decoding = False
+
+            # Print out generated outputs for each user at the end of every iteration
+            text = "".join(self.tokenizer.decode(output))
+            if len(text) > 100:
+                text = "..." + text[-97:]
+            text = text.replace("\n", " ")
+            print(text)
+            iteration += 1
+
+            # Upper limit of generated tokens for each user
+            if iteration >= max_generated_tokens:
+                user_decoding = False
+        text = self.tokenizer.decode(output)
+        prompt_including_assistant_tags = self.tokenizer.decode(
+            self.model_args[0].encode_prompt(prompt, instruct=self.generator_args_config["instruct"])
+        )
+        text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
+        return text_after_prompt
 
 
 class PrismaticConfig(PretrainedConfig):
@@ -775,10 +889,34 @@ vla_config, kwargs = OpenVLAConfig.from_dict(config_dict, **kwargs)
 # print(action)
 
 
+import pytest
 
 
-
-def test_language_model(device):
-    language_model = OpenVLALanguageModel(device)
-    breakpoint()
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": True, "trace_region_size": 30000000, "num_command_queues": 1}], indirect=True
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "N150x4": (1, 4),
+            "T3K": (1, 8),
+            "TG": (8, 4),
+            "P150": (1, 1),
+            "P300": (1, 2),
+            "P150x4": (1, 4),
+            "P150x8": (1, 8),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+    ],
+    indirect=True,
+)
+def test_language_model(mesh_device):
+    language_model = OpenVLALanguageModel(mesh_device)
+    prompt = "In: What action should the robot take to {<INSTRUCTION>}?\nOut:"
+    # prompt = "What is your favorite condiment? There are so many condiments to choose from, each bringing its unique flavor and texture to enhance different dishes. Do you prefer the classic taste of ketchup, the creamy richness of mayonnaise, the spicy kick of mustard, or perhaps something more exotic like sriracha or hoisin sauce? Maybe you enjoy the tangy zest of salsa or the smooth and savory taste of aioli. Share what your favorite condiment is and why you love it. Does it remind you of a specific dish or meal?"
+    predicted_text = language_model.predict_text([prompt])
+    print("Prompt -> ", prompt)
+    print("Final Result -> ", predicted_text)
     print("DONE")
