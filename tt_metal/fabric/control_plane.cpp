@@ -630,6 +630,7 @@ std::map<FabricNodeId, chip_id_t> ControlPlane::get_logical_chip_to_physical_chi
             std::optional<chip_id_t> nw_chip_physical_id = std::nullopt;
             const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
             // TODO: remove once we use global physical graph to map logical big mesh to physical chips
+            // NOTE: This nw chip may not be set the same for UBB devices when using the Mock Cluster Descriptor
             if (cluster.get_board_type(0) == BoardType::UBB) {
                 for (const auto& chip_id : cluster.all_chip_ids()) {
                     auto candidate_ubb_id = get_ubb_id(chip_id);

@@ -6,7 +6,6 @@
 
 #include <cstdlib>
 
-#include "tt_backend_api_types.hpp"
 #include "assert.hpp"
 #include "llrt/rtoptions.hpp"
 #include <umd/device/pci_device.hpp>
@@ -50,7 +49,15 @@ namespace tt::tt_metal {
  */
 inline tt::ARCH get_platform_architecture(const tt::llrt::RunTimeOptions& rtoptions) {
     auto arch = tt::ARCH::Invalid;
-    if (rtoptions.get_simulator_enabled()) {
+    // If running in mock mode, derive architecture from provided cluster descriptor
+    if (rtoptions.get_target_device() == tt::TargetDevice::Mock) {
+        auto cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions.get_mock_cluster_desc_path());
+        if (cluster_desc && cluster_desc->get_number_of_chips() > 0) {
+            auto chips = cluster_desc->get_all_chips();
+            arch = cluster_desc->get_arch(*chips.begin());
+        }
+        return arch;
+    } else if (rtoptions.get_target_device() == tt::TargetDevice::Simulator) {
         tt_SimulationDeviceInit init(rtoptions.get_simulator_path());
         arch = init.get_arch_name();
     } else {
