@@ -15,20 +15,6 @@
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace detail {
-uint32_t get_num_devices(const ttnn::Tensor& input_tensor, std::optional<uint32_t> cluster_axis) {
-    uint32_t num_devices;
-    if (cluster_axis.has_value()) {
-        auto mesh_device = input_tensor.mesh_device();
-        const auto& mesh_view = mesh_device->get_view();
-        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-    } else {
-        num_devices = ttnn::ccl::get_active_physical_devices(input_tensor).size();
-    }
-    return num_devices;
-}
-}  // namespace detail
-
 bool use_composite_reduce_scatter(
     const ttnn::Tensor& input_tensor, const int32_t dim, std::optional<uint32_t> cluster_axis) {
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
@@ -37,7 +23,14 @@ bool use_composite_reduce_scatter(
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
-    uint32_t num_devices = detail::get_num_devices(input_tensor, cluster_axis);
+    uint32_t num_devices;
+    if (cluster_axis.has_value()) {
+        auto mesh_device = input_tensor.device();
+        const auto& mesh_view = mesh_device->get_view();
+        num_devices = (cluster_axis.value() == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+    } else {
+        num_devices = ttnn::ccl::get_active_physical_devices(input_tensor).size();
+    }
 
     // Must scatter evenly
     auto input_shape = input_tensor.logical_shape();
@@ -76,16 +69,14 @@ ttnn::Tensor composite_reduce_scatter(
     auto tile_shape = input_tensor.tensor_spec().tile().get_tile_shape();
     uint32_t tile_height = tile_shape[0];
     uint32_t tile_width = tile_shape[1];
-    uint32_t num_devices = detail::get_num_devices(input_tensor, cluster_axis);
+
+    auto input_shape = input_tensor.logical_shape();
+
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
-    auto input_shape = input_tensor.logical_shape();
-    auto output_shape = input_shape;
-    output_shape[scatter_dim] /= num_devices;
-
     bool is_tiled_and_not_tile_aligned = input_tensor.layout() == Layout::TILE &&
-                                         (output_shape[2] % tile_height != 0 || output_shape[3] % tile_width != 0);
+                                         (input_shape[2] % tile_height != 0 || input_shape[3] % tile_width != 0);
 
     // If we need to convert to row-major, then if the input dtype is bfloat8_b we need to typecast before untilizing
     // and after re-tilizing
