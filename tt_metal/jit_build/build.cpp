@@ -396,6 +396,11 @@ void JitBuildState::compile_one(
             defines += fmt::format("-DKERNEL_COMPILE_TIME_ARGS={} ", fmt::join(values, ","));
         });
 
+        // This creates a command-line define for named compile time args
+        // Ex. for named_args like {"buffer_size": 1024, "num_tiles": 64}
+        // This generates:
+        // -DKERNEL_COMPILE_TIME_ARG_MAP="X(\"buffer_size\",1024) X(\"num_tiles\",64) "
+        // The macro expansion is defined in tt_metal/hw/inc/compile_time_args.h
         settings->process_named_compile_time_args(
             [&defines](const std::unordered_map<std::string, uint32_t> named_args) {
                 if (named_args.empty()) {

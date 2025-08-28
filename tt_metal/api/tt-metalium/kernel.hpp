@@ -169,7 +169,7 @@ private:
         const CoreRangeSet& core_range_set,
         const std::vector<uint32_t>& compile_args,
         const std::map<std::string, std::string>& defines,
-        const std::unordered_map<std::string, uint32_t>& named_compile_args = {});
+        const std::unordered_map<std::string, uint32_t>& named_compile_time_args = {});
 
     // Only allow KernelImpl to inherit from Kernel.
     friend class KernelImpl;

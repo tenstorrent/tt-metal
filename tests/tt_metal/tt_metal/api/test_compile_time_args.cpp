@@ -83,7 +83,7 @@ TEST_F(DeviceFixture, TensixTestNamedCompileTimeArgs) {
         const std::map<std::string, std::string> defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}};
 
         const std::vector<uint32_t> compile_time_args = {1024, 1, 64, 8};
-        const std::unordered_map<std::string, uint32_t> named_compile_args = {
+        const std::unordered_map<std::string, uint32_t> named_compile_time_args = {
             {"num_tiles", 64}, {"enable_debug", 1}, {"stride_value", 8}, {"buffer_size", 1024}};
 
         CreateKernel(
@@ -95,7 +95,7 @@ TEST_F(DeviceFixture, TensixTestNamedCompileTimeArgs) {
                 .noc = NOC::RISCV_0_default,
                 .compile_args = compile_time_args,
                 .defines = defines,
-                .named_compile_args = named_compile_args});
+                .named_compile_time_args = named_compile_time_args});
         this->RunProgram(device, program);
 
         std::vector<uint32_t> results;

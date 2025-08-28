@@ -28,7 +28,8 @@ constexpr uint32_t get_ct_arg() {
     return kernel_compile_time_args[Idx];
 }
 
-constexpr uint32_t get_named_arg(std::string_view name) {
+// Expands to a series of if statements that return the value of the named argument if it is found.
+constexpr uint32_t get_named_ct_arg(std::string_view name) {
 #ifdef KERNEL_COMPILE_TIME_ARG_MAP
 #define X(name_str, value) \
     if (name == name_str)  \
@@ -68,7 +69,6 @@ constexpr uint32_t get_named_arg(std::string_view name) {
  * | arg_name              | The name of the argument           | string literal        | defined names | True   |
  */
 // clang-format on
-// #define get_compile_time_arg_val_by_name(arg_name) get_named_arg(arg_name)
-constexpr uint32_t get_named_compile_time_arg_val(std::string_view name) { return get_named_arg(name); }
+constexpr uint32_t get_named_compile_time_arg_val(std::string_view name) { return get_named_ct_arg(name); }
 
 #endif  // TT_METAL_COMPILE_TIME_ARGS_H
