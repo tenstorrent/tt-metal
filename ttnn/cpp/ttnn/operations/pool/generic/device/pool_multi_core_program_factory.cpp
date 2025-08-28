@@ -88,7 +88,7 @@ std::vector<ScalarInfo> get_bf16_avg_pool_config_scalars(
             if (!scalars.empty()) {
                 scalars.back().end = i;
             }
-            scalars.push_back({i, bfloat16(value).to_packed(), i});
+            scalars.push_back({i, bfloat16::truncate(value).to_packed(), i});
             first_scalar = false;
         }
         last_pool_area = static_cast<uint32_t>(pool_area);
