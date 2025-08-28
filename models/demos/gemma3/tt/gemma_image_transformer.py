@@ -1,8 +1,9 @@
 """
 This is the Entire ImageTransformer for Gemma-3-4b-it.
-We have adapted the TtGemmaImageTransformerBlock from TtLlamaImageTransformerBlock
-with changes incorporating the GemmaImageAttention and GemmaImageFeedForward
+Uses simplified pattern that mirrors llama structure but with gemma blocks
+Only differences: gemma blocks and sequence length validation (128 vs 32)
 """
+
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
@@ -29,10 +30,12 @@ class TtGemmaImageTransformer(LightweightModule):
     ):
         super().__init__()
 
-        self.state_dict = state_dict
+        # Store the same attributes as llama transformer for compatibility
         self.mesh_device = mesh_device
+        self.tt_ccl = tt_ccl
         self.gated = gated
 
+        # Create gemma blocks (same pattern as llama but with gemma blocks)
         self.resblocks = [
             TtGemmaImageTransformerBlock(
                 mesh_device=mesh_device,
@@ -49,9 +52,7 @@ class TtGemmaImageTransformer(LightweightModule):
 
     def forward(self, x, return_intermediate=None, mask=None):
         """
-        Different from reference impl in that if return_intermediates, it returns
-        a list of intermediate tensors rather than a stack of intermediates.
-        Outer code will have to be aware and handle this correctly.
+        Forward pass - same logic as llama but with gemma-specific seq_len validation.
         """
         seq_len = x.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
