@@ -139,10 +139,9 @@ void kernel_main() {
         uint32_t num_pages_to_read = std::min(tile_id_end - tile_id, packet_size_in_pages);
 
         for (uint32_t j = 0; j < num_pages_to_read; j++) {
-            uint64_t noc0_dest_noc_addr = get_noc_addr(tile_id, tensor0_addrgen, 0 /*offset*/, 0 /*noc_id*/);
-
             write_and_advance_local_read_address_for_fabric_write(
-                noc0_dest_noc_addr,
+                tile_id,
+                tensor0_addrgen,
                 pkt_hdr_forward,
                 pkt_hdr_backward,
                 fabric_connection,

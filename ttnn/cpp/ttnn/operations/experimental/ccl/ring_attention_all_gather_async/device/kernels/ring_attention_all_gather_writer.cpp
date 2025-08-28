@@ -113,7 +113,6 @@ void kernel_main() {
 
                 // for (uint32_t j = 0; j < num_pages_to_read; j += contig_pages_advanced) {
                 uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
-                uint64_t noc0_dest_noc_addr = output_addrgens[input_idx].get_noc_addr(tile_id, 0, 0);
 
                 pages_read_in_row++;
                 if (pages_read_in_row >= input_tensor_Wt) {
@@ -123,7 +122,6 @@ void kernel_main() {
 
                 if (num_pages_to_read == 2) {
                     uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
-                    uint64_t second_noc0_dest_noc_addr = output_addrgens[input_idx].get_noc_addr(second_tile_id, 0, 0);
 
                     if constexpr (direction == 1) {
                         // Backwards does local write
@@ -137,12 +135,12 @@ void kernel_main() {
 
                     if constexpr (num_targets_in_direction) {
                         scatter_fabric_write_unidir(
-                            noc0_dest_noc_addr,
-                            second_noc0_dest_noc_addr,
+                            tile_id,
+                            second_tile_id,
+                            output_addrgens[input_idx],
                             pkt_hdr,
                             *fabric_direction_connection,
                             l1_read_addr,
-                            (uint16_t)output_page_size,
                             output_page_size);
                     }
 
@@ -160,7 +158,12 @@ void kernel_main() {
                     if constexpr (num_targets_in_direction) {
                         // Has valid targets to send to
                         fabric_write_unidir(
-                            noc0_dest_noc_addr, pkt_hdr, *fabric_direction_connection, l1_read_addr, output_page_size);
+                            tile_id,
+                            output_addrgens[input_idx],
+                            pkt_hdr,
+                            *fabric_direction_connection,
+                            l1_read_addr,
+                            output_page_size);
                     }
                 }
 
@@ -255,8 +258,7 @@ void kernel_main() {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
                     cb_wait_front(cb_output_id, packet_size_in_pages);
                     size_t l1_read_addr = get_read_ptr(cb_output_id);
-                    uint64_t noc0_dest_noc_addr = output_addrgens[input_idx].get_noc_addr(
-                        tile_id_start + row_offset + pages_read_in_row, 0 /*offset*/, 0 /*noc_id*/);
+                    uint32_t first_tile_id = tile_id_start + row_offset + pages_read_in_row;
                     pages_read_in_row++;
                     if (pages_read_in_row >= slice_Wt) {
                         row_offset += stride_Wt;
@@ -264,8 +266,7 @@ void kernel_main() {
                     }
 
                     if (num_pages_to_read == 2) {
-                        uint64_t second_noc0_dest_noc_addr = output_addrgens[input_idx].get_noc_addr(
-                            tile_id_start + row_offset + pages_read_in_row, 0 /*offset*/, 0 /*noc_id*/);
+                        uint32_t second_tile_id = tile_id_start + row_offset + pages_read_in_row;
                         pages_read_in_row++;
                         if (pages_read_in_row >= slice_Wt) {
                             row_offset += stride_Wt;
@@ -273,17 +274,22 @@ void kernel_main() {
                         }
 
                         scatter_fabric_write_unidir(
-                            noc0_dest_noc_addr,
-                            second_noc0_dest_noc_addr,
+                            first_tile_id,
+                            second_tile_id,
+                            output_addrgens[input_idx],
                             pkt_hdr,
                             *fabric_direction_connection,
                             l1_read_addr,
-                            (uint16_t)output_page_size,
                             output_page_size);
                     } else {
                         ASSERT(num_pages_to_read == 1);
                         fabric_write_unidir(
-                            noc0_dest_noc_addr, pkt_hdr, *fabric_direction_connection, l1_read_addr, output_page_size);
+                            first_tile_id,
+                            output_addrgens[input_idx],
+                            pkt_hdr,
+                            *fabric_direction_connection,
+                            l1_read_addr,
+                            output_page_size);
                     }
 
                     tiles_read += num_pages_to_read;
