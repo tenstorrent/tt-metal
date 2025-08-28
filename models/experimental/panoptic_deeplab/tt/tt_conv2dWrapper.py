@@ -250,8 +250,9 @@ class TtConv2d:
         self,
         x: ttnn.Tensor,
         memory_config: ttnn.MemoryConfig | None = None,
+        conv_config: Optional[ttnn.Conv2dConfig] = None,
     ) -> ttnn.Tensor:
-        x, shape = self.call_without_reshape(x, memory_config=memory_config)
+        x, shape = self.call_without_reshape(x, memory_config=memory_config, conv_config=conv_config)
 
         # workaround
         x = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
