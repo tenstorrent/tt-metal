@@ -138,6 +138,16 @@ ALWI void tilize_dest_init_short_with_dt(uint32_t old_icb, uint32_t new_icb, uin
     UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_icb, new_icb)));
     UNPACK((llk_unpack_tilize_init(new_icb, block)));
+
+#ifdef ARCH_BLACKHOLE
+    PACK((_llk_pack_init_<false, false, DstTileFaceLayout::RowMajor, false, true>(
+        pack_dst_format[new_icb],
+        get_output_face_r_dim(new_icb),
+        get_output_tile_c_dim(new_icb),
+        get_output_num_faces(new_icb),
+        get_output_partial_face(new_icb),
+        get_output_narrow_tile(new_icb))));
+#endif
 }
 
 // clang-format off
