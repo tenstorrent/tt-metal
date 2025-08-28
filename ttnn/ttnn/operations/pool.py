@@ -62,9 +62,14 @@ def prepare_grid_sample_grid(*args, **kwargs):
     Keyword Args:
         padding_mode (str): How to handle out-of-bounds coordinates. Currently only "zeros" is supported.
         output_dtype (ttnn.DataType, optional): Data type for the output tensor. Default: bfloat16
+        batch_factor (int, optional): Height-based batching factor. When provided, reshapes raw input grid
+                                    from (N, H, W, 2) to (N, H/batch_factor, W, 6*batch_factor)
 
     Returns:
-        ttnn.Tensor: Precomputed grid tensor of shape (N, H_out, W_out, 6) where:
+        ttnn.Tensor: Precomputed grid tensor of shape:
+                    - Without batch_factor: (N, H_out, W_out, 6)
+                    - With batch_factor: (N, H_out/batch_factor, W_out, 6*batch_factor)
+                    Where each group of 6 elements represents:
                     - [:, :, :, 0]: North-west height coordinate (as integer stored in bfloat16)
                     - [:, :, :, 1]: North-west width coordinate (as integer stored in bfloat16)
                     - [:, :, :, 2]: Weight for north-west pixel

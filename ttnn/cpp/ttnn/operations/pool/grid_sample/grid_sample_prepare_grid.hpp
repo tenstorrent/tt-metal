@@ -25,8 +25,13 @@ namespace grid_sample {
  * @param input_shape Array containing input tensor dimensions [N, H_in, W_in, C] in NHWC format
  * @param padding_mode How to handle out-of-bounds coordinates (currently only "zeros" supported)
  * @param output_dtype Data type for the output tensor (default: bfloat16)
+ * @param batch_factor Optional batching factor for height dimension. When provided, reshapes
+ *                     (N, H, W, 2) -> (N, H/batch_factor, W, 6*batch_factor)
  *
- * @return Precomputed grid tensor of shape (N, H_out, W_out, 6) where:
+ * @return Precomputed grid tensor of shape:
+ *         - Without batch_factor: (N, H_out, W_out, 6)
+ *         - With batch_factor: (N, H_out/batch_factor, W_out, 6*batch_factor)
+ *         Where each group of 6 elements represents:
  *         - [:, :, :, 0]: North-west height coordinate (as integer stored in bfloat16)
  *         - [:, :, :, 1]: North-west width coordinate (as integer stored in bfloat16)
  *         - [:, :, :, 2]: Weight for north-west pixel
@@ -41,7 +46,8 @@ ttnn::Tensor prepare_grid_sample_grid(
     const ttnn::Tensor& grid,
     const std::vector<uint32_t>& input_shape,
     const std::string& padding_mode = "zeros",
-    const std::optional<DataType>& output_dtype = std::nullopt);
+    const std::optional<DataType>& output_dtype = std::nullopt,
+    const std::optional<uint32_t>& batch_factor = std::nullopt);
 
 }  // namespace grid_sample
 }  // namespace operations
