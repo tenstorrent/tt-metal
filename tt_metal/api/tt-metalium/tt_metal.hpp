@@ -289,7 +289,7 @@ bool ReadFromDeviceDRAMChannel(
  *
  * | Argument      | Description                                     | Data type                | Valid range                                         | required |
  * |---------------|-------------------------------------------------|--------------------------|-----------------------------------------------------|----------|
- * | device        | The device whose DRAM to write data into        | IDevice*                 |                                                     | Yes      |
+ * | device        | The device whose L1 to write data into          | IDevice*                 |                                                     | Yes      |
  * | logical_core  | Logical coordinate of core whose L1 to write to | CoreCoord                | On Grayskull, any valid logical worker coordinate   | Yes      |
  * | address       | Starting address in L1 to write into            | uint32_t                 | Any non-reserved address in L1 that fits for buffer | Yes      |
  * | host_buffer   | Buffer on host whose data to copy from          | std::span<const uint8_t> | Buffer must fit into L1                             | Yes      |
@@ -331,7 +331,7 @@ bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t a
  *
  * | Argument             | Description                                 | Data type             | Valid range                                       | required |
  * |----------------------|---------------------------------------------|-----------------------|---------------------------------------------------|----------|
- * | device               | The device whose DRAM to read data from     | IDevice*              |                                                   | Yes      |
+ * | device               | The device whose L1 to read data from       | IDevice*              |                                                   | Yes      |
  * | logical_core         | Logical coordinate of core whose L1 to read | CoreCoord             | On Grayskull, any valid logical worker coordinate | Yes      |
  * | address              | Starting address in L1 to read from         | uint32_t              |                                                   | Yes      |
  * | host_buffer          | Buffer on host to copy data into            | std::span<uint8_t>    | Buffer must fit L1 buffer                         | Yes      |
