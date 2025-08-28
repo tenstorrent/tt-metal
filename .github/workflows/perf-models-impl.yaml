@@ -103,7 +103,6 @@ jobs:
         -e GTEST_OUTPUT=xml:generated/test_reports/
         -e GITHUB_ACTIONS=true
         -e LOGURU_LEVEL=INFO
-        -e PYTHONPATH=/work
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
@@ -336,7 +335,7 @@ jobs:
           docker_opts: ${{ env.DOCKER_OPTS }}
           run_args: |
             # Merge all the generated reports
-            export PYTHONPATH=$(pwd) && env python3 models/perf/merge_perf_results.py CHECK
+            env python3 models/perf/merge_perf_results.py CHECK
         #run: export PYTHONPATH=$(pwd) && env python3 models/perf/merge_perf_results.py CHECK
         if: ${{ !cancelled() }}
       # - name: Run performance regressions
