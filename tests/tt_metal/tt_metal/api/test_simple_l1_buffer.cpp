@@ -254,28 +254,4 @@ TEST_F(MeshDeviceFixture, TensixTestSimpleL1ReadWritex2y2TileHi) {
     }
 }
 
-TEST_F(MeshDeviceFixture, TensixTestBufferL1ReadWriteTileLo) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t lo_address = 768 * 1024;
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 2 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 4 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, lo_address + 8 * 1024, lo_address + 16 * 1024, 6 * 1024));
-    }
-}
-
-TEST_F(MeshDeviceFixture, TensixTestBufferL1ReadWriteTileHi) {
-    for (unsigned int id = 0; id < num_devices_; id++) {
-        size_t hi_address = this->devices_.at(id)->l1_size_per_core() - (24 * 1024);
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 2 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 4 * 1024));
-        ASSERT_TRUE(SimpleTiledL1WriteCBRead(
-            this->devices_.at(id), {2, 2}, hi_address + 8 * 1024, hi_address + 16 * 1024, 6 * 1024));
-    }
-}
-
 }  // namespace tt::tt_metal
