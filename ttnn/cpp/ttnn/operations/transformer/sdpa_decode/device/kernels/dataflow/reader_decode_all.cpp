@@ -83,8 +83,6 @@ void kernel_main() {
             cur_pos = cur_pos_arg;
         } else {
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
-            const InterleavedAddrGen<true> addrg = {.bank_base_address = pos_addr, .page_size = index_stick_size_B};
-
             cb_reserve_back(cb_index_id, 1);
             uint32_t index_cb_wr_ptr = get_write_ptr(cb_index_id);
             const auto addrg = TensorAccessor(pos_args, pos_addr, index_stick_size_B);
