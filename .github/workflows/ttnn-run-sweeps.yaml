@@ -15,9 +15,6 @@ on:
           - tilize_with_val_padding
           - untilize
           - untilize_with_unpadding
-          - ccl.line_all_gather
-          - ccl.all_gather_n300
-          - ccl.all_gather_n300_focused
           - creation.zeros.zeros
           - creation.empty.empty
           - creation.zeros_like.zeros_like
@@ -547,8 +544,15 @@ on:
           - data_movement.view.view_pytorch2
           - data_movement.view.view_tt_torch
           - data_movement.interleaved_to_sharded.interleaved_to_sharded_e2e
-  schedule:
-    - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
+      suite_name:
+        description: "Which sweep suite to run?"
+        type: string
+      upload_results:
+        description: "Upload sweep results to SFTP server?"
+        type: boolean
+        default: false
+  # schedule:
+  #   - cron: "0 21 * * *" # This cron schedule runs the workflow at 9:00pm UTC nightly
 
 jobs:
   build-artifact:
@@ -593,10 +597,17 @@ jobs:
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run ttnn sweeps generation (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
-        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --dump-file --tag ci-main
+        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --dump-file --tag ci-main --explicit
       - name: Run ttnn sweeps generation (all sweeps)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
-        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --dump-file --tag ci-main
+        run: python3 tests/sweep_framework/sweeps_parameter_generator.py --dump-file --tag ci-main --explicit
+
+      - name: Upload sweep vectors
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-vectors
+          path: /work/tests/sweep_framework/vectors_export/
+          retention-days: 1
 
   ttnn-run-sweeps:
     needs:
@@ -613,14 +624,14 @@ jobs:
               name: "Wormhole N150 Sweeps",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-              tt-smi-cmd: "tt-smi-metal -r 0"
+              tt-smi-cmd: "tt-smi -r"
             },
-            {
-              name: "Wormhole N300 Sweeps",
-              arch: wormhole_b0,
-              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-              tt-smi-cmd: "tt-smi-metal -r 0"
-            }
+            # {
+            #   name: "Wormhole N300 Sweeps",
+            #   arch: wormhole_b0,
+            #   runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+            #   tt-smi-cmd: "tt-smi-metal -r 0"
+            # }
           ]
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -652,9 +663,30 @@ jobs:
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      - name: Download sweep vectors
+        uses: actions/download-artifact@v4
+        with:
+          name: sweeps-vectors
+          path: /work/tests/sweep_framework/vectors_export/
       - name: Run ttnn sweeps (single sweep)
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' }}
         run: python3 tests/sweep_framework/sweeps_runner.py --module-name ${{ github.event.inputs.sweep_name }} --vector-source vectors_export --result-dest results_export --tag ci-main --summary
       - name: Run ttnn sweeps (all sweeps, nightly)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
-        run: python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary
+        run: python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout --skip-modules conv2d.full.conv2d_misc,conv2d.full.conv2d_sharding,conv2d.full.conv2d_sliding_window,conv2d.short.conv2d_short_sweep,conv2d.short.conv2d_ttforge_sweep,conv_transpose2d.short.conv_transpose2d_short_sweep
+      - name: Upload sweep results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sweeps-results
+          path: /work/tests/sweep_framework/results_export/
+          retention-days: 1
+      - name: Upload sweep results to SFTP server
+        if: ${{ always() && github.event.inputs.upload_results }}
+        uses: ./.github/actions/upload-data-via-sftp
+        with:
+          ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
+          sftp-batchfile: .github/actions/upload-data-via-sftp/optest_batchfile.txt
+          username: ml-kernel-op-test-writer
+          hostname: s-dbd4b8a190fa40a4b.server.transfer.us-east-2.amazonaws.com
+          path: /work

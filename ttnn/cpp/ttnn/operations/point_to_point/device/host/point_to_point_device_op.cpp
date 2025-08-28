@@ -136,7 +136,7 @@ void PointToPointOp::validate(const operation_attributes_t& operation_attributes
             output_spec);
 
         TT_FATAL(
-            output_tensor.mesh_device() == mesh_device,
+            output_tensor.device() == mesh_device,
             "Output tensor must be allocated on same mesh device as input tensor");
     }
     const uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();

@@ -3,15 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dev_msgs.h"
-#include <cstddef>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
-#include <memory>
 #include <numeric>
 #include <string>
-#include <vector>
 
-#include "core_config.h"  // ProgrammableCoreType
 #include "dev_mem_map.h"  // MEM_LOCAL_BASE
 #include "hal_types.hpp"
 #include "hw/inc/wormhole/eth_l1_address_map.h"
@@ -57,6 +53,13 @@ static constexpr float INF_WHB0 = 1.7014e+38;
 namespace tt {
 
 namespace tt_metal {
+
+namespace wormhole {
+
+// Wrap enum definitions in arch-specific namespace so as to not clash with other archs.
+#include "core_config.h"  // ProgrammableCoreType
+
+}
 
 class HalJitBuildQueryWormhole : public hal_1xx::HalJitBuildQueryBase {
 public:
@@ -211,6 +214,7 @@ public:
 };
 
 void Hal::initialize_wh(bool is_base_routing_fw_enabled) {
+    using namespace wormhole;
     static_assert(static_cast<int>(HalProgrammableCoreType::TENSIX) == static_cast<int>(ProgrammableCoreType::TENSIX));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));

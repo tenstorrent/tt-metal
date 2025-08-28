@@ -57,7 +57,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     const std::optional<const tt::tt_metal::experimental::GlobalCircularBuffer>& global_cb) {
     tt::tt_metal::Program program{};
 
-    IDevice* mesh_device = input_tensor.mesh_device();
+    IDevice* mesh_device = input_tensor.device();
     if (!mesh_device) {
         mesh_device = input_tensor.device();
     }
@@ -175,7 +175,7 @@ tt::tt_metal::operation::ProgramWithCallbacks llama_all_gather_matmul_async_shar
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
     const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
-    static constexpr auto packet_header_size_bytes = sizeof(tt::tt_fabric::PacketHeader);
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
         tt::tt_metal::CircularBufferConfig(
             num_packet_headers_storable * packet_header_size_bytes * 2,
