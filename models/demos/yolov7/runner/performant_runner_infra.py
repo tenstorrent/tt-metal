@@ -44,11 +44,7 @@ class YOLOv7PerformanceRunnerInfra:
         self.outputs_mesh_composer = outputs_mesh_composer
 
         self.torch_model = load_torch_model(self.model_location_generator)
-        self.torch_input_tensor = (
-            torch.randn((batch_size, 3, 640, 640), dtype=torch.float32)
-            if self.torch_input_tensor is None
-            else self.torch_input_tensor
-        )
+        self.torch_input_tensor = torch.randn((self.batch_size, 3, 640, 640), dtype=torch.float32)
         self.parameters = custom_preprocessor(model=self.torch_model, mesh_mapper=self.weights_mesh_mapper)
         nx_ny = [80, 40, 20]
         grid_tensors = []
@@ -84,10 +80,7 @@ class YOLOv7PerformanceRunnerInfra:
 
         assert torch_input_tensor.ndim == 4, "Expected input tensor to have shape (BS, C, H, W)"
 
-        input_tensor = [torch_input_tensor[i].unsqueeze(0) for i in range(torch_input_tensor.shape[0])]
-        tt_inputs_host = ttnn.from_host_shards(
-            [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT) for t in input_tensor], device.shape
-        )
+        tt_inputs_host = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, mesh_mapper=self.inputs_mesh_mapper)
         return tt_inputs_host, input_mem_config
 
     def setup_dram_sharded_input(self, device, torch_input_tensor=None, mesh_mapper=None, mesh_composer=None):
@@ -113,10 +106,14 @@ class YOLOv7PerformanceRunnerInfra:
         self.output_tensor = self.ttnn_yolov7_model(self.input_tensor)[0]
 
     def validate(self, output_tensor=None, torch_output_tensor=None):
-        ttnn_output_tensor = self.output_tensor if output_tensor is None else output_tensor
-        torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
-        output_tensor = ttnn.to_torch(ttnn_output_tensor, mesh_composer=self.outputs_mesh_composer)
+        if output_tensor is None:
+            output_tensor = self.output_tensor
+        else:
+            if isinstance(output_tensor, (list, tuple)):
+                output_tensor = output_tensor[0]
 
+        torch_output_tensor = self.torch_output_tensor if torch_output_tensor is None else torch_output_tensor
+        output_tensor = ttnn.to_torch(output_tensor, mesh_composer=self.outputs_mesh_composer)
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor, output_tensor, pcc=0.99)
 
         logger.info(
