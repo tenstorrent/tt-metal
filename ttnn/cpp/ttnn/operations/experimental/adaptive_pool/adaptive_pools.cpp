@@ -21,8 +21,7 @@ namespace operations::experimental::adaptive_pool {
 
 using namespace ttnn::operations::pool;
 
-// We'll reuse the generic pool2d functionality from the regular pool operations
-
+// Reusing the generic pool2d functionality from the regular pool operations
 Tensor AdaptiveAvgPool2DOp::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
@@ -39,8 +38,10 @@ Tensor AdaptiveAvgPool2DOp::invoke(
     uint32_t output_h = output_size[0];
     uint32_t output_w = output_size[1];
 
-    auto hybrid_config = calculate_pattern_based_hybrid_config(input_h, input_w, output_h, output_w);
-    auto params = convert_hybrid_to_legacy(hybrid_config, input_h, input_w);
+    // Validate that this adaptive pooling configuration is feasible
+    validate_adaptive_pool_feasibility(input_h, input_w, output_h, output_w);
+
+    auto params = calculate_adaptive_pool_params(input_h, input_w, output_h, output_w);
 
     return ttnn::operations::pool::AvgPool2DOp::invoke(
         queue_id,
@@ -52,8 +53,8 @@ Tensor AdaptiveAvgPool2DOp::invoke(
         params.kernel_size,
         params.stride,
         params.padding,
-        false,         // ceil_mode = false
-        false,         // count_include_pad = FALSE (ignores padding values)
+        false,         // ceil_mode
+        false,         // count_include_pad always false because we want to ignore padding values
         std::nullopt,  // divisor_override
         memory_config,
         applied_shard_scheme,
@@ -78,8 +79,10 @@ Tensor AdaptiveMaxPool2DOp::invoke(
     uint32_t output_h = output_size[0];
     uint32_t output_w = output_size[1];
 
-    auto hybrid_config = calculate_pattern_based_hybrid_config(input_h, input_w, output_h, output_w);
-    auto params = convert_hybrid_to_legacy(hybrid_config, input_h, input_w);
+    // Validate that this adaptive pooling configuration is feasible
+    validate_adaptive_pool_feasibility(input_h, input_w, output_h, output_w);
+
+    auto params = calculate_adaptive_pool_params(input_h, input_w, output_h, output_w);
 
     return ttnn::operations::pool::MaxPool2DOp::invoke(
         queue_id,
@@ -91,8 +94,8 @@ Tensor AdaptiveMaxPool2DOp::invoke(
         params.kernel_size,
         params.stride,
         params.padding,
-        hybrid_config.dilation,  // PATTERN-BASED: Calculated dilation based on kernel analysis for MaxPool too
-        false,                   // ceil_mode = false
+        {1, 1},  // dilation
+        false,   // ceil_mode
         memory_config,
         applied_shard_scheme,
         in_place_halo,
