@@ -52,7 +52,7 @@ run_qwen25_vl_func() {
 run_gemma3_func() {
   HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma3-4b-it MESH_DEVICE=N300 pytest models/demos/gemma3/demo/text_demo.py -k "performance and ci-1"
   echo "LOG_METAL: Gemma3 4B tests completed (text only)"
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma3-4b-it MESH_DEVICE=N300 pytest models/demos/gemma3/demo/vision_demo.py -k "performance and ci-1"
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/google/gemma3-4b-it MESH_DEVICE=N300 pytest models/demos/gemma3/demo/vision_demo.py -k "performance and batch1-trace"
   echo "LOG_METAL: Gemma3 4B tests completed (text and vision)"
 }
 
