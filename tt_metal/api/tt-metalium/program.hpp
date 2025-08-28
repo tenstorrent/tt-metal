@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <memory>
-#include <variant>
 #include <vector>
 
 #include <tt-metalium/circular_buffer.hpp>
@@ -25,22 +24,6 @@ class Kernel;
 class IDevice;
 class Program;
 class CircularBufferConfig;
-
-namespace experimental {
-class GlobalCircularBuffer;
-CBHandle CreateCircularBuffer(
-    Program& program,
-    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    const CircularBufferConfig& config,
-    const GlobalCircularBuffer& global_circular_buffer);
-
-}  // namespace experimental
-
-namespace program_dispatch {
-template <typename WorkloadType, typename DeviceType>
-uint32_t program_base_addr_on_core(
-    WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType core_type);
-}  // namespace program_dispatch
 
 namespace detail {
 class ProgramImpl;
@@ -61,7 +44,7 @@ public:
     Program& operator=(Program&& other) noexcept;
 
     //////////////////////////////
-    // Runtime ID related functions:
+    // ID related functions:
     //////////////////////////////
 
     // Extensively used by tests
