@@ -24,71 +24,83 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
+          # {
+          #   name: "[T3K] Llama-3.1-8B-Instruct",
+          #   model: "meta-llama/Llama-3.1-8B-Instruct",
+          #   server-timeout: 5,
+          #   benchmark-timeout: 5,
+          #   runner-label: config-t3000,
+          #   mesh-device: T3K,
+          #   tt-llama-text-ver: tt_transformers,
+          #   override-tt-config: "{\"fabric_config\": \"FABRIC_1D\"}",
+          #   co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+          #   co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
+          # },
+          # {
+          #   name: "[DB] Llama-3.1-8B-Instruct",
+          #   model: "meta-llama/Llama-3.1-8B-Instruct",
+          #   server-timeout: 5,
+          #   benchmark-timeout: 5,
+          #   runner-label: BH-DeskBox,
+          #   mesh-device: P150x2,
+          #   tt-llama-text-ver: tt_transformers,
+          #   override-tt-config: "{\"data_parallel\": 2}",
+          #   owner_id: U08GELBB1AP, # Ambrose Ling
+          # },
+          # {
+          #   name: "[QB] Llama-3.1-8B-Instruct",
+          #   model: "meta-llama/Llama-3.1-8B-Instruct",
+          #   server-timeout: 5,
+          #   benchmark-timeout: 5,
+          #   runner-label: bh-LLMBox,
+          #   mesh-device: P150x4,
+          #   tt-llama-text-ver: tt_transformers,
+          #   override-tt-config: "{\"data_parallel\": 4}",
+          #   owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
+          # },
+          # {
+          #   name: "[RB] Llama-3.1-8B-Instruct",
+          #   model: "meta-llama/Llama-3.1-8B-Instruct",
+          #   server-timeout: 35,
+          #   benchmark-timeout: 10,
+          #   runner-label: bh-rackbox,
+          #   mesh-device: P150x8,
+          #   tt-llama-text-ver: tt_transformers,
+          #   override-tt-config: "{\"data_parallel\": 8}",
+          #   owner_id: U08GELBB1AP, # Ambrose Ling
+          # },
+          # {
+          #   name: "[TG] Llama-3.3-70B-Instruct",
+          #   model: "meta-llama/Llama-3.3-70B-Instruct",
+          #   server-timeout: 35,
+          #   benchmark-timeout: 10,
+          #   runner-label: config-tg,
+          #   mesh-device: TG,
+          #   tt-llama-text-ver: llama3_70b_galaxy,
+          #   override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
+          #   co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+          #   co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
+          # },
+          # {
+          #   name: "[TG] Llama-8B DP=16",
+          #   model: "meta-llama/Llama-3.1-8B-Instruct",
+          #   server-timeout: 10,
+          #   benchmark-timeout: 5,
+          #   runner-label: config-tg,
+          #   mesh-device: TG,
+          #   override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D\"}",
+          #   tt-llama-text-ver: tt_transformers,
+          #   co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
+          #   co-owner-2-id: U08BH66EXAL, # Radoica Draskic
+          # },
           {
-            name: "[T3K] Llama-3.1-8B-Instruct",
-            model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 5,
+            name: "[T3K] Gemma3-27B",
+            model: "google/gemma-3-27b-it",
+            server-timeout: 10,
             benchmark-timeout: 5,
             runner-label: config-t3000,
             mesh-device: T3K,
-            tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\"}",
-            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
-            co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
-          },
-          {
-            name: "[DB] Llama-3.1-8B-Instruct",
-            model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 5,
-            benchmark-timeout: 5,
-            runner-label: BH-DeskBox,
-            mesh-device: P150x2,
-            tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 2}",
-            owner_id: U08GELBB1AP, # Ambrose Ling
-          },
-          {
-            name: "[QB] Llama-3.1-8B-Instruct",
-            model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 5,
-            benchmark-timeout: 5,
-            runner-label: bh-LLMBox,
-            mesh-device: P150x4,
-            tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 4}",
-            owner_id: U08CEGF78ET, # Salar Hosseini Khorasgani
-          },
-          {
-            name: "[RB] Llama-3.1-8B-Instruct",
-            model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 35,
-            benchmark-timeout: 10,
-            runner-label: bh-rackbox,
-            mesh-device: P150x8,
-            tt-llama-text-ver: tt_transformers,
-            override-tt-config: "{\"data_parallel\": 8}",
-            owner_id: U08GELBB1AP, # Ambrose Ling
-          },
-          {
-            name: "[TG] Llama-3.3-70B-Instruct",
-            model: "meta-llama/Llama-3.3-70B-Instruct",
-            server-timeout: 35,
-            benchmark-timeout: 10,
-            runner-label: config-tg,
-            mesh-device: TG,
-            tt-llama-text-ver: llama3_70b_galaxy,
-            override-tt-config: "{\"dispatch_core_axis\": \"col\", \"sample_on_device_mode\": \"all\", \"fabric_config\": \"FABRIC_1D\", \"worker_l1_size\": 1344544, \"trace_region_size\": 95693824}",
-            co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
-            co-owner-2-id: U08CEGF78ET, # Salar Hosseini Khorasgani
-          },
-          {
-            name: "[TG] Llama-8B DP=16",
-            model: "meta-llama/Llama-3.1-8B-Instruct",
-            server-timeout: 10,
-            benchmark-timeout: 5,
-            runner-label: config-tg,
-            mesh-device: TG,
-            override-tt-config: "{\"data_parallel\": 16, \"fabric_config\": \"FABRIC_1D\"}",
+            override-tt-config: "{\"fabric_config\": \"FABRIC_1D\", \"l1_small_size\": 79104}",
             tt-llama-text-ver: tt_transformers,
             co-owner-1-id: U08E1JCDVNX, # Pavle Petrovic
             co-owner-2-id: U08BH66EXAL, # Radoica Draskic
@@ -115,7 +127,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        - /mnt/MLPerf:/mnt/MLPerf:ro
+        - /mnt/MLPerf:/mnt/MLPerf:rw
       options: "--device /dev/tenstorrent"
     defaults:
       run:
