@@ -125,8 +125,8 @@ uint32_t default_workers(
     uint32_t ring_size,
     const MeshDevice& mesh_device,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    auto sd_id = sub_device_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     constexpr std::array<uint32_t, 4> candidate_worker_counts = {4, 2, 1};
     for (auto worker_count : candidate_worker_counts) {
         uint32_t core_count = (worker_count + 2) * num_links;
@@ -165,10 +165,11 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
     auto mesh_device = input_tensor.mesh_device();
+    TT_FATAL(mesh_device != nullptr, "Mesh device not found");
 
     // op hyperparams
     uint32_t num_workers_per_direction =
-        num_workers_per_direction_opt.value_or(default_workers(num_links, ring_size, mesh_device, sub_device_id));
+        num_workers_per_direction_opt.value_or(default_workers(num_links, ring_size, *mesh_device, sub_device_id));
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
