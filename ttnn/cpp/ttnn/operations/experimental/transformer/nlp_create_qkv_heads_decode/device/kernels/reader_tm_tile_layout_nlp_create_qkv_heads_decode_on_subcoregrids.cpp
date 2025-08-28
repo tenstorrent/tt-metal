@@ -28,9 +28,9 @@ void kernel_main() {
     constexpr uint32_t PROCESS_QV = get_compile_time_arg_val(11);
     constexpr uint32_t PROCESS_K = get_compile_time_arg_val(12);
     constexpr bool use_batch_offset = get_compile_time_arg_val(13) == 1;
-    constexpr bool index_is_dram = get_compile_time_arg_val(14) == 1;
-    constexpr uint32_t index_stick_size = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_batch_offset_id = get_compile_time_arg_val(16);
+    constexpr uint32_t index_stick_size = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_batch_offset_id = get_compile_time_arg_val(15);
+    constexpr auto index_args = TensorAccessorArgs<16>();
 
     tt_l1_ptr uint32_t* in0_mcast_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(3));
     tt_l1_ptr uint32_t* in0_mcast_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(3 + in_num_cores));
@@ -38,8 +38,7 @@ void kernel_main() {
     uint32_t device_batch_offset = 0;
 
     if constexpr (use_batch_offset) {
-        const InterleavedAddrGen<index_is_dram> addrg = {
-            .bank_base_address = batch_offset_tensor_addr, .page_size = index_stick_size};
+        const auto addrg = TensorAccessor(index_args, batch_offset_tensor_addr, index_stick_size);
         cb_reserve_back(cb_batch_offset_id, 1);
         uint32_t index_cb_wr_ptr = get_write_ptr(cb_batch_offset_id);
         // Read the batch offset 1 page to read

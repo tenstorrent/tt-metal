@@ -7,8 +7,8 @@
 #include <device_pool.hpp>
 #include <host_api.hpp>
 #include <enchantum/enchantum.hpp>
-#include <tt-metalium/erisc_datamover_builder.hpp>
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
+#include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include <tt-metalium/mesh_graph.hpp>
 #include <tt_metal.hpp>
 #include <algorithm>
@@ -1257,7 +1257,7 @@ std::unique_ptr<Program> create_and_compile_tt_fabric_program(IDevice* device) {
             auto eth_logical_core = soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL);
             auto kernel = tt::tt_metal::CreateKernel(
                 *fabric_program_ptr,
-                "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
+                "tt_metal/fabric/impl/kernels/edm_fabric/fabric_erisc_router.cpp",
                 eth_logical_core,
                 tt::tt_metal::EthernetConfig{
                     .noc = edm_builder.config.risc_configs[risc_id].get_configured_noc(),
