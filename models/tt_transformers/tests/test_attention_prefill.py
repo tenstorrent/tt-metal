@@ -172,12 +172,7 @@ def test_attention_inference(
     )[positions]
     attn_mask = torch.full((max_seq_len, max_seq_len), torch.finfo(torch.float32).min)
     attn_mask_torch = torch.triu(attn_mask, diagonal=1)
-    reference_output = reference_model(
-        pt_attention_input.to(dtype=torch.bfloat16),
-        positions[0],
-        freqs_cis_i,
-        mask=attn_mask_torch.to(dtype=torch.bfloat16),
-    )
+    reference_output = reference_model(pt_attention_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc)
 
