@@ -21,6 +21,7 @@
 #include "compute_kernel_api/transpose_wh.h"
 #include "compute_kernel_api/welford.h"
 #include "debug/dprint.h"
+#include "debug/dprint_tensix.h"
 
 namespace NAMESPACE {
 void MAIN {
@@ -211,7 +212,7 @@ void MAIN {
     tilize_uninit(cb_in_rm, cb_in);
     cb_wait_front(cb_in, per_core_MN);
 #else
-    binary_op_init_common(cb_in0, cb_input_mask, cb_x);  // TBD
+    binary_op_init_common(cb_in0, cb_ex_ping, cb_ex_ping);
 #endif
 
     index_b_offset = 0;
@@ -263,8 +264,6 @@ void MAIN {
             uint32_t curr_xy_coord = 0;
             uint32_t curr_xy_limit = 0;
 
-            cb_wait_front(cb_input_mask, block_w);
-
             // for h in ht
             //     for w in wt
             //         // get to a unique tile in the group
@@ -282,53 +281,13 @@ void MAIN {
                     out_block_hw_actual = out_block_hw_normal;
                 }
 
+                // Transpose (from cb_in0) and Welford
                 cb_wait_front(cb_in0, out_block_hw_normal);
-                DPRINT << "mask: input available: out_block_index: " << out_block_index << " out of "
-                       << num_out_blocks_padded << ENDL();
-
-                index_h_offset = 0;
-                reconfig_data_format_srcb(cb_in0, cb_input_mask);
-                // mask input
-                mul_tiles_init(cb_in0, cb_input_mask);
-                cb_reserve_back(cb_x, out_block_hw_normal);
-                for (uint32_t i = 0; i < out_block_h_actual; ++i) {
-                    DPRINT << "mask: i: " << i << " out of " << out_block_h_actual << ENDL();
-                    index_subblock_w_offset = 0;
-                    for (uint32_t j = 0; j < num_subblocks_w; ++j) {
-                        tile_regs_acquire();
-                        for (uint32_t w = 0; w < subblock_w; ++w) {
-                            uint32_t index = w + index_subblock_w_offset + index_h_offset;
-                            uint32_t index_mask = w + index_subblock_w_offset;
-#ifdef TILIZE_IN
-                            mul_tiles(cb_in, cb_input_mask, index, index_mask, w);
-#else
-                            mul_tiles(cb_in0, cb_input_mask, index, index_mask, w);
-#endif
-                        }
-                        tile_regs_commit();
-                        tile_regs_wait();
-                        for (uint32_t i = 0; i < subblock_w; ++i) {
-                            pack_tile(i, cb_x);
-                        }
-                        tile_regs_release();
-                        index_subblock_w_offset += subblock_w;
-                    }
-                    index_h_offset += block_w;
-                }
-#ifdef TILIZE_IN
-                cb_pop_front(cb_in, out_block_hw_actual);
-#else
-                cb_pop_front(cb_in0, out_block_hw_normal);
-#endif
-                cb_push_back(cb_x, out_block_hw_normal);
-
-                // Transpose (from cb_x) and Welford
-                cb_wait_front(cb_x, out_block_hw_normal);
                 DPRINT << "welford: read_from_ping: " << (uint32_t)read_from_ping << ENDL();
 
                 index_h_offset = 0;
-                reconfig_data_format_srcb(cb_input_mask, cb_x);
-                transpose_wh_init(cb_x, cb_x);
+                reconfig_data_format_srcb(cb_in0);
+                transpose_wh_init(cb_in0, cb_ex_ping);
                 copy_tile_init(read_from_ping ? cb_ex_ping : cb_ex_pong);
                 welford_init();
 
@@ -350,12 +309,16 @@ void MAIN {
                         for (uint32_t w = 0; w < subblock_w; ++w) {
                             uint32_t index = w + index_subblock_w_offset + index_h_offset;
                             uint32_t index_mask = w + index_subblock_w_offset;
-                            transpose_wh_init_short(cb_x);
-                            transpose_wh_tile(cb_x, index, 0);
+                            transpose_wh_init_short(cb_in0);
+#ifdef TILIZE_IN
+                            transpose_wh_tile(cb_in, index, 0);
+#else
+                            transpose_wh_tile(cb_in0, index, 0);
+#endif
                             bool is_last_tile_in_group = (out_block_index == num_out_blocks_padded - 1) &&
                                                          (i == out_block_h_actual - 1) && (j == num_subblocks_w - 1) &&
                                                          (w == subblock_w - 1);
-                            // welford(0, 1, 2, curr_xy_coord, curr_xy_limit, is_last_tile_in_group);
+                            welford(0, 1, 2, curr_xy_coord, curr_xy_limit, is_last_tile_in_group);
                             curr_xy_coord += 32;
                         }
                         tile_regs_commit();
@@ -370,15 +333,24 @@ void MAIN {
                     }
                     index_h_offset += block_w;
                 }
-                cb_pop_front(cb_x, out_block_hw_normal);
+#ifdef TILIZE_IN
+                cb_pop_front(cb_in, out_block_hw_actual);
+#else
+                cb_pop_front(cb_in0, out_block_hw_normal);
+#endif
                 DPRINT << "welford done: out_block_index: " << out_block_index << ENDL();
             }
 
             cb_wait_front(read_from_ping ? cb_ex_ping : cb_ex_pong, 2);
             cb_reserve_back(cb_ex_partial, 2);
+            transpose_wh_init(read_from_ping ? cb_ex_ping : cb_ex_pong, cb_ex_partial);
             tile_regs_acquire();
+            transpose_wh_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 0, 0);
+            transpose_wh_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 1, 1);
             copy_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 0, 0);
             copy_tile(read_from_ping ? cb_ex_ping : cb_ex_pong, 1, 1);
+            dprint_tensix_dest_reg(0);
+            dprint_tensix_dest_reg(1);
             tile_regs_commit();
             tile_regs_wait();
             pack_tile_block(0, cb_ex_partial, 2);
@@ -460,6 +432,7 @@ void MAIN {
                 DPRINT << "Pushed xmm to cb: " << cb_xmm << ENDL();
 
                 // zero out the garbage values by mult mask again
+                cb_wait_front(cb_input_mask, block_w);
                 reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
                 mul_tiles_init(cb_xmm, cb_input_mask);
                 cb_reserve_back(cb_x, out_block_hw_normal);
