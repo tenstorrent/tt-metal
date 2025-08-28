@@ -109,18 +109,6 @@ public:
     // Used in tests, fabric, CaptureCreateKernel, light metal, etc.
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
-    //////////////////////////////
-    // Semaphore related functions:
-    //////////////////////////////
-
-    // Used by MeshWorkloadImpl::semaphores, which is not used anywhere else
-    const std::vector<Semaphore>& semaphores() const;
-    // Not used outside of tests
-    std::size_t num_semaphores() const;
-    // Used in ConfigureDeviceWithProgram in tt_metal.cpp
-    void init_semaphores(
-        const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
-
     // Used in ConfigureDeviceWithProgram in tt_metal.cpp
     // Used in Device::init_command_queue_device, Device::configure_fabric in device.cpp
     std::vector<std::vector<CoreCoord>> logical_cores() const;

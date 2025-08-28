@@ -295,7 +295,8 @@ std::vector<Semaphore>& MeshWorkloadImpl::semaphores() {
     // Get all semaphores across all programs in the MeshWorkload
     if (not semaphores_.size()) {
         for (auto& [device_range, program] : programs_) {
-            semaphores_.insert(semaphores_.end(), program.semaphores().begin(), program.semaphores().end());
+            semaphores_.insert(
+                semaphores_.end(), program.impl().semaphores().begin(), program.impl().semaphores().end());
         }
     }
     return semaphores_;

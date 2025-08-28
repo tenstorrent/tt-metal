@@ -71,7 +71,7 @@ void check_program_is_mapped_to_correct_cores(
                 for (const auto& cb : program.circular_buffers()) {
                     TT_FATAL(cb->is_on_logical_core(logical_core), "Error");
                 }
-                for (const auto& semaphore : program.semaphores()) {
+                for (const auto& semaphore : program.impl().semaphores()) {
                     TT_FATAL(semaphore.initialized_on_logical_core(logical_core), "Error");
                 }
             }

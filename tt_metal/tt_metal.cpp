@@ -890,7 +890,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
                         device_id, physical_core, circular_buffer_config_vec, addr);
                 }
             }
-            program.init_semaphores(*device, logical_core, index);
+            program.impl().init_semaphores(*device, logical_core, index);
         }
     }
 

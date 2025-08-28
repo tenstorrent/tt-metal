@@ -940,10 +940,6 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     }
 }
 
-std::size_t detail::ProgramImpl::num_semaphores() const { return semaphores_.size(); }
-
-std::size_t Program::num_semaphores() const { return internal_->num_semaphores(); }
-
 void detail::ProgramImpl::init_semaphores(
     const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
     uint64_t kernel_config_base =
@@ -958,11 +954,6 @@ void detail::ProgramImpl::init_semaphores(
             std::vector{semaphore.get().initial_value()},
             addr + semaphore.get().offset());
     }
-}
-
-void Program::init_semaphores(
-    const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const {
-    internal_->init_semaphores(device, logical_core, programmable_core_type_index);
 }
 
 void detail::ProgramImpl::add_semaphore(
@@ -1601,8 +1592,6 @@ const std::vector<std::shared_ptr<CircularBuffer>>& Program::circular_buffers() 
 }
 
 const std::vector<Semaphore>& detail::ProgramImpl::semaphores() const { return semaphores_; }
-
-const std::vector<Semaphore>& Program::semaphores() const { return internal_->semaphores(); }
 
 void detail::ProgramImpl::add_buffer(std::shared_ptr<Buffer> buf) { owned_buffer_pool.push_back(std::move(buf)); }
 
