@@ -52,6 +52,8 @@ const tt::stl::Indestructible<std::unordered_map<tt::tt_metal::ClusterType, std:
                 {tt::tt_metal::ClusterType::P150_X8, "p150_x8_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0, "n150_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE, "p150_mesh_graph_descriptor.yaml"},
+                {tt::tt_metal::ClusterType::SIMULATOR_QUASAR,
+                 "p150_mesh_graph_descriptor.yaml"},  // TODO use quasar mesh
                 {tt::tt_metal::ClusterType::N300_2x2, "n300_2x2_mesh_graph_descriptor.yaml"},
                 {tt::tt_metal::ClusterType::P300, "p300_mesh_graph_descriptor.yaml"},
             });
