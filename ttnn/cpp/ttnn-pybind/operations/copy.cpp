@@ -16,8 +16,6 @@
 
 namespace ttnn::operations::copy {
 
-namespace {
-
 void bind_global_typecast(py::module& module) {
     auto doc = fmt::format(
         R"doc({0}(input_tensor: ttnn.Tensor, dtype: ttnn.DataType, *, memory_config: Optional[ttnn.MemoryConfig] = None, output_tensor : Optional[ttnn.Tensor] = None) -> ttnn.Tensor
@@ -79,8 +77,7 @@ Example::
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
             py::arg("sub_core_grids") = std::nullopt});
-
-}  // namespace
+}
 
 void py_module(py::module& module) { bind_global_typecast(module); }
 

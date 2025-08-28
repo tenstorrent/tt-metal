@@ -7,6 +7,7 @@
 #include "ttnn/operations/data_movement/bcast/device/bcast_device_operation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/run_operation.hpp"
 
 namespace ttnn::operations::data_movement {
 

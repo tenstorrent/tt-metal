@@ -192,25 +192,6 @@ ttnn::Tensor SliceOperation::invoke(
         input_tensor, start, end, step_vec, memory_config_arg, optional_output_tensor, pad_value);
 }
 
-template <typename T, std::size_t N>
-ttnn::Tensor SliceOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const std::array<T, N>& output_tensor_start,
-    const std::array<T, N>& output_tensor_end,
-    const std::array<T, N>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value) {
-    return SliceOperation::invoke<T, N>(
-        input_tensor,
-        output_tensor_start,
-        output_tensor_end,
-        step,
-        memory_config_arg,
-        optional_output_tensor,
-        pad_value);
-}
-
 template <typename T>
 ttnn::Tensor SliceOperation::invoke(
     const ttnn::Tensor& input_tensor,
@@ -266,6 +247,26 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t>(
     tt::stl::Span<const uint32_t> begins,
     tt::stl::Span<const uint32_t> ends,
     tt::stl::Span<const uint32_t> step,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<float>& pad_value);
+
+// Template instantiations for std::array version
+template ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
+    const ttnn::Tensor& input_tensor,
+    const std::array<uint32_t, 4>& output_tensor_start,
+    const std::array<uint32_t, 4>& output_tensor_end,
+    const std::array<uint32_t, 4>& step,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<float>& pad_value);
+
+// Template instantiations for Tensor version
+template ttnn::Tensor SliceOperation::invoke<uint32_t>(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& output_tensor_start,
+    const ttnn::Tensor& output_tensor_end,
+    const std::optional<ttnn::SmallVector<uint32_t>>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);

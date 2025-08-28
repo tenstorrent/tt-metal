@@ -87,12 +87,11 @@ void py_module(py::module& module) {
 
     module.def(
         "to_device",
-        py::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&, QueueId>(
+        py::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&>(
             &ttnn::operations::core::to_device),
         py::arg("tensor"),
         py::arg("device"),
         py::arg("memory_config") = std::nullopt,
-        py::arg("cq_id") = ttnn::DefaultQueueId,
         R"doc(
             Copy tensor from host to device.
 
@@ -100,7 +99,6 @@ void py_module(py::module& module) {
                 tensor (ttnn.Tensor): The tensor to be copied from host to device.
                 device (ttnn.Device | ttnn.MeshDevice): The target device where the tensor will be copied.
                 memory_config (ttnn.MemoryConfig, optional): The memory configuration to use. Defaults to `None`.
-                cq_id (int, optional): The command queue ID to use. Defaults to `0`.
 
             Returns:
                 ttnn.Tensor: The device tensor copy.
@@ -117,17 +115,12 @@ void py_module(py::module& module) {
         &ttnn::operations::core::from_device,
         py::arg("tensor"),
         py::arg("blocking") = true,
-        py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultQueueId,
         R"doc(
             Copy tensor from device to host.
 
             Args:
                 tensor (ttnn.Tensor): the tensor to be copied from device to host.
                 blocking (bool, optional): whether the operation should be blocked until the copy is complete. Defaults to `True`.
-
-            Keyword args:
-                cq_id (int, optional): the command queue ID to use. Defaults to `0`.
 
             Returns:
                 ttnn.Tensor: the host tensor copy.

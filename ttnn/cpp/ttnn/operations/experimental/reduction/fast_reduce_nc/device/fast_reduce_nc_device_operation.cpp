@@ -97,7 +97,7 @@ Tensor fast_reduce_nc(
             _fast_reduce_nc(temp_input, sorted_dims[i], std::nullopt, output_mem_config, compute_kernel_config);
         temp_input = temp_output;
     }
-    return _fast_reduce_nctemp_input, sorted_dims.front(), output, output_mem_config, compute_kernel_config);
+    return _fast_reduce_nc(temp_input, sorted_dims.front(), output, output_mem_config, compute_kernel_config);
 }
 
 }  // namespace ttnn::operations::experimental::reduction::detail

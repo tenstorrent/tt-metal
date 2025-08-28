@@ -335,18 +335,4 @@ Tensor FoldOperation::invoke(
     return ttnn::prim::fold(input_tensor, stride_h, stride_w, output_shape, pad_c, pad_h, pad_w);
 }
 
-Tensor FoldOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    uint32_t stride_h,
-    uint32_t stride_w,
-    bool use_transpose_as_fold,
-    const std::optional<const ttnn::Shape>& output_shape,
-    uint32_t pad_c,
-    uint32_t pad_h,
-    uint32_t pad_w,
-    const std::optional<CoreRangeSet>& core_grid,
-    const std::optional<MemoryConfig>& override_memory_config) {
-    return invoke(
-        input_tensor, stride_h, stride_w, use_transpose_as_fold, output_shape, pad_c, pad_h, pad_w, core_grid);
-}
 }  // namespace ttnn::operations::data_movement

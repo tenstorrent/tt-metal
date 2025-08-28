@@ -104,16 +104,6 @@ void def_call_operator(py_operation_t& py_operation, const pybind_overload_t<fun
         overload.args.value);
 }
 
-template <typename py_operation_t, typename function_t, typename... py_args_t>
-void def_primitive_operation_method(
-    py_operation_t& py_operation, const pybind_overload_t<function_t, py_args_t...>& overload, auto name, auto method) {
-    std::apply(
-        [&py_operation, &overload, &name, &method](auto... args) {
-            py_operation.def(name, resolve_primitive_operation_method(overload.function, method), args...);
-        },
-        overload.args.value);
-}
-
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, typename... overload_t>
 auto bind_registered_operation(
     py::module& module,

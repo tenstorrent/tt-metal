@@ -72,6 +72,6 @@ Tensor BcastTo::invoke(
             output.value().dtype());
     }
 
-    return ttnn::prim::bcast_toinput, output_shape, memory_config, output);
+    return ttnn::prim::bcast_to(input, output_shape, memory_config, output);
 }
 }  // namespace ttnn::operations::experimental

@@ -6,6 +6,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/fabric.hpp>
 #include "ttnn/global_semaphore.hpp"
+#include "ttnn/run_operation.hpp"
 
 #include <ranges>
 #include <algorithm>
@@ -297,7 +298,7 @@ Tensor reduce_scatter_impl(
         rank - 1,
         dim);
 
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ttnn::ReduceScatterAsync(
                    devices,
                    /*mesh_device=*/nullptr,
@@ -344,7 +345,7 @@ Tensor reduce_scatter_impl(
         persistent_output_tensors
             ? std::vector<std::optional<Tensor>>(persistent_output_tensors->begin(), persistent_output_tensors->end())
             : std::vector<std::optional<Tensor>>{};
-    return operation::run(
+    return tt::tt_metal::operation::run(
                ttnn::ReduceScatterAsync(
                    /*devices=*/{},
                    &mesh_device,

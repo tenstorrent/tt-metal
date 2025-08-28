@@ -8,12 +8,8 @@
 
 #include <tt-metalium/graph_tracking.hpp>
 #include <tracy/Tracy.hpp>
-#include "ttnn/common/queue_id.hpp"
-#include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/run_operation.hpp"
-#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
 namespace decorators {

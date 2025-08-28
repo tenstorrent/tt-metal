@@ -17,7 +17,7 @@ ttnn::Tensor FastReduceNCOperation::invoke(
     const std::optional<const Tensor>& output,
     const ttnn::MemoryConfig& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
-    return detail::fast_reduce_ncinput, dims, output, memory_config, compute_kernel_config);
+    return detail::fast_reduce_nc(input, dims, output, memory_config, compute_kernel_config);
 }
 
 }  // namespace operations::experimental::reduction

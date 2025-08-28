@@ -14,6 +14,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/device.hpp>
@@ -129,10 +130,15 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncRuntimeAllocatedBuffers) {
             ttnn::wait_for_event(device_->mesh_command_queue(*workload_dispatch_cq), write_event);
 
             // Run operation on cq 0
-            Tensor output_tensor = ttnn::sqrt(workload_dispatch_cq, input_tensor);
+            auto last_cq_id = tt::tt_metal::GetCurrentQueueId();
+            tt::tt_metal::SetCurrentQueueId(workload_dispatch_cq);
+            Tensor output_tensor = ttnn::sqrt(input_tensor);
+            tt::tt_metal::SetCurrentQueueId(last_cq_id);
             auto dummy_buffer_0 =
                 tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
-            output_tensor = ttnn::neg(workload_dispatch_cq, output_tensor);
+            tt::tt_metal::SetCurrentQueueId(workload_dispatch_cq);
+            output_tensor = ttnn::neg(output_tensor);
+            tt::tt_metal::SetCurrentQueueId(last_cq_id);
             // Allocate this buffer to stress test async allocation across op execution and explicit allocation
             auto dummy_buffer_1 =
                 tt::tt_metal::tensor_impl::allocate_device_buffer(device_, TensorSpec(shape, tensor_layout));
