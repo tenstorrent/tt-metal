@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
@@ -11,7 +10,6 @@
 #include <utility>
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 using ttnn::ccl::Topology;
 
 ///////////////////////////////////////////////////
@@ -19,17 +17,15 @@ using ttnn::ccl::Topology;
 ///////////////////////////////////////////////////
 
 constexpr uint32_t my_chip_id = get_compile_time_arg_val(0);
-constexpr BufferType input_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(1));
-constexpr BufferType output_buffer_type = static_cast<BufferType>(get_compile_time_arg_val(2));
-constexpr uint32_t cb_output_id = get_compile_time_arg_val(3);
-constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(4);
-constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(5);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
-constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(8));
-constexpr bool direction = get_compile_time_arg_val(9);  // 1 is forward, 0 is backward
-constexpr bool fuse_op = get_compile_time_arg_val(10);
-constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(11);
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(1);
+constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(2);
+constexpr uint32_t input_tensor_page_size = get_compile_time_arg_val(3);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(4);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(5);
+constexpr Topology topology = static_cast<Topology>(get_compile_time_arg_val(6));
+constexpr bool direction = get_compile_time_arg_val(7);  // 1 is forward, 0 is backward
+constexpr bool fuse_op = get_compile_time_arg_val(8);
+constexpr uint32_t chunks_per_sync = get_compile_time_arg_val(9);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -52,7 +48,7 @@ void kernel_main() {
     uint32_t start_pages_read_in_row = get_arg_val<uint32_t>(arg_idx++);
     uint32_t start_row_offset = get_arg_val<uint32_t>(arg_idx++);
 
-    constexpr uint32_t ct_idx = 12;
+    constexpr uint32_t ct_idx = 10;
 
 #ifdef INPUT_IS_SHARDED
     constexpr uint32_t ct_offset = 7;
@@ -73,13 +69,9 @@ void kernel_main() {
 
     arg_idx += input_rt_increment;
 #else
-    constexpr uint32_t ct_offset = 0;
-
-    constexpr bool input_tensor_is_dram = input_buffer_type == tt::tt_metal::BufferType::DRAM;
-    const InterleavedAddrGenFast<input_tensor_is_dram> input_tensor_addrgen = {
-        .bank_base_address = input_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_output_id)};
+    constexpr auto input_tensor_args = TensorAccessorArgs<ct_idx>();
+    constexpr uint32_t ct_offset = input_tensor_args.num_compile_time_args();
+    const auto input_tensor_addrgen = TensorAccessor(input_tensor_args, input_tensor_address, input_tensor_page_size);
 #endif
 
 #ifdef OUTPUT_IS_SHARDED
@@ -101,11 +93,9 @@ void kernel_main() {
 
     arg_idx += output_rt_increment;
 #else
-    constexpr bool output_tensor_is_dram = output_buffer_type == tt::tt_metal::BufferType::DRAM;
-    const InterleavedAddrGenFast<output_tensor_is_dram> output_tensor_addrgen = {
-        .bank_base_address = output_tensor_address,
-        .page_size = input_tensor_page_size,
-        .data_format = get_dataformat(cb_output_id)};
+    constexpr auto output_tensor_args = TensorAccessorArgs<ct_idx + ct_offset>();
+    const auto output_tensor_addrgen =
+        TensorAccessor(output_tensor_args, output_tensor_address, input_tensor_page_size);
 #endif
 
     OpSignaler op_signaler;

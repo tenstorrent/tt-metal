@@ -21,9 +21,9 @@ inline uint32_t get_data_page_idx(const uint32_t e, const uint32_t token) {
     }
 }
 
-template <uint32_t DeviceIdx, uint32_t NumMappingPages, uint32_t MappingPageSizeBytes, bool MappingIsDram>
+template <uint32_t DeviceIdx, uint32_t NumMappingPages, uint32_t MappingPageSizeBytes, typename AddrGen>
 void get_device_expert_indices(
-    const InterleavedAddrGen<MappingIsDram>& mapping_addrgen,
+    const AddrGen& mapping_addrgen,
     const uint32_t mapping_l1_buffer_addr,
     const uint32_t mapping_page_size,
     volatile tt_l1_ptr uint16_t* output_ptr) {
@@ -58,10 +58,10 @@ void kernel_main() {
     constexpr uint32_t selected_experts_k = get_compile_time_arg_val(10);
     constexpr uint32_t mapping_page_size_bytes = get_compile_time_arg_val(11);
     constexpr uint32_t metadata_page_size_bytes = get_compile_time_arg_val(12);
-    constexpr bool data_is_dram = get_compile_time_arg_val(13);
-    constexpr bool mapping_is_dram = get_compile_time_arg_val(14);
-    constexpr bool metadata_is_dram = get_compile_time_arg_val(15);
-    constexpr bool locally_reduced = get_compile_time_arg_val(16);
+    constexpr bool locally_reduced = get_compile_time_arg_val(13);
+    constexpr auto data_args = TensorAccessorArgs<14>();
+    constexpr auto mapping_args = TensorAccessorArgs<data_args.next_compile_time_args_offset()>();
+    constexpr auto metadata_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
 
     const auto mapping_tensor_addr = get_arg_val<uint32_t>(0);
     const auto metadata_tensor_addr = get_arg_val<uint32_t>(1);
@@ -69,12 +69,9 @@ void kernel_main() {
     const auto token_start_idx = get_arg_val<uint32_t>(3);
     const auto token_end_idx = get_arg_val<uint32_t>(4);
 
-    InterleavedAddrGen<metadata_is_dram> metadata_addrgen{
-        .bank_base_address = metadata_tensor_addr, .page_size = metadata_page_size_bytes};
-
-    InterleavedAddrGen<mapping_is_dram>
-        mapping_addrgen{.bank_base_address = mapping_tensor_addr, .page_size = mapping_page_size_bytes};
-    InterleavedAddrGen<data_is_dram> data_addrgen{.bank_base_address = data_tensor_addr, .page_size = data_size_bytes};
+    const auto metadata_addrgen = TensorAccessor(metadata_args, metadata_tensor_addr, metadata_page_size_bytes);
+    const auto mapping_addrgen = TensorAccessor(mapping_args, mapping_tensor_addr, mapping_page_size_bytes);
+    const auto data_addrgen = TensorAccessor(data_args, data_tensor_addr, data_size_bytes);
 
     // this gets sent to writer
     cb_reserve_back(local_experts_cb_id,1);
@@ -85,9 +82,8 @@ void kernel_main() {
     uint32_t mapping_buffer_addr = get_write_ptr(mapping_cb_id);
     cb_push_back(mapping_cb_id, 1);
 
-    detail::
-        get_device_expert_indices<linearized_mesh_coord, num_mapping_pages, mapping_page_size_bytes, mapping_is_dram>(
-            mapping_addrgen, mapping_buffer_addr, mapping_page_size_bytes, local_experts_ptr);
+    detail::get_device_expert_indices<linearized_mesh_coord, num_mapping_pages, mapping_page_size_bytes>(
+        mapping_addrgen, mapping_buffer_addr, mapping_page_size_bytes, local_experts_ptr);
     cb_push_back(local_experts_cb_id,1);
     for (uint32_t token = token_start_idx; token < token_end_idx; ++token) {
         cb_reserve_back(metadata_cb_id,1);
