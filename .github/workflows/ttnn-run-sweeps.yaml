@@ -674,13 +674,14 @@ jobs:
         if: ${{ github.event_name == 'schedule' || github.event.inputs.sweep_name == 'ALL SWEEPS (Nightly)' }}
         run: python3 tests/sweep_framework/sweeps_runner.py --vector-source vectors_export --result-dest results_export --tag ci-main --suite-name nightly --summary --skip-on-timeout --skip-modules conv2d.full.conv2d_misc,conv2d.full.conv2d_sharding,conv2d.full.conv2d_sliding_window,conv2d.short.conv2d_short_sweep,conv2d.short.conv2d_ttforge_sweep,conv_transpose2d.short.conv_transpose2d_short_sweep
       - name: Upload sweep results
+        if: ${{ always() }}
         uses: actions/upload-artifact@v4
         with:
           name: sweeps-results
           path: /work/tests/sweep_framework/results_export/
           retention-days: 1
       - name: Upload sweep results to SFTP server
-        if: ${{ github.event.inputs.upload_results }}
+        if: ${{ always() && github.event.inputs.upload_results }}
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
