@@ -326,9 +326,9 @@
 <dd>
 <p>Tensor, dtype: DataType, memory_config: MemoryConfig) -&gt; Tensor</p>
 <p>Clones the input, creating a copy with the specified <cite>memory_config</cite> and converting its data type to <cite>dtype</cite>.
-This operation does not alter the tensor’s layout.
-- ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.</p>
+This operation does not alter the tensor’s layout.</p>
 <ul class="simple">
+<li><p>ROW_MAJOR_LAYOUT: Returns the tensor unpadded in the last two dimensions.</p></li>
 <li><p>TILE_LAYOUT: Pads the tensor to ensure its width and height are multiples of 32.</p></li>
 </ul>
 <p>If the input’s current layout matches the specified layout, padding adjustments are applied to the last two dimensions as necessary.</p>
