@@ -55,6 +55,9 @@ uint32_t default_workers(
     auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     uint32_t num_cores = subdevice_core_range_set.num_cores();
+    // Above 4 workers we start getting performance drops, so we limit to 4 workers or less, depending on the number of
+    // available cores This was determined by the sweep
+    // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
     constexpr std::array<uint32_t, 4> candidate_worker_counts = {4, 2, 1};
     for (auto worker_count : candidate_worker_counts) {
         uint32_t core_count =
@@ -414,6 +417,9 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 uint32_t input_tile_id_end =
                     (global_worker_id + 1) * base_pages_per_worker + std::min(global_worker_id + 1, remainder);
 
+                // Heuristic is based on a sweep of large shapes. This will be used when total chunks per worker is
+                // larger than 160. Doing it less frequently adds performance cost to many shapes. Sweep test:
+                // tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py
                 constexpr uint32_t HEURISTIC_MAX_CHUNKS_PER_SYNC = 160;
                 uint32_t chunks_per_sync_val = chunks_per_sync.value_or(std::min(
                     std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1),
