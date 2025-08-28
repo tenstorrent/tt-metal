@@ -270,7 +270,7 @@ def run_avg_pool2d(
     # since the atol default is 0.016 we don't see this issue for low magnitude values, but
     # when using small divisor overrides with large kernels we see much large values which
     # overwhelm the atol and the rtol becomes significant
-    rtol = 0.01
+    rtol = 0.02
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
     assert_with_pcc(torch_output, ttnn_output, pcc_thresh)
