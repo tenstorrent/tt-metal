@@ -209,7 +209,7 @@ Tests:
           - destination:
               device: [6, 0]
           - destination:
-              device: [7, 0]
+              device: [8, 0]
           - destination:
               device: [9, 0]
           - destination:
