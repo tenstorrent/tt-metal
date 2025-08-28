@@ -250,11 +250,8 @@ void kernel_main() {
                     uint32_t num_pages_to_read = std::min(tiles_to_read - tiles_read, packet_size_in_pages);
                     cb_wait_front(cb_output_id, packet_size_in_pages);
                     size_t l1_read_addr = get_read_ptr(cb_output_id);
-                    uint64_t noc0_dest_noc_addr = get_noc_addr(
-                        tile_id_start + row_offset + pages_read_in_row,
-                        output_addrgens[input_idx],
-                        0 /*offset*/,
-                        0 /*noc_id*/);
+                    uint64_t noc0_dest_noc_addr = output_addrgens[input_idx].get_noc_addr(
+                        tile_id_start + row_offset + pages_read_in_row, 0 /*offset*/, 0 /*noc_id*/);
                     pages_read_in_row++;
                     if (pages_read_in_row >= slice_Wt) {
                         row_offset += stride_Wt;
@@ -262,11 +259,8 @@ void kernel_main() {
                     }
 
                     if (num_pages_to_read == 2) {
-                        uint64_t second_noc0_dest_noc_addr = get_noc_addr(
-                            tile_id_start + row_offset + pages_read_in_row,
-                            output_addrgens[input_idx],
-                            0 /*offset*/,
-                            0 /*noc_id*/);
+                        uint64_t second_noc0_dest_noc_addr = output_addrgens[input_idx].get_noc_addr(
+                            tile_id_start + row_offset + pages_read_in_row, 0 /*offset*/, 0 /*noc_id*/);
                         pages_read_in_row++;
                         if (pages_read_in_row >= slice_Wt) {
                             row_offset += stride_Wt;
