@@ -19,11 +19,13 @@ inline void llk_math_eltwise_binary_sfpu_binop_init() {
 }
 
 template <bool APPROXIMATE, ckernel::BinaryOp BINOP, bool is_fp32_dest_acc_en = false>
-inline void llk_math_eltwise_binary_sfpu_binop(uint dst_index0, uint32_t dst_index1, int vector_mode = VectorMode::RC) {
+inline void llk_math_eltwise_binary_sfpu_binop(
+    uint dst_index0, uint32_t dst_index1, uint32_t odst, int vector_mode = VectorMode::RC) {
     _llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(
         ckernel::sfpu::calculate_sfpu_binary<APPROXIMATE, BINOP, 8, is_fp32_dest_acc_en>,
         dst_index0,
         dst_index1,
+        odst,
         vector_mode);
 }
 

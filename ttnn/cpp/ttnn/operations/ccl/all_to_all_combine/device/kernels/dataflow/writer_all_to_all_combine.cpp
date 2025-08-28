@@ -172,11 +172,12 @@ void kernel_main() {
                             mesh_rows,
                             mesh_cols,
                             fabric_max_packet_size_bytes>(
+                            output_addrgen,
                             fabric_connections,
                             packet_headers[0],
                             dest_device_idx,
                             src_data_l1_ptr,
-                            output_noc_addr,
+                            output_page_idx,
                             data_size_bytes,
                             alignment);
                     } else {
@@ -186,12 +187,13 @@ void kernel_main() {
                             mesh_rows,
                             mesh_cols,
                             fabric_max_packet_size_bytes>(
+                            output_addrgen,
                             fabric_connections,
                             packet_headers[0],
                             dest_chip_id,
                             dest_mesh_id,
                             src_data_l1_ptr,
-                            output_noc_addr,
+                            output_page_idx,
                             data_size_bytes,
                             alignment);
                     }
