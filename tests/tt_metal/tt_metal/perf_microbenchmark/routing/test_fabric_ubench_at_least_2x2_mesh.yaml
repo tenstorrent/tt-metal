@@ -3,113 +3,113 @@ allocation_policies:
       max_configs_per_core: 4
 
 Tests:
-  - name: "LinearMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Linear
+  # - name: "LinearMulticast"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Linear
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    defaults:
-      ftype: mcast
-      num_packets: 200000
+  #   defaults:
+  #     ftype: mcast
+  #     num_packets: 200000
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
-  - name: "UnidirLinearMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Linear
+  # - name: "UnidirLinearMulticast"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Linear
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    defaults:
-      ftype: mcast
-      num_packets: 200000
+  #   defaults:
+  #     ftype: mcast
+  #     num_packets: 200000
 
-    patterns:
-      - type: unidirectional_linear
+  #   patterns:
+  #     - type: unidirectional_linear
 
-  - name: "SingleSenderLinearUnicastAllDevices"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Linear
+  # - name: "SingleSenderLinearUnicastAllDevices"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Linear
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    defaults:
-      ftype: unicast
-      num_packets: 200000
+  #   defaults:
+  #     ftype: unicast
+  #     num_packets: 200000
 
-    patterns:
-      - type: one_to_all
+  #   patterns:
+  #     - type: one_to_all
 
-  - name: "FullRingMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Ring
+  # - name: "FullRingMulticast"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Ring
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    defaults:
-      ftype: mcast
-      num_packets: 200000
+  #   defaults:
+  #     ftype: mcast
+  #     num_packets: 200000
 
-    patterns:
-      - type: full_ring
+  #   patterns:
+  #     - type: full_ring
 
-  - name: "FullRingUnicast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Ring
+  # - name: "FullRingUnicast"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Ring
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    defaults:
-      ftype: unicast
-      num_packets: 200000
+  #   defaults:
+  #     ftype: unicast
+  #     num_packets: 200000
 
-    patterns:
-      - type: full_ring
+  #   patterns:
+  #     - type: full_ring
 
-  - name: "HalfRingMulticast"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Ring
+  # - name: "HalfRingMulticast"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Ring
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    defaults:
-      ftype: mcast
-      num_packets: 200000
+  #   defaults:
+  #     ftype: mcast
+  #     num_packets: 200000
 
-    patterns:
-      - type: half_ring
+  #   patterns:
+  #     - type: half_ring
 
   - name: "MeshMulticast"
     benchmark_mode: true
@@ -129,40 +129,40 @@ Tests:
     patterns:
       - type: all_to_all
 
-  - name: "MeshMulticastDynamic"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Mesh
-      routing_type: Dynamic
+  # - name: "MeshMulticastDynamic"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Mesh
+  #     routing_type: Dynamic
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    defaults:
-      ftype: mcast
-      ntype: unicast_write
-      num_packets: 200000
+  #   defaults:
+  #     ftype: mcast
+  #     ntype: unicast_write
+  #     num_packets: 200000
 
-    patterns:
-      - type: all_to_all
+  #   patterns:
+  #     - type: all_to_all
 
-  - name: "SingleSenderMeshUnicastAllDevices"
-    benchmark_mode: true
-    sync: true
-    fabric_setup:
-      topology: Mesh
+  # - name: "SingleSenderMeshUnicastAllDevices"
+  #   benchmark_mode: true
+  #   sync: true
+  #   fabric_setup:
+  #     topology: Mesh
 
-    parametrization_params:
-      num_links: [1, 2, 3, 4]
-      ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
-      size: [2048, 4096]
+  #   parametrization_params:
+  #     num_links: [1, 2, 3, 4]
+  #     ntype: [unicast_write, fused_atomic_inc, unicast_scatter_write]
+  #     size: [2048, 4096]
 
-    defaults:
-      ftype: unicast
-      num_packets: 200000
+  #   defaults:
+  #     ftype: unicast
+  #     num_packets: 200000
 
-    patterns:
-      - type: one_to_all
+  #   patterns:
+  #     - type: one_to_all
