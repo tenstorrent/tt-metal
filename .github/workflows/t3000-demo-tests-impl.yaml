@@ -29,7 +29,7 @@ jobs:
           submodules: recursive
       - name: Load test matrix
         id: load-test-matrix
-        run: echo "matrix=$(cat ./tests/.github/t3k_test_groups.json)" >> $GITHUB_OUTPUT
+        run: echo "matrix=$(jq -c ./tests/.github/t3k_test_groups.json)" >> $GITHUB_OUTPUT
 
   demo-tests:
     needs: load-test-matrix
