@@ -107,26 +107,27 @@ public:
     void reset_size(StateDependencies::StateId state = StateDependencies::StateId{0});
 
 private:
-    void deallocate_buffer_(DeviceAddr address, StateDependencies::StateId state);
+    // State-independent
+    // Type of buffers allocated in the banks (same across states)
+    BufferType buffer_type_{0};
+    // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all
+    // banks using only bank_id. Set to 0 for cores/nodes with only 1 bank.
+    std::unordered_map<uint32_t, int64_t> bank_id_to_bank_offset_;
 
+    DeviceAddr interleaved_address_limit_{};
+    uint32_t alignment_bytes_{};
+
+    // State-dependent
     // Dependencies between states (also encodes number of states)
     StateDependencies dependencies_{};
     // Reverse edges: for each state, which states depend on it
     std::unordered_map<uint32_t, tt::stl::SmallVector<uint32_t>> dependents_{};
 
-    // Type of buffers allocated in the banks (same across states)
-    BufferType buffer_type_{};
     // Track allocations per state: base address -> size_per_bank
     std::vector<std::unordered_map<DeviceAddr, DeviceAddr>> allocated_buffers_{};
-    // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all
-    // banks using only bank_id. Set to 0 for cores/nodes with only 1 bank.
-    std::unordered_map<uint32_t, int64_t> bank_id_to_bank_offset_{};
     std::vector<std::unique_ptr<allocator::Algorithm>> allocators_{};
-    DeviceAddr interleaved_address_limit_{};
-    uint32_t alignment_bytes_{};
     // Remember allocator offsets per state
     std::vector<DeviceAddr> allocator_offsets_{};
-
     // Foreign occupancy overlay per state, represented as difference map
     struct Overlay {
         std::map<DeviceAddr, int64_t> delta;
@@ -138,10 +139,11 @@ private:
     };
     std::vector<Overlay> overlays_{};
 
+    void deallocate_buffer_(DeviceAddr address, StateDependencies::StateId state);
+    void init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset, uint32_t state);
     void validate_bank_id(uint32_t bank_id) const;
     void assert_valid_state(StateDependencies::StateId state) const;
 
-    void init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset, uint32_t state);
     static DeviceAddr align_up(DeviceAddr addr, DeviceAddr alignment) {
         if (alignment == 0) {
             return addr;
