@@ -442,24 +442,24 @@ inline ParsedSenderConfig YamlConfigParser::parse_sender_config(
 }
 
 inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& test_yaml) {
-    ParsedTestConfig test_config;
+    ParsedTestConfig config;
 
-    test_config.name = parse_scalar<std::string>(test_yaml["name"]);
-    log_info(tt::LogTest, "name: {}", test_config.name);
+    config.name = parse_scalar<std::string>(test_yaml["name"]);
+    log_info(tt::LogTest, "name: {}", config.name);
 
-    TT_FATAL(test_yaml["fabric_setup"], "No fabric setup specified for test: {}", test_config.name);
-    test_config.fabric_setup = parse_fabric_setup(test_yaml["fabric_setup"]);
+    TT_FATAL(test_yaml["fabric_setup"], "No fabric setup specified for test: {}", config.name);
+    config.fabric_setup = parse_fabric_setup(test_yaml["fabric_setup"]);
 
     if (test_yaml["parametrization_params"]) {
-        test_config.parametrization_params = parse_parametrization_params(test_yaml["parametrization_params"]);
+        config.parametrization_params = parse_parametrization_params(test_yaml["parametrization_params"]);
     }
 
     if (test_yaml["on_missing_param_policy"]) {
-        test_config.on_missing_param_policy = parse_scalar<std::string>(test_yaml["on_missing_param_policy"]);
+        config.on_missing_param_policy = parse_scalar<std::string>(test_yaml["on_missing_param_policy"]);
     }
 
     if (test_yaml["defaults"]) {
-        test_config.defaults = parse_traffic_pattern_config(test_yaml["defaults"]);
+        config.defaults = parse_traffic_pattern_config(test_yaml["defaults"]);
     }
 
     if (test_yaml["patterns"]) {
@@ -470,32 +470,36 @@ inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& te
         for (const auto& pattern_node : patterns_yaml) {
             high_level_patterns.push_back(parse_high_level_pattern_config(pattern_node));
         }
-        test_config.patterns = high_level_patterns;
+        config.patterns = high_level_patterns;
     }
 
     if (test_yaml["senders"]) {
         const auto& senders_yaml = test_yaml["senders"];
         TT_FATAL(senders_yaml.IsSequence(), "Expected senders to be a sequence");
-        test_config.senders.reserve(senders_yaml.size());
+        config.senders.reserve(senders_yaml.size());
         for (const auto& sender_node : senders_yaml) {
-            test_config.senders.push_back(
-                parse_sender_config(sender_node, test_config.defaults.value_or(ParsedTrafficPatternConfig{})));
+            config.senders.push_back(
+                parse_sender_config(sender_node, config.defaults.value_or(ParsedTrafficPatternConfig{})));
         }
     }
 
     if (test_yaml["bw_calc_func"]) {
-        test_config.bw_calc_func = parse_scalar<std::string>(test_yaml["bw_calc_func"]);
+        config.bw_calc_func = parse_scalar<std::string>(test_yaml["bw_calc_func"]);
     }
 
     if (test_yaml["benchmark_mode"]) {
-        test_config.benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
+        config.benchmark_mode = parse_scalar<bool>(test_yaml["benchmark_mode"]);
     }
 
     if (test_yaml["sync"]) {
-        test_config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
+        config.global_sync = parse_scalar<bool>(test_yaml["sync"]);
     }
 
-    return test_config;
+    if (test_yaml["check_for_cycles"].IsDefined()) {
+        config.check_for_cycles = parse_scalar<bool>(test_yaml["check_for_cycles"]);
+    }
+
+    return config;
 }
 
 inline AllocatorPolicies YamlConfigParser::parse_allocator_policies(const YAML::Node& policies_yaml) {
