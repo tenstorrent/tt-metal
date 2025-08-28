@@ -5,11 +5,11 @@
 #include "profiler_no_op_program_factory.hpp"
 
 #include <core/ttnn_all_includes.hpp>
+#include <enchantum/enchantum.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/ops/common/program_utils.hpp"
 #include "profiler_no_op_device_operation_types.hpp"
-
-#include <enchantum/enchantum.hpp>
 
 namespace {
 
@@ -146,16 +146,17 @@ ProfilerNoopProgramFactory::cached_program_t ProfilerNoopProgramFactory::create(
     std::map<std::string, std::string> defines;
 
     CrossEntropyBackwardKernels kernels;
-    kernels.reader = create_reader_kernel(
-        program,
-        all_cores,
-        /* reader_compile_args */
-        {block_size, Wt},
-        defines,
-        kReaderKernelPath);
+    {
+        std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
+        tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
+        kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
+    }
 
-    kernels.writer = create_writer_kernel(
-        program, all_cores, /* writer_compile_args */ {block_size, Wt}, defines, kWriterKernelPath);
+    {
+        std::vector<uint32_t> writer_compile_time_args{block_size, Wt};
+        tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
+        kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
+    }
 
     // -------------------------------------------------------------------------
     // 4) Create compute kernels for profiler_no_op
