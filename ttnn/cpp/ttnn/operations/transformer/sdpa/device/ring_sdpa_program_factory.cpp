@@ -65,16 +65,16 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     const uint32_t local_seq_len =
         local_num_chunks * global_chunk_size_positions;  // Local Q sequence length in positions
 
-    log_debug(tt::LogOp, "Ring distribution parameters:");
-    log_debug(tt::LogOp, "ring_size: {}, ring_id: {}", ring_size, ring_id);
-    log_debug(tt::LogOp, "global_chunk_size: {} positions = {} tiles", global_chunk_size_positions, global_chunk_size);
-    log_debug(tt::LogOp, "local_seq_len: {}", local_seq_len);
+    log_info(tt::LogOp, "Ring distribution parameters:");
+    log_info(tt::LogOp, "ring_size: {}, ring_id: {}", ring_size, ring_id);
+    log_info(tt::LogOp, "global_chunk_size: {} positions = {} tiles", global_chunk_size_positions, global_chunk_size);
+    log_info(tt::LogOp, "local_seq_len: {}", local_seq_len);
 
     // Calculate which global chunks this device processes
     uint32_t first_chunk_id = ring_id;
     uint32_t second_chunk_id = (2 * ring_size - 1) - ring_id;
 
-    log_debug(tt::LogOp, "Device {} processes chunks: {} and {}", ring_id, first_chunk_id, second_chunk_id);
+    log_info(tt::LogOp, "Device {} processes chunks: {} and {}", ring_id, first_chunk_id, second_chunk_id);
 
     /*
     Note about tensor shapes:
@@ -101,12 +101,12 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     const uint32_t k_num_chunks = padded_Sk / k_chunk_size;              // Global K chunks (all devices need same)
 
     // Log all parameters
-    log_debug(tt::LogOp, "Shape parameters:");
-    log_debug(tt::LogOp, "B: {}, NQH: {}, Sq (global): {}, DH: {}", B, NQH, Sq, DH);
-    log_debug(
+    log_info(tt::LogOp, "Shape parameters:");
+    log_info(tt::LogOp, "B: {}, NQH: {}, Sq (global): {}, DH: {}", B, NQH, Sq, DH);
+    log_info(
         tt::LogOp, "local_seq_len: {}, padded_local_Sq: {}, padded_Sk: {}", local_seq_len, padded_local_Sq, padded_Sk);
-    log_debug(tt::LogOp, "local_q_num_chunks: {}, k_num_chunks: {}", local_q_num_chunks, k_num_chunks);
-    log_debug(tt::LogOp, "Sq_chunk_t: {}, Sk_chunk_t: {}", Sq_chunk_t, Sk_chunk_t);
+    log_info(tt::LogOp, "local_q_num_chunks: {}, k_num_chunks: {}", local_q_num_chunks, k_num_chunks);
+    log_info(tt::LogOp, "Sq_chunk_t: {}, Sk_chunk_t: {}", Sq_chunk_t, Sk_chunk_t);
 
     Program program = CreateProgram();
     IDevice* device = input_tensor_q.device();
@@ -119,8 +119,8 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     auto v_buffer = input_tensor_v.buffer();
     auto out0_buffer = output_tensor.buffer();
 
-    CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
-                                                     : device->compute_with_storage_grid_size();
+    CoreCoord grid_size = {1, 1};  // program_config.has_value() ? program_config->compute_with_storage_grid_size
+                                   //: device->compute_with_storage_grid_size();
     bool exp_approx_mode =
         program_config.has_value()
             ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
@@ -147,10 +147,10 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         batch_parallel_factor * nh_parallel_factor * q_parallel_factor,
         num_cores);
 
-    log_debug(tt::LogOp, "Ring parallelization scheme:");
-    log_debug(tt::LogOp, "batch_parallel_factor: {}", batch_parallel_factor);
-    log_debug(tt::LogOp, "nh_parallel_factor: {}", nh_parallel_factor);
-    log_debug(tt::LogOp, "q_parallel_factor: {} (for local chunks)", q_parallel_factor);
+    log_info(tt::LogOp, "Ring parallelization scheme:");
+    log_info(tt::LogOp, "batch_parallel_factor: {}", batch_parallel_factor);
+    log_info(tt::LogOp, "nh_parallel_factor: {}", nh_parallel_factor);
+    log_info(tt::LogOp, "q_parallel_factor: {} (for local chunks)", q_parallel_factor);
 
     // Calculate work per core
     const uint32_t batch_per_core = (B + batch_parallel_factor - 1) / batch_parallel_factor;
@@ -159,34 +159,52 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
 
     const uint32_t q_buffer_factor = (local_q_per_core > 1) ? 2 : 1;
 
-    log_debug(tt::LogOp, "Work distribution:");
-    log_debug(
+    log_info(tt::LogOp, "Work distribution:");
+    log_info(
         tt::LogOp,
         "batch_per_core: {}, nh_per_core: {}, local_q_per_core: {}",
         batch_per_core,
         nh_per_core,
         local_q_per_core);
 
-    // Calculate CB tile counts (same as regular SDPA but with local dimensions)
+    // Calculate CB tile counts (adjusted for ring distribution causal attention)
     uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
-    uint32_t k_tiles = Sk_chunk_t * DHt * 2;   // double buffer
-    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
-    uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
+
+    // For ring distribution, calculate max K/V chunks needed for causal attention
+    // The highest chunk (second_chunk_id) needs K/V chunks [0..second_chunk_id], so (second_chunk_id + 1) total chunks
+    uint32_t max_k_chunks_needed = second_chunk_id + 1;
+    uint32_t k_tiles =
+        max_k_chunks_needed * Sk_chunk_t * DHt * 2;  // buffer for all needed K chunks with double buffering
+    uint32_t v_tiles =
+        max_k_chunks_needed * Sk_chunk_t * vDHt * 2;  // buffer for all needed V chunks with double buffering
+    // For ring SDPA, mask CB needs to hold masks for all K chunks that the largest Q chunk attends to
+    // In causal attention, the last Q chunk (second_chunk_id) attends to the most K chunks
+    uint32_t max_k_chunks_for_any_q = second_chunk_id + 1;  // Q chunk attends to chunks [0, second_chunk_id]
+    uint32_t qk_tiles = max_k_chunks_for_any_q * Sq_chunk_t * Sk_chunk_t;
+
+    log_info(tt::LogOp, "Ring SDPA mask CB sizing:");
+    log_info(
+        tt::LogOp,
+        "second_chunk_id: {}, max_k_chunks_for_any_q: {}, qk_tiles: {}",
+        second_chunk_id,
+        max_k_chunks_for_any_q,
+        qk_tiles);
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
     uint32_t out0_t = Sq_chunk_t * vDHt;
     uint32_t scale_tiles = 1;
     uint32_t statistics_tiles = Sq_chunk_t;
 
-    log_debug(tt::LogOp, "Circular buffer sizes:");
-    log_debug(tt::LogOp, "q_tiles: {}, k_tiles: {}, v_tiles: {}", q_tiles, k_tiles, v_tiles);
-    log_debug(tt::LogOp, "qk_tiles: {}, out0_t: {}, statistics_tiles: {}", qk_tiles, out0_t, statistics_tiles);
+    log_info(tt::LogOp, "Circular buffer sizes:");
+    log_info(tt::LogOp, "max_k_chunks_needed: {}, second_chunk_id: {}", max_k_chunks_needed, second_chunk_id);
+    log_info(tt::LogOp, "q_tiles: {}, k_tiles: {}, v_tiles: {}", q_tiles, k_tiles, v_tiles);
+    log_info(tt::LogOp, "qk_tiles: {}, out0_t: {}, statistics_tiles: {}", qk_tiles, out0_t, statistics_tiles);
 
     // Scale computation
     float scale_val = scale.value_or(1.0f / std::sqrt(static_cast<float>(DH)));
     bfloat16 scale_bf16 = bfloat16(scale_val);
     uint32_t scale_fp32 = std::bit_cast<uint32_t>(scale_val);
 
-    log_debug(tt::LogOp, "scale_val: {}", scale_val);
+    log_info(tt::LogOp, "scale_val: {}", scale_val);
 
     // Matmul configuration (same as regular SDPA)
     const uint32_t dst_size = fp32_dest_acc_en ? 4 : 8;
@@ -214,6 +232,16 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     const uint32_t out_in0_num_subblocks = Sq_chunk_t / out_out_subblock_h;
     const uint32_t out_in1_num_subblocks = vDHt / out_out_subblock_w;
     const uint32_t out_num_blocks = Sk_chunk_t / out_in0_block_w;
+
+    // Calculate scalar values needed by writer kernel (same as regular SDPA)
+    class bfloat16 bfloat_identity_scalar(1.0f);
+    uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
+
+    union {
+        float f;
+        uint32_t u;
+    } scale_union{};
+    scale_union.f = scale.value_or(1.0f);
 
     // Compile-time arguments
     std::vector<uint32_t> reader_compile_time_args = {
@@ -254,7 +282,9 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         ring_id,  // 12-13
         first_chunk_id,
         second_chunk_id,
-        global_chunk_size  // 14-16
+        global_chunk_size,  // 14-16
+        packed_identity_scalar,
+        scale_union.u  // 17-18: scalar values for generate functions
     };
 
     std::vector<uint32_t> compute_compile_time_args = {
@@ -315,12 +345,12 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         "dht_granularity must be a power of 2. Got {}.",
         dht_granularity);
 
-    log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
-    log_debug(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
-    log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
-    log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
-    log_debug(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
+    log_info(tt::LogOp, "stats_granularity: {}", stats_granularity);
+    log_info(tt::LogOp, "log2_stats_granularity: {}", log2_stats_granularity);
+    log_info(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
+    log_info(tt::LogOp, "log2_sub_exp_granularity: {}", log2_sub_exp_granularity);
+    log_info(tt::LogOp, "dht_granularity: {}", dht_granularity);
+    log_info(tt::LogOp, "log2_dht_granularity: {}", log2_dht_granularity);
 
     // Create defines for kernels
     std::map<std::string, std::string> defines;
@@ -341,7 +371,7 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["LOG2_DHT_GRANULARITY"] = std::to_string(log2_dht_granularity);
 
-    log_debug(tt::LogOp, "Creating kernels with ring distribution...");
+    log_info(tt::LogOp, "Creating kernels with ring distribution...");
 
     auto reader_kernels_id = CreateKernel(
         program,
@@ -496,10 +526,10 @@ operation::ProgramWithCallbacks ring_sdpa_multi_core(
         local_q_start = std::min(local_q_start, local_q_num_chunks);
         local_q_end = std::min(local_q_end, local_q_num_chunks);
 
-        log_debug(tt::LogOp, "Core {} runtime args:", i);
-        log_debug(tt::LogOp, "  batch range: [{}, {})", local_batch_start, local_batch_end);
-        log_debug(tt::LogOp, "  nh range: [{}, {})", local_nh_start, local_nh_end);
-        log_debug(tt::LogOp, "  local q range: [{}, {}) (local chunk indices)", local_q_start, local_q_end);
+        log_info(tt::LogOp, "Core {} runtime args:", i);
+        log_info(tt::LogOp, "  batch range: [{}, {})", local_batch_start, local_batch_end);
+        log_info(tt::LogOp, "  nh range: [{}, {})", local_nh_start, local_nh_end);
+        log_info(tt::LogOp, "  local q range: [{}, {}) (local chunk indices)", local_q_start, local_q_end);
 
         SetRuntimeArgs(
             program,

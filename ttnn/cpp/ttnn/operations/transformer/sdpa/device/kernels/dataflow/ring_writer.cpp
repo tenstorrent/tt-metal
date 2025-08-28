@@ -28,6 +28,8 @@ void kernel_main() {
     constexpr uint32_t first_chunk_id = get_compile_time_arg_val(14);
     constexpr uint32_t second_chunk_id = get_compile_time_arg_val(15);
     constexpr uint32_t global_chunk_size = get_compile_time_arg_val(16);  // In tiles
+    constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(17);
+    constexpr uint32_t scale_val = get_compile_time_arg_val(18);
 
     // Runtime arguments
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -47,6 +49,8 @@ void kernel_main() {
     constexpr bool is_dram = true;
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
     constexpr uint32_t cb_mask_in = tt::CBIndex::c_3;
+    constexpr uint32_t cb_identity_scale_in = tt::CBIndex::c_5;  // Identity scale CB
+    constexpr uint32_t cb_col_identity = tt::CBIndex::c_7;       // Column identity CB
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
     constexpr uint32_t barrier_threshold = get_barrier_read_threshold<tile_bytes, is_dram>();
@@ -59,47 +63,52 @@ void kernel_main() {
     // Calculate output tensor shape
     const auto out_tile_shape = TensorTileShape(B, NQH, global_chunk_size * 2, vDHt);
 
-    DPRINT << "RING_WRITER: Starting main processing loops" << ENDL();
+    // Generate scalar values needed by compute kernel (same as regular SDPA)
+    generate_reduce_scaler(cb_identity_scale_in, identity_scalar_packed);
+    DPRINT << "RING_WRITER: identity_scalar_packed=" << (uint32_t)identity_scalar_packed << ENDL();
+    generate_bcast_col_scalar(cb_col_identity, scale_val);
 
-    // Main processing loop: iterate over batches, heads, and local Q chunks
+    // Main processing loop: iterate over batches, heads, and local Q chunks (ring-distributed)
+    DPRINT << "WRITER: is_causal=" << (uint32_t)is_causal << ENDL();
+    DPRINT << "WRITER: Starting main processing loops" << ENDL();
     for (uint32_t nb = local_batch_start; nb < local_batch_end; nb++) {
-        DPRINT << "RING_WRITER: Processing batch " << (uint32_t)nb << ENDL();
         for (uint32_t nq = local_nh_start; nq < local_nh_end; nq++) {
-            DPRINT << "RING_WRITER: Processing head " << (uint32_t)nq << ENDL();
-            for (uint32_t local_q_iter = local_q_start; local_q_iter < local_q_end; local_q_iter++) {
-                DPRINT << "RING_WRITER: Processing local_q_iter " << (uint32_t)local_q_iter << ENDL();
-                // Map local Q iteration to global Q chunk
+            for (uint32_t local_q_iter = 0; local_q_iter < 2; local_q_iter++) {
+                // Map local Q iteration to global Q chunk using ring balanced assignment
                 uint32_t global_q_chunk = (local_q_iter == 0) ? first_chunk_id : second_chunk_id;
 
-                // Calculate output position (write contiguously)
-                uint32_t local_output_q_pos = local_q_iter - local_q_start;
+                DPRINT << "WRITER: Processing local_q_iter=" << local_q_iter << " global_q_chunk=" << global_q_chunk
+                       << ENDL();
 
-                // Generate causal masks for this Q chunk
+                // Generate causal masks for this Q chunk (same logic as regular SDPA)
                 if constexpr (is_causal) {
-                    // Calculate Q range for causal masking
                     uint32_t q_low_idx = global_q_chunk * Sq_chunk_t;
                     uint32_t q_high_idx = q_low_idx + Sq_chunk_t;
 
-                    // Generate mask for each K chunk that this Q chunk attends to
+                    DPRINT << "CAUSAL: q_low=" << q_low_idx << " q_high=" << q_high_idx << ENDL();
+
                     for (uint32_t k_chunk = 0; (k_chunk * Sk_chunk_t) < q_high_idx; ++k_chunk) {
                         const uint32_t k_low_idx = k_chunk * Sk_chunk_t;
                         const uint32_t k_high_idx = k_low_idx + Sk_chunk_t;
 
-                        // Skip computation if Q chunk doesn't attend to this K chunk
+                        // Generate mask only if there's overlap (same logic as regular SDPA)
                         if (!(q_low_idx >= k_high_idx)) {
+                            DPRINT << "GEN mask q=" << (uint32_t)global_q_chunk << " k=" << (uint32_t)k_chunk << ENDL();
                             generate_causal_mask<cb_mask_in>(Sq_chunk_t, Sk_chunk_t, global_q_chunk, k_chunk);
                         }
                     }
                 }
 
-                // Wait for compute to deliver output chunk
+                // Wait for compute kernel to finish processing this Q chunk
+                DPRINT << "WRITER: Waiting for output from global_q_chunk=" << global_q_chunk << ENDL();
                 cb_wait_front(cb_out, out_chunk_tiles);
+
+                DPRINT << "OUTPUT READY: global_q_chunk=" << global_q_chunk << ENDL();
+
+                // Write output tiles to global memory (same pattern as regular SDPA)
                 barrier_count = 0;
                 uint32_t l1_read_addr = get_read_ptr(cb_out);
-
-                // Write output tiles to global memory contiguously
-                // Local output position: [nb, nq, local_output_q_pos * Sq_chunk_t, 0]
-                uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, local_output_q_pos * Sq_chunk_t, 0);
+                uint32_t out_tile_id = out_tile_shape.id_of(nb, nq, local_q_iter * Sq_chunk_t, 0);
 
                 for (uint32_t row = 0; row < Sq_chunk_t; ++row) {
                     for (uint32_t col = 0; col < vDHt; ++col) {
@@ -115,7 +124,12 @@ void kernel_main() {
                 }
                 noc_async_write_barrier();
                 cb_pop_front(cb_out, out_chunk_tiles);
+
+                DPRINT << "OUTPUT WRITTEN: global_q_chunk=" << global_q_chunk << ENDL();
             }
         }
     }
+
+    noc_async_write_barrier();
+    DPRINT << "WRITER COMPLETE" << ENDL();
 }

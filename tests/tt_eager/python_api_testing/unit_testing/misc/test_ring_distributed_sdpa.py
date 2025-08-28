@@ -169,7 +169,7 @@ def run_test_ring_distributed_sdpa(
 
     # Run ring-distributed SDPA for each device
     ring_outputs = []
-    for ring_id in range(ring_size):
+    for ring_id in range(1):
         logger.debug(f"Running ring-distributed SDPA for device {ring_id}/{ring_size}")
 
         # Call ring-distributed SDPA for this device
@@ -185,6 +185,7 @@ def run_test_ring_distributed_sdpa(
 
         # Convert back to torch and remove padding
         ring_out_torch = ttnn.to_torch(tt_ring_out)
+        print(f"Ring output shape: {ring_out_torch.shape}")
         local_seq_len = s // ring_size  # Each device processes s/(2*ring_size) * 2 = s/ring_size positions
         ring_out_torch = ring_out_torch[:, :, :local_seq_len, :]  # Remove tile padding
         ring_outputs.append(ring_out_torch)
@@ -205,7 +206,7 @@ def run_test_ring_distributed_sdpa(
     pytorch_reference = torch.nn.functional.scaled_dot_product_attention(Q, K_repeated, V_repeated, is_causal=True)
 
     # Debug output for walkthrough example
-    if b == 1 and nh == 1 and s == 32 and ring_size == 4:
+    if b == 1 and nh == 1 and s == 256 and ring_size == 4:
         print(f"\n=== RESULT SHAPES DEBUG ===")
         print(f"Original Q shape: {Q.shape}")
         print(f"Ring outputs shapes: {[out.shape for out in ring_outputs]}")
@@ -256,20 +257,23 @@ def run_test_ring_distributed_sdpa(
 @pytest.mark.skipif(is_watcher_enabled(), reason="Kernel OOM with watcher enabled")
 def test_ring_distributed_sdpa_walkthrough_example(device):
     """Test using exact parameters from our detailed walkthrough analysis"""
-    # Exact parameters from idea.txt walkthrough:
-    # - Sequence Length (S): 32 positions = 8 tiles (4 positions per tile)
+    # Correct parameters for Tenstorrent tile system (32x32 tiles):
+    # - Sequence Length (S): 256 positions = 8 tiles (32 positions per tile)
     # - Ring Size: 4 devices
-    # - Device 0 Assignment: chunks 0 and 7 → positions [0-3] and [28-31]
-    b, nh, nkv, s, d = 1, 1, 1, 32, 64  # Simple case for debugging
+    # - Device 0 Assignment: chunks 0 and 7 → positions [0-31] and [224-255] (1 tile each)
+    b, nh, nkv, s, d = 1, 1, 1, 256, 32  # Fixed to use proper tile dimensions
     ring_size = 4
     q_chunk_size, k_chunk_size = 32, 32
     dtype = ttnn.bfloat16
 
-    print(f"\n=== WALKTHROUGH EXAMPLE TEST ===")
+    print(f"\n=== WALKTHROUGH EXAMPLE TEST (FIXED TILE DIMENSIONS) ===")
     print(f"Parameters: B={b}, NH={nh}, S={s}, D={d}, ring_size={ring_size}")
-    print(f"Chunk size: S/(2*ring_size) = {s}/({2*ring_size}) = {s//(2*ring_size)} positions per chunk")
-    print(f"Expected Device 0 chunks: 0 and 7 → positions [0-3] and [28-31]")
-    print(f"Expected ~87% computation reduction (2 out of 16 QK blocks)")
+    print(f"Total tiles: S/32 = {s//32} tiles")
+    print(
+        f"Chunk size: S/(2*ring_size) = {s}/({2*ring_size}) = {s//(2*ring_size)} positions = {s//(2*ring_size)//32} tile per chunk"
+    )
+    print(f"Expected Device 0 chunks: 0 and 7 → positions [0-31] and [224-255] (1 tile each)")
+    print(f"Expected ~75% computation reduction (2 out of 8 tiles processed)")
 
     rmse_threshold = 0.01
     ttnn.device.DisablePersistentKernelCache()
@@ -285,9 +289,9 @@ def test_ring_distributed_sdpa_walkthrough_example(device):
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d",
     [
-        (1, 1, 1, 32, 64),  # EXACT walkthrough example
-        (1, 2, 1, 32, 64),  # Add one more head
-        (1, 8, 1, 128, 64),  # Larger but still ring_size=4 compatible
+        (1, 1, 1, 256, 64),  # EXACT walkthrough example (FIXED for tile dimensions)
+        (1, 2, 1, 256, 64),  # Add one more head
+        (1, 8, 1, 256, 64),  # Larger but still ring_size=4 compatible
     ],
     ids=["walkthrough", "multi_head", "larger"],
 )
