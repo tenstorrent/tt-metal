@@ -24,31 +24,77 @@ class RMSNorm:
             if bias:
                 self.bias = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
 
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        # Cache weight
+        if self.weight is not None:
+            weight_path = path_prefix + "weight"
+            ttnn.dump_tensor(weight_path, self.weight)
+            cache_dict["weight"] = weight_path
+
+        # Cache bias if it exists
+        if self.bias is not None:
+            bias_path = path_prefix + "bias"
+            ttnn.dump_tensor(bias_path, self.bias)
+            cache_dict["bias"] = bias_path
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        if "weight" in cache_dict:
+            self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
+        if "bias" in cache_dict:
+            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
+
     def load_state_dict(self, state_dict):
         if self.norm_elementwise_affine:
             self.weight = bf16_tensor(state_dict["weight"].unsqueeze(0), device=self.mesh_device)
             if self.use_bias:
                 self.bias = bf16_tensor(state_dict["bias"].unsqueeze(0), device=self.mesh_device)
 
-    def __call__(self, x):
-        return ttnn.rms_norm(x, weight=self.weight, bias=self.bias, epsilon=self.norm_eps)
+    def __call__(self, x, compute_kernel_config=None):
+        return ttnn.rms_norm(
+            x, weight=self.weight, bias=self.bias, epsilon=self.norm_eps, compute_kernel_config=compute_kernel_config
+        )
 
 
 class LayerNorm:
     def __init__(
-        self, embedding_dim, norm_eps=1e-5, norm_elementwise_affine=True, bias=True, mesh_device=None, init=False
+        self,
+        embedding_dim,
+        norm_eps=1e-5,
+        norm_elementwise_affine=True,
+        bias=True,
+        mesh_device=None,
+        init=False,
+        use_row_major_workaround=False,  # Issue #20789
     ):
         self.embedding_dim = embedding_dim
         self.norm_eps = norm_eps
         self.norm_elementwise_affine = norm_elementwise_affine
         self.mesh_device = mesh_device
         self.use_bias = bias
+        self.use_row_major_workaround = use_row_major_workaround
         self.weight = None
         self.bias = None
-        if norm_elementwise_affine and init:
-            self.weight = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
+        # When using the row-major workaround, ensure that dummy weight/bias are created
+        if norm_elementwise_affine and init or use_row_major_workaround:
+            if use_row_major_workaround:
+                self.weight = bf16_tensor(
+                    torch.ones(1, embedding_dim).reshape(-1, 32), device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+            else:
+                self.weight = bf16_tensor(torch.ones(1, embedding_dim), device=self.mesh_device)
             if bias:
-                self.bias = bf16_tensor(torch.randn(1, embedding_dim), device=self.mesh_device)
+                if use_row_major_workaround:
+                    self.bias = bf16_tensor(
+                        torch.zeros(1, embedding_dim).reshape(-1, 32),
+                        device=self.mesh_device,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                    )
+                else:
+                    self.bias = bf16_tensor(torch.zeros(1, embedding_dim), device=self.mesh_device)
 
         self.compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
@@ -58,11 +104,44 @@ class LayerNorm:
             packer_l1_acc=False,
         )
 
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        if self.weight is not None:
+            # Cache weight
+            weight_path = path_prefix + "weight"
+            ttnn.dump_tensor(weight_path, self.weight)
+            cache_dict["weight"] = weight_path
+
+        if self.bias is not None:
+            # Cache bias
+            bias_path = path_prefix + "bias"
+            ttnn.dump_tensor(bias_path, self.bias)
+            cache_dict["bias"] = bias_path
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        if "weight" in cache_dict:
+            self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
+        if "bias" in cache_dict:
+            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
+
     def load_state_dict(self, state_dict):
         if self.norm_elementwise_affine:
-            self.weight = bf16_tensor(state_dict["weight"].unsqueeze(0), device=self.mesh_device)
+            if self.use_row_major_workaround:
+                self.weight = bf16_tensor(
+                    state_dict["weight"].reshape(-1, 32), device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
+                )
+            else:
+                self.weight = bf16_tensor(state_dict["weight"].unsqueeze(0), device=self.mesh_device)
             if self.use_bias:
-                self.bias = bf16_tensor(state_dict["bias"].unsqueeze(0), device=self.mesh_device)
+                if self.use_row_major_workaround:
+                    self.bias = bf16_tensor(
+                        state_dict["bias"].reshape(-1, 32), device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
+                    )
+                else:
+                    self.bias = bf16_tensor(state_dict["bias"].unsqueeze(0), device=self.mesh_device)
 
     def __call__(self, x):
         return ttnn.layer_norm(
@@ -128,6 +207,29 @@ class DistributedLayerNorm:
             packer_l1_acc=False,
         )
 
+    def to_cached_state_dict(self, path_prefix):
+        cache_dict = {}
+
+        # Cache weight
+        if self.weight is not None:
+            weight_path = path_prefix + "weight"
+            ttnn.dump_tensor(weight_path, self.weight)
+            cache_dict["weight"] = weight_path
+
+        # Cache bias
+        if self.bias is not None:
+            bias_path = path_prefix + "bias"
+            ttnn.dump_tensor(bias_path, self.bias)
+            cache_dict["bias"] = bias_path
+
+        return cache_dict
+
+    def from_cached_state_dict(self, cache_dict):
+        if "weight" in cache_dict:
+            self.weight = ttnn.load_tensor(cache_dict["weight"], device=self.mesh_device)
+        if "bias" in cache_dict:
+            self.bias = ttnn.load_tensor(cache_dict["bias"], device=self.mesh_device)
+
     def load_state_dict(self, state_dict):
         if self.norm_elementwise_affine:
             weight = state_dict["weight"]
@@ -162,7 +264,7 @@ class DistributedLayerNorm:
             cluster_axis=self.mesh_axis,
             mesh_device=x.device(),
             topology=self.ccl_manager.topology,
-            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(),
+            multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.mesh_axis),
             persistent_output_tensor=self.ccl_manager.get_ag_ping_pong_buffer(
                 stats.shape, len(stats.shape) - 1, self.mesh_axis
             ),
@@ -190,8 +292,8 @@ Set mesh_axis to None to disable data parallelism.
 # TODO: Add helper to assert torch reference
 class GroupNorm:
     default_num_out_blocks = {
-        (1, 128, 128, 512): 1
-    }  # used to overrride the num_out_blocks computed based on the input shape. Entry here is an example
+        # (Batch, Height, Width, Channels): num_out_blocks
+    }  # used to overrride the num_out_blocks computed based on the input shape.
 
     def __init__(
         self,
@@ -201,7 +303,7 @@ class GroupNorm:
         mesh_device=None,
         mesh_axis=None,
         core_grid=None,
-        num_out_blocks=None,
+        num_out_blocks=-1,
         torch_ref=None,
     ):
         self.eps = eps or torch_ref.eps
@@ -214,25 +316,18 @@ class GroupNorm:
         self.weight = None
         self.bias = None
         self.mask = None
+        self.core_grid = core_grid or ttnn.CoreGrid(x=8, y=8)  # self.mesh_device.core_grid # Issue on 6U 8x9 grid
 
         # Assert group norm parameters
         assert (
             self.num_channels % 32 == 0 == self.num_channels % self.num_groups
         ), f"num_channels must be divisible by 32 and num_groups"
-        self.core_grid = core_grid
-
-        if self.core_grid is None:
-            grid_y = self.mesh_device.core_grid.y
-            while self.num_channels % (32 * grid_y) != 0:
-                grid_y -= 1
-
-            self.core_grid = ttnn.CoreGrid(y=grid_y, x=mesh_device.core_grid.x)
 
         if torch_ref is not None:
             self.load_state_dict(torch_ref.state_dict())
 
     @classmethod
-    def from_torch(cls, torch_ref, num_output_blocks=None, mesh_device=None, mesh_axis=None, core_grid=None):
+    def from_torch(cls, torch_ref, num_output_blocks=-1, mesh_device=None, mesh_axis=None, core_grid=None):
         layer = cls(
             mesh_device=mesh_device,
             mesh_axis=mesh_axis,
@@ -242,50 +337,17 @@ class GroupNorm:
         )
         return layer
 
-    def group_norm_weight_bias_rm_sharded(self, tensor):
-        if self.num_devices > 1:
-            torch_sharded_lst = [
-                ttnn.create_group_norm_weight_bias_rm(t, self.num_channels, self.core_grid.y)
-                for t in tensor.chunk(self.num_devices)
-            ]
-            tensor_to_shard = torch.cat(torch_sharded_lst, dim=0)
-            shard_dim = 0
-        else:
-            tensor_to_shard = ttnn.create_group_norm_weight_bias_rm(tensor, self.num_channels, self.core_grid.y)
-            shard_dim = None
-
-        return tensor_to_shard, shard_dim
-
     def load_state_dict(self, state_dict):
-        torch_weight, shard_dim_weight = self.group_norm_weight_bias_rm_sharded(state_dict["weight"])
-        torch_bias, shard_dim_bias = self.group_norm_weight_bias_rm_sharded(state_dict["bias"])
-        torch_mask = ttnn.create_group_norm_input_mask(self.num_channels, self.num_groups, self.core_grid.y)
-
-        self.weight = bf16_tensor(
-            torch_weight,
+        [self.weight, self.bias], self.mask = ttnn.dram_group_norm_params_from_torch(
+            torch_params=[state_dict["weight"], state_dict["bias"]],
+            channels_per_device=self.num_channels,
+            groups_per_device=self.num_groups,
             device=self.mesh_device,
             mesh_axis=self.mesh_axis,
-            shard_dim=shard_dim_weight,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            return_mask=True,
         )
-        self.bias = bf16_tensor(
-            torch_bias,
-            device=self.mesh_device,
-            mesh_axis=self.mesh_axis,
-            shard_dim=shard_dim_bias,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-        self.mask = bf16_tensor(
-            torch_mask, device=self.mesh_device, mesh_axis=None, shard_dim=None, layout=ttnn.TILE_LAYOUT
-        )
-
-    @classmethod
-    def get_num_out_blocks(cls, x_shape):
-        return cls.default_num_out_blocks.setdefault(x_shape, x_shape[1] * x_shape[2] // (128 * 128))
 
     def __call__(self, x):
-        num_out_blocks = self.num_out_blocks or self.get_num_out_blocks(tuple(x.shape))
-
         batch_size, height, width, channels = x.shape
         x = x.reshape([batch_size, 1, width * height, channels])
         x = ttnn.group_norm(
@@ -297,7 +359,7 @@ class GroupNorm:
             epsilon=self.eps,
             core_grid=self.core_grid,
             inplace=False,
-            num_out_blocks=num_out_blocks,
+            num_out_blocks=self.num_out_blocks,
             output_layout=ttnn.TILE_LAYOUT,
         )
         x = x.reshape([batch_size, height, width, channels])

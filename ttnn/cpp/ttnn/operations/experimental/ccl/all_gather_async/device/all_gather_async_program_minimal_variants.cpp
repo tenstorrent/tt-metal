@@ -183,7 +183,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     const auto output_tensor_buffer_type = output_tensor.buffer()->buffer_type();
     const auto& input_tensor_shape = input_tensor.padded_shape();
     const auto& output_tensor_shape = output_tensor.padded_shape();
-    auto mesh_device = input_tensor.mesh_device();
+    auto mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Mesh device not found");
 
     // op hyperparams
@@ -673,7 +673,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_llama_sharded(
     bool use_optimal_ccl_for_llama = false) {
     tt::tt_metal::Program program{};
 
-    IDevice* mesh_device = input_tensor.mesh_device();
+    IDevice* mesh_device = input_tensor.device();
     if (!mesh_device) {
         mesh_device = input_tensor.device();
     }
