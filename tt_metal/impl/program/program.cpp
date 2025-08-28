@@ -1477,8 +1477,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     Inspector::program_compile_finished(this, device, build_env.build_key);
 }
 
-void Program::compile(IDevice* device, bool force_slow_dispatch) { internal_->compile(device, force_slow_dispatch); }
-
 void detail::ProgramImpl::set_runtime_id(Program::id_t id) { this->runtime_id = id; }
 
 void Program::set_runtime_id(Program::id_t id) { internal_->set_runtime_id(id); }
@@ -1791,7 +1789,8 @@ void detail::ProgramCompileGroup::compile_all(bool force_slow_dispatch) {
     std::vector<std::shared_future<void>> events;
     for (auto& [device, program] : program_device_map_) {
         auto pgm = program.get();
-        launch_build_step([device, pgm, force_slow_dispatch]() { pgm->compile(device, force_slow_dispatch); }, events);
+        launch_build_step(
+            [device, pgm, force_slow_dispatch]() { pgm->impl().compile(device, force_slow_dispatch); }, events);
     }
     sync_build_steps(events);
 }
