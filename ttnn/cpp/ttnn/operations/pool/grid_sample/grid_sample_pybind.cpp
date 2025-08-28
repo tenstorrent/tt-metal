@@ -26,7 +26,7 @@ void bind_grid_sample(py::module& module) {
         and implementing spatial transformer networks.
 
         Args:
-            input_tensor (ttnn.Tensor): Input tensor of shape (N, C, H_in, W_in)
+            input_tensor (ttnn.Tensor): Input tensor of shape (N, H_in, W_in, C) - channel last format
             grid (ttnn.Tensor): Sampling grid of shape (N, H_out, W_out, 2) containing
                                normalized coordinates in range [-1, 1]. The last dimension
                                contains (x, y) coordinates where:
@@ -42,11 +42,11 @@ void bind_grid_sample(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation.
 
         Returns:
-            ttnn.Tensor: Output tensor of shape (N, C, H_out, W_out)
+            ttnn.Tensor: Output tensor of shape (N, H_out, W_out, C) - channel last format
 
         Example:
-            >>> # Create input tensor (N=1, C=3, H=4, W=4)
-            >>> input_tensor = ttnn.from_torch(torch.randn(1, 3, 4, 4), device=device)
+            >>> # Create input tensor (N=1, H=4, W=4, C=32) - channel last format
+            >>> input_tensor = ttnn.from_torch(torch.randn(1, 4, 4, 32), device=device)
 
             >>> # Create identity grid (should return input unchanged)
             >>> theta = torch.tensor([[[1., 0., 0.], [0., 1., 0.]]], dtype=torch.float)
@@ -55,7 +55,7 @@ void bind_grid_sample(py::module& module) {
 
             >>> # Apply grid sample
             >>> output = ttnn.grid_sample(input_tensor, grid_tensor)
-            >>> print(output.shape)  # [1, 3, 4, 4]
+            >>> print(output.shape)  # [1, 4, 4, 32]
         )doc";
 
     ttnn::bind_registered_operation(
