@@ -70,6 +70,9 @@ inline std::string get_soc_description_file(
         case tt::ARCH::BLACKHOLE:
             file = is_sim ? "blackhole_simulation_1x2_arch.yaml" : "blackhole_140_arch.yaml";
             break;
+        case tt::ARCH::QUASAR:
+            file = is_sim ? "quasar_simulation_1x3_arch.yaml" : "quasar_simulation_1x3_arch.yaml";
+            break;
         default: throw std::runtime_error("Unsupported device arch");
     }
     path += file;
@@ -87,6 +90,8 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
             return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
         } else if (arch == tt::ARCH::BLACKHOLE) {
             return tt::tt_metal::ClusterType::SIMULATOR_BLACKHOLE;
+        } else if (arch == tt::ARCH::QUASAR) {
+            return tt::tt_metal::ClusterType::SIMULATOR_QUASAR;
         }
         return tt::tt_metal::ClusterType::INVALID;
     }
