@@ -10,10 +10,10 @@ TtGemmaImageAttention and TtGemmaImageFeedForward
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.tt_transformers.tt.multimodal.gemma.gemma_image_attention import TtGemmaImageAttention
+from models.demos.gemma3.tt.gemma_image_attention import TtGemmaImageAttention
 
 # from models.tt_transformers.tt.multimodal.llama_image_attention import TtLlamaImageAttention
-from models.tt_transformers.tt.multimodal.gemma.gemma_image_mlp import TtGemmaImageFeedForward
+from models.demos.gemma3.tt.gemma_image_mlp import TtGemmaImageFeedForward
 from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
 
 

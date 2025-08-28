@@ -335,7 +335,7 @@ class TtGemmaImageAttention(LightweightModule):
 
         # TODO: get this from model_config
         sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(8, 8), q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False
+            compute_with_storage_grid_size=(8, 8), q_chunk_size=256, k_chunk_size=256, exp_approx_mode=False
         )
         attn_output_1QSD = ttnn.transformer.scaled_dot_product_attention(
             q_heads_1QSD,
