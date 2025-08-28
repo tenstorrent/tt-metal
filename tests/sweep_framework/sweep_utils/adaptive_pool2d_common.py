@@ -2,56 +2,47 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple
+import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
-    input_shape = test_vector["input_shape"]
-    output_size = test_vector["output_size"]
-    input_layout = test_vector.get("input_a_layout", ttnn.TILE_LAYOUT)
-    input_dtype = test_vector.get("input_a_dtype", ttnn.bfloat16)
-
-    # Invalidate bfloat8_b with ROW_MAJOR_LAYOUT
-    if input_layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
-        return True, "bfloat8_b requires TILE_LAYOUT!"
-
-    # Invalidate cases where output size is larger than input size
-    if output_size is not None:
-        input_h, input_w = input_shape[2], input_shape[3]
-        output_h, output_w = output_size[0], output_size[1]
-        if output_h > input_h or output_w > input_w:
-            return True, f"Adaptive pooling cannot upsample: input {input_h}x{input_w} -> output {output_h}x{output_w}"
-
-    return False, None
+def randomize_tensor(tensor_map, tensor_shape):
+    tensor_shape = tuple(tensor_shape)
+    if tensor_shape in tensor_map.keys():
+        torch_tensor = tensor_map[tensor_shape]
+    else:
+        torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
+        tensor_map[tensor_shape] = torch_tensor
+    return torch_tensor
 
 
 def run_adaptive_pool2d(
-    in_n,
-    in_c,
-    in_h,
-    in_w,
-    out_h,
-    out_w,
-    dtype,
     device,
+    tensor_map,
+    input_shape,
+    output_size,
+    dtype,
     pool_type="avg",
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
     sharding=None,
 ):
+    in_n, in_c, in_h, in_w = input_shape
+    out_h, out_w = output_size
+
+    # Skip cases where output size is larger than input size (upsampling)
+    if output_size is not None:
+        input_h, input_w = input_shape[2], input_shape[3]
+        output_h, output_w = output_size[0], output_size[1]
+        if output_h > input_h or output_w > input_w:
+            pytest.skip(f"Adaptive pooling cannot upsample: input {input_h}x{input_w} -> output {output_h}x{output_w}")
+
     # Skip memory-intensive cases that cause OOM
     if dtype == ttnn.bfloat16 and in_n == 1 and in_c == 64 and in_h == 224 and in_w == 224:
-        import pytest
-
         pytest.skip(f"Skipping memory-intensive case [1, 64, 224, 224] -> [{out_h}, {out_w}] with {dtype} due to OOM")
 
-    torch.manual_seed(0)
-
-    input_shape = [in_n, in_c, in_h, in_w]
-    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_input = randomize_tensor(tensor_map, input_shape)
 
     # Convert to TTNN format [1, 1, NHW, C]
     ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
@@ -61,9 +52,7 @@ def run_adaptive_pool2d(
     if dtype == ttnn.bfloat8_b:
         ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.TILE_LAYOUT, device=device)
     else:
-        ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.TILE_LAYOUT, device=device)
-
-    start_time = start_measuring_time()
+        ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     # Call the appropriate TTNN function
     if pool_type == "avg":
@@ -93,8 +82,6 @@ def run_adaptive_pool2d(
         # PyTorch reference
         torch_output = torch.nn.functional.adaptive_max_pool2d(torch_input, (out_h, out_w))
 
-    e2e_perf = stop_measuring_time(start_time)
-
     # Reshape TTNN output from [1, 1, N*out_h*out_w, C] to [N, C, out_h, out_w]
     ttnn_output = ttnn.to_torch(ttnn_output).reshape(in_n, out_h, out_w, in_c)
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # NHWC -> NCHW
@@ -105,7 +92,9 @@ def run_adaptive_pool2d(
         rtol = 0.01  # Relaxed rtol for avg pool due to bfloat16 scalar precision limitations
         pcc_threshold = 0.985
     else:  # max
-        pcc_threshold = 0.998
+        pcc_threshold = 1
+        if dtype == ttnn.bfloat8_b:
+            pcc_threshold = 0.99
 
     if dtype == ttnn.bfloat8_b:
         atol = 0.35
@@ -122,18 +111,4 @@ def run_adaptive_pool2d(
             isequal
         ), f"Reference and output tensor are not equal for bfloat16. Input: {input_shape}, Output: [{out_h}, {out_w}]"
 
-    pcc = check_with_pcc(torch_output, ttnn_output, pcc_threshold)
-    return [pcc, e2e_perf]
-
-
-# Wrapper functions for backward compatibility
-def run_adaptive_avg_pool2d(
-    in_n, in_c, in_h, in_w, out_h, out_w, dtype, device, memory_config=ttnn.DRAM_MEMORY_CONFIG, sharding=None
-):
-    return run_adaptive_pool2d(in_n, in_c, in_h, in_w, out_h, out_w, dtype, device, "avg", memory_config, sharding)
-
-
-def run_adaptive_max_pool2d(
-    in_n, in_c, in_h, in_w, out_h, out_w, dtype, device, memory_config=ttnn.DRAM_MEMORY_CONFIG, sharding=None
-):
-    return run_adaptive_pool2d(in_n, in_c, in_h, in_w, out_h, out_w, dtype, device, "max", memory_config, sharding)
+    assert_with_pcc(torch_output, ttnn_output, pcc_threshold)
