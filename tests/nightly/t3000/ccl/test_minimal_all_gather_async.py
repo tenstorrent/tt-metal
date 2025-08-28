@@ -664,9 +664,3 @@ def test_all_gather_async_interleaved_to_sharded(
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
-
-
-def get_max_chunks_per_sync(num_devices, ag_output_shape, num_links):
-    packet_elems = 2048
-    total_elems = math.prod(ag_output_shape)
-    return (total_elems // packet_elems) // (num_devices * num_links)
