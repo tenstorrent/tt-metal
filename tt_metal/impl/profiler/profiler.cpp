@@ -1383,7 +1383,6 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
     while (device_marker_it != device_markers.end()) {
         tracy::TTDeviceMarker marker = *device_marker_it;
         tracy::MarkerDetails marker_details = this->getMarkerDetails(marker.marker_id);
-        const kernel_profiler::PacketTypes marker_type = get_packet_type(marker.marker_id);
 
         auto next_device_marker_it = std::next(device_marker_it);
 
@@ -1421,9 +1420,9 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
             // Reset the command subtype, in case it isn't set during the command.
             current_dispatch_meta_data.cmd_subtype = "";
 
-            if (marker_type == kernel_profiler::ZONE_START) {
+            if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_START) {
                 start_marker_stack.push(device_marker_it);
-            } else if (marker_type == kernel_profiler::ZONE_END) {
+            } else if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
                 TT_FATAL(
                     !start_marker_stack.empty(),
                     "End marker {} found without a corresponding start marker",
