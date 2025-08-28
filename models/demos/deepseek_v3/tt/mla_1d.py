@@ -19,7 +19,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     FromWeightConfig,
     LinearConfig,
     MeshDeviceStub,
-    ReduceScatterAsyncConfig,
     ReduceScatterAsyncMinimalConfig,
     ReshardConfig,
 )
@@ -355,11 +354,9 @@ class MLA1D(SharedStateAddOn, AbstractModule):
         # Set up CCLs
 
         # Q
-        wq_a_rs_config = ReduceScatterAsyncConfig(
-            mesh_device=MeshDeviceStub(mesh_shape),
+        wq_a_rs_config = ReduceScatterAsyncMinimalConfig(
             cluster_axis=1,
             dim=3,
-            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
         )
@@ -1139,7 +1136,7 @@ class MLA1D(SharedStateAddOn, AbstractModule):
         # wq_a and wq_b
         tt_q = ttnn.linear(x, **cfg["wq_a"])
 
-        tt_q = ttnn.experimental.reduce_scatter_async(tt_q, **cfg["wq_a_rs_prefill"])
+        tt_q = ttnn.experimental.reduce_scatter_minimal_async(tt_q, **cfg["wq_a_rs_prefill"])
         tt_q = ttnn.experimental.all_gather_async(tt_q, **cfg["wq_a_ag_prefill"])
 
         tt_q = RMSNorm.forward_prefill(tt_q, cfg["q_norm"])
