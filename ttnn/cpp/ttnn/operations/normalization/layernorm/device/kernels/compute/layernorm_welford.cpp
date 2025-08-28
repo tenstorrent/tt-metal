@@ -143,7 +143,7 @@ void MAIN {
                     transpose_wh_init_short(cb_x);
                     transpose_wh_tile(cb_x, wt + j, dst0);
                     welford_init();
-                    welford(dst0, dst1, dst2, start_N, W, wt + j == Wt);
+                    welford(dst0, dst1, dst2, start_N, W);
                     start_N += tile_width;
                 }
             }
