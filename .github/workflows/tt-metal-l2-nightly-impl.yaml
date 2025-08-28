@@ -344,7 +344,7 @@ jobs:
         if: always()
 
   ttnn-bos-tests:
-    if: ${{ inputs.run_ttnn-bos-tests }}
+    if: ${{ inputs.run_ttnn-bos-tests && (inputs.runner-label == 'P150b') }}
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
