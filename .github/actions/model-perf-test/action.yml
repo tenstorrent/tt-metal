@@ -6,6 +6,8 @@ runs:
   using: "composite"
   steps:
     - uses: ./.github/actions/docker-run
+      env:
+        PYTHONPATH: ${{ github.workspace }}
       with:
         docker_image: ${{ env.DOCKER_IMAGE }}
         docker_password: ${{ env.DOCKER_PASSWORD }}
@@ -13,4 +15,4 @@ runs:
         install_wheel: true
         run_args: |
           ${{ inputs.run_args }}
-          export PYTHONPATH=$(pwd) && env python3 models/perf/merge_perf_results.py REPORT
+          env python3 models/perf/merge_perf_results.py REPORT
