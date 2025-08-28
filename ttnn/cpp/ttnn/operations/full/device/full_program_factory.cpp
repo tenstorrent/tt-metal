@@ -24,9 +24,9 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     auto fill_value = operation_attributes.fill_value;
 
     auto grid = tensor_args.any.device()->compute_with_storage_grid_size();
-    auto num_tiles = output.physical_volume() / TILE_HW;
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(grid, num_tiles);
+    auto num_pages = (uint32_t)output.buffer()->num_pages();
+    auto [num_cores, all_cores, core_group_1, core_group_2, num_pages_per_core_group_1, num_pages_per_core_group_2] =
+        tt::tt_metal::split_work_to_cores(grid, num_pages);
 
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
 
@@ -77,17 +77,17 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     uint32_t num_cores_y = grid.y;
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t num_tiles_per_core;
+        uint32_t num_pages_per_core;
         if (core_group_1.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_1;
+            num_pages_per_core = num_pages_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            num_tiles_per_core = num_tiles_per_core_group_2;
+            num_pages_per_core = num_pages_per_core_group_2;
         } else {
             TT_THROW("Core not in specified core ranges");
         }
-        std::vector<uint32_t> writer_args = {output.buffer()->address(), u.u32, num_tiles_per_core, tile_offset};
+        std::vector<uint32_t> writer_args = {output.buffer()->address(), u.u32, num_pages_per_core, tile_offset};
         SetRuntimeArgs(program, writer_id, core, writer_args);
-        tile_offset += num_tiles_per_core;
+        tile_offset += num_pages_per_core;
     }
     return {std::move(program), {writer_id, num_cores, num_cores_y}};
 }
