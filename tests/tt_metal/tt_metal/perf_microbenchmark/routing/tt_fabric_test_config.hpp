@@ -30,6 +30,7 @@
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
 #include <tt-metalium/hal.hpp>
+#include "tt_fabric_cycle_detector.hpp"
 
 namespace tt::tt_fabric {
 namespace fabric_tests {
@@ -1214,6 +1215,41 @@ public:
                     continue;
                 }
                 auto expanded_tests = this->expand_high_level_patterns(p_config);
+
+                // Apply cycle detection if enabled
+                if (p_config.check_for_cycles) {
+                    for (auto& config : expanded_tests) {
+                        // Check if conditions are met for cycle detection
+                        bool is_2d_dynamic = (config.fabric_setup.topology == Topology::Mesh ||
+                                              config.fabric_setup.topology == Topology::Torus) &&
+                                             config.fabric_setup.routing_type == RoutingType::Dynamic;
+
+                        if (is_2d_dynamic) {
+                            // Extract src-dest pairs from senders
+                            std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
+                            for (const auto& sender : config.senders) {
+                                for (const auto& receiver : sender.receivers) {
+                                    pairs.emplace_back(sender.sender_device, receiver.receiver_device);
+                                }
+                            }
+
+                            // Perform cycle detection
+                            CycleDetector detector;
+                            bool has_cycles = detector.detect_and_handle_cycles(
+                                pairs,
+                                this->fixture_.rt_gen,
+                                this->fixture_.inter_conn,
+                                !this->fixture_.is_deadlock_prevention_enabled(),
+                                config.name);
+
+                            if (has_cycles) {
+                                log_warning(
+                                    LogTest, "Cycles detected in test '{}' - check generated YAML files", config.name);
+                            }
+                        }
+                    }
+                }
+
                 built_tests.insert(
                     built_tests.end(),
                     std::make_move_iterator(expanded_tests.begin()),
