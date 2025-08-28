@@ -223,11 +223,11 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4N7ckernel12dequant_tileE8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a7d10aea5f5b8cf8f2ab877521c3d91ae"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">dequant_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel12dequant_tileE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel12dequant_tileE8uint32_t8uint32_t8uint32_t">
+<span class="target" id="namespaceckernel_1abc139062954eed843e4afb9542b12e2a"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">dequant_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">odst</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel12dequant_tileE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
-<p>Performs an elementwise per-tensor affine de-quantization operation on the first operand using the scaling factor in the second operand. Output overwrites first operand in DST.</p>
+<p>Performs an elementwise per-tensor affine de-quantization operation on the first operand using the scaling factor in the second operand. Output overwrites odst in DST.</p>
 <p>Return value: None</p>
 <p></p>
 <table class="docutils align-default">
@@ -251,6 +251,13 @@
 <tr class="row-odd">
 <td><p>idst1   </p></td>
 <td><p>The index of the tile in DST register buffer to use as second operand   </p></td>
+<td><p>uint32_t   </p></td>
+<td><p>Must be less than the size of the DST register buffer   </p></td>
+<td><p>True    </p></td>
+</tr>
+<tr class="row-even">
+<td><p>odst   </p></td>
+<td><p>The index of the tile in DST register buffer to use as output   </p></td>
 <td><p>uint32_t   </p></td>
 <td><p>Must be less than the size of the DST register buffer   </p></td>
 <td><p>True   </p></td>
