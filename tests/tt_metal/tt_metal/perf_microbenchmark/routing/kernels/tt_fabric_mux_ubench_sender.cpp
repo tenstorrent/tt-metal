@@ -7,7 +7,7 @@
 #include "debug/dprint.h"
 #include "debug/assert.h"
 #include "fabric/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h" // zero_l1_buf
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 // clang-format on
