@@ -52,7 +52,6 @@
 #include "ttnn/operations/embedding_backward/embedding_backward_pybind.hpp"
 #include "ttnn/operations/examples/examples_pybind.hpp"
 #include "ttnn/operations/experimental/experimental_pybind.hpp"
-#include "ttnn/operations/experimental/adaptive_pool/adaptive_pools_pybind.hpp"
 #include "ttnn/operations/full/full_pybind.hpp"
 #include "ttnn/operations/full_like/full_like_pybind.hpp"
 #include "ttnn/operations/generic/generic_op_pybind.hpp"
