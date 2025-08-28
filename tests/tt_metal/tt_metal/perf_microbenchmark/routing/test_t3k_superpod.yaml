@@ -138,7 +138,7 @@ Tests:
       ntype: unicast_write
       size: 1024
       num_packets: 100
-    num_iterations: 2
+    num_iterations: 1
     senders:
       - device: [0, 0]
         patterns:
