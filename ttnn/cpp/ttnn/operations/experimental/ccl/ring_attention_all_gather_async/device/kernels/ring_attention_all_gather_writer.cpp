@@ -127,8 +127,12 @@ void kernel_main() {
 
                     if constexpr (direction == 1) {
                         // Backwards does local write
-                        noc_async_write(noc0_dest_noc_addr, l1_read_addr, output_page_size);
-                        noc_async_write(second_noc0_dest_noc_addr, l1_read_addr + output_page_size, output_page_size);
+                        noc_async_write(
+                            l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id), output_page_size);
+                        noc_async_write(
+                            l1_read_addr + output_page_size,
+                            output_addrgens[input_idx].get_noc_addr(second_tile_id),
+                            output_page_size);
                     }
 
                     if constexpr (num_targets_in_direction) {
@@ -150,7 +154,8 @@ void kernel_main() {
                 } else {
                     ASSERT(num_pages_to_read == 1);
                     if constexpr (direction == 1) {
-                        noc_async_write(noc0_dest_noc_addr, l1_read_addr, output_page_size);
+                        noc_async_write(
+                            l1_read_addr, output_addrgens[input_idx].get_noc_addr(tile_id), output_page_size);
                     }
                     if constexpr (num_targets_in_direction) {
                         // Has valid targets to send to
