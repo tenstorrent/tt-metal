@@ -151,6 +151,7 @@ class Embedding1D(AbstractModule):
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "all_gather": {
                 "multi_device_global_semaphore": ccl.get_gather_sem(0),
+                "barrier_semaphore": ccl.get_barrier_sem(0),
                 "num_links": ccl.get_max_links(0),
             },
         }

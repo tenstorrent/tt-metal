@@ -102,8 +102,6 @@ def test_forward_pass(
     weights_type,
     deepseek_cache_path,
 ):
-    tensor_cache_path = deepseek_cache_path / "ttnn_tensors_cache"
-    mesh_device.disable_and_clear_program_cache()
     mesh_shape = list(mesh_device.shape)
     num_rows, sdpa_dp_factor = mesh_shape
 
@@ -165,10 +163,13 @@ def test_forward_pass(
     ############################
     logger.info("Setting up TTNN configs")
 
+    tensor_cache_path = deepseek_cache_path / "ttnn_tensors_cache"
     weight_config_path = tensor_cache_path / f"model_{hf_config.num_hidden_layers}_layers_weight_config.json"
     # save this weight config to json file if it doesn't exist
     if not weight_config_path.exists():
-        weight_config = Model1D.convert_weights(hf_config, state_dict, tensor_cache_path, mesh_device, state_dict_prefix="model.")
+        weight_config = Model1D.convert_weights(
+            hf_config, state_dict, tensor_cache_path, mesh_device, state_dict_prefix="model."
+        )
         with open(weight_config_path, "w") as f:
             json.dump(weight_config, f)
         logger.info(f"Saved weight config to {weight_config_path}")

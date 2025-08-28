@@ -17,7 +17,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     AllToAllCombineConfig,
     AllToAllDispatchConfig,
     MulConfig,
-    ReduceScatterAsyncConfig,
+    ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -96,8 +96,8 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "num_links": 1,
             },
             "final_output_reduce_scatter": {
-                "from_remote_multi_device_global_semaphore": ccl.get_from_sem(1),
-                "to_remote_multi_device_global_semaphore": ccl.get_to_sem(1),
+                "multi_device_global_semaphore": ccl.get_reduce_scatter_sem(1),
+                "barrier_semaphore": ccl.get_barrier_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
             "revert_tp": {
@@ -149,11 +149,9 @@ class MoE(SharedStateAddOn, AbstractModule):
             "output_memory_config": memory_config,
             "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
             "all_to_all_combine": AllToAllCombineConfig(axis=0, memory_config=memory_config),
-            "final_output_reduce_scatter": ReduceScatterAsyncConfig(
-                mesh_device=mesh_device,
+            "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
                 cluster_axis=1,
                 dim=3,
-                math_op=ttnn.ReduceType.Sum,
                 memory_config=memory_config,
                 topology=ttnn.Topology.Linear,
             ),
@@ -230,7 +228,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             post_combine_output_tensor, topk_experts_weights, **cfg["mul_experts_output_with_weights"]
         )
         post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
-        post_combine_output_tensor = ttnn.experimental.reduce_scatter_async(
+        post_combine_output_tensor = ttnn.experimental.reduce_scatter_minimal_async(
             post_combine_output_tensor, **cfg["final_output_reduce_scatter"]
         )
 
