@@ -352,12 +352,10 @@ private:
 
     using iterator_adaptor_type = detail::IAnyIteratorAdaptor<AnyIterator>;
 
-    iterator_adaptor_type& iterator_adaptor() noexcept {
-        return *static_cast<iterator_adaptor_type*>(static_cast<void*>(bytes));
-    }
+    iterator_adaptor_type& iterator_adaptor() noexcept { return *reinterpret_cast<iterator_adaptor_type*>(bytes); }
 
     const iterator_adaptor_type& iterator_adaptor() const noexcept {
-        return *static_cast<const iterator_adaptor_type*>(static_cast<const void*>(bytes));
+        return *reinterpret_cast<const iterator_adaptor_type*>(bytes);
     }
 
 public:
@@ -721,9 +719,7 @@ private:
 
     using range_adaptor_type = detail::IAnyRangeAdaptor<BasicAnyRange, range_category>;
 
-    range_adaptor_type& range_adaptor() const noexcept {
-        return *static_cast<range_adaptor_type*>(static_cast<void*>(bytes));
-    }
+    range_adaptor_type& range_adaptor() const noexcept { return *reinterpret_cast<range_adaptor_type*>(bytes); }
 
 public:
     BasicAnyRange() = delete;
