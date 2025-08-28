@@ -964,7 +964,6 @@ void Synchronize(
  * | cq_id        | The command queue id to set as current.                                           | uint8_t                       |                                    | Yes      |
  */
 // clang-format on
-// todo: consider if returning a guard on this level is better vs if guard belongs to the layer above
 void SetCurrentCommandQueueId(uint8_t cq_id);
 
 // clang-format off
