@@ -1896,7 +1896,7 @@ void py_module(py::module& module) {
         ttnn::square,
         R"doc(\mathrm{{output\_tensor}}_i = \verb|square|(\mathrm{{input\_tensor}}_i))doc",
         "",
-        R"doc(BFLOAT16, BFLOAT8_B, INT32)doc");
+        R"doc(BFLOAT16, BFLOAT8_B, INT32, UINT16 [0,255])doc");
     bind_unary_operation(
         module,
         ttnn::tan,
