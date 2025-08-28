@@ -98,72 +98,6 @@ def run_max_pool(
     if (in_h + pad_h) < kernel_h or (in_w + pad_w) < kernel_w:
         pytest.skip("kernel is too large for the padded tensor")
 
-    # Skip problematic dilation configurations
-    # Check if effective kernel size exceeds input dimensions
-    effective_kernel_h = (kernel_h - 1) * dilation_h + 1
-    effective_kernel_w = (kernel_w - 1) * dilation_w + 1
-
-    if effective_kernel_h > (in_h + pad_h):
-        pytest.skip(
-            f"Effective kernel height {effective_kernel_h} > padded input height {in_h + pad_h} with dilation {dilation}"
-        )
-
-    if effective_kernel_w > (in_w + pad_w):
-        pytest.skip(
-            f"Effective kernel width {effective_kernel_w} > padded input width {in_w + pad_w} with dilation {dilation}"
-        )
-
-    # Check for potential output dimension issues
-    if stride_h == 0 or stride_w == 0:
-        pytest.skip("Zero stride not supported")
-
-    # Calculate expected output dimensions to check validity
-    expected_out_h = math.floor((in_h + pad_h - effective_kernel_h) / stride_h) + 1
-    expected_out_w = math.floor((in_w + pad_w - effective_kernel_w) / stride_w) + 1
-
-    if expected_out_h <= 0 or expected_out_w <= 0:
-        pytest.skip(f"Invalid output dimensions: {expected_out_h}x{expected_out_w} with dilation {dilation}")
-
-    # Skip specific problematic combinations that cause shape mismatches
-    problematic_configs = [
-        # Configurations that cause calculation vs PyTorch mismatches
-        ([24, 24], [3, 3], [1, 1], [0, 0], [2, 2]),  # 24x24 -> expected 19x19 vs actual 20x20
-        ([32, 32], [3, 3], [1, 1], [1, 1], [2, 2]),  # 32x32 -> expected 29x29 vs actual 30x30
-        ([16, 16], [3, 3], [1, 1], [0, 0], [2, 2]),  # 16x16 -> expected 11x11 vs actual 12x12
-        ([20, 20], [3, 3], [1, 1], [0, 0], [2, 2]),  # 20x20 -> expected 15x15 vs actual 16x16
-        ([16, 16], [3, 3], [1, 1], [1, 1], [1, 2]),  # asymmetric dilation shape mismatch
-        ([16, 16], [3, 3], [1, 1], [0, 0], [4, 4]),  # high dilation shape mismatch
-        ([20, 20], [7, 7], [1, 1], [3, 3], [2, 2]),  # large kernel + dilation + padding mismatch
-        ([30, 30], [3, 3], [1, 1], [0, 0], [1, 4]),  # asymmetric high dilation mismatch
-    ]
-
-    input_hw = (in_h, in_w)
-    kernel_hw = (kernel_h, kernel_w)
-    stride_hw = (stride_h, stride_w)
-    padding_hw = (
-        (pad_h // 2, pad_w // 2) if len(padding) == 2 else (padding[0], padding[2])
-    )  # Use top/left padding for comparison
-    dilation_hw = (dilation_h, dilation_w)
-
-    for prob_input, prob_kernel, prob_stride, prob_padding, prob_dilation in problematic_configs:
-        if (
-            input_hw == tuple(prob_input)
-            and kernel_hw == tuple(prob_kernel)
-            and stride_hw == tuple(prob_stride)
-            and dilation_hw == tuple(prob_dilation)
-        ):
-            pytest.skip(
-                f"Known problematic configuration: input {prob_input}, kernel {prob_kernel}, dilation {prob_dilation} causes shape calculation mismatch"
-            )
-
-    # Skip configurations with very large effective kernels that might cause memory or performance issues
-    if effective_kernel_h > 32 or effective_kernel_w > 32:
-        pytest.skip(f"Effective kernel size too large: {effective_kernel_h}x{effective_kernel_w}")
-
-    # Skip very high dilation values that might be problematic
-    if dilation_h > 4 or dilation_w > 4:
-        pytest.skip(f"Very high dilation values {dilation} might cause issues")
-
     out_n = in_n
     out_c = in_c
     ceil_mode_out_shape_adj = False
@@ -265,23 +199,7 @@ def run_max_pool(
 
     # adjust the TTNN output to match the expected shape
     ttnn_output = ttnn.to_torch(ttnn_output)
-
-    # Get actual output dimensions from PyTorch reference instead of pre-calculated values
-    # This fixes the dilation shape mismatch issue
-    pytorch_out_n, pytorch_out_c, pytorch_out_h, pytorch_out_w = torch_output.shape
-
-    # Verify the sizes match before reshaping
-    expected_flat_size = pytorch_out_n * pytorch_out_h * pytorch_out_w * pytorch_out_c
-    actual_flat_size = ttnn_output.numel()
-
-    if expected_flat_size != actual_flat_size:
-        raise RuntimeError(
-            f"TTNN output size mismatch: expected {expected_flat_size}, got {actual_flat_size}. "
-            f"Expected shape: [{pytorch_out_n}, {pytorch_out_c}, {pytorch_out_h}, {pytorch_out_w}]"
-        )
-
-    # Use actual dimensions from PyTorch reference for correct reshaping
-    ttnn_output = ttnn_output.reshape(pytorch_out_n, pytorch_out_h, pytorch_out_w, pytorch_out_c)  # N, H, W, C
+    ttnn_output = ttnn_output.reshape(out_n, out_h, out_w, out_c)  # N, H, W, C
     ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
 
     # test for equivalance
@@ -323,12 +241,12 @@ def run_max_pool(
             [1, 576, 32, 32],
             [1, 384, 32, 32],
             # C partial tile test
-            [1, 16, 20, 20],  # Increased from 12x12 to avoid dilation issues
+            [1, 16, 12, 12],
             [1, 1, 56, 56],
-            [2, 290, 16, 16],  # Increased from 10x10 to avoid dilation issues
+            [2, 290, 10, 10],
             # partial grid tests
-            [1, 32, 16, 16],  # Increased from 10x10 to avoid dilation issues
-            [1, 32, 12, 12],  # Increased from 6x6 to avoid dilation issues
+            [1, 32, 10, 10],  # BH
+            [1, 32, 6, 6],  # WH
         )
     ),
 )
@@ -400,10 +318,10 @@ def test_run_max_pool_height_shard(
     (
         (
             [1, 2048, 28, 28],
-            [1, 1024, 16, 16],  # Increased from 6x6 to avoid dilation issues
+            [1, 1024, 6, 6],
             [1, 2048, 132, 20],
-            [2, 4096, 16, 20],  # Increased from 10x16 to avoid dilation issues
-            [1, 32768, 16, 16],  # Increased from 10x10 to avoid dilation issues
+            [2, 4096, 10, 16],
+            [1, 32768, 10, 10],
         )
     ),
 )
@@ -475,10 +393,10 @@ def test_run_max_pool_width_shard(
     (
         (
             [1, 256, 56, 56],
-            [1, 128, 20, 20],  # Increased from 10x14 to avoid dilation issues
-            [1, 512, 16, 16],  # Increased from 8x6 to avoid dilation issues
+            [1, 128, 10, 14],
+            [1, 512, 8, 6],
             [1, 256, 132, 20],
-            [1, 4096, 16, 16],  # Increased from 10x10 to avoid dilation issues
+            [1, 4096, 10, 10],
         )
     ),
 )
@@ -658,128 +576,4 @@ def test_run_max_pool_squeeze_net_model(
         tensor_map,
         dtype,
         ceil_mode=ceil_mode,
-    )
-
-
-def run_adaptive_max_pool(
-    input_shape,
-    output_size,
-    device,
-    tensor_map,
-    dtype,
-    memory_config=None,
-    shard_scheme=None,
-):
-    in_n, in_c, in_h, in_w = input_shape
-    out_h, out_w = output_size
-
-    torch.manual_seed(0)
-    torch_input = randomize_torch_tensor(tensor_map, input_shape)
-
-    ttnn_input_shape = (1, 1, in_n * in_h * in_w, in_c)
-    torch_input_permuted = torch.permute(torch_input, (0, 2, 3, 1))  # N, H, W, C
-    torch_input_reshaped = torch_input_permuted.reshape(ttnn_input_shape)  # NHW, C
-
-    if dtype == ttnn.bfloat8_b:
-        ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.TILE_LAYOUT, device=device)
-    else:
-        ttnn_input = ttnn.from_torch(torch_input_reshaped, dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    pre_shard = shard_scheme == None
-    if pre_shard:
-        parallel_config = ttnn._ttnn.operations.conv.determine_parallel_config(
-            shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            batch_size=in_n,
-            input_channels=in_c,
-            output_height=out_h,
-            output_width=out_w,
-            output_channels=in_c,
-            input_channels_alignment=32,
-            compute_grid_size=device.compute_with_storage_grid_size(),
-            block_shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
-            enable_channels_padding=False,
-            is_shard_height_tile_multiple=dtype == ttnn.bfloat8_b,
-            is_shard_width_tile_multiple=dtype == ttnn.bfloat8_b,
-        )
-        sharded_memory_config = ttnn._ttnn.operations.conv.create_sharded_memory_config_from_parallel_config(
-            tensor_shape=ttnn_input.shape,
-            parallel_config=parallel_config,
-            tile_size=32 if dtype == ttnn.bfloat8_b else 1,
-        )
-        ttnn_input = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
-
-    # run ttnn adaptive_max_pool2d
-    ttnn_output = ttnn.max_pool2d(
-        input_tensor=ttnn_input,
-        batch_size=in_n,
-        input_h=in_h,
-        input_w=in_w,
-        channels=in_c,
-        output_size=output_size,
-        memory_config=memory_config,
-        applied_shard_scheme=shard_scheme,
-    )
-
-    # run torch adaptive max pool2d
-    torch_output = torch.nn.AdaptiveMaxPool2d(output_size=output_size)(torch_input)
-
-    # adjust the TTNN output to match the expected shape
-    ttnn_output = ttnn.to_torch(ttnn_output)
-    ttnn_output = ttnn_output.reshape(in_n, out_h, out_w, in_c)  # N, H, W, C
-    ttnn_output = torch.permute(ttnn_output, (0, 3, 1, 2))  # N, C, H, W
-
-    # test for equivalance
-    pcc_thresh = 1.0
-    atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-    if dtype == ttnn.bfloat8_b:
-        pcc_thresh = 0.997
-        atol = 0.35
-    assert_with_pcc(ttnn_output, torch_output, pcc_thresh)
-    allclose = torch.allclose(ttnn_output, torch_output, atol=atol, rtol=rtol)
-    assert allclose
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
-@pytest.mark.parametrize(
-    "input_shape",  ## NCHW
-    (
-        [1, 64, 112, 112],
-        [1, 128, 56, 56],
-        [1, 256, 28, 28],
-        [1, 512, 14, 14],
-        [2, 64, 32, 32],
-        [4, 32, 16, 16],
-    ),
-)
-@pytest.mark.parametrize(
-    "output_size",
-    (
-        (1, 1),
-        (2, 2),
-        (4, 4),
-        (7, 7),
-        (14, 14),
-    ),
-)
-@pytest.mark.parametrize(
-    "dtype",
-    [
-        ttnn.bfloat16,
-        ttnn.bfloat8_b,
-    ],
-)
-def test_run_adaptive_max_pool_height_shard(input_shape, output_size, device, tensor_map, dtype):
-    # Skip if output size is larger than input
-    in_n, in_c, in_h, in_w = input_shape
-    out_h, out_w = output_size
-    if out_h > in_h or out_w > in_w:
-        pytest.skip("Output size cannot be larger than input size for adaptive pooling")
-
-    run_adaptive_max_pool(
-        input_shape,
-        output_size,
-        device,
-        tensor_map,
-        dtype,
-        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
     )
