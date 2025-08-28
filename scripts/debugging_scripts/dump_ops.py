@@ -363,11 +363,9 @@ def load_host_id_mapping(mapping_file: str | None) -> dict:
             mapping = {}
             for op in yaml_data:
                 if isinstance(op, dict):
-                    # Support both old format (operation_id) and new format (device_operation_id)
+                    # Use device_operation_id as the key
                     if "device_operation_id" in op and op["device_operation_id"] != "none":
                         mapping[str(op["device_operation_id"])] = op
-                    elif "operation_id" in op:
-                        mapping[str(op["operation_id"])] = op
             return mapping
     except Exception:
         return {}
@@ -379,11 +377,17 @@ def dump_ops(
     mapping_file: str | None = None,
     max_width: int = 100,
     verbose: bool = False,
-) -> list[DumpOpsData]:
-    """Extract core location and host ID for all operations."""
+) -> tuple[list[DumpOpsData], list[tuple[int, str]]]:
+    """Extract core location and host ID for all operations.
+
+    Returns:
+        tuple: (list of DumpOpsData, list of (host_id, operation_name) tuples)
+    """
     blocks_to_test = ["functional_workers", "eth"]
     result: list[DumpOpsData] = []
+    host_id_op_names: list[tuple[int, str]] = []
     host_id_mapping = load_host_id_mapping(mapping_file)
+    seen_host_ids = set()
 
     for block_to_test in blocks_to_test:
         for location in device.get_block_locations(block_to_test):
@@ -395,25 +399,31 @@ def dump_ops(
 
             # Check all RISC cores but only add one entry per location since data repeats
             kernel_config_host_id = None
-            first_valid_risc = None
             for risc_name in noc_block.risc_names:
                 dispatcher_core_data = dispatcher_data.get_core_data(location, risc_name)
 
                 # Only include cores that have valid kernel config host assigned IDs (not -1 or 0)
                 if dispatcher_core_data.kernel_config_host_assigned_id not in [-1, 0]:
                     kernel_config_host_id = dispatcher_core_data.kernel_config_host_assigned_id
-                    first_valid_risc = risc_name
                     break  # Data is the same across all RISCs, so use first valid one
 
             # If we found a valid kernel_config_host_id, add one entry for this location
             if kernel_config_host_id is not None:
-                # Use kernel_config_host_assigned_id to look up in mapping
-                # For new format: device_operation_id matches kernel_config_host_assigned_id directly
-                # For old format: decrement by 1 since kernel_config_host_assigned_id starts at 1 but operation_id starts at 0
+                # Track unique host IDs and their operation names
+                if kernel_config_host_id not in seen_host_ids and kernel_config_host_id > 0:
+                    seen_host_ids.add(kernel_config_host_id)
+
+                    # device_operation_id matches kernel_config_host_assigned_id directly
+                    operation_id_key = str(kernel_config_host_id)
+
+                    if operation_id_key in host_id_mapping:
+                        mapping = host_id_mapping[operation_id_key]
+                        if mapping.get("device_operation_id") != "none":
+                            op_name = mapping.get("operation_name", "unknown_op")
+                            host_id_op_names.append((kernel_config_host_id, op_name))
+
+                # device_operation_id matches kernel_config_host_assigned_id directly
                 operation_id_key = str(kernel_config_host_id)
-                if operation_id_key not in host_id_mapping:
-                    # Fallback to old format offset for backwards compatibility
-                    operation_id_key = str(kernel_config_host_id - 1)
 
                 # Get callstack and args from mapping if available
                 callstack = ""
@@ -460,7 +470,7 @@ def dump_ops(
                 )
                 result.append(ops_data)
 
-    return result
+    return result, host_id_op_names
 
 
 def run(args, context: Context):
@@ -473,16 +483,22 @@ def run(args, context: Context):
 
     # Handle device iteration directly to avoid automatic "Dev" column
     all_ops_data = []
+    all_host_id_op_names = []
     for device in check_per_device.devices:
-        device_ops = dump_ops(device, dispatcher_data, mapping_file, max_width, verbose)
+        device_ops, host_id_op_names = dump_ops(device, dispatcher_data, mapping_file, max_width, verbose)
         all_ops_data.extend(device_ops)
+        all_host_id_op_names.extend(host_id_op_names)
+
+    # Save host_id_op_names to a module-level variable for access in __main__
+    import dump_ops as this_module
+
+    this_module._collected_host_id_op_names = all_host_id_op_names
 
     return all_ops_data
 
 
 if __name__ == "__main__":
     import docopt
-    import sys
 
     # Parse arguments to check if mapping file is provided
     args = docopt.docopt(__doc__)
@@ -491,7 +507,18 @@ if __name__ == "__main__":
     # Run the main triage script
     run_script()
 
-    # If mapping file was provided, show the tip
+    # If mapping file was provided, show the tips
     if mapping_file:
-        print("\nTIP: Generate tests for the operations above:")
-        print("  python scripts/debugging_scripts/generate_tests.py generated/inspector/ops/ops.yaml")
+        # Try to access the collected host_id_op_names
+        try:
+            # Access from current module after run_script has completed
+            import dump_ops as this_module
+
+            if hasattr(this_module, "_collected_host_id_op_names") and this_module._collected_host_id_op_names:
+                print("\nTIP: Generate tests for the hanging operations:")
+                print("  python scripts/debugging_scripts/generate_tests.py generated/inspector/ops/ops.yaml")
+                print("\nTIP: Run tests for the hanging operations:")
+                for host_id, op_name in this_module._collected_host_id_op_names:
+                    print(f"  pytest test_op_{host_id}.py  # {op_name}")
+        except:
+            pass
