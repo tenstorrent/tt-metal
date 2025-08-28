@@ -17,6 +17,7 @@
 #include <vector>
 
 namespace tt::tt_metal {
+class PinnedMemory;
 
 // HostBuffer is a wrapper around contiguous data, which can either be owned or borrowed from external sources (Python
 // objects, mmap-ed regions, etc).
@@ -65,10 +66,14 @@ public:
     // Returns the memory pin of the host buffer.
     MemoryPin pin() const { return pin_; }
 
+    void set_pinned_memory(std::shared_ptr<PinnedMemory> pinned_memory);
+    std::shared_ptr<PinnedMemory> get_pinned_memory() const;
+
 private:
     MemoryPin pin_;
     tt::stl::Span<std::byte> view_;
     const std::type_info* type_info_ = nullptr;
+    std::shared_ptr<PinnedMemory> pinned_memory_ = nullptr;
 };
 
 template <typename T>

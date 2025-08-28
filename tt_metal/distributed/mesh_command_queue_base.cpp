@@ -273,6 +273,7 @@ void MeshCommandQueueBase::enqueue_read_shards_nolock(
                 *buffer,
                 shard_data_transfer.shard_coord,
                 shard_data_transfer.host_data,
+                shard_data_transfer.pinned_memory,
                 shard_data_transfer.region,
                 num_txns_per_device);
         }
@@ -305,6 +306,7 @@ void MeshCommandQueueBase::enqueue_read(
             shard_data_transfers.push_back(
                 {.shard_coord = coord,
                  .host_data = buf->view_bytes().data(),
+                 .pinned_memory = buf->get_pinned_memory(),
                  .region = BufferRegion(0, buf->view_bytes().size())});
         }
     }
