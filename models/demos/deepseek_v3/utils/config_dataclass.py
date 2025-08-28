@@ -141,6 +141,25 @@ class ReduceScatterAsyncConfig(OpConfigBase):
 
 
 @dataclass
+class ReduceScatterAsyncMinimalConfig(OpConfigBase):
+    """Common parameters for a ttnn.experimental.reduce_scatter_minimal_async op"""
+
+    dim: int
+    multi_device_global_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+    num_links: int | None = None
+    persistent_output_buffers: ttnn.Tensor | None = None
+    barrier_semaphore: ttnn._ttnn.global_semaphore.global_semaphore | None = None
+    memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    intermediate_memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
+    topology: ttnn.Topology = ttnn.Topology.Ring
+    subdevice_id: ttnn._ttnn.device.SubDeviceId | None = None
+    cluster_axis: int | None = None
+    chunks_per_sync: int | None = None
+    num_workers_per_link: int | None = None
+    num_buffers_per_channel: int | None = None
+
+
+@dataclass
 class PointToPointConfig(OpConfigBase):
     """Common parameters for a ttnn.point_to_point op"""
 
