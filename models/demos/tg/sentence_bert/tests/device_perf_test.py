@@ -2,14 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import glob
-import os
 import time
 
 import pytest
 from loguru import logger
 
-from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
+from models.perf.device_perf_utils import check_device_perf, run_device_perf
+from models.perf.perf_utils import prep_perf_report
 from models.utility_functions import is_wormhole_b0, run_for_wormhole_b0
 
 
@@ -59,24 +58,23 @@ def test_perf_device_bare_metal_sentence_bert_tg(batch_size, expected_perf, test
 
     logger.info(f"{expected_results}")
 
-    prep_device_perf_report(
-        model_name=f"ttnn_sentence_bert_tg_{batch_size}",
-        batch_size=batch_size,
-        post_processed_results=post_processed_results,
-        expected_results=expected_results,
-        comments=test.replace("/", "_"),
-    )
+    # Calculate performance metrics for the standard perf report
+    inference_time = post_processed_results.get(inference_time_key, 0)
+    if inference_time > 0:
+        throughput = batch_size / inference_time
+    else:
+        throughput = 0
 
     today = time.strftime("%Y_%m_%d")
-    expected_filename = f"device_perf_ttnn_sentence_bert_tg_{batch_size}_{test.replace('/', '_')}_{today}.csv"
-    logger.info(f"Expected performance file: {expected_filename}")
 
-    # Check if file exists
-    if os.path.exists(expected_filename):
-        logger.info(f"Performance file created successfully: {expected_filename}")
-        logger.info(f"File size: {os.path.getsize(expected_filename)} bytes")
-    else:
-        logger.warning(f"Performance file not found: {expected_filename}")
-        # List all CSV files in current directory
-        csv_files = glob.glob("*.csv")
-        logger.info(f"Available CSV files: {csv_files}")
+    # Use standard perf report with custom filename
+    prep_perf_report(
+        model_name=f"perf_{pcc_file}_{today}",
+        batch_size=batch_size,
+        inference_and_compile_time=inference_time,  # Use inference time as placeholder
+        inference_time=inference_time,
+        expected_compile_time=60,  # Placeholder value
+        expected_inference_time=expected_perf,
+        comments=test.replace("/", "_"),
+        inference_time_cpu=None,
+    )
