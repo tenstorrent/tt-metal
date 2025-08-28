@@ -16,8 +16,6 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-logger/tt-logger.hpp>
-
 namespace ttnn {
 namespace operations::experimental::adaptive_pool {
 
