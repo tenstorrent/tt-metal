@@ -1248,7 +1248,7 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
                         kernel_ids.push_back(device_local_kernel_id);
 
                         // Update destination address by kernel config offset
-                        if (hal.get_core_has_kernel_config_buffer(hal.get_programmable_core_type(index))) {
+                        if (hal.get_core_kernel_stored_in_config_buffer(hal.get_programmable_core_type(index))) {
                             int proc_sub_class = 0;
                             for (uint32_t& dst_addr : kernel_transfer_info.at(device_local_kernel_id).dst_base_addrs) {
                                 dst_addr = kernel_group->kernel_text_offsets[dispatch_class + proc_sub_class];

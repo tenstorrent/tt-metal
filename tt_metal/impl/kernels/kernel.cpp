@@ -671,7 +671,7 @@ bool EthernetKernel::configure(
     const ll_api::memory& binary_mem =
         *this->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)[0];
 
-    if (tt::tt_metal::MetalContext::instance().hal().get_core_has_kernel_config_buffer(
+    if (tt::tt_metal::MetalContext::instance().hal().get_core_kernel_stored_in_config_buffer(
             this->get_kernel_programmable_core_type())) {
         uint32_t offset_idx = enchantum::to_underlying(HalProcessorClassType::DM) + enchantum::to_underlying(this->config_.processor);
         llrt::write_binary_to_address(binary_mem, device_id, ethernet_core, base_address + offsets[offset_idx]);

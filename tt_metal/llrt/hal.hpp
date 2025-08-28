@@ -84,7 +84,7 @@ enum class FWMailboxMsg : uint8_t {
 // Query dispatch related features depending on the arch
 enum class DispatchFeature : uint8_t {
     // Ethernet Firmware supports the usage of the mailbox API
-    ETH_FW_API,
+    ETH_MAILBOX_API,
     // Dispatch to Active ethernet cores utilize a kernel config buffer
     DISPATCH_ACTIVE_ETH_KERNEL_CONFIG_BUFFER,
     // Dispatch to Idle ethernet cores utilize a kernel config buffer
@@ -331,8 +331,10 @@ public:
         std::variant<HalProgrammableCoreType, uint32_t> programmable_core_type, uint32_t processor_class_idx) const;
     // Query device features. Returns true if the feature is enabled.
     bool get_dispatch_feature_enabled(DispatchFeature feature) const { return this->device_features_func_(feature); }
-    // Returns true if the core has a kernel config buffer.
-    bool get_core_has_kernel_config_buffer(HalProgrammableCoreType programmable_core_type) const;
+    // Returns true if kernel binaries for a given core type are stored in the config buffer
+    // Note, binaries which are not stored in the config buffer are written directly to L1 at the text start address.
+    // This value can be found in the ELF file.
+    bool get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType programmable_core_type) const;
 
     template <typename T = DeviceAddr>
     T get_dev_addr(HalProgrammableCoreType programmable_core_type, HalL1MemAddrType addr_type) const;
@@ -538,10 +540,11 @@ inline uint32_t Hal::get_eth_fw_mailbox_arg_count() const {
 inline uint32_t Hal::get_eth_fw_mailbox_address(int mailbox_index) const {
     const auto index = utils::underlying_type<HalProgrammableCoreType>(HalProgrammableCoreType::ACTIVE_ETH);
     TT_ASSERT(index < this->core_info_.size());
+    // Index 0 is the offset of the mailbox message
     return get_eth_fw_mailbox_arg_addr(mailbox_index, 0) - sizeof(uint32_t);
 }
 
-inline bool Hal::get_core_has_kernel_config_buffer(HalProgrammableCoreType programmable_core_type) const {
+inline bool Hal::get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType programmable_core_type) const {
     switch (programmable_core_type) {
         case HalProgrammableCoreType::TENSIX:
             return get_dispatch_feature_enabled(DispatchFeature::DISPATCH_TENSIX_KERNEL_CONFIG_BUFFER);

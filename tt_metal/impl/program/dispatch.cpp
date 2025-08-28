@@ -336,17 +336,19 @@ uint32_t finalize_kernel_bins(
                     offset += binary_packed_size;
                     offset = tt::align(offset, l1_alignment);
 
-                    // Provide text size for copying to NCRISC IRAM (not used in other processors)
-                    const auto binary_text_size = kernel_impl.get_binary_text_size(device, 0);
-                    TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
-                    kg->launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
+                    // Provide text size for copying to NCRISC IRAM
+                    if (class_id == DISPATCH_CLASS_TENSIX_DM1) {
+                        const auto binary_text_size = kernel_impl.get_binary_text_size(device, 0);
+                        TT_ASSERT(binary_text_size >> 4 <= std::numeric_limits<uint16_t>::max());
+                        kg->launch_msg.kernel_config.ncrisc_kernel_size16 = (binary_text_size + 15) >> 4;
+                    }
                 }
             } else {
                 // All other core types
                 const auto binary_packed_size = kernel_impl.get_binary_packed_size(device, 0);
                 kg->kernel_bin_sizes[class_id] = binary_packed_size;
 
-                if (hal.get_core_has_kernel_config_buffer(
+                if (hal.get_core_kernel_stored_in_config_buffer(
                         hal.get_programmable_core_type(programmable_core_type_index))) {
                     kg->kernel_text_offsets[class_id] = offset;
                     kg->launch_msg.kernel_config.kernel_text_offset[class_id] = offset;
@@ -1112,7 +1114,7 @@ public:
 
                     // Set write offset if required
                     auto write_offset = DISPATCH_WRITE_OFFSET_ZERO;
-                    if (hal.get_core_has_kernel_config_buffer(kg_transfer_info.core_type)) {
+                    if (hal.get_core_kernel_stored_in_config_buffer(kg_transfer_info.core_type)) {
                         write_offset = get_dispatch_write_offset(kg_transfer_info.core_type, true);
                     }
                     kernel_bins_unicast_cmds.back().add_dispatch_write_linear<flush_prefetch>(
@@ -1810,7 +1812,7 @@ void initialize_worker_config_buf_mgr(WorkerConfigBufferMgr& config_buffer_mgr, 
     // Subtract 1 from the number of entries, so the watcher can read information (e.g. fired asserts) from the
     // previous launch message.
     config_buffer_mgr.init_add_buffer(0, launch_msg_buffer_num_entries - 1);
-    if (hal.get_core_has_kernel_config_buffer(HalProgrammableCoreType::ACTIVE_ETH)) {
+    if (hal.get_core_kernel_stored_in_config_buffer(HalProgrammableCoreType::ACTIVE_ETH)) {
         // Keeping it the same
         config_buffer_mgr.init_add_buffer(0, 1);
     } else {
