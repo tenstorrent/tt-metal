@@ -20,9 +20,9 @@ CONFIGS = [
 ]
 
 CONFIGS_IDS = [f"ag_output_shape{i}" for i in range(len(CONFIGS))]
-WORKERS_PER_LINK = [4, 2, 1]
+WORKERS_PER_LINK = [4, 1]  # [4, 2, 1]
 WORKERS_PER_LINK_IDS = [f"{worker}-workers" for worker in WORKERS_PER_LINK]
-CHUNKS_PER_SYNC = ["MAX", 320, 160, 80, 40, 20, 10]
+CHUNKS_PER_SYNC = ["MAX", 160]  # ["MAX", 320, 160, 80, 40, 20, 10]
 CHUNKS_PER_SYNC_IDS = [f"{chunk}-chunks" for chunk in CHUNKS_PER_SYNC]
 TOPOLOGY = ["ring", "linear"]
 

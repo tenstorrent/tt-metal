@@ -27,20 +27,14 @@ def total_elems(ag_output_shape):
 
 
 @pytest.mark.models_device_performance_bare_metal
-def test_all_gather_chunk_perf(
-    arch_type,
-):
+def test_all_gather_chunk_perf():
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     rows = []
 
     subdir = "ag_perf"
     num_links = 1
-    if arch_type == "T3K":
-        file = f"pytest tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py"
-        num_links = 1
-    else:
-        raise ValueError(f"Invalid arch_type: {arch_type}")
+    file = f"pytest tests/ttnn/multidevice_perf_tests/sweep_all_gather_hyperparameters_T3K.py"
 
     base_command = file + "::test_all_gather_chunks_per_sync"
 
@@ -67,9 +61,7 @@ def test_all_gather_chunk_perf(
                 for k, num_workers_per_link in enumerate(num_workers_per_link_list):
                     cols = ["DEVICE KERNEL"]
                     op_name = "AllGatherAsync"
-                    step_name = (
-                        f"all_gather_chunk_perf_{arch_type}_{chunks_per_sync}_{num_workers_per_link}_{topology}_perf"
-                    )
+                    step_name = f"all_gather_chunk_perf_T3K_{chunks_per_sync}_{num_workers_per_link}_{topology}_perf"
 
                     # Filter by both chunks_per_sync and shape
                     final_command = (

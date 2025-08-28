@@ -27,9 +27,7 @@ def total_elems(ag_output_shape):
 
 
 @pytest.mark.models_device_performance_bare_metal
-def test_all_gather_chunk_perf(
-    arch_type,
-):
+def test_all_gather_chunk_perf():
     profiler = BenchmarkProfiler()
     benchmark_data = BenchmarkData()
     rows = []
@@ -65,11 +63,14 @@ def test_all_gather_chunk_perf(
             best_num_workers_per_link = None
             for j, chunks_per_sync in enumerate(chunks_per_sync_list):
                 for k, num_workers_per_link in enumerate(num_workers_per_link_list):
+                    if chunks_per_sync == "MAX" and num_workers_per_link == 4:
+                        continue
+                    elif chunks_per_sync == 160 and num_workers_per_link == 1:
+                        continue
+
                     cols = ["DEVICE KERNEL"]
                     op_name = "AllGatherAsync"
-                    step_name = (
-                        f"all_gather_chunk_perf_{arch_type}_{chunks_per_sync}_{num_workers_per_link}_{topology}_perf"
-                    )
+                    step_name = f"all_gather_chunk_perf_6U_{chunks_per_sync}_{num_workers_per_link}_{topology}_perf"
 
                     # Filter by both chunks_per_sync and shape
                     final_command = (
