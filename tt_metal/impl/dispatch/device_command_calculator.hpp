@@ -39,6 +39,18 @@ public:
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
 
+    void add_prefetch_exec_buf() {
+        this->cmd_write_offsetB += sizeof(CQPrefetchCmd);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
+    void add_prefetch_exec_buf_end() {
+        this->cmd_write_offsetB += sizeof(CQPrefetchCmd);
+        this->cmd_write_offsetB += sizeof(CQDispatchCmd);
+        this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
+    }
+
+
     void add_data(uint32_t cmd_write_offset_incrementB) { this->cmd_write_offsetB += cmd_write_offset_incrementB; }
 
     template <bool flush_prefetch = true, bool inline_data = false>
@@ -100,6 +112,7 @@ public:
         this->cmd_write_offsetB += sizeof(CQDispatchCmd) + num_offsets * sizeof(uint32_t);
         this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
     }
+
 
     void add_dispatch_terminate() {
         this->add_prefetch_relay_inline();
