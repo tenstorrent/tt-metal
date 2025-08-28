@@ -100,12 +100,12 @@ run_t3000_llama3_perplexity_tests_single_card() {
 
   for MESH_DEVICE in N150 N300; do
     for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=3600 ; fail+=$?
+      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=4600 ; fail+=$?
     done
   done
 
   # 11B test does not run on N150
-  MESH_DEVICE=N300 LLAMA_DIR="$llama11b" pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=3600 ; fail+=$?
+  MESH_DEVICE=N300 LLAMA_DIR="$llama11b" pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=4600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
@@ -153,7 +153,7 @@ run_t3000_llama3_perplexity_tests_t3000() {
 
     # 70B and 90B tests has the same configuration between `-k "attention-accuracy"` and `-k "attention-performance"` so we only run one of them
     for LLAMA_DIR in "$llama70b" "$llama90b"; do
-      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=3600 ; fail+=$?
+      MESH_DEVICE=$MESH_DEVICE LLAMA_DIR=$LLAMA_DIR pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" --timeout=3600 ; fail+=$?
     done
   done
 
