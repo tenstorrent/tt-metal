@@ -9,38 +9,38 @@
 using namespace ttnn::operations::ccl::common;
 
 void kernel_main() {
-    constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(1);
-    constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(2);
-    constexpr uint32_t mapping_tensor_cb_id = get_compile_time_arg_val(3);
+    constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
+    constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(1);
+    constexpr uint32_t mapping_tensor_cb_id = get_compile_time_arg_val(2);
 
-    constexpr uint32_t input_pages = get_compile_time_arg_val(6);
-    constexpr uint32_t indices_pages = get_compile_time_arg_val(7);
-    constexpr uint32_t mapping_pages = get_compile_time_arg_val(8);
+    constexpr uint32_t input_pages = get_compile_time_arg_val(5);
+    constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
+    constexpr uint32_t mapping_pages = get_compile_time_arg_val(7);
 
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(11);
-    constexpr uint32_t indices_page_size = get_compile_time_arg_val(12);
-    constexpr uint32_t mapping_page_size = get_compile_time_arg_val(13);
-    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(15);
+    constexpr uint32_t input_page_size = get_compile_time_arg_val(10);
+    constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
+    constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
+    constexpr uint32_t metadata_page_size = get_compile_time_arg_val(14);
 
-    constexpr uint32_t num_devices = get_compile_time_arg_val(16);
-    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(21);
+    constexpr uint32_t num_devices = get_compile_time_arg_val(15);
+    constexpr uint32_t tokens_per_device = get_compile_time_arg_val(20);
 
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
+    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(23);
+    constexpr uint32_t src_chip_id = get_compile_time_arg_val(24);
 
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(26);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(27);  // ew_dim
+    constexpr uint32_t mesh_rows = get_compile_time_arg_val(25);
+    constexpr uint32_t mesh_cols = get_compile_time_arg_val(26);  // ew_dim
 
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(29);
-    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(30);
-    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(32);
+    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(28);
+    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(29);
+    constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(31);
 
-    constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(35);
+    constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(34);
 
-    constexpr bool write_page_by_page = get_compile_time_arg_val(36);
-    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(37);
+    constexpr bool write_page_by_page = get_compile_time_arg_val(35);
+    constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(36);
 
-    constexpr auto input_args = TensorAccessorArgs<38>();
+    constexpr auto input_args = TensorAccessorArgs<37>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto mapping_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto output_args = TensorAccessorArgs<mapping_args.next_compile_time_args_offset()>();
