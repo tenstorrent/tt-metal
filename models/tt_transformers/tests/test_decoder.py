@@ -61,7 +61,7 @@ def test_decoder_inference(
     reset_seeds,
     ensure_gc,
 ):
-    dtype = ttnn.bfloat16
+    dtype = ttnn.bfloat8_b
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len, cache_hf=True)
     model_args.n_layers = 1

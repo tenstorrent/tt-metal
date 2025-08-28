@@ -47,6 +47,7 @@ def test_embedding(max_seq_len, batch_size, mesh_device, reset_seeds, ensure_gc,
         logger.info(f"Using scaled embedding with scale {model_args.embed_scale}")
 
     reference_emb = model_args.reference_embedding()
+
     if model_args.is_vision():
         layer_name = "text_model.tok_embeddings.weight"
     else:

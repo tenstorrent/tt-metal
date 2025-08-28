@@ -47,7 +47,7 @@ from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 @pytest.mark.parametrize(
     "max_seq_len",
     (
-        # 4096,
+        4096,
         128,
     ),
 )
@@ -165,7 +165,6 @@ def test_decoder_inference(
             )
             * 2
         ) - 1
-        print("pt_decode_input shape ", pt_decode_input.shape)
         tt_decode_input = pt_decode_input.clone()
         decode_input = model_args.prepare_residual_tensor_prefill(
             tt_decode_input,
@@ -186,7 +185,7 @@ def test_decoder_inference(
             positions[0],
             freqs_cis_i,
             mask=attn_mask_torch,
-        ).unsqueeze(0)
+        )
         # Run TT model
         tt_out = tt_model(
             decode_input,
