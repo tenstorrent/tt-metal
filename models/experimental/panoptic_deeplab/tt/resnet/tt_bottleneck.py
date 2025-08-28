@@ -26,6 +26,9 @@ class TtBottleneck(nn.Module):
         state_dict: dict[str, torch.Tensor],
         dtype: ttnn.DataType = ttnn.bfloat16,
         has_shortcut: bool = False,
+        stride: int = 1,
+        dilation: int = 1,
+        shortcut_stride: int = 1,
     ):
         super().__init__()
         self.device = device
@@ -36,18 +39,20 @@ class TtBottleneck(nn.Module):
         conv2_state = {k.replace("conv2.", ""): v for k, v in state_dict.items() if k.startswith("conv2.")}
         conv3_state = {k.replace("conv3.", ""): v for k, v in state_dict.items() if k.startswith("conv3.")}
 
-        # Get stride and dilation from conv2 (middle conv)
-        conv2_stride = conv2_state.get("stride", (1, 1))
-        conv2_dilation = conv2_state.get("dilation", (1, 1))
-        conv2_padding = conv2_state.get("padding", (1, 1))
+        # Use passed stride and dilation parameters
+        conv2_stride = (stride, stride)
+        conv2_dilation = (dilation, dilation)
+        conv2_padding = (dilation, dilation)  # Padding should match dilation for 3x3 conv
 
         # Initialize conv layers
         self.conv1 = TtConv2d(
             TtConv2dParameters.from_torch(conv1_state, device=device, dtype=dtype), stride=(1, 1), padding=(0, 0)
         )
 
-        # For conv2, extract dilation from state_dict if available
+        # For conv2, use architecture parameters
         conv2_params = TtConv2dParameters.from_torch(conv2_state, device=device, dtype=dtype)
+        # Update conv2_params with correct dilation
+        conv2_params.dilation = conv2_dilation
         self.conv2 = TtConv2d(conv2_params, stride=conv2_stride, padding=conv2_padding)
 
         self.conv3 = TtConv2d(
@@ -57,12 +62,11 @@ class TtBottleneck(nn.Module):
         # Initialize shortcut if needed
         if has_shortcut:
             shortcut_state = {k.replace("shortcut.", ""): v for k, v in state_dict.items() if k.startswith("shortcut.")}
-            shortcut_stride = shortcut_state.get("stride", (1, 1))
+            shortcut_stride_tuple = (shortcut_stride, shortcut_stride)
             self.shortcut = TtConv2d(
                 TtConv2dParameters.from_torch(shortcut_state, device=device, dtype=dtype),
-                stride=shortcut_stride,
+                stride=shortcut_stride_tuple,
                 padding=(0, 0),
-                slice_count=4,
             )
 
         # Extract normalization parameters
@@ -206,11 +210,15 @@ class TtBottleneck(nn.Module):
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         # Store input for residual connection
         identity = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(x)
+        # workaround for conv tilize issue with non-height shard
+        if identity.spec.layout != ttnn.TILE_LAYOUT:
+            identity = ttnn.tilize(identity)
+        # ttnn.deallocate(x)
 
         # Process shortcut if needed
         if self.has_shortcut:
             identity = self.shortcut(identity)
+            identity = ttnn.to_memory_config(identity, ttnn.DRAM_MEMORY_CONFIG)
             # Convert NHWC to NCHW for batch_norm
             identity = ttnn.permute(identity, (0, 3, 1, 2))
             identity = ttnn.batch_norm(
@@ -226,6 +234,7 @@ class TtBottleneck(nn.Module):
             identity = ttnn.permute(identity, (0, 2, 3, 1))
 
         # Main path: Conv1 + BatchNorm + ReLU
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
         out = self.conv1(x)
         # Convert NHWC to NCHW for batch_norm
         out = ttnn.permute(out, (0, 3, 1, 2))
@@ -241,11 +250,12 @@ class TtBottleneck(nn.Module):
         # Convert back to NHWC
         out = ttnn.permute(out, (0, 2, 3, 1))
         out = ttnn.relu(out)
+        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
 
         # Conv2 + BatchNorm + ReLU
         out = self.conv2(out)
         # Convert NHWC to NCHW for batch_norm
-        out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG)
+        # out = ttnn.to_memory_config(out, ttnn.L1_MEMORY_CONFIG)
         out = ttnn.permute(out, (0, 3, 1, 2))
         out = ttnn.batch_norm(
             out,
@@ -259,10 +269,12 @@ class TtBottleneck(nn.Module):
         # Convert back to NHWC
         out = ttnn.permute(out, (0, 2, 3, 1))
         out = ttnn.relu(out)
+        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
 
         # Conv3 + BatchNorm (no ReLU yet)
         out = self.conv3(out)
         # Convert NHWC to NCHW for batch_norm
+        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
         out = ttnn.permute(out, (0, 3, 1, 2))
         out = ttnn.batch_norm(
             out,
@@ -280,5 +292,6 @@ class TtBottleneck(nn.Module):
         if self.has_shortcut or identity.shape == out.shape:
             out = ttnn.add(out, identity)
         out = ttnn.relu(out)
+        out = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
 
         return out

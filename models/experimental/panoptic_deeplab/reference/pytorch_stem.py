@@ -33,22 +33,32 @@ class StemBlock(nn.Module):
         self.conv3.norm = nn.SyncBatchNorm(128, eps=1e-05, momentum=0.1, affine=True, track_running_stats=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        print(f"[STEM] Starting stem processing with input shape: {x.shape}")
+
         # Conv1 + BatchNorm + ReLU
+        print("[STEM] Processing conv1...")
         x = self.conv1(x)
         x = self.conv1.norm(x)
         x = F.relu(x)
+        print(f"[STEM] Conv1 complete, shape: {x.shape}")
 
         # Conv2 + BatchNorm + ReLU
+        print("[STEM] Processing conv2...")
         x = self.conv2(x)
         x = self.conv2.norm(x)
         x = F.relu(x)
+        print(f"[STEM] Conv2 complete, shape: {x.shape}")
 
         # Conv3 + BatchNorm + ReLU
+        print("[STEM] Processing conv3...")
         x = self.conv3(x)
         x = self.conv3.norm(x)
         x = F.relu(x)
+        print(f"[STEM] Conv3 complete, shape: {x.shape}")
 
         # Max pooling with kernel_size=3, stride=2, padding=1
+        print("[STEM] Processing max pooling...")
         x = F.max_pool2d(x, kernel_size=3, stride=2, padding=1, dilation=1, ceil_mode=False)
+        print(f"[STEM] Stem processing complete, final shape: {x.shape}")
 
         return x
