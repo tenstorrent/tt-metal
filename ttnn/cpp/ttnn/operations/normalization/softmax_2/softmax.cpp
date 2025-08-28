@@ -36,14 +36,13 @@ Tensor ExecuteSoftmax::invoke(
             DEFAULT_SCALE_VALUE,
             input_tensor.dtype(),
             input_tensor.layout(),
-            *input_tensor.mesh_device(),
+            *input_tensor.device(),
             memory_config);
     }
 
     // Operation
-    auto input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
     auto output_tensor = ttnn::operations::normalization::softmax::softmax(
-        queue_id, input_tensor_4D, dim_calculated, mem_config, compute_kernel_config, numeric_stable);
+        queue_id, input_tensor, dim_calculated, mem_config, compute_kernel_config, numeric_stable);
 
     return ttnn::reshape(output_tensor, input_shape);
 }
@@ -68,7 +67,7 @@ Tensor ExecuteScaleMaskSoftmax::invoke(
             scale.value_or(DEFAULT_SCALE_VALUE),
             input_tensor.dtype(),
             input_tensor.layout(),
-            *input_tensor.mesh_device(),
+            *input_tensor.device(),
             memory_config);
     }
 
