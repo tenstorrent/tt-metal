@@ -32,7 +32,6 @@ class TransformerBlock(LightweightModule):
         self.tt_ccl = tt_ccl
 
         self.num_devices = args.num_devices
-        self.TG = self.num_devices == 32
         self.args = args
         self.hidden_size = args.dim
         self.n_heads = args.n_heads

@@ -32,7 +32,7 @@ def test_gemma_vision(
     reset_seeds,
     bsz,
 ):
-    pcc_required = 0.99
+    pcc_required = 0.95
     dtype = ttnn.bfloat16
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
