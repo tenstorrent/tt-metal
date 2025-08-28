@@ -105,7 +105,7 @@ run_t3000_llama3_perplexity_tests_single_card() {
   done
 
   # 11B test does not run on N150
-  MESH_DEVICE=N300 LLAMA_DIR="$llama11b" pytest -n models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=3600 ; fail+=$?
+  MESH_DEVICE=N300 LLAMA_DIR="$llama11b" pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout=3600 ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)

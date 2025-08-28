@@ -120,7 +120,7 @@ run_t3000_llama3_accuracy_tests() {
 
   # Run test accuracy llama3 - 1B, 3B, 8B, 11B and 70B weights
   for llama_dir in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b" "$llama90b"; do
-    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching ; fail+=$?
+    LLAMA_DIR=$llama_dir pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-token-matching" ; fail+=$?
     echo "LOG_METAL: Llama3 accuracy tests for $llama_dir completed"
   done
 

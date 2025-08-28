@@ -11,13 +11,13 @@ run_mistral7b_func() {
 
   mistral7b=/mnt/MLPerf/tt_dnn-models/Mistral/hub/models--mistralai--Mistral-7B-Instruct-v0.3/snapshots/e0bc86c23ce5aae1db576c8cca6f06f1f73af2db
   mistral_cache=/mnt/MLPerf/tt_dnn-models/Mistral/TT_CACHE/Mistral-7B-Instruct-v0.3
-  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1200 -k ci-token-matching ; fail+=$?
+  HF_MODEL=$mistral7b TT_CACHE_PATH=$mistral_cache pytest -n auto models/tt_transformers/demo/simple_text_demo.py --timeout 1200 -k "performance and ci-token-matching" ; fail+=$?
 
 }
 
 run_qwen7b_func() {
 
-  HF_MODEL=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k ci-token-matching --timeout 1800
+  HF_MODEL=/mnt/MLPerf/tt_dnn-models/qwen/Qwen2-7B-Instruct MESH_DEVICE=N300 pytest -n auto models/tt_transformers/demo/simple_text_demo.py -k performance-ci-1 --timeout 1800
 
 }
 
