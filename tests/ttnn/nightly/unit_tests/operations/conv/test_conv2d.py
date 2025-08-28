@@ -4217,35 +4217,35 @@ def test_conv_sharded_rm_input(
 @pytest.mark.parametrize(
     "stride, padding, dilation, act_block_h_override, weights_dtype, output_dtype, input_layout, output_layout, slice_type",
     [
-        (2, 3, 1, 32 * 8, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (2, 0, 1, 32 * 15, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (2, 0, 2, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (2, 0, 3, 32 * 12, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 3, 1, 256, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 0, 1, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 0, 2, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 0, 3, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
 
-        (2, 1, 1, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (2, 1, 2, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (2, 1, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 1, 1, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 1, 2, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 1, 3, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
 
-        (2, 2, 1, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (2, 2, 2, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (2, 2, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 2, 1, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 2, 2, 96, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (2, 2, 3, 96, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
 
-        (3, 0, 1, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (3, 0, 2, 32 * 13, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (3, 0, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 0, 1, 96, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 0, 2, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 0, 3, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
 
-        (3, 1, 1, 32 * 11, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (3, 1, 2, 32 * 13, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (3, 1, 3, 32 * 14, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-
-        (3, 2, 1, 32 * 13, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (3, 2, 2, 32 * 12, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
-        (3, 2, 3, 32 * 16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 1, 1, 96, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 1, 2, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 1, 3, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        #
+        (3, 2, 1, 96, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 2, 2, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
+        (3, 2, 3, 64, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT, None),
         # dram slicing
         (1, 3, 4, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
         (1, 4, 4, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
-        (1, 5, 4, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
-        (1, 3, 5, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
+        (1, 5, 4, 96, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
+        (1, 3, 5, 96, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
         (1, 4, 5, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
         (1, 5, 5, 128, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, ttnn.TILE_LAYOUT, SliceWidth),
     ]
