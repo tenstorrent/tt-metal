@@ -420,7 +420,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     }
 
     // Finalize Program: Compute relative offsets for data structures (semaphores, kernel binaries, etc) in L1
-    program.finalize_offsets(device_);
+    program.impl().finalize_offsets(device_);
 
     if (program.get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
         // Write program binaries to device if it hasn't previously been cached
