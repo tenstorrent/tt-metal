@@ -297,14 +297,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         is_conv_1d_depthwise_conv,
         act_block_h_ntiles,
         p_config.per_core_out_matrix_height_ntile,
-        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(a.dtype())),
-        tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),
         shard_shape[1],
         p_config.per_core_out_matrix_width_ntile * tt::constants::TILE_WIDTH,
         filter_w,
         device->arch() == tt::ARCH::BLACKHOLE,
-        a.dtype());
-
+        a.dtype(),
+        b.dtype());
     TT_FATAL(input_channels_padded >= ashape[3], "Incorrect padding of input channels!");
     // check is for 16-byte alignment
     TT_FATAL(

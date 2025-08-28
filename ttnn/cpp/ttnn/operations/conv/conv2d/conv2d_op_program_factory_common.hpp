@@ -95,13 +95,12 @@ bool is_split_reader_supported(
     bool is_1d_depthwise_conv,
     uint32_t act_block_h_ntiles,
     uint32_t per_core_out_matrix_height_ntiles,
-    uint32_t input_tile_size,
-    uint32_t weights_tile_size,
     uint32_t input_channels,
     uint32_t output_channels,
     uint32_t kernel_width,
     bool is_blackhole,
-    DataType input_datatype);
+    DataType input_datatype,
+    DataType weights_datatype);
 
 }  // namespace conv2d
 }  // namespace ttnn::operations::conv

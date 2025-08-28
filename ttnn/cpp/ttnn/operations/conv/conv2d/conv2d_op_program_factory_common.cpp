@@ -198,13 +198,12 @@ std::vector<CBInfo> get_cb_info(
                 is_1d_depthwise_conv,
                 block_config.act_block_h_ntiles,
                 pconfig.per_core_out_matrix_height_ntile,
-                input_tile_size,
-                weights_tile_size,
                 conv_input_shard_shape[1],
                 per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH,
                 kernel_size[1],
                 tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE,
-                input_datatype)) {
+                input_datatype,
+                conv_config.weights_dtype.value())) {
             uint32_t act_block_h_nsubblocks = block_config.act_block_h_ntiles;
             uint32_t act_block_h_nsubblocks_split_last = act_block_h_nsubblocks / 2;
             uint32_t act_block_h_nsubblocks_split = act_block_h_nsubblocks - act_block_h_nsubblocks_split_last;
@@ -401,13 +400,12 @@ float_t get_noc_transfer_rate(uint32_t transfer_size, bool is_blackhole) {
 
 bool is_split_reader_viable(
     uint32_t per_core_out_matrix_height_ntiles,
-    uint32_t input_tile_size,
-    uint32_t weights_tile_size,
     uint32_t input_channels,
     uint32_t output_channels,
     uint32_t kernel_width,
     bool is_blackhole,
-    DataType input_datatype) {
+    DataType input_datatype,
+    DataType weights_datatype) {
     // Determine bytes per element based on input data type, halo outputs either float32 or bfloat16
     uint32_t bytes_per_element = (input_datatype == DataType::FLOAT32) ? 4 : 2;
     const float_t noc_transfer_unit = bytes_per_element * input_channels * kernel_width;
@@ -418,9 +416,15 @@ bool is_split_reader_viable(
 
     const uint32_t dram_transfer_speed = is_blackhole ? 32 : 16;
     // Additional heuristic factors from stash insights
-    // Weight size per core estimation (approximated to 1.0 for simplicity)
+    // Determine bytes per element based on weights data type
+    uint32_t weights_bytes_per_element = (weights_datatype == DataType::FLOAT32)     ? 4
+                                         : (weights_datatype == DataType::BFLOAT8_B) ? 1
+                                                                                     : 2;
+
+    // Weight size per core estimation based on actual data type
     const float_t weights_cost =
-        static_cast<float_t>(1.0 * input_channels * output_channels * kernel_width) / dram_transfer_speed;
+        static_cast<float_t>(weights_bytes_per_element * input_channels * output_channels * kernel_width) /
+        dram_transfer_speed;
 
     const float_t act_cost = per_core_out_matrix_height_ntiles * tt::constants::TILE_HEIGHT * noc_transfer_time;
 
@@ -432,23 +436,21 @@ bool is_split_reader_supported(
     bool is_1d_depthwise_conv,
     uint32_t act_block_h_ntiles,
     uint32_t per_core_out_matrix_height_ntiles,
-    uint32_t input_tile_size,
-    uint32_t weights_tile_size,
     uint32_t input_channels,
     uint32_t output_channels,
     uint32_t kernel_width,
     bool is_blackhole,
-    DataType input_datatype) {
+    DataType input_datatype,
+    DataType weights_datatype) {
     return memory_layout == TensorMemoryLayout::HEIGHT_SHARDED && !is_1d_depthwise_conv && act_block_h_ntiles > 1 &&
            is_split_reader_viable(
                per_core_out_matrix_height_ntiles,
-               input_tile_size,
-               weights_tile_size,
                input_channels,
                output_channels,
                kernel_width,
                is_blackhole,
-               input_datatype);
+               input_datatype,
+               weights_datatype);
 }
 
 }  // namespace conv2d
