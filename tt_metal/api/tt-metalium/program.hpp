@@ -8,11 +8,7 @@
 #include <memory>
 #include <span>
 
-#include <tt-metalium/kernel_types.hpp>
-
-namespace tt {
-
-namespace tt_metal {
+namespace tt::tt_metal {
 
 // Fwd declares
 class ProgramDescriptor;
@@ -53,13 +49,6 @@ public:
     // Used in ops.
     std::span<const std::shared_ptr<CircularBuffer>> circular_buffers() const;
 
-    //////////////////////////////
-    // Kernel related functions:
-    //////////////////////////////
-
-    // Used in fabric, CaptureCreateKernel, light metal.
-    std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
-
     // debug/test/internal usage.
     detail::ProgramImpl& impl() { return *internal_; }
     const detail::ProgramImpl& impl() const { return *internal_; }
@@ -69,6 +58,4 @@ private:
     std::shared_ptr<detail::ProgramImpl> internal_;
 };
 
-}  // namespace tt_metal
-
-}  // namespace tt
+}  // namespace tt::tt_metal

@@ -38,6 +38,9 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
+// Access to internal API: ProgramImpl::get_kernel
+#include "impl/program/program_impl.hpp"
+
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
@@ -202,8 +205,8 @@ Program create_simple_unary_program(Buffer& input, Buffer& output, Buffer* cb_in
 
     *reader_runtime_args = {&input, (uint32_t)0, input.num_pages()};
 
-    SetRuntimeArgs(device, program.get_kernel(writer_kernel), worker, writer_runtime_args);
-    SetRuntimeArgs(device, program.get_kernel(reader_kernel), worker, reader_runtime_args);
+    SetRuntimeArgs(device, program.impl().get_kernel(writer_kernel), worker, writer_runtime_args);
+    SetRuntimeArgs(device, program.impl().get_kernel(reader_kernel), worker, reader_runtime_args);
 
     CircularBufferConfig output_cb_config = CircularBufferConfig(2048, {{tt::CBIndex::c_16, tt::DataFormat::Float16_b}})
                                                 .set_page_size(tt::CBIndex::c_16, 2048);
