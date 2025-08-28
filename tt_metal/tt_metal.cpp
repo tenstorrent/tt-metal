@@ -772,7 +772,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
         // don't get the GO mailbox (eg, storage cores) have all landed
         tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device->id());
 
-        std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
+        std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
         std::unordered_set<CoreCoord> not_done_cores;
         const auto& hal = MetalContext::instance().hal();
         for (uint32_t programmable_core_type_index = 0;
@@ -811,7 +811,7 @@ void LaunchProgram(IDevice* device, Program& program, bool wait_until_cores_done
 
 void WaitProgramDone(IDevice* device, Program& program, bool read_device_profiler_results) {
     auto device_id = device->id();
-    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     std::unordered_set<CoreCoord> not_done_cores;
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
@@ -844,7 +844,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
     program.allocate_circular_buffers(device);
     program.impl().validate_circular_buffer_region(device);
 
-    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.logical_cores();
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         const auto& logical_cores = logical_cores_used_in_program[index];

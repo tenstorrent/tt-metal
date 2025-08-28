@@ -199,10 +199,10 @@ public:
         const CoreCoord& core, CoreType core_type) const;
     void init_semaphores(
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
-    // XXXXX TODO: this should return a const reference
     std::vector<std::vector<CoreCoord>> logical_cores() const;
     void compile(IDevice* device, bool force_slow_dispatch = false);
     void invalidate_circular_buffer_allocation();
+    // Always used in conjuction with validate_circular_buffer_region and compile
     void allocate_circular_buffers(const IDevice* device);
     bool is_finalized() const;
     void set_finalized();

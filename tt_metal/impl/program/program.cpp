@@ -489,10 +489,6 @@ std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& detail::ProgramImpl::
     return this->kernels_.at(programmable_core_type_index);
 }
 
-std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& Program::get_kernels(uint32_t programmable_core_type_index) {
-    return internal_->get_kernels(programmable_core_type_index);
-}
-
 KernelGroup* detail::ProgramImpl::kernels_on_core(const CoreCoord& core, uint32_t programmable_core_type_index) {
     update_kernel_groups(programmable_core_type_index);
     if (core.x >= grid_extent_[programmable_core_type_index].x ||
@@ -984,8 +980,6 @@ std::vector<std::vector<CoreCoord>> detail::ProgramImpl::logical_cores() const {
     return cores_in_program;
 }
 
-std::vector<std::vector<CoreCoord>> Program::logical_cores() const { return internal_->logical_cores(); }
-
 void detail::ProgramImpl::set_remote_circular_buffer_init(const std::shared_ptr<Kernel>& kernel) const {
     const auto& kernel_defines = kernel->defines();
     const std::string reserved_defines[] = {"ALIGN_LOCAL_CBS_TO_REMOTE_CBS"};
@@ -1405,10 +1399,6 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
     }
 }
 
-void Program::allocate_kernel_bin_buf_on_device(IDevice* device) {
-    internal_->allocate_kernel_bin_buf_on_device(device);
-}
-
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
     auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
@@ -1580,8 +1570,6 @@ size_t detail::ProgramImpl::num_kernels() const {
     }
     return count;
 }
-
-std::size_t Program::num_kernels() const { return internal_->num_kernels(); }
 
 const std::vector<std::shared_ptr<CircularBuffer>>& detail::ProgramImpl::circular_buffers() const {
     return circular_buffers_;
