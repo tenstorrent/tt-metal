@@ -6,7 +6,7 @@
  *
  * Two possible invokation locations:
  * 1. Reader at UNPACKER core as Compute Kernel
- * 2. Reader at BRSIC as dataflow
+ * 2. Reader at a Dataflow Kernel
  *
  * Test will be performed in both cases.
  *
