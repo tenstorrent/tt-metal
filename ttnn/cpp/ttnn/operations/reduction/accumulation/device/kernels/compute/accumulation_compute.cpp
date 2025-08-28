@@ -47,7 +47,7 @@ void MAIN {
             } else if (accumulation_op == AccumulationOp::CUMSUM) {
 #ifdef CUMSUM_USE_INT32
                 add_int_tile_init();
-                add_int32_tile(INT32_TILE_DEST, INT32_TILE_ACC);
+                add_int32_tile(INT32_TILE_DEST, INT32_TILE_ACC, INT32_TILE_DEST);
 #else
                 add_tiles_init(cb_in, cb_op);
                 add_tiles(cb_in, cb_op, FIRST_TILE, FIRST_TILE, WORKING_REG);

@@ -464,7 +464,7 @@ void reduce_cb(
         } else {
             // path if we are doing a sum redudce
             add_binary_tile_init();
-            add_binary_tile(0, 1);
+            add_binary_tile(0, 1, 0);
         }
         cb_pop_front(cb_prev_out, 1);
     }

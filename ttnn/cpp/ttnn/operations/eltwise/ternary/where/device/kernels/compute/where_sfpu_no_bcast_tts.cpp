@@ -47,7 +47,7 @@ void MAIN {
 #endif
 
         where_tile_init();
-        WHERE_LLK(0, 1, 2);
+        WHERE_LLK(0, 1, 2, 0);
 
         tile_regs_commit();
         tile_regs_wait();

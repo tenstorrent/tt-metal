@@ -19,7 +19,7 @@ namespace ckernel {
 // clang-format off
 /**
  * Performs an elementwise sub operation with the two integer inputs: y = sub(x0,x1)
- * Output overwrites first operand in DST.
+ * Output overwrites odst in DST.
  *
  * The DST register buffer must be in acquired state via *acquire_dst* call. This call is blocking and is only available
  * on the compute engine.
@@ -28,27 +28,27 @@ namespace ckernel {
  *
  * Return value: None
  *
- * | Argument              | Description                                                                 | Type     | Valid Range                                           | Required |
- * |-----------------------|-----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst0                 | The index of the tile in DST register buffer to use as first operand        | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | idst1                 | The index of the tile in DST register buffer to use as second operand       | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | sign_magnitude_format | Whether the Int32 values are in sign-magnitude format (not 2's complement)  | bool     |                                                       | False    |
+ * | Argument              | Description                                                           | Type     | Valid Range                                           | Required |
+ * |-----------------------|-----------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
+ * | idst0                 | The index of the tile in DST register buffer to use as first operand  | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | idst1                 | The index of the tile in DST register buffer to use as second operand | uint32_t | Must be less than the size of the DST register buffer | True     |
+ * | odst                  | The index of the tile in DST register buffer to use as output         | uint32_t | Must be less than the size of the DST register buffer | True     |
  */
 // clang-format on
-ALWI void sub_int32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::INT32, false>(idst0, idst1)));
+ALWI void sub_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::INT32, false>(idst0, idst1, odst)));
 }
 
-ALWI void sub_uint32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::INT32, false>(idst0, idst1)));
+ALWI void sub_uint32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::INT32, false>(idst0, idst1, odst)));
 }
 
-ALWI void sub_uint16_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::LO16, false>(idst0, idst1)));
+ALWI void sub_uint16_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_sub_int<APPROX, 8, InstrModLoadStore::LO16, false>(idst0, idst1, odst)));
 }
 
-ALWI void rsub_int32_tile(uint32_t idst0, uint32_t idst1) {
-    MATH((llk_math_eltwise_binary_sfpu_rsub_int32<APPROX>(idst0, idst1)));
+ALWI void rsub_int32_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((llk_math_eltwise_binary_sfpu_rsub_int32<APPROX>(idst0, idst1, odst)));
 }
 
 /**
