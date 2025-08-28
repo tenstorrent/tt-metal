@@ -13,7 +13,7 @@
 #include "ttnn/graph/graph_trace_utils.hpp"
 #include "ttnn/operations/trace.hpp"
 
-#ifdef BUILD_MLP_OP_PERF
+#ifdef BUILD_TTNN_OP_RUNTIME_PREDICTOR
 #include "interface.hpp"
 #include "tt_stl/tt_stl/span.hpp"
 #include "ttnn/decorators.hpp"
@@ -35,7 +35,7 @@ struct RuntimeQueryResponse {
 static constexpr size_t NUM_TRACE_EXECUTIONS = 20;
 static constexpr size_t WARMUP_TRACE_EXECUTIONS = 5;
 
-#ifdef BUILD_MLP_OP_PERF
+#ifdef BUILD_TTNN_OP_RUNTIME_PREDICTOR
 
 // helper function checking for base_name()
 // if it does, this implies Op op in query_op_runtime() is a registered operation
@@ -159,7 +159,7 @@ auto query_op_runtime(Op op, MeshDevice* device, Args&&... args) {
     };
     auto transformed_args = std::make_tuple(transform_arg(std::forward<Args>(args))...);
 
-#ifdef BUILD_MLP_OP_PERF
+#ifdef BUILD_TTNN_OP_RUNTIME_PREDICTOR
     if constexpr (HasBaseName<Op>) {
         // helper lambda to make nlohmann::json objects from args
         auto transform_to_json = [](auto&& arg) {
