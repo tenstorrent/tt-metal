@@ -147,7 +147,20 @@ void kernel_main() {
             packet_size = std::min(packet_size, page_size - max_packet_size * j);
 
             write_and_advance_local_read_address_for_fabric_write(
-                noc0_dest_noc_addr, pkt_hdr_forward, pkt_hdr_backward, fabric_connection, l1_read_addr, packet_size);
+                row_id,
+                tensor0_addrgen,
+                pkt_hdr_forward,
+                pkt_hdr_backward,
+                fabric_connection,
+                l1_read_addr,
+                packet_size,
+                offset);
+            if constexpr (dynamic_alternate) {
+                std::swap(
+                    pkt_hdr_forward->routing_fields.value,
+                    pkt_hdr_backward->routing_fields
+                        .value);  // alternate the packet header distance for better balancing
+            }
             offset += packet_size;  // advance the noc address for the next packet
         }
         row_id++;

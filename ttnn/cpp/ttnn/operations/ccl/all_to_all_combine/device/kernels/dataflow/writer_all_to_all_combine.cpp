@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
@@ -173,11 +172,12 @@ void kernel_main() {
                             mesh_rows,
                             mesh_cols,
                             fabric_max_packet_size_bytes>(
+                            output_addrgen,
                             fabric_connections,
                             packet_headers[0],
                             dest_device_idx,
                             src_data_l1_ptr,
-                            output_noc_addr,
+                            output_page_idx,
                             data_size_bytes,
                             alignment);
                     } else {
@@ -187,12 +187,13 @@ void kernel_main() {
                             mesh_rows,
                             mesh_cols,
                             fabric_max_packet_size_bytes>(
+                            output_addrgen,
                             fabric_connections,
                             packet_headers[0],
                             dest_chip_id,
                             dest_mesh_id,
                             src_data_l1_ptr,
-                            output_noc_addr,
+                            output_page_idx,
                             data_size_bytes,
                             alignment);
                     }
