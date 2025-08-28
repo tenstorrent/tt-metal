@@ -63,7 +63,7 @@ inline void compute_gained_dL_dout(uint32_t col, uint32_t working_register, uint
     copy_tile_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, col, tile_register);
     mul_binary_tile_init();
-    mul_binary_tile(working_register, tile_register);
+    mul_binary_tile(working_register, tile_register, working_register);
 }
 
 inline void compute_dL_da(
@@ -86,17 +86,17 @@ inline void compute_dL_da(
     copy_tile_init(cb_recip_rms_a_bcasted_idx);
     copy_tile(cb_recip_rms_a_bcasted_idx, /* tile_idx */ 0, tile_register);
     mul_binary_tile_init();
-    mul_binary_tile(rhs_register, tile_register);
-    mul_binary_tile(rhs_register, tile_register);
+    mul_binary_tile(rhs_register, tile_register, rhs_register);
+    mul_binary_tile(rhs_register, tile_register, rhs_register);
     copy_tile_init(cb_scaler_idx);
     copy_tile(cb_scaler_idx, /* tile_idx */ 0, tile_register);
     mul_binary_tile_init();
-    mul_binary_tile(rhs_register, tile_register);
+    mul_binary_tile(rhs_register, tile_register, rhs_register);
 
     // Compute final result: dL_da = gained_dL_dout - rhs
     compute_gained_dL_dout(input_tile_idx, dL_da_register, tile_register);
     sub_binary_tile_init();
-    sub_binary_tile(dL_da_register, rhs_register);
+    sub_binary_tile(dL_da_register, rhs_register, dL_da_register);
 }
 
 inline void compute_dL_dgamma_components(
@@ -119,7 +119,7 @@ inline void compute_dL_dgamma_components(
     copy_tile_init(cb_dL_out_idx);
     copy_tile(cb_dL_out_idx, /* tile_idx */ input_tile_idx, tile_register);
     mul_binary_tile_init();
-    mul_binary_tile(dL_dg_components_register, tile_register);
+    mul_binary_tile(dL_dg_components_register, tile_register, dL_dg_components_register);
 }
 
 // ============================================================================
@@ -166,7 +166,7 @@ inline void compute_scale(const uint32_t row) {
         copy_tile_init(cb_input_idx);
         copy_tile(cb_input_idx, col, tile_register);
         mul_binary_tile_init();
-        mul_binary_tile(working_register, tile_register);
+        mul_binary_tile(working_register, tile_register, working_register);
 
         // Mask the tile if needed
         if constexpr (do_mask_w) {
@@ -185,7 +185,7 @@ inline void compute_scale(const uint32_t row) {
         // Add scale_components to scale
         if (col > 0) {
             add_binary_tile_init();
-            add_binary_tile(scale_register, working_register);
+            add_binary_tile(scale_register, working_register, scale_register);
         }
     }
     tile_regs_commit();
@@ -239,7 +239,7 @@ inline void compute_scale(const uint32_t row) {
             copy_tile_init(cb_input_idx);
             copy_tile(cb_input_idx, block_idx, tile_register);
             mul_binary_tile_init();
-            mul_binary_tile(working_register, tile_register);
+            mul_binary_tile(working_register, tile_register, working_register);
 
             // Mask the tile if needed
             if constexpr (do_mask_w) {
@@ -259,7 +259,7 @@ inline void compute_scale(const uint32_t row) {
             // Add scale_components to scale
             if (col > 0) {
                 add_binary_tile_init();
-                add_binary_tile(scale_register, working_register);
+                add_binary_tile(scale_register, working_register, scale_register);
             }
         }
         // Pop tiles that are not needed anymore.
