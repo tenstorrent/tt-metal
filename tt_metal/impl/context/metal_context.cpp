@@ -54,6 +54,14 @@ void MetalContext::initialize(
     const BankMapping& l1_bank_remap,
     size_t worker_l1_size,
     bool minimal) {
+
+    if (cluster_->get_target_device_type() == tt::TargetDevice::Mock) {
+        TT_THROW(
+            "Mock cluster cannot be initialized because there is no device. "
+            "Mock clusters are only supported for testing control plane initialization without a device."
+            "Please unset the TT_METAL_MOCK_CLUSTER_DESC_PATH environment variable.");
+    }
+
     // Workaround for galaxy and BH, need to always re-init
     if (rtoptions_.get_force_context_reinit() or cluster_->is_galaxy_cluster() or cluster_->arch() == ARCH::BLACKHOLE) {
         force_reinit_ = true;
@@ -227,12 +235,17 @@ MetalContext& MetalContext::instance() {
 MetalContext::MetalContext() {
     // If a custom fabric mesh graph descriptor is specified as an RT Option, use it by default
     // to initialize the control plane.
+    std::unique_ptr<tt_ClusterDescriptor> cluster_desc;
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     }
 
+    if (rtoptions_.get_mock_enabled()) {
+        cluster_desc = tt::umd::tt_ClusterDescriptor::create_from_yaml(rtoptions_.get_mock_cluster_desc_path());
+    }
+
     bool is_base_routing_fw_enabled =
-        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_));
+        Cluster::is_base_routing_fw_enabled(Cluster::get_cluster_type_from_cluster_desc(rtoptions_, cluster_desc.get()));
     hal_ = std::make_unique<Hal>(get_platform_architecture(rtoptions_), is_base_routing_fw_enabled);
     cluster_ = std::make_unique<Cluster>(rtoptions_, *hal_);
     distributed_context_ = distributed::multihost::DistributedContext::get_current_world();
@@ -394,6 +407,7 @@ void MetalContext::set_default_fabric_topology() {
     // Set the mesh graph descriptor file to the default value and clear the custom FabricNodeId to physical chip
     // mapping.
     this->logical_mesh_chip_id_to_physical_chip_id_mapping_.clear();
+
     if (rtoptions_.is_custom_fabric_mesh_graph_desc_path_specified()) {
         custom_mesh_graph_desc_path_ = rtoptions_.get_custom_fabric_mesh_graph_desc_path();
     } else {
