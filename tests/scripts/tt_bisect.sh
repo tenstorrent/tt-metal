@@ -41,9 +41,10 @@ done
 [ -n "$good_commit" ] || die "Please specify -g GOOD_SHA."
 [ -n "$bad_commit" ] || die "Please specify -b BAD_SHA."
 
-TT_METAL_HOME="${TT_METAL_HOME:-$(pwd)}"
-cd "$TT_METAL_HOME" || die "Cannot cd into TT_METAL_HOME=$TT_METAL_HOME"
-export PYTHONPATH="$TT_METAL_HOME"
+echo "TT_METAL_HOME: $TT_METAL_HOME"
+echo "PYTHONPATH: $PYTHONPATH"
+echo "ARCH_NAME: $ARCH_NAME"
+echo "pwd: $(pwd)"
 
 git cat-file -e "$good_commit^{commit}" 2>/dev/null || die "Invalid good commit: $good_commit"
 git cat-file -e "$bad_commit^{commit}" 2>/dev/null  || die "Invalid bad commit: $bad_commit"
@@ -57,7 +58,7 @@ echo "Status:"
 git status --porcelain=v1
 
 echo "Starting git bisect…"
-git bisect start "$bad_commit" "$good_commit" --
+git bisect start "$bad_commit" "$good_commit"
 
 echo "Environment (filtered):"
 env | grep -E '^(TT_|PYTHON|CC|CXX|PATH)=' || true
