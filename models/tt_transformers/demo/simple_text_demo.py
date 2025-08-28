@@ -34,12 +34,12 @@ class TokenAccuracy:
         assert os.path.exists(reference_data_file)
         logger.info(f"Loading reference data from {reference_data_file}")
         reference_data = torch.load(reference_data_file)
-        self.reference_tokens = reference_data["reference_tokens"]
-        split_point = self.reference_tokens.shape[-1] // 2
-        self.input_prompt = self.reference_tokens[0, :split_point]
-        self.gt_tokens = self.reference_tokens[0, split_point:]
+        reference_tokens = reference_data["reference_tokens"]
+        split_point = reference_tokens.shape[-1] // 2
+        self.input_prompt = reference_tokens[0, :split_point]
+        self.reference_tokens = reference_tokens[0, split_point:]
         self.top5_tokens = reference_data["top5_tokens"][split_point - 1 :, :]
-        self.maxindex = len(self.gt_tokens) - 1
+        self.maxindex = len(self.reference_tokens) - 1
 
     def prepare_ref_tokens(self, tokenizer):
         text_data = tokenizer.decode(self.input_prompt.tolist())
@@ -48,12 +48,12 @@ class TokenAccuracy:
     def collect_predicted_tokens(self, tokens):
         self.store_predicted_tokens.append(tokens)
         self.gt_pos += 1
-        return self.gt_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
+        return self.reference_tokens[min(self.gt_pos, self.maxindex)].unsqueeze(-1).unsqueeze(-1)
 
     def compute_accuracy(self):
         count = 0
         count_t5 = 0
-        matching_sz = min(len(self.gt_tokens), len(self.store_predicted_tokens))
+        matching_sz = min(len(self.reference_tokens), len(self.store_predicted_tokens))
         for i in range(matching_sz):
             if self.top5_tokens[i, 0].item() == self.store_predicted_tokens[i]:
                 count += 1
@@ -489,7 +489,7 @@ def prepare_generator_args(
             {"page_block_size": 32, "page_max_num_blocks_per_dp": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             True,  # stop_at_eos
-            True,  # ci_only
+            False,  # ci_only
             1,  # data_parallel
             True,  # token_accuracy
             False,  # stress_test
@@ -568,8 +568,11 @@ def test_demo_text(
     Simple demo with limited dependence on reference code.
     """
     test_id = request.node.callspec.id
-    # if is_ci_env and (("accuracy" in test_id) or not ci_only):
-    # pytest.skip("CI only runs the CI-only tests")
+    if is_ci_env:
+        if not ci_only:
+            pytest.skip("CI only runs the CI-only tests")
+        if "accuracy" in test_id and "ci_token_matching" not in test_id:
+            pytest.skip("CI only runs the tests with performance optimizations except for ci_token_matching case")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
@@ -628,8 +631,8 @@ def test_demo_text(
 
         tg_enabled = (data_parallel == 4 and is_33_70b) or (data_parallel in [4, 16, 32] and is_31_8b)
 
-        if num_devices == 32 and not tg_enabled:
-            pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
+        # if num_devices == 32 and not tg_enabled:
+        # pytest.skip("CI only runs Llama3 70b DP = 4, TP = 8 or Llama3 8b DP = 4/16/32, TP = 8/2/1 on TG")
         if num_devices == 8 and data_parallel > 1 and not (is_32_1b or is_31_8b):
             pytest.skip("CI only runs hybrid Llama3 1b and 8b on T3K")
 
