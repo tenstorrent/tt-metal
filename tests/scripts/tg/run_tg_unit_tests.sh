@@ -30,7 +30,7 @@ run_tg_sentence_bert_tests() {
 
   echo "LOG_METAL: Running run_tg_sentence_bert_tests"
 
-  pytest -n auto models/demos/tg/sentence_bert/tests/device_perf_test.py ; fail+=$?
+  pytest models/demos/tg/sentence_bert/tests/device_perf_test.py ; fail+=$?
 
   # Record the end time
   end_time=$(date +%s)
