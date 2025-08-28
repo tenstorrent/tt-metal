@@ -32,6 +32,9 @@
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 
+// Access to internal API: ProgramImpl::get_kernel
+#include "impl/program/program_impl.hpp"
+
 namespace tt::tt_metal {
 
 using std::vector;
@@ -203,7 +206,8 @@ bool flatten(
     return pass;
 }
 
-bool flatten_stress(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+bool flatten_stress(
+    std::shared_ptr<distributed::MeshDevice> mesh_device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     // Test Simulating Program Caching with Async Command Queues
     bool pass = true;
     // Create a program used across all loops
@@ -286,9 +290,9 @@ bool flatten_stress(std::shared_ptr<distributed::MeshDevice> mesh_device, uint32
             src_dram_buffer.get(), (uint32_t)0, num_tiles_r, num_tiles_c, num_bytes_per_tensor_row};
         *writer_runtime_args = {dst_dram_buffer.get(), (uint32_t)0, num_tiles * 32};
 
-        SetRuntimeArgs(device, program_.get_kernel(flatten_kernel), core, compute_runtime_args);
+        SetRuntimeArgs(device, program_.impl().get_kernel(flatten_kernel), core, compute_runtime_args);
 
-        SetRuntimeArgs(device, program_.get_kernel(unary_writer_kernel), core, writer_runtime_args);
+        SetRuntimeArgs(device, program_.impl().get_kernel(unary_writer_kernel), core, writer_runtime_args);
         // Async write input
         EnqueueWriteBuffer(device->command_queue(), src_dram_buffer, src_vec, false);
         // Share ownership of buffer with program
