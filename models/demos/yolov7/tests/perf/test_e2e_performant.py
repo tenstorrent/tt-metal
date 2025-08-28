@@ -97,15 +97,14 @@ def run_perf_e2e_yolov7(
     num_measurement_iterations = 32
     run_model_pipeline(device, test_infra, num_measurement_iterations)
 
-    first_iter_time = profiler.get("compile")
+    compile_time = profiler.get("compile")
     inference_time_avg = profiler.get(f"run_model_pipeline_2cqs") / num_measurement_iterations
-    compile_time = first_iter_time - 2 * inference_time_avg
     expected_inference_time = batch_size / expected_inference_throughput
 
     prep_perf_report(
         model_name=f"ttnn_yolov7_trace_2cqs_batch_size{batch_size}",
         batch_size=batch_size,
-        inference_and_compile_time=first_iter_time,
+        inference_and_compile_time=compile_time,
         inference_time=inference_time_avg,
         expected_compile_time=240,
         expected_inference_time=expected_inference_time,

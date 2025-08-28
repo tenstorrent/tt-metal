@@ -105,15 +105,14 @@ def run_perf_e2e_yolov4(
         device, ttnn_input_tensor, test_infra, num_warmup_iterations, num_measurement_iterations
     )
 
-    first_iter_time = profiler.get("compile")
+    compile_time = profiler.get("compile")
     inference_time_avg = profiler.get(f"run_model_pipeline_2cqs") / num_measurement_iterations
-    compile_time = first_iter_time - 2 * inference_time_avg
     expected_inference_time = batch_size / expected_inference_throughput
 
     prep_perf_report(
         model_name=f"ttnn_yolov4_trace_2cqs_batch_size{batch_size}",
         batch_size=batch_size,
-        inference_and_compile_time=first_iter_time,
+        inference_and_compile_time=compile_time,
         inference_time=inference_time_avg,
         expected_compile_time=1,
         expected_inference_time=expected_inference_time,
