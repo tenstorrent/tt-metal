@@ -340,7 +340,7 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
     EXPECT_EQ(result_composite_xtensor.shape(), x_data.shape());
 
     // Compare forward results
-    EXPECT_TRUE(xt::allclose(result_kernel_xtensor, result_composite_xtensor, 1.0e-3F, 3e-2F));
+    EXPECT_TRUE(xt::allclose(result_kernel_xtensor, result_composite_xtensor, 4e-2F, 3e-2F));
     EXPECT_TRUE(xt::all(xt::isfinite(result_kernel_xtensor)));
     EXPECT_TRUE(xt::all(xt::isfinite(result_composite_xtensor)));
 

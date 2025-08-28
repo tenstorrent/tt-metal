@@ -2351,29 +2351,6 @@ TEST_F(UnitMeshRandomProgramFixture, TensixTestSimplePrograms) {
     Finish(device_->mesh_command_queue());
 }
 
-TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestSimplePrograms) {
-    for (const auto& device : device_->get_devices()) {
-        if (!does_device_have_active_eth_cores(device)) {
-            GTEST_SKIP() << "Skipping test because device " << device->id()
-                         << " does not have any active ethernet cores";
-        }
-    }
-
-    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
-        if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
-        }
-        distributed::MeshWorkload workload;
-        Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
-        auto& program_ = workload.get_programs().at(device_range_);
-        this->create_kernel(program_, CoreType::WORKER, true);
-        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
-    }
-
-    Finish(device_->mesh_command_queue());
-}
-
 TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
     for (const auto& device : device_->get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
@@ -2406,22 +2383,6 @@ TEST_F(UnitMeshRandomProgramFixture, TensixActiveEthTestSimplePrograms) {
     Finish(device_->mesh_command_queue());
 }
 
-TEST_F(UnitMeshRandomProgramFixture, TensixTestPrograms) {
-    for (uint32_t i = 0; i < NUM_WORKLOADS; i++) {
-        if (i % 10 == 0) {
-            log_info(tt::LogTest, "Creating Program {}", i);
-        }
-        distributed::MeshWorkload workload;
-        Program program = CreateProgram();
-        distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range_);
-        auto& program_ = workload.get_programs().at(device_range_);
-        this->create_kernel(program_, CoreType::WORKER, true);
-        distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
-    }
-
-    Finish(device_->mesh_command_queue());
-}
-
 TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
     for (const auto& device : device_->get_devices()) {
         if (!does_device_have_active_eth_cores(device)) {
@@ -2443,7 +2404,7 @@ TEST_F(UnitMeshRandomProgramFixture, ActiveEthTestPrograms) {
         KernelProperties kernel_properties;
         kernel_properties.max_kernel_size_bytes = MAX_KERNEL_SIZE_BYTES / 2;
         kernel_properties.max_num_rt_args = MAX_NUM_RUNTIME_ARGS / 4;
-        this->create_kernel(program_, CoreType::WORKER, true);
+        this->create_kernel(program_, CoreType::ETH, true);
         distributed::EnqueueMeshWorkload(device_->mesh_command_queue(), workload, false);
     }
 

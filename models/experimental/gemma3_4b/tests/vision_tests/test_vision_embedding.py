@@ -45,7 +45,7 @@ def test_vision_embedding_integration(
     #     k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     # }
 
-    image_size = model_args.vision_chunk_size
+    image_size = model_args.image_size
     patch_size = model_args.vision_patch_size
     hidden_dim = model_args.vision_dim
     dim = model_args.vision_dim

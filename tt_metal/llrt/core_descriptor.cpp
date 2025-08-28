@@ -40,12 +40,7 @@ inline YAML::Node string_to_yaml_node(const std::string& input) {
 inline std::string get_core_descriptor_file(
     const tt::ARCH& arch, const tt::tt_metal::DispatchCoreConfig& dispatch_core_config) {
     // Ability to skip this runtime opt, since trimmed SOC desc limits which DRAM channels are available.
-    std::string core_desc_dir;
-    if (getenv("TT_METAL_HOME")) {
-        core_desc_dir = getenv("TT_METAL_HOME");
-    } else {
-        core_desc_dir = "./";
-    }
+    std::string core_desc_dir = tt_metal::MetalContext::instance().rtoptions().get_root_dir();
     if (core_desc_dir.back() != '/') {
         core_desc_dir += "/";
     }

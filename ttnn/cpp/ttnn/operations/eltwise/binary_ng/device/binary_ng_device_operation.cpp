@@ -14,23 +14,24 @@ bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
     using enum DataType;
     switch (val) {
         case ADD:
+        case SUB:
             return (
                 (a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT32 && b == UINT32) ||
                 (a == UINT16 && b == UINT16));
-        case SUB:
+        case MUL:
         case EQ:
         case NE:
-        case MUL: return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
+        case LOGICAL_AND:
+        case LOGICAL_OR:
+        case LOGICAL_XOR:
+            return ((a == FLOAT32 && b == FLOAT32) || (a == INT32 && b == INT32) || (a == UINT16 && b == UINT16));
         case DIV:
-        case RSUB:
         case LOGADDEXP:
         case LOGADDEXP2:
         case LDEXP:
         case BIAS_GELU: return (a == FLOAT32 && b == FLOAT32);
-        case LOGICAL_AND:
-        case LOGICAL_OR:
-        case LOGICAL_XOR:
         case SQUARED_DIFFERENCE:
+        case RSUB:
         case GT:
         case LT:
         case GE:

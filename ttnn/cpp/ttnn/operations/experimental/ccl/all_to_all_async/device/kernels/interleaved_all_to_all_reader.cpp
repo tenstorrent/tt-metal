@@ -3,12 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 #include <utility>
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -16,12 +14,11 @@ using tt::tt_metal::BufferType;
 
 constexpr uint32_t my_ring_id = get_compile_time_arg_val(0);
 constexpr uint32_t ring_size = get_compile_time_arg_val(1);
-constexpr BufferType buffer0_type = static_cast<BufferType>(get_compile_time_arg_val(2));
-constexpr uint32_t cb0_id = get_compile_time_arg_val(3);
-constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
-constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
-constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
-constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
+constexpr uint32_t cb0_id = get_compile_time_arg_val(2);
+constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(3);
+constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(4);
+constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(5);
+constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(6);
 
 void kernel_main() {
     ///////////////////////////////////////////////////
@@ -39,10 +36,8 @@ void kernel_main() {
     uint32_t out_row_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_col_offset = get_arg_val<uint32_t>(arg_idx++);
 
-    // interleaved addrgen
-    constexpr bool is_dram = buffer0_type == tt::tt_metal::BufferType::DRAM;
-    auto tensor0_addrgen = InterleavedAddrGenFast<is_dram>{
-        .bank_base_address = tensor_address0, .page_size = tensor0_page_size, .data_format = get_dataformat(cb0_id)};
+    constexpr auto tensor0_args = TensorAccessorArgs<7>();
+    auto tensor0_addrgen = TensorAccessor(tensor0_args, tensor_address0, tensor0_page_size);
 
     bool cur_is_forward = num_targets_forward_direction > num_targets_backward_direction;
     uint32_t forward_hops = 1;
