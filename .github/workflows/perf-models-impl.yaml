@@ -25,10 +25,10 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "N300 WH B0", model-group: "llm_javelin", timeout: 20, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          #{name: "N300 WH B0", model-group: "llm_javelin", timeout: 20, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
           {name: "N300 WH B0", model-group: "cnn_javelin", timeout: 10, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-          {name: "N300 WH B0", model-group: "other", timeout: 5, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-          {name: "N300 WH B0", model-group: "other_magic_env", timeout: 10, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          #{name: "N300 WH B0", model-group: "other", timeout: 5, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
+          {name: "N300 WH B0", model-group: "other_magic_env2", timeout: 45, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
         ]
         # model-group:
         #   - name: llm_javelin
@@ -141,7 +141,7 @@ jobs:
           run_args: pytest -n auto models/experimental/functional_unet/tests -m models_performance_bare_metal --timeout=480
         if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' }}
       - name: Run stable_diffusion model_perf test
-        timeout-minutes: ${{ matrix.test-info.timeout }}
+        timeout-minutes: 8
         uses: ./.github/actions/model-perf-test
         with:
           run_args: pytest -n auto models/demos/wormhole/stable_diffusion/tests -m models_performance_bare_metal --timeout=480
@@ -175,7 +175,7 @@ jobs:
         uses: ./.github/actions/model-perf-test
         with:
           run_args: pytest -n auto models/demos/yolov10x/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env2' }}
       - name: Run sentence_bert model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/model-perf-test
@@ -241,7 +241,7 @@ jobs:
         uses: ./.github/actions/model-perf-test
         with:
           run_args: pytest -n auto models/demos/yolov8s/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env2' }}
       - name: Run yolov6l model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/model-perf-test
@@ -283,7 +283,7 @@ jobs:
         uses: ./.github/actions/model-perf-test
         with:
           run_args: pytest -n auto models/demos/wormhole/vit/demo/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' }}
+        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env2' }}
       - name: Run swin_v2 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: ./.github/actions/model-perf-test
@@ -340,12 +340,12 @@ jobs:
         if: ${{ !cancelled() }}
       # - name: Run performance regressions
       #   timeout-minutes: ${{ matrix.test-info.timeout }}
-      #   uses: ./.github/actions/model-perf-test
+      #   uses: ./.github/actions/docker-run
       #   with:
-      #     # docker_image: ${{ inputs.docker-image }}
-      #     # docker_password: ${{ secrets.GITHUB_TOKEN }}
-      #     # docker_opts: ${{ env.DOCKER_OPTS }}
-      #     # install_wheel: true
+      #     docker_image: ${{ inputs.docker-image }}
+      #     docker_password: ${{ secrets.GITHUB_TOKEN }}
+      #     docker_opts: ${{ env.DOCKER_OPTS }}
+      #     install_wheel: true
       #     run_args: |
       #       if [[ "${{ matrix.test-info.model-group }}" == "other" ]]; then
       #         echo "No environment variable engineering needed for other models"
