@@ -6,7 +6,7 @@
  *
  * Two possible invokation locations:
  * 1. Reader at UNPACKER core as Compute Kernel
- * 2. Reader at NOC 1 as dataflow
+ * 2. Reader at BRSIC as dataflow
  *
  * Test will be performed in both cases.
  *
@@ -55,8 +55,7 @@ void report_page(std::size_t i) {
 
 // Getting the raw read pointer for CB differes across TRISC and BRISC.
 #ifdef TRISC_UNPACK
-    static constexpr auto TRISC_RD_PTR_PAGE_SHIFT = 4;
-    read_ptr = reinterpret_cast<DataT*>(get_local_cb_interface(CB_ID).fifo_rd_ptr << TRISC_RD_PTR_PAGE_SHIFT);
+    read_ptr = reinterpret_cast<DataT*>(get_local_cb_interface(CB_ID).fifo_rd_ptr << cb_addr_shift);
 #elif defined(COMPILE_FOR_BRISC)
     read_ptr = reinterpret_cast<DataT*>(get_read_ptr(CB_ID));
 #else

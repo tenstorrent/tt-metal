@@ -9,7 +9,7 @@
  * Two possible invokation locations:
  * 1. Reader at UNPACKER core as Compute Kernel, no test will be performed (no cb_pages_available_at_front in compute
  *    kernel).
- * 2. Reader at NOC 1 as dataflow, test will be performed.
+ * 2. Reader at BRSIC as dataflow, test will be performed.
  *
  */
 

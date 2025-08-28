@@ -48,12 +48,11 @@ static constexpr std::size_t CB_PAGE_SIZE = 16;
 static constexpr std::size_t RESULT_BUFFER_PAGE_SIZE = CB_PAGE_SIZE;
 static constexpr std::size_t RESULT_BUFFER_SIZE = RESULT_BUFFER_PAGE_SIZE;
 static constexpr auto RESULT_BUFFER_TYPE = BufferType::L1;
-static const std::vector<DataT> RESULT_BUFFER_INIT_DATA(RESULT_BUFFER_PAGE_SIZE / sizeof(DataT), 0);
 
 // Helper function that creates and zero-initializes a result buffer.
 std::shared_ptr<Buffer> create_result_buffer(IDevice* device) {
     auto result_buffer = Buffer::create(device, RESULT_BUFFER_PAGE_SIZE, RESULT_BUFFER_SIZE, RESULT_BUFFER_TYPE);
-    std::vector<DataT> init_data(RESULT_BUFFER_INIT_DATA);
+    std::vector<DataT> init_data(RESULT_BUFFER_SIZE / sizeof(DataT), 0);
     detail::WriteToDeviceL1(device, WORKER_CORE, result_buffer->address(), init_data);
     return result_buffer;
 }
@@ -90,7 +89,7 @@ static constexpr DataT WRITE_OVER_VALUE = 0xBBBB;
 static const std::vector<DataT> EXPECTED_RESULT = {WRAP_WRITE_VALUE, WRAP_WRITE_VALUE, WRITE_OVER_VALUE};
 
 /**
- * This tests blocking reserve back and wait front between Packer at Compute Kernel and NOC 1.
+ * This tests blocking reserve back and wait front between Packer at Compute Kernel and BRSIC.
  * Here, cb_reserve_back is implemented in compute kernel API while cb_wait_front is implemented in dataflow API.
  */
 TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
@@ -124,7 +123,7 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlockingToWriter) {
 }
 
 /**
- * This tests blocking reserve back and wait_front between NOC 0 and Unpacker at Compute Kernel.
+ * This tests blocking reserve back and wait_front between BRSIC and Unpacker at Compute Kernel.
  * Here, cb_reserve_back is implemented in dataflow API while cb_wait_front is implemented in Compute Kernel API.
  */
 TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
@@ -166,7 +165,7 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingBlockingToCompute) {
 /**
  * This tests if available at front is working correctly.
  *
- * Here, writer is at Compute Kernel, and reader is at NOC 1.
+ * Here, writer is at Compute Kernel, and reader is at BRSIC.
  *
  * The sequence of event is:
  * 1. Writer and Reader churn through the received and acked counter till the acked and received counter 2 steps till
@@ -210,7 +209,7 @@ TEST_F(DeviceFixture, TensixTestCircularBufferWrappingNonBlockingFront) {
 /**
  * This tests if reservable at back is working correctly.
  *
- * Here, writer is at NOC 0, and reader is at Compute Kernel.
+ * Here, writer is at BRSIC, and reader is at Compute Kernel.
  *
  * The sequence of event is:
  * 1. Writer and Reader churn through the received and acked counter till the acked and received counter 2 steps till

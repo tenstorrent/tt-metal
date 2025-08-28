@@ -9,7 +9,7 @@
  * Two possible invokation locations:
  * 1. Writer at Packer core as Compute Kernel, no test will be performed (no cb_pages_reservable_at_back in compute
  *    kernel).
- * 2. Writer at NOC 0 as dataflow, test will be performed.
+ * 2. Writer at BRISC as dataflow, test will be performed.
  *
  */
 

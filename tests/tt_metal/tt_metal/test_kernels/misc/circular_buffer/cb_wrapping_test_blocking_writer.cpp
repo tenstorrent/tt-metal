@@ -5,8 +5,8 @@
 /**
  *
  * Two possible invokation locations:
- * 1. Writer at UNPACKER core as Compute Kernel
- * 2. Writer at NOC 1 as dataflow
+ * 1. Reader at UNPACKER core as Compute Kernel
+ * 2. Reader at BRSIC as dataflow
  *
  * Test will be performed in both cases.
  *
@@ -56,8 +56,7 @@ static constexpr DataT WRITE_OVER_VALUE = 0xBBBB;
 
 void fill_page(DataT value) {
 #ifdef COMPILE_FOR_TRISC
-    static constexpr auto TRISC_WR_PTR_PAGE_SHIFT = 4;
-    auto ptr = (get_local_cb_interface(CB_ID).fifo_wr_ptr) << TRISC_WR_PTR_PAGE_SHIFT;
+    auto ptr = (get_local_cb_interface(CB_ID).fifo_wr_ptr) << cb_addr_shift;
 #else
     auto ptr = get_write_ptr(CB_ID);
 #endif
