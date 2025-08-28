@@ -63,8 +63,9 @@ def test_multimodal_demo_chat(
         model_args, model, _ = create_multimodal_model(
             mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len
         )
-        preprocessor = AutoProcessor.from_pretrained(ckpt_dir)
-        generator = Generator([model], [model_args], mesh_device, preprocessor=preprocessor)
+        processor = AutoProcessor.from_pretrained(ckpt_dir)
+        tokenizer = processor.tokenizer
+        generator = Generator([model], [model_args], mesh_device, processor=processor, tokenizer=tokenizer)
 
     # image understanding
     dialogs = []

@@ -226,10 +226,6 @@ def preprocess_inputs_prefill(
 def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
     """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
     chat = []
-    # for multimodal model tokenizer is instance of Processor which produces different from tokenizer shape for single prompt
-    if hasattr(tokenizer, "tokenizer"):
-        tokenizer = tokenizer.tokenizer
-
     if isinstance(prompt_text, str):
         if system_prompt_text:
             chat.append({"role": "system", "content": system_prompt_text})

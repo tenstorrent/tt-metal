@@ -329,8 +329,9 @@ def test_demo(
         use_paged_kv_cache=paged_attention,
     )
 
+    processor = model_args.processor
     tokenizer = model_args.tokenizer
-    generator = Generator(model, model_args, mesh_device, preprocessor=tokenizer)
+    generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     # Load vision model and processor
     # reduce the number of layers to 1 for fast ci runs (also useful for debugging)

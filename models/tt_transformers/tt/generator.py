@@ -39,7 +39,7 @@ class SamplingParams:
 
 
 class Generator:
-    def __init__(self, model, model_args, mesh_device, preprocessor=None):
+    def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
         With model_args you have the checkpoint location, can specify max batch size
@@ -53,7 +53,8 @@ class Generator:
         self.model = model
         self.model_args = model_args
         self.mesh_device = mesh_device
-        self.preprocessor = preprocessor
+        self.processor = processor
+        self.tokenizer = tokenizer
         self.data_parallel = len(self.model)
         self.prev_page_table = None
 
@@ -1172,7 +1173,8 @@ class Generator:
             else:
                 next_token = torch.argmax(logits[:, -1], dim=-1)
             next_token = next_token.reshape(-1)
-            return next_token, self.preprocessor.decode(next_token.tolist())
+            decoder = self.tokenizer or self.processor
+            return next_token, decoder.decode(next_token.tolist())
 
         next_token, text = sample(logits)
 
@@ -1212,13 +1214,12 @@ class Generator:
         if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
-        model_input = self.preprocessor.apply_chat_template(
-            messages, add_generation_prompt=True, tokenize=True, return_dict=True
-        )
+        encoder = self.processor or self.tokenizer
+        model_input = encoder.apply_chat_template(messages, add_generation_prompt=True, tokenize=True, return_dict=True)
         vision_images = extract_images_from_messages(messages) or None
         vision_mask = None
         if vision_images is not None:
-            vision_mask = create_vision_mask(model_input["input_ids"][0], self.preprocessor.image_token_id) or None
+            vision_mask = create_vision_mask(model_input["input_ids"][0], encoder.image_token_id) or None
 
         tokens = []
 
@@ -1240,7 +1241,8 @@ class Generator:
         if stop_reason is None:
             stop_reason = StopReason.out_of_tokens
 
-        message = self.preprocessor.decode(tokens, skip_special_tokens=True)
+        decoder = self.tokenizer or self.processor
+        message = decoder.decode(tokens, skip_special_tokens=True)
 
         return CompletionMessage(message)
 
@@ -1251,17 +1253,19 @@ class Generator:
         top_p: float = 0.9,
         max_gen_len=None,
     ):
+        """Supports only vision models at the moment"""
         model_id = 0
         if max_gen_len is None or max_gen_len == 0 or max_gen_len >= self.model[model_id].configuration.max_seq_len:
             max_gen_len = self.model[model_id].configuration.max_seq_len - 1
 
         vision_images = []
-        text = encode_content(content, vision_images, getattr(self.preprocessor, "image_token", None))
+        image_token = getattr(self.processor, "image_token", None) or getattr(self.tokenizer, "image_token", None)
+        text = encode_content(content, vision_images, image_token)
         vision_images = vision_images or None
-        model_input = self.preprocessor(text=text, images=vision_images, add_special_tokens=False)
+        model_input = self.processor(text=text, images=vision_images, add_special_tokens=False)
         vision_mask = None
         if vision_images is not None:
-            vision_mask = create_vision_mask(model_input["input_ids"][0], self.preprocessor.image_token_id) or None
+            vision_mask = create_vision_mask(model_input["input_ids"][0], self.processor.image_token_id) or None
 
         tokens = []
 
@@ -1275,7 +1279,8 @@ class Generator:
         ):
             tokens.append(result.token)
 
-        generation = self.preprocessor.decode(tokens, skip_special_tokens=True)
+        decoder = self.tokenizer or self.processor
+        generation = decoder.decode(tokens, skip_special_tokens=True)
 
         return generation
 

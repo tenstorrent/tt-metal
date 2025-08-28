@@ -11,7 +11,7 @@ from models.tt_transformers.tt.generator import Generator as TTTGenerator
 
 
 class Generator:
-    def __init__(self, model, model_args, mesh_device, preprocessor=None):
+    def __init__(self, model, model_args, mesh_device, processor=None, tokenizer=None):
         """
         Creating a Qwen2_5_Vision wrapper requires only a mesh_device and model_args.
         With model_args you have the checkpoint location, can specify max batch size
@@ -19,7 +19,7 @@ class Generator:
 
         """
         # favor composition over inheritance: __ is convention for private variables
-        self._ttt_generator = TTTGenerator([model], [model_args], mesh_device, preprocessor)
+        self._ttt_generator = TTTGenerator([model], [model_args], mesh_device, processor=processor, tokenizer=tokenizer)
 
     @property
     def model(self):
@@ -38,6 +38,10 @@ class Generator:
     @property
     def tokenizer(self):
         return self._ttt_generator.tokenizer
+
+    @property
+    def processor(self):
+        return self._ttt_generator.processor
 
     def prefill_forward_text(self, tokens: torch.Tensor, rot_mats, page_table=None, kv_cache=None, prompt_lens=None):
         batch, batch_seq_len = tokens.shape[:2]

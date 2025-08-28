@@ -70,8 +70,9 @@ def test_multimodal_demo_text(
         model_args, model, _ = create_multimodal_model(
             mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len
         )
-        preprocessor = AutoProcessor.from_pretrained(ckpt_dir, local_files_only=is_ci_env)
-        generator = Generator([model], [model_args], mesh_device, preprocessor=preprocessor)
+        processor = AutoProcessor.from_pretrained(ckpt_dir, local_files_only=is_ci_env)
+        tokenizer = processor.tokenizer
+        generator = Generator([model], [model_args], mesh_device, preprocessor=processor, tokenizer=tokenizer)
 
     with open(IMG_PATH / "dog.jpg", "rb") as f:
         img = PIL_Image.open(f).convert("RGB")

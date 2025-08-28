@@ -199,7 +199,8 @@ def prepare_generator_args(
     tokenizer = model_args[
         0
     ].tokenizer  # TODO Should we support Data Parallel different models? If so, we need to support multiple tokenizers
-    return model_args, model, page_table, tt_kv_cache, tokenizer
+    processor = model_args[0].processor
+    return model_args, model, page_table, tt_kv_cache, tokenizer, processor
 
 
 # List of supported Parameters for demo.py
@@ -645,7 +646,7 @@ def test_demo_text(
     # This loop will rotate the prompts between the users for each batch, to simulate users sending different requests
     # If batch_size=1, the same prompt is repeated for each batch
 
-    model_args, model, page_table, tt_kv_cache, tokenizer = prepare_generator_args(
+    model_args, model, page_table, tt_kv_cache, tokenizer, processor = prepare_generator_args(
         num_devices=num_devices,
         data_parallel=data_parallel,
         mesh_device=mesh_device,
@@ -666,7 +667,7 @@ def test_demo_text(
                 f"Max seq len {max_seq_len} not supported by model {m_args.model_name}. The model's max context len is {m_args.max_context_len}"
             )
 
-    generator = Generator(model, model_args, mesh_device, preprocessor=tokenizer)
+    generator = Generator(model, model_args, mesh_device, processor=processor, tokenizer=tokenizer)
 
     if token_accuracy:
         input_prompts[0] = token_acc.prepare_ref_tokens(tokenizer)

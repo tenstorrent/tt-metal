@@ -147,7 +147,9 @@ def generate(model, processed_inputs, model_args, page_table=None, paged_attenti
     logger.info("Running generation...")
 
     # Create Generator (exactly like test_end2end.py)
-    generator = Generator([model], [model_args], model.mesh_device, tokenizer=model_args.tokenizer)
+    generator = Generator(
+        [model], [model_args], model.mesh_device, processor=model_args.processor, tokenizer=model_args.tokenizer
+    )
 
     # Setup KV cache (exactly like test_end2end.py)
     tt_kv_cache = [[l.attention.layer_past for l in model.layers]] if paged_attention_config else None
