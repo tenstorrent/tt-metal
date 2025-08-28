@@ -1,0 +1,8 @@
+# Batchfile for uploading oprun files from /work/tests/sweep_framework/results_export/
+# This will upload all files starting with "oprun_" (typically oprun_*.json files)
+
+# Upload all oprun files from the local results_export directory to server home directory
+put tests/sweep_framework/results_export/oprun_*
+
+# List files to verify upload
+ls -hal
