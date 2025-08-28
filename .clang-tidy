@@ -13,7 +13,6 @@ Checks: >
   -bugprone-assert-side-effect,
   -bugprone-assignment-in-if-condition,
   -bugprone-branch-clone,
-  -bugprone-casting-through-void,
   -bugprone-chained-comparison,
   -bugprone-crtp-constructor-accessibility,
   -bugprone-easily-swappable-parameters,
