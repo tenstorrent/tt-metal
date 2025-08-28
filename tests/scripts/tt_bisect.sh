@@ -79,7 +79,7 @@ while [[ "$found" == "false" ]]; do
   git submodule update --init --recursive --force
 
   # Use and clean the CPM cache that CMake will use
-  export CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-/work/.cpmcache}"
+  export CPM_SOURCE_CACHE="${CPM_SOURCE_CACHE:-/pwd/.cpmcache}"
   rm -rf "$CPM_SOURCE_CACHE" build build_Release build_Debug
   mkdir -p "$CPM_SOURCE_CACHE"
 
