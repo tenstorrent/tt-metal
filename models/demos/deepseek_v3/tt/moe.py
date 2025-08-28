@@ -91,22 +91,18 @@ class MoE(SharedStateAddOn, AbstractModule):
             "expert_mapping_tensors": expert_mapping_tensors,
             # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
-                "global_semaphore": ccl.get_semaphore(0),
-                "init_semaphore": ccl.get_semaphore(0),
                 "num_links": 1,
             },
             "all_to_all_combine": {
-                "global_semaphore": ccl.get_semaphore(0),
-                "init_semaphore": ccl.get_semaphore(0),
                 "num_links": 1,
             },
             "final_output_reduce_scatter": {
-                "from_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
-                "to_remote_multi_device_global_semaphore": ccl.get_semaphore(1),
+                "from_remote_multi_device_global_semaphore": ccl.get_from_sem(1),
+                "to_remote_multi_device_global_semaphore": ccl.get_to_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
             "revert_tp": {
-                "multi_device_global_semaphore": ccl.get_semaphore(1),
+                "multi_device_global_semaphore": ccl.get_gather_sem(1),
                 "num_links": ccl.get_max_links(1),
             },
         }
