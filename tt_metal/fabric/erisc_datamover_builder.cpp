@@ -1209,6 +1209,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
     auto ct_args = std::vector<uint32_t>(stream_ids.begin(), stream_ids.end());
     ct_args.push_back(0xFFEE0001);
 
+    // when have dateline vc (vc1) and with tensix exntension enabled, need to send vc1 to downstream fabric router
+    // instead of downstream tensix exntension.
+    bool vc1_has_different_downstream_dest =
+        fabric_context.need_deadlock_avoidance_support(this->direction) && this->has_tensix_extension;
+
     const std::vector<uint32_t> main_args = {
         num_sender_channels,
         num_receiver_channels,
@@ -1224,6 +1229,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
         is_handshake_master,
         this->handshake_address,
         this->channel_buffer_size,
+        vc1_has_different_downstream_dest,
 
         config.skip_receiver_channel_1_connection,
         config.skip_sender_channel_1_connection,
@@ -1319,7 +1325,7 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args(uint32_
 
     // insert the sender channel num buffers
     // Index updated to account for 23 stream ID arguments + 1 marker at the beginning
-    const size_t sender_channel_num_buffers_idx = 37;  // 13 + 23 + 1
+    const size_t sender_channel_num_buffers_idx = 38;  // 14 + 23 + 1
     ct_args.insert(
         ct_args.begin() + sender_channel_num_buffers_idx,
         this->sender_channels_num_buffers.begin(),
