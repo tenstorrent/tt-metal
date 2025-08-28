@@ -239,9 +239,7 @@ class LMHead(AbstractModule):
     def create_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, ccl: CCL1D) -> ModelState:
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
-            "mesh_scatter": {
-                "semaphores": (ccl.get_point_to_point_sem(0), ccl.get_point_to_point_sem(1)),
-            },
+            "mesh_scatter": {},
         }
 
     @classmethod
