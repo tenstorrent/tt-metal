@@ -571,8 +571,8 @@ def test_demo_text(
     if is_ci_env:
         if not ci_only:
             pytest.skip("CI only runs the CI-only tests")
-        if "accuracy" in test_id and "ci_token_matching" not in test_id:
-            pytest.skip("CI only runs the tests with performance optimizations except for ci_token_matching case")
+        if "accuracy" in test_id and "ci-token-matching" not in test_id:
+            pytest.skip("CI only runs the tests with performance optimizations except for ci-token-matching case")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("MESH_DEVICE") == "TG" and batch_size not in [1, 32]:
