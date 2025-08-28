@@ -841,7 +841,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
     auto device_id = device->id();
 
-    program.allocate_circular_buffers(device);
+    program.impl().allocate_circular_buffers(device);
     program.impl().validate_circular_buffer_region(device);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
@@ -1205,7 +1205,7 @@ const CircularBufferConfig& GetCircularBufferConfig(Program& program, CBHandle c
 void UpdateCircularBufferTotalSize(Program& program, CBHandle cb_handle, uint32_t total_size) {
     std::shared_ptr<CircularBuffer> circular_buffer = program.impl().get_circular_buffer(cb_handle);
     if (not circular_buffer->globally_allocated()) {
-        program.invalidate_circular_buffer_allocation();
+        program.impl().invalidate_circular_buffer_allocation();
     }
     circular_buffer->config().set_total_size(total_size);
 }
@@ -1311,7 +1311,7 @@ void DeallocateBuffer(Buffer& buffer) { buffer.deallocate(); }
 
 void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program) {
     detail::DispatchStateCheck(tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch());
-    program.add_buffer(buffer);
+    program.impl().add_buffer(buffer);
 }
 
 void SetRuntimeArgs(

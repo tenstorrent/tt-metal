@@ -852,8 +852,6 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     this->local_circular_buffer_allocation_needed_ = true;
 }
 
-void Program::invalidate_circular_buffer_allocation() { internal_->invalidate_circular_buffer_allocation(); }
-
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     // ZoneScoped;
     if (not this->local_circular_buffer_allocation_needed_) {
@@ -900,8 +898,6 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
     }
     this->local_circular_buffer_allocation_needed_ = false;
 }
-
-void Program::allocate_circular_buffers(const IDevice* device) { internal_->allocate_circular_buffers(device); }
 
 void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device) {
     // ZoneScoped;
@@ -1583,11 +1579,7 @@ const std::vector<Semaphore>& detail::ProgramImpl::semaphores() const { return s
 
 void detail::ProgramImpl::add_buffer(std::shared_ptr<Buffer> buf) { owned_buffer_pool.push_back(std::move(buf)); }
 
-void Program::add_buffer(std::shared_ptr<Buffer> buf) { internal_->add_buffer(std::move(buf)); }
-
 void detail::ProgramImpl::release_buffers() { owned_buffer_pool = {}; }
-
-void Program::release_buffers() { internal_->release_buffers(); }
 
 std::vector<std::reference_wrapper<const Semaphore>> detail::ProgramImpl::semaphores_on_core(
     const CoreCoord& core, CoreType core_type) const {

@@ -57,19 +57,8 @@ public:
     // Buffer related functions:
     //////////////////////////////
 
-    // Only used in AssignGlobalBufferToProgram in tt_metal.cpp
-    void add_buffer(std::shared_ptr<Buffer> buf);
-    // Only used in EnqueueProgram in host_runtime_commands.cpp
-    void release_buffers();
-
     // Used in ops.
     const std::vector<std::shared_ptr<CircularBuffer>>& circular_buffers() const;
-
-    // Only used in UpdateCircularBufferTotalSize in tt_metal.cpp
-    void invalidate_circular_buffer_allocation();
-
-    // Always used in conjuction with validate_circular_buffer_region, which is in impl.
-    void allocate_circular_buffers(const IDevice* device);
 
     //////////////////////////////
     // Kernel related functions:
@@ -78,7 +67,7 @@ public:
     // Used in tests, fabric, CaptureCreateKernel, light metal, etc.
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
 
-    // debug/test
+    // debug/test/internal usage
     detail::ProgramImpl& impl() { return *internal_; }
     const detail::ProgramImpl& impl() const { return *internal_; }
 
