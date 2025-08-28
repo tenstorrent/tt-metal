@@ -13,5 +13,4 @@ runs:
         install_wheel: true
         run_args: |
           ${{ inputs.run_args }}
-          export PYTHONPATH=$(pwd)
-          env python3 models/perf/merge_perf_results.py REPORT
+          export PYTHONPATH=$(pwd) && env python3 models/perf/merge_perf_results.py REPORT
