@@ -46,9 +46,9 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
  *
  * @tparam DSpec        DistributionSpec type.
  */
-template <typename _DSpec>
+template <typename DSpecT>
 struct TensorAccessor {
-    using DSpec = _DSpec;
+    using DSpec = DSpecT;
     static constexpr bool is_dram = DSpec::is_dram;
 
 private:
