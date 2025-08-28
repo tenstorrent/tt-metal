@@ -455,36 +455,6 @@ WhereDeviceOperation::WhereProgramFactory::cached_program_t WhereDeviceOperation
         num_tiles_per_cb,
         output_data_format);  // output
 
-    if (variant == WhereVariant::TTT && broadcast_type == WhereBroadcastType::ROW_BCAST) {
-        // Create additional CBs for broadcast operations (used by compute kernel)
-        // CB4 for predicate broadcast
-        auto [pred_bcast_cb, pred_bcast_cb_handle] = create_cb(
-            tt::CBIndex::c_4,
-            program,
-            all_device_cores,
-            predicate_single_tile_size,
-            num_tiles_per_cb,
-            predicate_data_format);
-
-        // CB5 for true tensor broadcast
-        auto [true_bcast_cb, true_bcast_cb_handle] = create_cb(
-            tt::CBIndex::c_5,
-            program,
-            all_device_cores,
-            value_true_single_tile_size,
-            num_tiles_per_cb,
-            value_true_data_format);
-
-        // CB6 for false tensor broadcast
-        auto [false_bcast_cb, false_bcast_cb_handle] = create_cb(
-            tt::CBIndex::c_6,
-            program,
-            all_device_cores,
-            value_false_single_tile_size,
-            num_tiles_per_cb,
-            value_false_data_format);
-    }
-
     auto predicate_is_dram =
         static_cast<uint32_t>(predicate_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
 
