@@ -141,14 +141,18 @@ class LMHead(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config,
                 program_config=pc,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
-                dtype=self.args.lm_head_dtype or ttnn.bfloat8_b,
+                dtype=self.args.lm_head_dtype if hasattr(self.args, "lm_head_dtype") else ttnn.bfloat8_b,
             )
             outputs.append(
-                ttnn.sharded_to_interleaved(output, memory_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"])
+                ttnn.sharded_to_interleaved(
+                    output, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
+                )
             )
 
         # Concatenate the outputs
-        output = ttnn.concat(outputs, dim=-1, memory_config=self.model_config["LM_HEAD_OUTPUT_MEMCFG"])
+        output = ttnn.concat(
+            outputs, dim=-1, memory_config=self.model_config.get("LM_HEAD_OUTPUT_MEMCFG", ttnn.L1_MEMORY_CONFIG)
+        )
 
         output = tt_all_reduce(
             output,

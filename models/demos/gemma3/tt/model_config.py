@@ -1238,6 +1238,7 @@ class ModelArgs:
                 ttnn.DRAM_MEMORY_CONFIG if "gemma-3" in self.model_name else ttnn.L1_MEMORY_CONFIG
             )
             self.lm_head_dtype = ttnn.bfloat16 if "gemma-3" in self.model_name else None
+
             self.set_tg_attention_config()
 
             self.is_multichip = self.num_devices > 1

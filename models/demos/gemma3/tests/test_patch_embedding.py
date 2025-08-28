@@ -9,8 +9,8 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.gemma3.tt.model_config import ModelArgs
 from models.demos.gemma3.tt.gemma_conv2d_patch import TtGemmaConv2dPatch
+from models.demos.gemma3.tt.model_config import ModelArgs
 from models.utility_functions import comp_allclose, comp_pcc, skip_for_grayskull
 from ttnn import ConcatMeshToTensor
 
