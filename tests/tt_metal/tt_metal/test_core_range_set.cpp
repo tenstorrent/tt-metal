@@ -41,7 +41,7 @@
 #include "umd/device/tt_core_coordinates.h"
 #include "umd/device/types/xy_pair.h"
 
-// Access to internal API: ProgramImpl::get_sem_base_addr, ProgramImpl::get_sem_size
+// Access to internal API: ProgramImpl::get_sem_base_addr, get_sem_size, num_kernels
 #include "impl/program/program_impl.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -59,7 +59,7 @@ void check_program_is_mapped_to_correct_cores(
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 auto logical_core = CoreCoord{x, y};
-                for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
+                for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
                     auto kernel = program.get_kernel(kernel_id);
                     TT_FATAL(kernel->is_on_logical_core(logical_core), "Error");
                     // Check that compute kernel compile time args are mapped to the correct cores

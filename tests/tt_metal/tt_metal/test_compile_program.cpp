@@ -38,6 +38,9 @@
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "umd/device/types/arch.h"
 
+// Access to internal API: ProgramImpl::num_kernel
+#include "impl/program/program_impl.hpp"
+
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
@@ -56,7 +59,7 @@ void ClearKernelCache(const std::string& kernel_root_path) {
 std::unordered_map<std::string, std::string> get_last_program_binary_path(
     const Program& program, const std::string& kernel_root_path) {
     std::unordered_map<std::string, std::string> kernel_name_to_last_compiled_dir;
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
         auto kernel = program.get_kernel(kernel_id);
         if (not std::filesystem::exists(kernel_root_path + kernel->name())) {
             continue;
@@ -65,7 +68,7 @@ std::unordered_map<std::string, std::string> get_last_program_binary_path(
         std::filesystem::path kernel_path{kernel_root_path + kernel->name()};
         std::filesystem::file_time_type ftime = std::filesystem::last_write_time(*kernel_path.begin());
         std::string latest_hash;
-        for (auto const& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
+        for (const auto& dir_entry : std::filesystem::directory_iterator{kernel_path}) {
             auto kbtime = std::filesystem::last_write_time(dir_entry.path());
             if (kbtime > ftime) {
                 ftime = kbtime;
@@ -176,7 +179,7 @@ Program create_program(IDevice* device, const ProgramAttributes& program_attribu
 void assert_kernel_binary_path_exists(
     const Program& program, const std::string& kernel_root_path, const KernelCacheStatus& kernel_cache_status) {
     auto kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
         auto kernel = program.get_kernel(kernel_id);
         auto hash = kernel_name_to_hash.at(kernel->name());
         auto kernel_binary_path = kernel_root_path + kernel->name() + "/" + hash;
@@ -187,7 +190,7 @@ void assert_kernel_binary_path_exists(
 void assert_program_cache_hit_status(
     const Program& program, bool hit_expected, const KernelCacheStatus& kernel_cache_status) {
     auto kernel_name_to_cache_hit_status = kernel_cache_status.kernel_name_to_cache_hit;
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
         auto kernel = program.get_kernel(kernel_id);
         auto hit_status = kernel_name_to_cache_hit_status.at(kernel->name());
         TT_FATAL(
@@ -271,7 +274,7 @@ void assert_hash_comparison_for_kernel_type(
     const std::unordered_map<HalProcessorClassType, bool>& type_to_same_hash_expected,
     const KernelCacheStatus& kernel_cache_status) {
     auto curr_kernel_name_to_hash = kernel_cache_status.kernel_name_to_hash_str;
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
         auto kernel = program.get_kernel(kernel_id);
         auto prev_hash = prev_kernel_name_to_hash.at(kernel->name());
         auto curr_hash = curr_kernel_name_to_hash.at(kernel->name());
@@ -289,7 +292,7 @@ void assert_cache_hit_status_for_kernel_type(
     const std::unordered_map<HalProcessorClassType, bool>& type_to_cache_hit_status,
     const KernelCacheStatus& kernel_cache_status) {
     auto kernel_name_to_cache_hit_status = kernel_cache_status.kernel_name_to_cache_hit;
-    for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
+    for (size_t kernel_id = 0; kernel_id < program.impl().num_kernels(); kernel_id++) {
         auto kernel = program.get_kernel(kernel_id);
         bool hit_expected = type_to_cache_hit_status.at(kernel->get_kernel_processor_class());
         auto hit_status = kernel_name_to_cache_hit_status.at(kernel->name());

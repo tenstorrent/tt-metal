@@ -8,7 +8,6 @@
 #include <memory>
 #include <variant>
 #include <vector>
-#include <unordered_map>
 
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/program_descriptors.hpp>
@@ -100,18 +99,8 @@ public:
     // Kernel related functions:
     //////////////////////////////
 
-    // Used in tests
-    std::size_t num_kernels() const;
-    // Used in test_kernel_compile_cache.cpp, MeshWorkLoadImpl::get_kernels (which is not used anywhere else)
-    std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& get_kernels(uint32_t programmable_core_type_index);
-    // Used in EnqueueProgram in hardware_command_queue.cpp
-    void allocate_kernel_bin_buf_on_device(IDevice* device);
     // Used in tests, fabric, CaptureCreateKernel, light metal, etc.
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
-
-    // Used in ConfigureDeviceWithProgram in tt_metal.cpp
-    // Used in Device::init_command_queue_device, Device::configure_fabric in device.cpp
-    std::vector<std::vector<CoreCoord>> logical_cores() const;
 
     //////////////////////////////
     // Program Binary Status related functions:
