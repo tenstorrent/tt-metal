@@ -1525,13 +1525,14 @@ template <
     uint8_t to_receiver_pkts_sent_id,
     typename WriteTridTracker,
     uint8_t RECEIVER_NUM_BUFFERS,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
+    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0
+    // uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+    >
 void run_receiver_channel_step_impl(
     tt::tt_fabric::EthChannelBuffer<PACKET_HEADER_TYPE, RECEIVER_NUM_BUFFERS>& local_receiver_channel,
     std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
-    tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1,
+    // tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1,
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
@@ -1587,8 +1588,9 @@ void run_receiver_channel_step_impl(
 #if defined(FABRIC_2D) && defined(DYNAMIC_ROUTING_ENABLED)
             // need this ifdef since the 2D dynamic routing packet header contains unique fields
             if constexpr (enable_deadlock_avoidance) {
-                can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
-                    packet_header, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1, port_direction_table);
+                // can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
+                //     packet_header, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1,
+                //     port_direction_table);
             } else {
                 can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
                     packet_header, downstream_edm_interfaces_vc0, port_direction_table);
@@ -1597,8 +1599,8 @@ void run_receiver_channel_step_impl(
             // need this ifdef since the packet header for 1D does not have router_buffer field in it.
             hop_cmd = packet_header->route_buffer[cached_routing_fields.hop_index];
             if constexpr (enable_deadlock_avoidance) {
-                can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
-                    hop_cmd, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
+                // can_send_to_all_local_chip_receivers = can_forward_packet_completely<receiver_channel>(
+                //     hop_cmd, downstream_edm_interfaces_vc0, downstream_edm_interface_vc1);
             } else {
                 can_send_to_all_local_chip_receivers =
                     can_forward_packet_completely<receiver_channel>(hop_cmd, downstream_edm_interfaces_vc0);
@@ -1609,8 +1611,8 @@ void run_receiver_channel_step_impl(
                 can_send_to_all_local_chip_receivers =
                     can_forward_packet_completely(cached_routing_fields, downstream_edm_interfaces_vc0[0]);
             } else {
-                can_send_to_all_local_chip_receivers =
-                    can_forward_packet_completely(cached_routing_fields, downstream_edm_interface_vc1);
+                // can_send_to_all_local_chip_receivers =
+                //     can_forward_packet_completely(cached_routing_fields, downstream_edm_interface_vc1);
             }
         }
         if constexpr (enable_trid_flush_check_on_noc_txn) {
@@ -1659,8 +1661,8 @@ void run_receiver_channel_step_impl(
                     receiver_forward_packet<receiver_channel>(
                         packet_header, cached_routing_fields, downstream_edm_interfaces_vc0[0], trid);
                 } else {
-                    receiver_forward_packet<receiver_channel>(
-                        packet_header, cached_routing_fields, downstream_edm_interface_vc1, trid);
+                    // receiver_forward_packet<receiver_channel>(
+                    //     packet_header, cached_routing_fields, downstream_edm_interface_vc1, trid);
                 }
             }
             wr_sent_counter.increment();
@@ -1721,13 +1723,14 @@ template <
     typename EthReceiverChannels,
     typename WriteTridTracker,
     uint8_t RECEIVER_NUM_BUFFERS,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>
+    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0
+    // uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1
+    >
 FORCE_INLINE void run_receiver_channel_step(
     EthReceiverChannels& local_receiver_channels,
     std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_interfaces_vc0,
-    tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1,
+    // tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_interface_vc1,
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS>& receiver_channel_pointers,
     WriteTridTracker& receiver_channel_trid_tracker,
     std::array<uint8_t, num_eth_ports>& port_direction_table,
@@ -1736,7 +1739,7 @@ FORCE_INLINE void run_receiver_channel_step(
         run_receiver_channel_step_impl<receiver_channel, to_receiver_packets_sent_streams[receiver_channel]>(
             local_receiver_channels.template get<receiver_channel>(),
             downstream_edm_interfaces_vc0,
-            downstream_edm_interface_vc1,
+            // downstream_edm_interface_vc1,
             receiver_channel_pointers,
             receiver_channel_trid_tracker,
             port_direction_table,
@@ -1765,7 +1768,7 @@ template <
     bool enable_packet_header_recording,
     size_t NUM_RECEIVER_CHANNELS,
     uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC0,
-    uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
+    // uint8_t DOWNSTREAM_SENDER_NUM_BUFFERS_VC1,
     size_t NUM_SENDER_CHANNELS,
     size_t MAX_NUM_SENDER_CHANNELS,
     typename EthSenderChannels,
@@ -1780,7 +1783,7 @@ void run_fabric_edm_main_loop(
     EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
     std::array<tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC0>, NUM_USED_RECEIVER_CHANNELS_VC0>&
         downstream_edm_noc_interfaces_vc0,
-    tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_noc_interface_vc1,
+    // tt::tt_fabric::EdmToEdmSender<DOWNSTREAM_SENDER_NUM_BUFFERS_VC1>& downstream_edm_noc_interface_vc1,
     RemoteEthReceiverChannels& remote_receiver_channels,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
     std::array<PacketHeaderRecorder<PACKET_HEADER_TYPE>, MAX_NUM_SENDER_CHANNELS>& sender_channel_packet_recorders,
@@ -1851,7 +1854,7 @@ void run_fabric_edm_main_loop(
                 run_receiver_channel_step<0>(
                     local_receiver_channels,
                     downstream_edm_noc_interfaces_vc0,
-                    downstream_edm_noc_interface_vc1,
+                    // downstream_edm_noc_interface_vc1,
                     receiver_channel_pointers_ch0,
                     receiver_channel_0_trid_tracker,
                     port_direction_table,
@@ -1861,7 +1864,7 @@ void run_fabric_edm_main_loop(
                 run_receiver_channel_step<1>(
                     local_receiver_channels,
                     downstream_edm_noc_interfaces_vc0,
-                    downstream_edm_noc_interface_vc1,
+                    // downstream_edm_noc_interface_vc1,
                     receiver_channel_pointers_ch1,
                     receiver_channel_1_trid_tracker,
                     port_direction_table,
@@ -2821,7 +2824,7 @@ void kernel_main() {
         local_sender_channels,
         local_sender_channel_worker_interfaces,
         downstream_edm_noc_interfaces_vc0,
-        downstream_edm_noc_interface_vc1,
+        // downstream_edm_noc_interface_vc1,
         remote_receiver_channels,
         termination_signal_ptr,
         sender_channel_packet_recorders,
