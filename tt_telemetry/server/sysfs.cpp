@@ -62,6 +62,127 @@ There's an attribute named asic_id that will show up if your FW is new enough.  
 #include <third_party/umd/device/api/umd/device/chip/local_chip.h>
 #include <third_party/umd/device/api/umd/device/tt_device/tt_device.h>
 
+#include <third_party/umd/device/api/umd/device/topology/topology_discovery.h>
+#include <telemetry/ethernet/chip_identifier.hpp>
+
+static uint16_t get_bus_id(const std::unique_ptr<tt::umd::TTDevice>& device) {
+    return device->get_pci_device()->get_device_info().pci_bus;
+}
+
+static ChipIdentifier get_chip_identifier_from_umd_chip_id(
+    const std::unique_ptr<tt::umd::TTDevice>& device, tt::umd::chip_id_t chip_id) {
+    if (device->get_board_type() == BoardType::GALAXY) {
+        const std::unordered_map<tt::ARCH, std::vector<std::uint16_t>> ubb_bus_ids = {
+            {tt::ARCH::WORMHOLE_B0, {0xC0, 0x80, 0x00, 0x40}},
+            {tt::ARCH::BLACKHOLE, {0x00, 0x40, 0xC0, 0x80}},
+        };
+        const auto& tray_bus_ids = ubb_bus_ids.at(device->get_arch());
+        const auto bus_id = get_bus_id(device);
+        auto tray_bus_id_it = std::find(tray_bus_ids.begin(), tray_bus_ids.end(), bus_id & 0xF0);
+        if (tray_bus_id_it != tray_bus_ids.end()) {
+            auto ubb_chip_number = bus_id & 0x0F;
+            return {
+                .id = chip_id,
+                .galaxy_ubb = GalaxyUbbIdentifier{tray_bus_id_it - tray_bus_ids.begin() + 1, ubb_chip_number}};
+        }
+
+        // Invalid UBB, drop through
+    }
+
+    // Not a known cluster type, just use chip ID directly
+    return {.id = chip_id, .galaxy_ubb = {}};  // invalid UBB ID if not found
+}
+
+static auto make_ordered_ethernet_connections(const auto& unordered_connections) {
+    std::map<
+        tt::umd::chip_id_t,
+        std::map<tt::umd::ethernet_channel_t, std::tuple<tt::umd::chip_id_t, tt::umd::ethernet_channel_t>>>
+        ordered_connections;
+
+    for (const auto& [chip_id, channel_map] : unordered_connections) {
+        for (const auto& [channel, connection_tuple] : channel_map) {
+            ordered_connections[chip_id][channel] = connection_tuple;
+        }
+    }
+
+    return ordered_connections;
+}
+
+std::unordered_map<tt::umd::ethernet_channel_t, CoreCoord> map_ethernet_channel_to_core_coord(
+    const tt::umd::tt_SocDescriptor& soc_desc, tt::umd::chip_id_t chip_id) {
+    // logical_eth_core_to_chan_map should be a 1:1 mapping and therefore easily invertible
+    std::unordered_map<tt::umd::ethernet_channel_t, CoreCoord> ethernet_channel_to_core_coord;
+    for (auto channel = 0; channel < soc_desc.get_num_eth_channels(); channel++) {
+        ethernet_channel_to_core_coord.insert({channel, soc_desc.get_eth_core_for_channel(channel)});
+    }
+    return ethernet_channel_to_core_coord;
+}
+
+std::map<ChipIdentifier, std::vector<EthernetEndpoint>> get_ethernet_endpoints_by_chip(
+    const std::unique_ptr<tt::umd::tt_ClusterDescriptor>& cluster,
+    const std::unordered_map<tt::umd::chip_id_t, std::unique_ptr<tt::umd::TTDevice>>& pcie_device_by_chip_id) {
+    std::map<ChipIdentifier, std::vector<EthernetEndpoint>> ethernet_endpoints_by_chip;
+
+    for (const auto& [chip_id, remote_chip_and_channel_by_channel] : cluster->get_ethernet_connections()) {
+        // Get the TTDevice corresponding to the nearest MMIO chip
+        chip_id_t nearest_pcie_chip_id = cluster->get_closest_mmio_capable_chip(chip_id);
+        TT_ASSERT(
+            pcie_device_by_chip_id.count(nearest_pcie_chip_id) != 0,
+            "MMIO chip chip_id={} missing in pcie_device_by_chip_id map for chip {}",
+            nearest_pcie_chip_id,
+            chip_id);
+        const std::unique_ptr<tt::umd::TTDevice>& device = pcie_device_by_chip_id.at(nearest_pcie_chip_id);
+
+        // Create a SOC descriptor just for the purpose of mapping Ethernet channel to core coordinates
+        tt::umd::tt_SocDescriptor soc_desc =
+            tt::umd::tt_SocDescriptor(device->get_arch(), true);  // noc_translation_enabled=true
+
+        ChipIdentifier chip = get_chip_identifier_from_umd_chip_id(device, chip_id);
+        std::vector<EthernetEndpoint>& endpoints_this_chip = ethernet_endpoints_by_chip[chip];
+
+        for (const auto& [channel, remote_chip_and_channel] : remote_chip_and_channel_by_channel) {
+            // Construct EthernetEndpoint from its components
+            CoreCoord ethernet_core = soc_desc.get_eth_core_for_channel(channel, tt::umd::CoordSystem::LOGICAL);
+            EthernetEndpoint endpoint{.chip = chip, .ethernet_core = ethernet_core, .channel = channel};
+
+            // Add to list of endpoints for current chip
+            endpoints_this_chip.push_back(endpoint);
+        }
+    }
+
+    return ethernet_endpoints_by_chip;
+}
+
+static std::unordered_map<tt::umd::chip_id_t, std::unique_ptr<tt::umd::TTDevice>> get_pcie_devices(
+    const std::unique_ptr<tt::umd::tt_ClusterDescriptor>& cluster_descriptor) {
+    std::unordered_map<tt::umd::chip_id_t, std::unique_ptr<tt::umd::TTDevice>> pcie_device_by_chip_id;
+    for (auto [chip_id, pcie_id] : cluster_descriptor->get_chips_with_mmio()) {
+        std::unique_ptr<tt::umd::TTDevice> device = tt::umd::TTDevice::create(pcie_id);
+        device->init_tt_device();
+        pcie_device_by_chip_id.emplace(std::make_pair(chip_id, std::move(device)));
+    }
+    return pcie_device_by_chip_id;
+}
+
+void test_umd() {
+    std::cout << "Num PCIE devices: " << PCIDevice::enumerate_devices_info().size() << std::endl;
+    std::unique_ptr<tt::umd::tt_ClusterDescriptor> cluster_descriptor =
+        tt::umd::TopologyDiscovery::create_cluster_descriptor();
+    auto connections = make_ordered_ethernet_connections(cluster_descriptor->get_ethernet_connections());
+    std::cout << "Connections: " << cluster_descriptor->get_ethernet_connections().size() << std::endl;
+    std::unordered_map<tt::umd::chip_id_t, std::unique_ptr<tt::umd::TTDevice>> pcie_devices_by_chip_id =
+        get_pcie_devices(cluster_descriptor);
+    auto endpoint_by_chip = get_ethernet_endpoints_by_chip(cluster_descriptor, pcie_devices_by_chip_id);
+    for (auto& [chip_id, endpoints] : endpoint_by_chip) {
+        std::cout << chip_id << ":" << std::endl;
+        for (auto& endpoint : endpoints) {
+            std::cout << "  " << endpoint << std::endl;
+        }
+    }
+    std::cout << "Finished" << std::endl;
+    return;
+}
+
 namespace fs = std::filesystem;
 
 // Constants
