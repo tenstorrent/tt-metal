@@ -6,14 +6,6 @@
 
 #include "tt-metalium/constants.hpp"
 #include <tt-metalium/buffer_types.hpp>
-#include <array>
-#include <utility>
-#include <tuple>
-#include <vector>
-#include <algorithm>
-#include <cmath>
-#include <numeric>
-#include <limits>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/pool_utils.hpp"
@@ -22,7 +14,6 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-logger/tt-logger.hpp>
 
 namespace ttnn {
 namespace operations::pool {
@@ -50,28 +41,9 @@ static Tensor pool2d_invoke(
     bool in_place_halo = false,
     bool deallocate_input = false,
     bool reallocate_halo_output = true) {
-    log_debug(
-        tt::LogOp,
-        "[pool2d_invoke] ENTRY: pool_type={}, input_tensor.dtype={}, input_tensor.layout={}",
-        static_cast<int>(pool_type),
-        static_cast<int>(input_tensor.dtype()),
-        static_cast<int>(input_tensor.layout()));
-    log_debug(
-        tt::LogOp,
-        "[pool2d_invoke] PARAMS: batch={}, input_h={}, input_w={}, channels={}, kernel=[{}, {}], stride=[{}, {}]",
-        batch_size,
-        input_h,
-        input_w,
-        channels,
-        kernel_size[0],
-        kernel_size[1],
-        stride[0],
-        stride[1]);
-
     std::array<uint32_t, 4> padding_4d = sliding_window::get_pair_n4_padding(padding);
     bool is_out_tiled = false;  // pool output is row major
     bool is_in_tiled = input_tensor.layout() == ttnn::TILE_LAYOUT;
-    log_debug(tt::LogOp, "[pool2d_invoke] LAYOUT FLAGS: is_in_tiled={}, is_out_tiled={}", is_in_tiled, is_out_tiled);
     validate_input_params(
         input_tensor,
         batch_size,
@@ -332,7 +304,7 @@ Tensor AvgPool2DOp::invoke(
         kernel_size,
         stride,
         padding,
-        std::nullopt,  // dilation not supported for AvgPool2D
+        std::nullopt,  // dilation
         ceil_mode,
         count_include_pad,
         divisor_override,
