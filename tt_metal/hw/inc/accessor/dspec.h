@@ -466,9 +466,9 @@ auto make_interleaved_dspec() {
     return DistributionSpec<
         /*RankCT=*/0,
         /*NumBanksCT=*/0,
-        /*TensorShapeWrapper=*/ArrayDynamicWrapper,
-        /*ShardShapeWrapper=*/ArrayDynamicWrapper,
-        /*BankCoordsWrapper=*/ArrayDynamicWrapper,
+        /*TensorShapeWrapper=*/ArrayStaticWrapper<uint32_t>,
+        /*ShardShapeWrapper=*/ArrayStaticWrapper<uint32_t>,
+        /*BankCoordsWrapper=*/ArrayStaticWrapper<uint16_t>,
         /*IsInterleaved=*/true,
         IsDram>();
 }
