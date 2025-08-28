@@ -40,7 +40,9 @@ def load_model(model_ref: str, cache_dir: str | None):
 def main():
     parser = argparse.ArgumentParser(description="Load a GPT-2 model by HF id or local path and print state_dict keys.")
     parser.add_argument(
-        "model",
+        "-m",
+        "--model",
+        default="gpt2",
         help="Hugging Face model id (e.g. 'gpt2') OR a local path to a model dir (supports ~ and $VARS).",
     )
     parser.add_argument(

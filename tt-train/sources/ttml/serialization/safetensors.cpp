@@ -41,7 +41,7 @@ void SafetensorSerialization::visit_safetensors_file(const std::filesystem::path
     if (fd < 0) {
         throw std::runtime_error(fmt::format("open failed: {}: {}", path.string(), std::strerror(errno)));
     }
-    ttsl::make_cleanup([fd]() { ::close(fd); });
+    auto _1 = ttsl::make_cleanup([fd]() { ::close(fd); });
     struct stat st{};
     if (fstat(fd, &st) != 0) {
         throw std::system_error(errno, std::generic_category(), "fstat");
@@ -62,7 +62,7 @@ void SafetensorSerialization::visit_safetensors_file(const std::filesystem::path
     if (map == MAP_FAILED) {
         throw std::runtime_error(fmt::format("mmap failed: {}", std::strerror(errno)));
     }
-    ttsl::make_cleanup([map, file_size]() { munmap(map, file_size); });
+    auto _2 = ttsl::make_cleanup([map, file_size]() { munmap(map, file_size); });
 
     auto* base = reinterpret_cast<const unsigned char*>(map);
 
