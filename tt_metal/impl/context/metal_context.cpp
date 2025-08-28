@@ -916,7 +916,11 @@ void MetalContext::initialize_logical_to_translated_tables(
         logical_to_translated_map_addr + firmware_grid_size_x * sizeof(uint8_t);
     cluster_->write_core(
         &logical_row_to_translated_row_[device_id][0],
+        logical_row_to_translated_row_sz_in_bytes,
         tt_cxy_pair(device_id, virtual_core),
+        logical_row_to_translated_row_addr);
+}
+
 void MetalContext::initialize_firmware(
     ChipId device_id,
     const HalProgrammableCoreType& core_type,
