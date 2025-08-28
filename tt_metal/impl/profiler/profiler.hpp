@@ -255,6 +255,9 @@ public:
     bool isLastFDReadDone() const;
 };
 
+// Merges markers from each (physical core, risc type) group into a single sorted vector. The markers in each group
+// should already be sorted.
+//
 // IMPORTANT: This function creates a vector of references to the TTDeviceMarker objects stored in
 // device_markers_per_core_risc_map. These are direct references to the original objects, not copies of the data.
 // Thread safety warning: device_markers_per_core_risc_map MUST NOT be modified (no insertions, deletions, or rehashing)

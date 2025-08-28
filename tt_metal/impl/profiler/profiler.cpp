@@ -190,6 +190,13 @@ void mergeSortedDeviceMarkerChunks(
            std::reference_wrapper<const tracy::TTDeviceMarker> b) { return a.get() < b.get(); }));
 }
 
+// Merges markers from each (physical core, risc type) group into a single sorted vector. The markers in each group
+// should already be sorted.
+//
+// IMPORTANT: This function creates a vector of references to the TTDeviceMarker objects stored in
+// device_markers_per_core_risc_map. These are direct references to the original objects, not copies of the data.
+// Thread safety warning: device_markers_per_core_risc_map MUST NOT be modified (no insertions, deletions, or rehashing)
+// while these references are in use, as this could invalidate the references and cause undefined behavior.
 std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> getSortedDeviceMarkersVector(
     const std::map<CoreCoord, std::map<tracy::RiscType, std::set<tracy::TTDeviceMarker>>>&
         device_markers_per_core_risc_map) {
