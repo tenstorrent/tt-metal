@@ -13,6 +13,7 @@ set(TT_EAGER_TESTS_OPS
     ops/test_bmm_op.cpp
     # ops/test_pad_op.cpp                     # <- not called in run_tt_eager.py
     ops/test_sfpu.cpp
+    ops/test_storage_type_validation.cpp
 )
 
 set(TT_EAGER_TESTS_TENSORS
