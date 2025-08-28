@@ -11,10 +11,24 @@ set_target_properties(
 )
 
 # Globbing non-build files is acceptable for now because devs don't generate packages.
-file(GLOB_RECURSE kernels softmax/device/kernels/*)
+file(
+    GLOB_RECURSE kernels
+    layernorm/device/kernels/*
+    softmax/device/kernels/*
+)
 target_sources(
     ttnn_op_normalization
     PUBLIC
+        FILE_SET api
+        TYPE HEADERS
+        BASE_DIRS ${FixmeOpAPIDir}
+        FILES
+            layernorm/layernorm.hpp
+            layernorm/device/layernorm_types.hpp
+            rmsnorm/rmsnorm.hpp
+            softmax/device/softmax_op.hpp
+            softmax/device/softmax_types.hpp
+            softmax/softmax.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -52,6 +66,9 @@ target_link_libraries(
 install(
     TARGETS
         ttnn_op_normalization
+    FILE_SET
+    api
+        COMPONENT ttnn-dev
     FILE_SET
     kernels
         DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/ttnn/cpp/ttnn/operations/normalization
