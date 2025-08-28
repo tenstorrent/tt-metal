@@ -407,10 +407,10 @@ def test_ttnn_debug(device):
     w_aspp_k1 = torch.randn(256, 2048, 1, 1, dtype=torch.bfloat16)
     w_aspp_k3 = torch.randn(256, 2048, 3, 3, dtype=torch.bfloat16)
     w_aspp_k1_out5 = torch.randn(256, 1280, 1, 1, dtype=torch.bfloat16)
-    w_shared_fuse0 = torch.randn(256, 304, 3, 3, dtype=torch.bfloat16)
+    w_shared_fuse0 = torch.randn(256, 320, 3, 3, dtype=torch.bfloat16)
     w_shared_fuse1 = torch.randn(256, 256, 3, 3, dtype=torch.bfloat16)
-    w_res3_proj = torch.randn(48, 512, 1, 1, dtype=torch.bfloat16)
-    w_res2_proj = torch.randn(48, 256, 1, 1, dtype=torch.bfloat16)
+    w_res3_proj = torch.randn(64, 512, 1, 1, dtype=torch.bfloat16)
+    w_res2_proj = torch.randn(64, 256, 1, 1, dtype=torch.bfloat16)
     # --- Weights for the Panoptic-specific head and predictor ---
     w_panoptic_head_0 = torch.randn(256, 256, 3, 3, dtype=torch.bfloat16)
     w_panoptic_head_1 = torch.randn(128, 256, 3, 3, dtype=torch.bfloat16)
@@ -442,7 +442,7 @@ def test_ttnn_debug(device):
     # --- Instantiate and run PyTorch model ---
     torch_model = PanopticDeepLabSemSegHead(
         input_shape=input_shape_pytorch,
-        project_channels=[48, 48],
+        project_channels=[64, 64],
         aspp_dilations=[6, 12, 18],
         aspp_dropout=0.0,  # Disable dropout for comparison
         decoder_channels=[256, 256, 256],
@@ -486,7 +486,7 @@ def test_ttnn_debug(device):
     ttnn_model = TtPanopticDeepLabSemSegHead(
         input_shape=input_shape_ttnn,
         device=device,
-        project_channels=[48, 48],
+        project_channels=[64, 64],
         aspp_dilations=[6, 12, 18],
         aspp_dropout=0.0,
         decoder_channels=[256, 256, 256],
