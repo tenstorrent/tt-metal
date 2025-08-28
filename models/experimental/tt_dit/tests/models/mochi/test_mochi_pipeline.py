@@ -128,8 +128,8 @@ def test_tt_mochi_pipeline(
     This uses the TT transformer instead of the diffusers one.
     """
     try:
-        from ...pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
-        from ...parallel.config import DiTParallelConfig, ParallelFactor
+        from ....pipelines.mochi.pipeline_mochi import MochiPipeline as TTMochiPipeline
+        from ....parallel.config import DiTParallelConfig, ParallelFactor
     except ImportError as e:
         pytest.skip(f"Required TT modules not available: {e}")
 
