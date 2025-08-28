@@ -46,9 +46,12 @@ BankManager::StateDependencies::StateDependencies(
 uint32_t BankManager::StateDependencies::num_states() const { return static_cast<uint32_t>(adjacency.size()); }
 
 void BankManager::init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset, uint32_t state) {
-    this->assert_single_state(state);
     allocators_[state] = std::make_unique<allocator::FreeListOpt>(
         size_bytes, offset, alignment_bytes, alignment_bytes, allocator::FreeListOpt::SearchPolicy::FIRST);
+    if (allocator_offsets_.size() < dependencies_.num_states()) {
+        allocator_offsets_.resize(dependencies_.num_states());
+    }
+    allocator_offsets_[state] = offset;
 }
 
 void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool disable_interleaved) {
@@ -79,11 +82,21 @@ BankManager::BankManager(
     bool disable_interleaved,
     const StateDependencies& dependencies) :
     dependencies_(dependencies) {
-    // buffer_type_ and allocated_buffers_ are scalar now
-    allocators_.resize(dependencies_.num_states());
+    const uint32_t n = dependencies_.num_states();
+    allocators_.resize(n);
+    allocated_buffers_.resize(n);
+    overlays_.resize(n);
+    allocator_offsets_.resize(n);
 
-    // For now, mirror the same configuration across states; we assert single-state in API usage
-    for (uint32_t s = 0; s < dependencies_.num_states(); ++s) {
+    // Build reverse dependency list: for each state s, which states depend on s
+    for (const auto& kv : dependencies_.adjacency) {
+        const uint32_t from = kv.first.value;
+        for (const auto dep : kv.second) {
+            dependents_[dep.value].push_back(from);
+        }
+    }
+
+    for (uint32_t s = 0; s < n; ++s) {
         buffer_type_ = buffer_type;
         alignment_bytes_ = alignment_bytes;
         unsigned int bank_id = 0;
@@ -110,10 +123,21 @@ BankManager::BankManager(
     bool disable_interleaved,
     const StateDependencies& dependencies) :
     dependencies_(dependencies) {
-    // buffer_type_ and allocated_buffers_ are scalar now
-    allocators_.resize(dependencies_.num_states());
+    const uint32_t n = dependencies_.num_states();
+    allocators_.resize(n);
+    allocated_buffers_.resize(n);
+    overlays_.resize(n);
+    allocator_offsets_.resize(n);
 
-    for (uint32_t s = 0; s < dependencies_.num_states(); ++s) {
+    // Build reverse dependency list
+    for (const auto& kv : dependencies_.adjacency) {
+        const uint32_t from = kv.first.value;
+        for (const auto dep : kv.second) {
+            dependents_[dep.value].push_back(from);
+        }
+    }
+
+    for (uint32_t s = 0; s < n; ++s) {
         buffer_type_ = buffer_type;
         bank_id_to_bank_offset_ = bank_id_to_bank_offset;
         interleaved_address_limit_ = interleaved_address_limit;
@@ -127,12 +151,12 @@ BankManager::BankManager(
 // Removed num_states-only overload
 
 uint32_t BankManager::num_banks(uint32_t state) const {
-    this->assert_single_state(state);
+    this->assert_valid_state(state);
     return bank_id_to_bank_offset_.size();
 }
 
 DeviceAddr BankManager::bank_size(uint32_t state) const {
-    this->assert_single_state(state);
+    this->assert_valid_state(state);
     TT_ASSERT(bool(allocators_[state]), "Allocator not initialized!");
     DeviceAddr max_size_bytes_u64 = allocators_[state]->max_size_bytes();
     if (max_size_bytes_u64 > std::numeric_limits<DeviceAddr>::max()) {
@@ -143,7 +167,7 @@ DeviceAddr BankManager::bank_size(uint32_t state) const {
 }
 
 int64_t BankManager::bank_offset(uint32_t bank_id, uint32_t state) const {
-    this->assert_single_state(state);
+    this->assert_valid_state(state);
     this->validate_bank_id(bank_id, state);
     return bank_id_to_bank_offset_.at(bank_id);
 }
@@ -156,10 +180,8 @@ void BankManager::validate_bank_id(uint32_t bank_id, uint32_t state) const {
         bank_id_to_bank_offset_.size());
 }
 
-void BankManager::assert_single_state(uint32_t state) const {
-    TT_FATAL(
-        dependencies_.num_states() == 1, "Multi-state is not yet supported. num_states {}", dependencies_.num_states());
-    TT_FATAL(state == 0, "State index must be 0 for single-state mode. Got {}", state);
+void BankManager::assert_valid_state(uint32_t state) const {
+    TT_FATAL(state < dependencies_.num_states(), "Invalid state {} (num_states={})", state, dependencies_.num_states());
 }
 
 uint64_t BankManager::allocate_buffer(
@@ -169,7 +191,7 @@ uint64_t BankManager::allocate_buffer(
     const CoreRangeSet& compute_grid,
     std::optional<uint32_t> num_shards,
     uint32_t state) {
-    this->assert_single_state(state);
+    this->assert_valid_state(state);
     uint32_t num_banks = this->num_banks(state);
     bool is_sharded = false;
     if (num_shards.has_value()) {
@@ -189,43 +211,120 @@ uint64_t BankManager::allocate_buffer(
         TT_FATAL(address_limit > 0, "Address limit {} needs to be larger than zero.", address_limit);
     }
     TT_ASSERT(bool(allocators_[state]), "Allocator not initialized!");
-    auto address = allocators_[state]->allocate(size_per_bank, bottom_up, address_limit);
-    if (not address.has_value()) {
+
+    // Compute candidate ranges from allocator and subtract overlay
+    auto free_local = allocators_[state]->available_addresses(size_per_bank);
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> free_abs;
+    free_abs.reserve(free_local.size());
+    DeviceAddr base_off = allocator_offsets_[state];
+    for (auto r : free_local) {
+        DeviceAddr s = r.first + base_off;
+        DeviceAddr e = r.second + base_off;
+        if (address_limit > 0 && s < address_limit) {
+            s = address_limit;
+        }
+        if (e > s) {
+            free_abs.emplace_back(s, e);
+        }
+    }
+    auto allowed = overlays_[state].subtract(free_abs);
+
+    // Choose a start according to bottom_up
+    std::optional<DeviceAddr> chosen;
+    if (bottom_up) {
+        for (auto r : allowed) {
+            DeviceAddr s = align_up(r.first, alignment_bytes_);
+            if (s + size_per_bank <= r.second) {
+                chosen = s;
+                break;
+            }
+        }
+    } else {
+        for (ssize_t i = (ssize_t)allowed.size() - 1; i >= 0; --i) {
+            auto r = allowed[(size_t)i];
+            DeviceAddr s = r.second - size_per_bank;
+            s = (s / alignment_bytes_) * alignment_bytes_;  // round down to alignment
+            if (s >= r.first) {
+                chosen = s;
+                break;
+            }
+        }
+    }
+
+    if (!chosen.has_value()) {
         TT_THROW(
-            "Out of Memory: Not enough space to allocate {} B {} buffer across {} banks, where each bank needs to "
-            "store {} B",
+            "Out of Memory: Not enough space after considering dependencies to allocate {} B {} across {} banks ({} B "
+            "per bank)",
             size,
             enchantum::to_string(buffer_type_),
             num_banks,
             size_per_bank);
     }
-    allocated_buffers_.insert(address.value());
+
+    auto address = allocators_[state]->allocate_at_address(chosen.value(), size_per_bank);
+    if (!address.has_value()) {
+        TT_THROW("Allocator failed to place at chosen address {}", chosen.value());
+    }
+
+    // Track allocation and update dependents' overlays
+    allocated_buffers_[state][address.value()] = size_per_bank;
+    auto dep_it = dependents_.find(state);
+    if (dep_it != dependents_.end()) {
+        for (auto y : dep_it->second) {
+            overlays_[y].add(address.value(), address.value() + size_per_bank);
+        }
+    }
+
     return address.value();
 }
 
-void BankManager::deallocate_buffer(DeviceAddr address, uint32_t state) {
-    this->assert_single_state(state);
+void BankManager::deallocate_buffer_(DeviceAddr address, uint32_t state) {
+    // Helper: update overlays and delegate to allocator
+    auto it = allocated_buffers_[state].find(address);
+    if (it != allocated_buffers_[state].end()) {
+        DeviceAddr size_per_bank = it->second;
+        auto dep_it = dependents_.find(state);
+        if (dep_it != dependents_.end()) {
+            for (auto y : dep_it->second) {
+                overlays_[y].remove(address, address + size_per_bank);
+            }
+        }
+        allocated_buffers_[state].erase(it);
+    }
     allocators_[state]->deallocate(address);
 }
 
+void BankManager::deallocate_buffer(DeviceAddr address, uint32_t state) {
+    this->assert_valid_state(state);
+    this->deallocate_buffer_(address, state);
+}
+
 void BankManager::deallocate_all(uint32_t state) {
-    this->assert_single_state(state);
-    for (DeviceAddr addr : allocated_buffers_) {
-        allocators_[state]->deallocate(addr);
+    this->assert_valid_state(state);
+    std::vector<DeviceAddr> addrs;
+    addrs.reserve(allocated_buffers_[state].size());
+    for (const auto& kv : allocated_buffers_[state]) {
+        addrs.push_back(kv.first);
+    }
+    for (DeviceAddr addr : addrs) {
+        this->deallocate_buffer_(addr, state);
     }
 }
 
 void BankManager::clear(uint32_t state) {
-    this->assert_single_state(state);
+    this->assert_valid_state(state);
     if (allocators_[state]) {
         allocators_[state]->clear();
     }
 }
 
 BankManager::~BankManager() {
-    if (!allocators_.empty() && allocators_[0]) {
-        for (DeviceAddr addr : allocated_buffers_) {
-            allocators_[0]->deallocate(addr);
+    for (uint32_t s = 0; s < allocators_.size(); ++s) {
+        if (!allocators_[s]) {
+            continue;
+        }
+        for (const auto& kv : allocated_buffers_[s]) {
+            allocators_[s]->deallocate(kv.first);
         }
     }
     allocated_buffers_.clear();
@@ -244,7 +343,7 @@ BankManager&& BankManager::operator=(BankManager&& that) noexcept {
 }
 
 std::optional<DeviceAddr> BankManager::lowest_occupied_address(uint32_t bank_id, uint32_t state) const {
-    this->assert_single_state(state);
+    this->assert_valid_state(state);
     if (not allocators_[state]) {
         return std::nullopt;
     }
@@ -257,19 +356,19 @@ std::optional<DeviceAddr> BankManager::lowest_occupied_address(uint32_t bank_id,
 }
 
 Statistics BankManager::get_statistics(uint32_t state) const {
-    this->assert_single_state(state);
+    this->assert_valid_state(state);
     return allocators_[state] ? allocators_[state]->get_statistics() : Statistics();
 }
 
 void BankManager::dump_blocks(std::ofstream& out, uint32_t state) const {
-    this->assert_single_state(state);
+    this->assert_valid_state(state);
     if (allocators_[state]) {
         allocators_[state]->dump_blocks(out);
     }
 }
 
 MemoryBlockTable BankManager::get_memory_block_table(uint32_t state) const {
-    this->assert_single_state(state);
+    this->assert_valid_state(state);
     if (allocators_[state]) {
         return allocators_[state]->get_memory_block_table();
     }
@@ -279,14 +378,14 @@ MemoryBlockTable BankManager::get_memory_block_table(uint32_t state) const {
 }
 
 void BankManager::shrink_size(DeviceAddr shrink_size, bool bottom_up, uint32_t state) {
-    this->assert_single_state(state);
+    this->assert_valid_state(state);
     if (allocators_[state]) {
         allocators_[state]->shrink_size(shrink_size, bottom_up);
     }
 }
 
 void BankManager::reset_size(uint32_t state) {
-    this->assert_single_state(state);
+    this->assert_valid_state(state);
     if (allocators_[state]) {
         allocators_[state]->reset_size();
     }

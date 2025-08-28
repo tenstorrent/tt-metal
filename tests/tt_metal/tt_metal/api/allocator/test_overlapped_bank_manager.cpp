@@ -160,3 +160,61 @@ INSTANTIATE_TEST_SUITE_P(
             /*expected_edges=*/{{5, {1, 2, 3}}, {1, {}}, {2, {}}, {3, {}}}}));
 
 }  // namespace tt::tt_metal
+
+namespace tt::tt_metal {
+
+TEST_F(DeviceSingleCardBufferFixture, Overlay_MergeUnmerge_RG_into_B) {
+    // States: 0=R, 1=G, 2=B
+    using SD = BankManager::StateDependencies;
+    std::unordered_map<SD::StateId, tt::stl::SmallVector<SD::StateId>, SD::Hasher> deps_map;
+    deps_map.emplace(SD::StateId{0}, tt::stl::SmallVector<SD::StateId>{SD::StateId{2}});  // R depends on B
+    deps_map.emplace(SD::StateId{1}, tt::stl::SmallVector<SD::StateId>{SD::StateId{2}});  // G depends on B
+    deps_map.emplace(
+        SD::StateId{2}, tt::stl::SmallVector<SD::StateId>{SD::StateId{0}, SD::StateId{1}});  // B depends on R,G
+    SD deps{deps_map};
+
+    // Single logical bank with offset 0 for simplicity
+    std::vector<int64_t> bank_desc = {0};
+
+    const uint64_t total_size = 512 * 1024;  // 512 KiB
+    const uint32_t align = 1024;             // 1 KiB alignment
+
+    BankManager bm(
+        BufferType::DRAM,
+        bank_desc,
+        /*size_bytes=*/total_size,
+        /*alignment_bytes=*/align,
+        /*alloc_offset=*/0,
+        /*disable_interleaved=*/true,
+        deps);
+
+    auto empty_grid = CoreRangeSet(std::vector<CoreRange>{});
+
+    const uint64_t sz = 64 * 1024;  // 64 KiB per state allocation
+
+    // t0: allocate in R bottom-up (expects near 0), and in G top-down (expects near top)
+    auto r0 = bm.allocate_buffer(sz, sz, /*bottom_up=*/true, empty_grid, std::nullopt, /*state=*/0);
+    auto g0 = bm.allocate_buffer(sz, sz, /*bottom_up=*/false, empty_grid, std::nullopt, /*state=*/1);
+
+    ASSERT_NE(r0, 0u);
+    ASSERT_NE(g0, 0u);
+    ASSERT_NE(r0, g0);
+
+    // t1: allocate in B top-down; must avoid union(R,G). With G at top, B should pick below g0.
+    auto b0 = bm.allocate_buffer(sz, sz, /*bottom_up=*/false, empty_grid, std::nullopt, /*state=*/2);
+    ASSERT_NE(b0, 0u);
+    EXPECT_LT(b0, g0);  // should not overlap the topmost region taken by G
+
+    // t2: free G; now the top region becomes available again for B
+    bm.deallocate_buffer(g0, /*state=*/1);
+    auto b1 = bm.allocate_buffer(sz, sz, /*bottom_up=*/false, empty_grid, std::nullopt, /*state=*/2);
+    ASSERT_NE(b1, 0u);
+    EXPECT_GE(b1, g0);  // top region should now be usable again
+
+    // cleanup
+    bm.deallocate_buffer(b1, /*state=*/2);
+    bm.deallocate_buffer(b0, /*state=*/2);
+    bm.deallocate_buffer(r0, /*state=*/0);
+}
+
+}  // namespace tt::tt_metal
