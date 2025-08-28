@@ -16,8 +16,6 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES
             hw/inc/tt_fabric_api.h
-            hw/inc/tt_fabric.h
-            hw/inc/tt_fabric_interface.h
             hw/inc/tt_fabric_mux.hpp
             hw/inc/tt_fabric_mux_interface.hpp
             hw/inc/fabric_routing_mode.h
