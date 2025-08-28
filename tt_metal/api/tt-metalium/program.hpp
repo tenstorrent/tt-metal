@@ -46,13 +46,6 @@ namespace detail {
 class ProgramImpl;
 }  // namespace detail
 
-// Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
-enum class ProgramBinaryStatus : uint8_t {
-    NotSent = 0,    // Binaries have not been written
-    InFlight = 1,   // Fast Dispatch Commands to write the binaries to DRAM has been issued
-    Committed = 2,  // Binaries have been committed to DRAM
-};
-
 class Program {
 public:
     using id_t = std::uint64_t;
@@ -101,14 +94,6 @@ public:
 
     // Used in tests, fabric, CaptureCreateKernel, light metal, etc.
     std::shared_ptr<Kernel> get_kernel(KernelHandle kernel_id) const;
-
-    //////////////////////////////
-    // Program Binary Status related functions:
-    //////////////////////////////
-
-    // Both used in hardware_command_queue.cpp and host_runtime_commands.cpp
-    ProgramBinaryStatus get_program_binary_status(chip_id_t device_id) const;
-    void set_program_binary_status(chip_id_t device_id, ProgramBinaryStatus status);
 
     // debug/test
     detail::ProgramImpl& impl() { return *internal_; }

@@ -422,7 +422,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     // Finalize Program: Compute relative offsets for data structures (semaphores, kernel binaries, etc) in L1
     program.impl().finalize_offsets(device_);
 
-    if (program.get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
+    if (program.impl().get_program_binary_status(device_->id()) == ProgramBinaryStatus::NotSent) {
         // Write program binaries to device if it hasn't previously been cached
         program.impl().allocate_kernel_bin_buf_on_device(device_);
         if (program.impl().get_program_transfer_info().binary_data.size()) {
@@ -433,7 +433,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
                 buffer_region,
                 false);
         }
-        program.set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
+        program.impl().set_program_binary_status(device_->id(), ProgramBinaryStatus::InFlight);
     }
 
     // Lower the program to device: Generate dispatch commands.

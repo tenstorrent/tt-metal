@@ -111,6 +111,13 @@ struct ProgramConfig {
     uint32_t kernel_text_size;    // max size of all kernel bins across all kernel groups
 };
 
+// Represents the status of Program Kernel Binaries in Device DRAM with respect to the dispatcher
+enum class ProgramBinaryStatus : uint8_t {
+    NotSent = 0,    // Binaries have not been written
+    InFlight = 1,   // Fast Dispatch Commands to write the binaries to DRAM has been issued
+    Committed = 2,  // Binaries have been committed to DRAM
+};
+
 namespace detail {
 
 struct ProgramOffsetsState {

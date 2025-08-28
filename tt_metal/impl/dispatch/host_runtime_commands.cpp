@@ -124,7 +124,7 @@ void EnqueueProgramCommand::process() {
     program_dispatch::reserve_space_in_kernel_config_buffer(
         this->config_buffer_mgr,
         program.impl().get_program_config_sizes(),
-        program.get_program_binary_status(device->id()),
+        program.impl().get_program_binary_status(device->id()),
         num_workers,
         this->expected_num_workers_completed,
         dispatch_metadata);
@@ -145,7 +145,7 @@ void EnqueueProgramCommand::process() {
         this->dispatch_core_type,
         this->sub_device_id,
         dispatch_metadata,
-        program.get_program_binary_status(device->id()));
+        program.impl().get_program_binary_status(device->id()));
     // Issue dispatch commands for this program
     program_dispatch::write_program_command_sequence(
         cached_program_command_sequence,
@@ -155,7 +155,7 @@ void EnqueueProgramCommand::process() {
         dispatch_metadata.stall_first,
         dispatch_metadata.stall_before_program);
     // Kernel Binaries are committed to DRAM, the first time the program runs on device. Reflect this on host.
-    program.set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
+    program.impl().set_program_binary_status(device->id(), ProgramBinaryStatus::Committed);
 }
 
 EnqueueTerminateCommand::EnqueueTerminateCommand(
@@ -209,7 +209,7 @@ void EnqueueReadBuffer(
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueReadBuffer, cq, buffer, dst, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return detail::ReadFromBuffer(buffer_obj, (uint8_t *)dst);
+        return detail::ReadFromBuffer(buffer_obj, (uint8_t*)dst);
     }
     BufferRegion region(0, buffer_obj.size());
     EnqueueReadSubBuffer(cq, buffer, dst, region, blocking);
@@ -236,8 +236,8 @@ void EnqueueWriteBuffer(
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueWriteBuffer, cq, buffer, src, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return detail::WriteToBuffer(buffer_obj,
-            tt::stl::Span<const uint8_t>((const uint8_t *)std::get<const void *>(src), buffer_obj.size()));
+        return detail::WriteToBuffer(
+            buffer_obj, tt::stl::Span<const uint8_t>((const uint8_t*)std::get<const void*>(src), buffer_obj.size()));
     }
     BufferRegion region(0, buffer_obj.size());
     EnqueueWriteSubBuffer(cq, buffer, std::move(src), region, blocking);
@@ -260,7 +260,7 @@ void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueProgram, cq, program, blocking);
     if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
-        return detail::LaunchProgram((IDevice *)&cq, program);
+        return detail::LaunchProgram((IDevice*)&cq, program);
     }
     detail::DispatchStateCheck(true);
 
