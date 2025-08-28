@@ -1626,8 +1626,6 @@ std::vector<std::reference_wrapper<const Semaphore>> detail::ProgramImpl::semaph
 bool detail::ProgramImpl::is_finalized() const { return this->finalized_; }
 void detail::ProgramImpl::set_finalized() { this->finalized_ = true; }
 
-bool Program::is_finalized() const { return internal_->is_finalized(); }
-
 ProgramBinaryStatus Program::get_program_binary_status(chip_id_t device_id) const {
     return internal_->get_program_binary_status(device_id);
 }
@@ -1683,8 +1681,6 @@ void detail::ProgramImpl::set_program_attrs_across_core_types(IDevice* device) {
         populate_dispatch_data(device);  // TODO: maybe rename
     }
 }
-
-void Program::finalize_offsets(IDevice* device) { internal_->finalize_offsets(device); }
 
 using KernelsGetter = std::function<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>&(uint32_t index)>;
 using KernelGroupsGetter = std::function<std::vector<std::shared_ptr<KernelGroup>>&(uint32_t index)>;

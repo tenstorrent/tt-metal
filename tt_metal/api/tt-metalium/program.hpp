@@ -133,10 +133,6 @@ public:
     ProgramBinaryStatus get_program_binary_status(chip_id_t device_id) const;
     void set_program_binary_status(chip_id_t device_id, ProgramBinaryStatus status);
 
-    // We are removing these...
-    void finalize_offsets(IDevice* device);
-    bool is_finalized() const;
-
     // debug/test
     detail::ProgramImpl& impl() { return *internal_; }
     const detail::ProgramImpl& impl() const { return *internal_; }

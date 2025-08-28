@@ -282,7 +282,7 @@ void Device::configure_command_queue_programs() {
     configure_dispatch_cores(this);
 
     // Run the cq program
-    command_queue_program.finalize_offsets(this);
+    command_queue_program.impl().finalize_offsets(this);
     detail::ConfigureDeviceWithProgram(this, command_queue_program, true);
     tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(this->id());
 }
@@ -391,7 +391,7 @@ void Device::configure_fabric() {
 
     tt::tt_fabric::configure_fabric_cores(this);
 
-    fabric_program_->finalize_offsets(this);
+    fabric_program_->impl().finalize_offsets(this);
 
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_, using_fast_dispatch_);
     detail::ConfigureDeviceWithProgram(this, *fabric_program_, using_fast_dispatch_);
@@ -785,10 +785,11 @@ std::vector<CoreCoord> Device::get_optimal_dram_bank_to_logical_worker_assignmen
 
         const auto& hal = MetalContext::instance().hal();
         bool noc_translation_enabled =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(this->id());
+            tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_desc()->get_noc_translation_table_en().at(
+                this->id());
         bool dram_is_virtualized =
-            noc_translation_enabled &&
-            (hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal.get_virtualized_core_types().end());
+            noc_translation_enabled && (hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) !=
+                                        hal.get_virtualized_core_types().end());
         const metal_SocDescriptor& soc_d =
             tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(this->id());
         std::vector<CoreCoord> dram_phy_coords;
