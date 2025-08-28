@@ -129,6 +129,7 @@ struct ParsedTestConfig {
                                   // cross-chip start-skew effects
     uint32_t global_sync_val = 0;
     uint32_t seed{};
+    uint32_t iterations = 1;
 };
 
 struct TestConfig {

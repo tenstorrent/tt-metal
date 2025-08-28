@@ -470,7 +470,9 @@ inline ParsedTestConfig YamlConfigParser::parse_test_config(const YAML::Node& te
                 parse_sender_config(sender_node, test_config.defaults.value_or(ParsedTrafficPatternConfig{})));
         }
     }
-
+    if (test_yaml["num_iterations"]) {
+        test_config.iterations = parse_scalar<uint32_t>(test_yaml["num_iterations"]);
+    }
     if (test_yaml["bw_calc_func"]) {
         test_config.bw_calc_func = parse_scalar<std::string>(test_yaml["bw_calc_func"]);
     }
