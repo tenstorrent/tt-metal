@@ -226,7 +226,6 @@ static FORCE_INLINE void fabric_set_unicast_route(
 #else
         (LowLatencyMeshPacketHeader*)packet_header,
 #endif
-        static_cast<eth_chan_directions>(slot.eth_dir),
         connection_manager.my_dev_id,
         slot.dst_dev_id,
         slot.dst_mesh_id,
