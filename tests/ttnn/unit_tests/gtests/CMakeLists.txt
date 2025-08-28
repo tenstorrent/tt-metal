@@ -71,9 +71,9 @@ target_link_libraries(
         TTNN::CPP
 )
 
-# Add ttnn-op-runtime-predictor dependency if BUILD_MLP_OP_PERF is enabled
-if(BUILD_MLP_OP_PERF)
-    message(STATUS "BUILD_MLP_OP_PERF is enabled")
+# Add ttnn-op-runtime-predictor dependency if BUILD_TTNN_OP_RUNTIME_PREDICTOR is enabled
+if(BUILD_TTNN_OP_RUNTIME_PREDICTOR)
+    message(STATUS "BUILD_TTNN_OP_RUNTIME_PREDICTOR is enabled")
 
     # Try multiple possible variable names for the ttnn-op-runtime-predictor source directory
     set(TTNN_OP_RUNTIME_PREDICTOR_DIR "")
@@ -94,7 +94,7 @@ if(BUILD_MLP_OP_PERF)
         else()
             message(
                 FATAL_ERROR
-                "ttnn-op-runtime-predictor interface.hpp not found. Make sure BUILD_MLP_OP_PERF is enabled and the package is downloaded."
+                "ttnn-op-runtime-predictor interface.hpp not found. Make sure BUILD_TTNN_OP_RUNTIME_PREDICTOR is enabled and the package is downloaded."
             )
         endif()
     endif()
@@ -112,7 +112,7 @@ if(BUILD_MLP_OP_PERF)
             ${TTNN_OP_RUNTIME_PREDICTOR_DIR}/interface
             ${TTNN_OP_RUNTIME_PREDICTOR_DIR}/ops/include
     )
-    target_compile_definitions(unit_tests_ttnn_basic PRIVATE BUILD_MLP_OP_PERF=1)
+    target_compile_definitions(unit_tests_ttnn_basic PRIVATE BUILD_TTNN_OP_RUNTIME_PREDICTOR=1)
 
     # Link the ttnn-op-runtime-predictor ops library
     target_link_libraries(unit_tests_ttnn_basic PRIVATE ops_library interface_library)

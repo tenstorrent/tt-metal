@@ -323,9 +323,9 @@ CPMAddPackage(
 )
 
 ####################################################################################################################
-# mlp-op-perf
+# ttnn-op-runtime-predictor
 ####################################################################################################################
-if(BUILD_MLP_OP_PERF)
+if(BUILD_TTNN_OP_RUNTIME_PREDICTOR)
     CPMAddPackage(
         NAME mlpack
         GITHUB_REPOSITORY mlpack/mlpack
