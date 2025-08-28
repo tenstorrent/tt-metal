@@ -234,10 +234,6 @@ def test_multimodal_demo_text(
         num_layers=num_layers,
     )
 
-    import pdb
-
-    pdb.set_trace()
-
     HF_MODEL = model_args[0].checkpoint_type == CheckpointType.HuggingFace
 
     if not HF_MODEL:

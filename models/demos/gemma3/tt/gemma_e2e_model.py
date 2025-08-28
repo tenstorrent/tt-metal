@@ -1,11 +1,15 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
 from typing import List
 
 import torch
 
 import ttnn
-from models.tt_transformers.tt.model import Transformer
 from models.demos.gemma3.tt.gemma_vision_model import TtGemmaTransformerVision
+from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.multimodal.llama_vision_model import _stack_images
+
 
 def _stack_images(
     images: List[List[torch.Tensor]],  # batch of samples, each with list of image embeddings
