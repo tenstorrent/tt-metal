@@ -26,7 +26,6 @@ def total_elems(ag_output_shape):
     return math.prod(ag_output_shape)
 
 
-@pytest.mark.parametrize("arch_type", ["6U"])
 @pytest.mark.models_device_performance_bare_metal
 def test_all_gather_chunk_perf(
     arch_type,

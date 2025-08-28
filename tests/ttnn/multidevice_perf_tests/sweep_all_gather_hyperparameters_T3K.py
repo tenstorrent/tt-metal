@@ -27,13 +27,17 @@ CONFIGS = [
     (8, [1, 1, 11264, 12288], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     (8, [1, 1, 12288, 4096], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     (8, [1, 1, 12288, 3072], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    (8, [1, 1, 8192, 16384], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+    (8, [1, 1, 8192, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16),
 ]
 CONFIGS_IDS = [f"ag_output_shape{i}" for i in range(len(CONFIGS))]
 
-CHUNKS_PER_SYNC = ["MAX", 320, 160, 80, 40, 20, 10]
+CHUNKS_PER_SYNC = ["MAX", 160]  # ["MAX", 320, 160, 80, 40, 20, 10]
 CHUNKS_PER_SYNC_IDS = [f"{chunk}-chunks" for chunk in CHUNKS_PER_SYNC]
 
-WORKERS_PER_LINK = [8, 4, 2, 1]
+WORKERS_PER_LINK = [1, 4]  # [8, 4, 2, 1]
 WORKERS_PER_LINK_IDS = [f"{worker}-workers" for worker in WORKERS_PER_LINK]
 
 TOPOLOGY = ["ring", "linear"]
