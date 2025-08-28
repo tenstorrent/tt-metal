@@ -8,22 +8,16 @@
 #include <memory>
 #include <vector>
 
-#include <tt-metalium/circular_buffer.hpp>
-#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/semaphore.hpp>
 
 namespace tt {
 
 namespace tt_metal {
 
 // Fwd declares
-
+class ProgramDescriptor;
+class CircularBuffer;
 class Kernel;
-class IDevice;
-class Program;
-class CircularBufferConfig;
 
 namespace detail {
 class ProgramImpl;
