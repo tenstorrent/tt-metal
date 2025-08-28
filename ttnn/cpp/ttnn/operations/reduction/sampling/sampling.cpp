@@ -14,7 +14,6 @@
 namespace ttnn::operations::reduction {
 
 ttnn::Tensor SamplingOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_values_tensor,
     const Tensor& input_indices_tensor,
     const Tensor& k,
@@ -27,8 +26,7 @@ ttnn::Tensor SamplingOperation::invoke(
                Sampling{seed, sub_core_grids},
                {input_values_tensor, input_indices_tensor, k, p, temp},
                {},
-               {std::move(optional_output_tensor)},
-               queue_id)
+               {std::move(optional_output_tensor)})
         .at(0);
 }
 

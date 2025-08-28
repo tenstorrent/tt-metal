@@ -226,7 +226,6 @@ void bind_ternary_backward_optional_output(
             are_required_outputs (List[bool], optional): list of required outputs. Defaults to `[True, True]`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
             output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
 
         Returns:
             List of ttnn.Tensor: the output tensor.
@@ -271,18 +270,16 @@ void bind_ternary_backward_optional_output(
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& input_a_grad,
-               const std::optional<ttnn::Tensor>& input_b_grad,
-               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
-                return self(
-                    queue_id,
-                    grad_tensor,
-                    input_tensor_a,
-                    input_tensor_b,
-                    input_tensor_c,
-                    memory_config,
-                    are_required_outputs,
-                    input_a_grad,
-                    input_b_grad);
+               const std::optional<ttnn::Tensor>& input_b_grad) -> std::vector<std::optional<ttnn::Tensor>> {
+            return self(
+                grad_tensor,
+                input_tensor_a,
+                input_tensor_b,
+                input_tensor_c,
+                memory_config,
+                are_required_outputs,
+                input_a_grad,
+                input_b_grad);
             },
             py::arg("grad_tensor"),
             py::arg("input_tensor_a"),
@@ -292,8 +289,7 @@ void bind_ternary_backward_optional_output(
             py::arg("memory_config") = std::nullopt,
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
             py::arg("input_a_grad") = std::nullopt,
-            py::arg("input_b_grad") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("input_b_grad") = std::nullopt);
 }
 }  // namespace
 

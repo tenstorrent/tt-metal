@@ -55,9 +55,8 @@ void bind_rand_operation(py::module& pymodule) {
                const MemoryConfig& memory_config,
                float from,
                float to,
-               uint32_t seed,
-               QueueId queue_id) {
-                return self(queue_id, shape, device, dtype, layout, memory_config, from, to, seed);
+               uint32_t seed) {
+            return self(shape, device, dtype, layout, memory_config, from, to, seed);
             },
             py::arg("shape"),
             py::arg("device"),
@@ -67,7 +66,6 @@ void bind_rand_operation(py::module& pymodule) {
             py::arg("memory_config") = ttnn::DRAM_MEMORY_CONFIG,
             py::arg("low") = 0.0f,
             py::arg("high") = 1.0f,
-            py::arg("seed") = 0,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("seed") = 0);
 }
 }  // namespace ttnn::operations::rand

@@ -38,22 +38,20 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
                const bool use_noc1_only,
                const std::optional<uint32_t> num_links,
                const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    buffer_tensor,
-                    dim,
-                    cluster_axis,
-                    mesh_device,
-                    global_semaphore,
-                    num_heads,
-                    memory_config,
-                    use_noc1_only,
-                    num_links,
-                    topology,
-                    subdevice_id);
+               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
+            return self(
+                input_tensor,
+                buffer_tensor,
+                dim,
+                cluster_axis,
+                mesh_device,
+                global_semaphore,
+                num_heads,
+                memory_config,
+                use_noc1_only,
+                num_links,
+                topology,
+                subdevice_id);
             },
             py::arg("input_tensor"),
             py::arg("buffer_tensor"),
@@ -67,8 +65,7 @@ void bind_all_gather_concat(pybind11::module& module, const ccl_operation_t& ope
             py::arg("use_noc1_only") = false,
             py::arg("num_links") = 1,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
-            py::arg("subdevice_id") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("subdevice_id") = std::nullopt);
 }
 
 }  // namespace

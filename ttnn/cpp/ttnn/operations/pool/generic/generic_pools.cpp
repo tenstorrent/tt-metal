@@ -22,7 +22,6 @@ namespace operations::pool {
 // dilation which is set to (1,1) for avg pool and count_include_pad and divisor_override which have no effect on
 // maxpool.
 static Tensor pool2d_invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     Pool2DType pool_type,
     uint32_t batch_size,
@@ -197,7 +196,7 @@ static Tensor pool2d_invoke(
 
     // Call the halo uop
     auto haloed_tensor = ttnn::halo(
-        queue_id,
+
         input_tensor_sharded,
         sliding_window_config,
         get_bf16_pool_init_value(pool_type),  // pad_val
@@ -219,7 +218,7 @@ static Tensor pool2d_invoke(
         haloed_tensor.device()->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
 
     auto output_tensor = ttnn::prim::pool2d(
-        queue_id,
+
         haloed_tensor,
         sliding_window_config,
         pool_type,
@@ -237,7 +236,6 @@ static Tensor pool2d_invoke(
 }
 
 Tensor MaxPool2DOp::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -254,7 +252,7 @@ Tensor MaxPool2DOp::invoke(
     bool deallocate_input,
     bool reallocate_halo_output) {
     return pool2d_invoke(
-        queue_id,
+
         input_tensor,
         Pool2DType::MAX_POOL2D,
         batch_size,
@@ -276,7 +274,6 @@ Tensor MaxPool2DOp::invoke(
 }
 
 Tensor AvgPool2DOp::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,
@@ -294,7 +291,7 @@ Tensor AvgPool2DOp::invoke(
     bool deallocate_input,
     bool reallocate_halo_output) {
     return pool2d_invoke(
-        queue_id,
+
         input_tensor,
         Pool2DType::AVG_POOL2D,
         batch_size,

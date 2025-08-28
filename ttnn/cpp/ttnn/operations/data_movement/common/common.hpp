@@ -61,11 +61,7 @@ bool is_enough_space(
     uint32_t num_tiles_per_row);
 
 ttnn::Tensor pad_to_tile_vol(
-    QueueId queue_id,
-    const ttnn::Tensor& tensor,
-    float value,
-    bool use_multicore,
-    const std::optional<MemoryConfig>& memory_config);
+    const ttnn::Tensor& tensor, float value, bool use_multicore, const std::optional<MemoryConfig>& memory_config);
 
 uint32_t wrap_index(int index, int size);
 

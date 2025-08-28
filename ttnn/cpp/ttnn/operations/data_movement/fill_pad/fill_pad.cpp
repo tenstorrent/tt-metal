@@ -6,7 +6,6 @@
 #include "device/fill_pad_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <utility>
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -14,10 +13,7 @@
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor FillPadOperation::invoke(
-    QueueId queue_id,
-    const ttnn::Tensor& input_tensor,
-    float fill_value,
-    const std::optional<ttnn::MemoryConfig>& memory_config) {
+    const ttnn::Tensor& input_tensor, float fill_value, const std::optional<ttnn::MemoryConfig>& memory_config) {
     // if padded shape == logical shape for last 2 dims no padding should be present, and no fill pad is necessary
     uint32_t padded_height =
         tt::div_up(input_tensor.logical_shape()[-2], tt::constants::TILE_HEIGHT) * tt::constants::TILE_HEIGHT;
@@ -44,13 +40,11 @@ ttnn::Tensor FillPadOperation::invoke(
         auto reshaped_tensor = ttnn::reshape(mutable_input_tensor, new_shape);
 
         reshaped_tensor =
-            tt::tt_metal::operation::run(FillPad{fill_value, output_memory_config}, {reshaped_tensor}, {}, {}, queue_id)
-                .at(0);
+            tt::tt_metal::operation::run(FillPad{fill_value, output_memory_config}, {reshaped_tensor}, {}, {}).at(0);
         return ttnn::reshape(reshaped_tensor, original_shape);
     }
-    auto output_tensor = tt::tt_metal::operation::run(
-                             FillPad{fill_value, output_memory_config}, {mutable_input_tensor}, {}, {}, queue_id)
-                             .at(0);
+    auto output_tensor =
+        tt::tt_metal::operation::run(FillPad{fill_value, output_memory_config}, {mutable_input_tensor}, {}, {}).at(0);
     if (input_tensor.dtype() == DataType::BFLOAT8_B) {
         return ttnn::typecast(output_tensor, DataType::BFLOAT8_B);
     }

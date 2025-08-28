@@ -12,7 +12,6 @@ namespace ttnn::operations::data_movement {
 
 // Does a broadcast
 Tensor BcastOperation::invoke(
-    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     BcastOpMath bcast_op,
@@ -61,8 +60,7 @@ Tensor BcastOperation::invoke(
                {input_tensor_a, input_tensor_b},
                {},
                {output_tensor},
-               0, /* pad_value*/
-               queue_id)
+               0 /* pad_value*/)
         .at(0);
 }
 

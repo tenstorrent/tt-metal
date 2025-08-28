@@ -15,7 +15,6 @@ namespace operations::point_to_point {
 
 struct ExecutePointToPoint {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const MeshCoordinate& receiver_coord,
         const MeshCoordinate& sender_coord,

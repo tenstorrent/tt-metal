@@ -16,7 +16,6 @@ namespace operations::pool {
 
 struct MaxPool2DOp {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         uint32_t batch_size,
         uint32_t input_h,
@@ -35,7 +34,6 @@ struct MaxPool2DOp {
 };
 struct AvgPool2DOp {
     static Tensor invoke(
-        QueueId queue_id,
         const Tensor& input_tensor,
         uint32_t batch_size,
         uint32_t input_h,

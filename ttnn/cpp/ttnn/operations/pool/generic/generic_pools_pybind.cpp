@@ -44,7 +44,6 @@ void bind_max_pool2d_operation(py::module& module) {
             in_place (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
             deallocate_input (bool, optional): whether to deallocate the input tensor after the operation. Defaults to `False`.
             reallocate_halo_output (bool, optional): whether to reallocate the halo output tensor after the operation, ideally used with deallocate_activation = true. Defaults to `True`.
-            queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the max pool convolved output tensor.
@@ -100,25 +99,23 @@ void bind_max_pool2d_operation(py::module& module) {
                const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
                bool in_place_halo,
                bool deallocate_input,
-               bool reallocate_halo_output,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    batch_size,
-                    input_h,
-                    input_w,
-                    channels,
-                    kernel_size,
-                    stride,
-                    padding,
-                    dilation,
-                    ceil_mode,
-                    memory_config,
-                    applied_shard_scheme,
-                    in_place_halo,
-                    deallocate_input,
-                    reallocate_halo_output);
+               bool reallocate_halo_output) -> ttnn::Tensor {
+            return self(
+                input_tensor,
+                batch_size,
+                input_h,
+                input_w,
+                channels,
+                kernel_size,
+                stride,
+                padding,
+                dilation,
+                ceil_mode,
+                memory_config,
+                applied_shard_scheme,
+                in_place_halo,
+                deallocate_input,
+                reallocate_halo_output);
             },
             py::arg("input_tensor"),
             py::arg("batch_size"),
@@ -135,15 +132,14 @@ void bind_max_pool2d_operation(py::module& module) {
             py::arg("applied_shard_scheme") = std::nullopt,
             py::arg("in_place_halo") = false,
             py::arg("deallocate_input") = false,
-            py::arg("reallocate_halo_output") = true,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("reallocate_halo_output") = true);
 }
 
 void bind_avg_pool2d_operation(py::module& module) {
-    bind_registered_operation(
-        module,
-        ttnn::avg_pool2d,
-        R"doc(
+        bind_registered_operation(
+            module,
+            ttnn::avg_pool2d,
+            R"doc(
         Applies an average pool convolution to the input tensor. The resulting output Tensor will contain the average
         value for each channel within a kernel window. The input tensor is expected to be in [NHW, C] format and
         should be on the device. Height, width and block sharding schemes are supported.
@@ -167,7 +163,6 @@ void bind_avg_pool2d_operation(py::module& module) {
             in_place (bool, optional): whether to perform the halo operation in place. Defaults to `False`.
             deallocate_input (bool, optional): whether to deallocate the input tensor after the operation. Defaults to `False`.
             reallocate_halo_output (bool, optional): whether to reallocate the halo output tensor after the operation, ideally used with deallocate_activation = true. Defaults to `True`.
-            queue_id (int, optional): the queue id to use for the operation. Defaults to `0`.
 
         Returns:
             ttnn.Tensor: the average pool convolved output tensor.
@@ -206,62 +201,59 @@ void bind_avg_pool2d_operation(py::module& module) {
                             reallocate_halo_output=True,
                         )
         )doc",
-        ttnn::pybind_overload_t{
-            [](const decltype(ttnn::avg_pool2d)& self,
-               const ttnn::Tensor& input_tensor,
-               uint32_t batch_size,
-               uint32_t input_h,
-               uint32_t input_w,
-               uint32_t channels,
-               std::array<uint32_t, 2> kernel_size,
-               std::array<uint32_t, 2> stride,
-               std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
-               bool ceil_mode,
-               bool count_include_pad,
-               std::optional<int32_t> divisor_override,
-               const std::optional<const MemoryConfig>& memory_config,
-               const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
-               bool in_place_halo,
-               bool deallocate_input,
-               bool reallocate_halo_output,
-               QueueId queue_id) -> ttnn::Tensor {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    batch_size,
-                    input_h,
-                    input_w,
-                    channels,
-                    kernel_size,
-                    stride,
-                    padding,
-                    ceil_mode,
-                    count_include_pad,
-                    divisor_override,
-                    memory_config,
-                    applied_shard_scheme,
-                    in_place_halo,
-                    deallocate_input,
-                    reallocate_halo_output);
-            },
-            py::arg("input_tensor"),
-            py::arg("batch_size"),
-            py::arg("input_h"),
-            py::arg("input_w"),
-            py::arg("channels"),
-            py::arg("kernel_size"),
-            py::arg("stride"),
-            py::arg("padding"),
-            py::arg("ceil_mode") = false,
-            py::arg("count_include_pad") = true,
-            py::arg("divisor_override") = std::nullopt,
-            py::kw_only(),
-            py::arg("memory_config") = std::nullopt,
-            py::arg("applied_shard_scheme") = std::nullopt,
-            py::arg("in_place_halo") = false,
-            py::arg("deallocate_input") = false,
-            py::arg("reallocate_halo_output") = true,
-            py::arg("queue_id") = 0});
+            ttnn::pybind_overload_t{
+                [](const decltype(ttnn::avg_pool2d)& self,
+                   const ttnn::Tensor& input_tensor,
+                   uint32_t batch_size,
+                   uint32_t input_h,
+                   uint32_t input_w,
+                   uint32_t channels,
+                   std::array<uint32_t, 2> kernel_size,
+                   std::array<uint32_t, 2> stride,
+                   std::variant<std::array<uint32_t, 2>, std::array<uint32_t, 4>> padding,
+                   bool ceil_mode,
+                   bool count_include_pad,
+                   std::optional<int32_t> divisor_override,
+                   const std::optional<const MemoryConfig>& memory_config,
+                   const std::optional<const ttnn::TensorMemoryLayout> applied_shard_scheme,
+                   bool in_place_halo,
+                   bool deallocate_input,
+                   bool reallocate_halo_output) -> ttnn::Tensor {
+                    return self(
+                        input_tensor,
+                        batch_size,
+                        input_h,
+                        input_w,
+                        channels,
+                        kernel_size,
+                        stride,
+                        padding,
+                        ceil_mode,
+                        count_include_pad,
+                        divisor_override,
+                        memory_config,
+                        applied_shard_scheme,
+                        in_place_halo,
+                        deallocate_input,
+                        reallocate_halo_output);
+                },
+                py::arg("input_tensor"),
+                py::arg("batch_size"),
+                py::arg("input_h"),
+                py::arg("input_w"),
+                py::arg("channels"),
+                py::arg("kernel_size"),
+                py::arg("stride"),
+                py::arg("padding"),
+                py::arg("ceil_mode") = false,
+                py::arg("count_include_pad") = true,
+                py::arg("divisor_override") = std::nullopt,
+                py::kw_only(),
+                py::arg("memory_config") = std::nullopt,
+                py::arg("applied_shard_scheme") = std::nullopt,
+                py::arg("in_place_halo") = false,
+                py::arg("deallocate_input") = false,
+                py::arg("reallocate_halo_output") = true});
 }
 
 void py_module(py::module& module) {

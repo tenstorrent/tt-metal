@@ -189,7 +189,6 @@ Tensor post_scatter_transform_tensor(
 }  // namespace
 
 Tensor ScatterOperation::invoke(
-    const QueueId& queue_id,
     const Tensor& input_tensor,
     const int32_t& dim,
     const Tensor& index_tensor,
@@ -235,8 +234,7 @@ Tensor ScatterOperation::invoke(
         transformed_index_tensor,
         transformed_source_tensor,
         final_memory_config,
-        std::nullopt,
-        queue_id);
+        std::nullopt);
     output = CMAKE_UNIQUE_NAMESPACE::post_scatter_transform_tensor(
         output,
         after_transpose_shape,

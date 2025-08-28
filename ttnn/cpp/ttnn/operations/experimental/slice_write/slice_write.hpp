@@ -13,7 +13,6 @@ namespace experimental {
 struct SliceWriteOperation {
     template <typename T, std::size_t N>
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& output_tensor,
         const std::array<T, N>& output_tensor_start,

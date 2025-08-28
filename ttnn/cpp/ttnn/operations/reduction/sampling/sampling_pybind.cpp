@@ -44,7 +44,6 @@ void bind_reduction_sampling_operation(py::module& module) {
                         temp=temp,
                         seed=seed,
                         optional_output_tensor=optional_output_tensor,
-                        queue_id=queue_id
                     )
 
             Note:
@@ -118,7 +117,6 @@ void bind_reduction_sampling_operation(py::module& module) {
                 seed (int, optional): Seed for sampling randomness. Defaults to `0`.
                 sub_core_grids (ttnn.CoreRangeSet, optional): Core range set for multicore execution. Defaults to `None`.
                 optional_output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-                queue_id (int, optional): Command queue ID for execution. Defaults to `0`.
 
             Returns:
                 ttnn.Tensor: The output tensor containing sampled indices.
@@ -148,18 +146,9 @@ void bind_reduction_sampling_operation(py::module& module) {
                const ttnn::Tensor& temp,
                const std::optional<uint32_t>& seed,
                const std::optional<CoreRangeSet>& sub_core_grids,
-               std::optional<ttnn::Tensor> optional_output_tensor,
-               QueueId queue_id) {
-                return self(
-                    queue_id,
-                    input_values_tensor,
-                    input_indices_tensor,
-                    k,
-                    p,
-                    temp,
-                    seed,
-                    sub_core_grids,
-                    optional_output_tensor);
+               std::optional<ttnn::Tensor> optional_output_tensor) {
+            return self(
+                input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, optional_output_tensor);
             },
             py::arg("input_values_tensor").noconvert(),
             py::arg("input_indices_tensor").noconvert(),
@@ -169,8 +158,7 @@ void bind_reduction_sampling_operation(py::module& module) {
             py::kw_only(),
             py::arg("seed").noconvert() = std::nullopt,
             py::arg("sub_core_grids") = std::nullopt,
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("output_tensor") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::reduction::detail

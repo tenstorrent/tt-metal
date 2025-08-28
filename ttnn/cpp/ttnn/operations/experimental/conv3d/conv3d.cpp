@@ -17,7 +17,6 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::conv3d {
 
 ttnn::Tensor ExecuteConv3d::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     const std::optional<ttnn::Tensor>& bias_tensor,
@@ -34,8 +33,7 @@ ttnn::Tensor ExecuteConv3d::invoke(
                    .compute_kernel_config = kernel_config_val},
                {input_tensor, weight_tensor},
                {bias_tensor},
-               {},
-               queue_id)
+               {})
         .at(0);
 }
 

@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
-
 #include <tt-metalium/constants.hpp>
 
 #include "llama_reduce_scatter.hpp"
@@ -16,7 +14,6 @@ namespace ttnn::operations::experimental::ccl {
 namespace detail {}  // namespace detail
 
 ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& intermediate_packet_buffer,
     const int32_t dim,

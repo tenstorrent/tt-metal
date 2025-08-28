@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "device/sdpa_decode_op.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -33,7 +32,6 @@ inline uint32_t get_chunk_size(uint32_t s) {
 namespace ttnn::operations::transformer {
 
 ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -84,12 +82,11 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {cur_pos_tensor, std::nullopt, attn_mask, attention_sink},
                {},
-               queue_id)
+               ttnn::DefaultQueueId)
         .at(0);
 }
 
 ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -137,12 +134,11 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {cur_pos_tensor, page_table_tensor, attn_mask, attention_sink},
                {},
-               queue_id)
+               ttnn::DefaultQueueId)
         .at(0);
 }
 
 ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
@@ -195,12 +191,11 @@ ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
                {input_tensor_q, input_tensor_k},
                {cur_pos_tensor, std::nullopt, attn_mask, attention_sink},
                {},
-               queue_id)
+               ttnn::DefaultQueueId)
         .at(0);
 }
 
 ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const uint32_t head_dim_v,
@@ -250,7 +245,7 @@ ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
                {input_tensor_q, input_tensor_k},
                {cur_pos_tensor, page_table_tensor, attn_mask, attention_sink},
                {},
-               queue_id)
+               ttnn::DefaultQueueId)
         .at(0);
 }
 

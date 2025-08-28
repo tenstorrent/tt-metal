@@ -14,7 +14,6 @@ namespace operations::experimental::reduction {
 
 struct FastReduceNCOperation {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input,
         tt::stl::Span<const int32_t> dims,
         const std::optional<const Tensor>& output,

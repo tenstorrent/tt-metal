@@ -14,7 +14,6 @@ namespace operations::ccl {
 
 struct ExecuteMeshPartition {
     static ttnn::Tensor invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         int32_t dim,
         std::optional<uint32_t> cluster_axis,

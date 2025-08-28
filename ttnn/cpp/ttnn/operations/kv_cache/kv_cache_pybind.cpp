@@ -88,8 +88,7 @@ void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t
                const uint32_t batch_offset) -> ttnn::Tensor { return self(cache, input, update_index, batch_offset); },
             py::arg("cache"),
             py::arg("input"),
-            py::arg("update_index"),
-            py::arg("batch_offset") = DefaultQueueId});
+            py::arg("update_index")});
 }
 
 template <typename update_cache_operation_t>

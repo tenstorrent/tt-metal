@@ -25,10 +25,8 @@ void bind_attn_matmul(pybind11::module& module) {
                std::optional<const DataType> output_dtype,
                std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<MemoryConfig>& memory_config,
-               std::optional<Tensor> optional_output_tensor,
-               QueueId queue_id) {
+               std::optional<Tensor> optional_output_tensor) {
                 return self(
-                    queue_id,
                     input_tensor_a,
                     input_tensor_b,
                     compute_with_storage_grid_size,
@@ -44,8 +42,7 @@ void bind_attn_matmul(pybind11::module& module) {
             pybind11::arg("dtype").noconvert() = std::nullopt,
             pybind11::arg("compute_kernel_config").noconvert() = std::nullopt,
             pybind11::arg("memory_config") = std::nullopt,
-            pybind11::arg("output_tensor") = std::nullopt,
-            pybind11::arg("queue_id") = DefaultQueueId});
+            pybind11::arg("output_tensor") = std::nullopt});
 }
 
 void bind_attn_matmul_from_cache(pybind11::module& module) {
@@ -65,10 +62,8 @@ void bind_attn_matmul_from_cache(pybind11::module& module) {
                const CoreCoord& compute_with_storage_grid_size,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<const DataType> dtype,
-               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               QueueId queue_id) {
+               std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
                 return self(
-                    queue_id,
                     input_tensor_a,
                     input_tensor_b,
                     num_tokens,
@@ -86,8 +81,7 @@ void bind_attn_matmul_from_cache(pybind11::module& module) {
             pybind11::arg("compute_with_storage_grid_size").noconvert(),
             pybind11::arg("memory_config") = std::nullopt,
             pybind11::arg("dtype") = std::nullopt,
-            pybind11::arg("compute_kernel_config") = std::nullopt,
-            pybind11::arg("queue_id") = DefaultQueueId});
+            pybind11::arg("compute_kernel_config") = std::nullopt});
 }
 
 }  // namespace ttnn::operations::experimental::matmul::detail

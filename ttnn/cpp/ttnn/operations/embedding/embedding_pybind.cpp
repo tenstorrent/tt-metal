@@ -32,7 +32,6 @@ void py_module(py::module& module) {
         Keyword args:
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             output_tensor (ttnn.Tensor, optional): Preallocated output tensor. Defaults to `None`.
-            queue_id (int, optional): command queue id. Defaults to `0`.
             padding_idx (int, optional): the padding token. Default to `None`.
             layout (ttnn.Layout): the layout of the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
             embeddings_type (ttnn.EmbeddingsType): the type of embeddings. Defaults to `ttnn._ttnn.operations.embedding.EmbeddingsType.GENERIC`.
@@ -73,18 +72,16 @@ void py_module(py::module& module) {
                EmbeddingsType embeddings_type,
                const std::optional<const DataType> dtype,
                std::optional<ttnn::Tensor>& optional_output_tensor,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) {
-                return self(
-                    queue_id,
-                    input_tensor,
-                    weight,
-                    padding_idx,
-                    layout,
-                    embeddings_type,
-                    dtype,
-                    memory_config,
-                    optional_output_tensor);
+               const std::optional<ttnn::MemoryConfig>& memory_config) {
+            return self(
+                input_tensor,
+                weight,
+                padding_idx,
+                layout,
+                embeddings_type,
+                dtype,
+                memory_config,
+                optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("weight").noconvert(),
@@ -94,8 +91,7 @@ void py_module(py::module& module) {
             py::arg("embeddings_type").noconvert() = EmbeddingsType::GENERIC,
             py::arg("dtype").noconvert() = std::nullopt,
             py::arg("output_tensor").noconvert() = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("memory_config") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::embedding

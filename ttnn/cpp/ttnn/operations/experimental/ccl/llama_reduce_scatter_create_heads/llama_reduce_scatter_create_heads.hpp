@@ -14,7 +14,6 @@ namespace operations::experimental::ccl {
 
 struct ExecuteLlamaReduceScatterCreateHeads {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
-        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         ttnn::Tensor& intermediate_packet_buffer,
         int32_t dim,

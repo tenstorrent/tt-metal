@@ -84,10 +84,8 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const MemoryConfig>& memory_config,
                const std::optional<const Conv2dSliceConfig>& slice_config_,
                bool return_output_dim,
-               bool return_weights_and_bias,
-               QueueId queue_id) -> ResultWithOptions {
+               bool return_weights_and_bias) -> ResultWithOptions {
                 return self(
-                    queue_id,
                     input_tensor,
                     weight_tensor,
                     device,
@@ -131,8 +129,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("slice_config") = std::nullopt,
             py::arg("return_output_dim") = false,
-            py::arg("return_weights_and_bias") = false,
-            py::arg("queue_id") = DefaultQueueId});
+            py::arg("return_weights_and_bias") = false});
     module.def(
         "prepare_conv_weights",
         prepare_conv_weights,

@@ -8,7 +8,6 @@
 #include "tt-metalium/constants.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "tt-metalium/math.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation.hpp"
@@ -21,7 +20,6 @@ namespace ttnn::operations::experimental {
 // Specialization for uint32_t and N=4
 template <>
 ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
-    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& output_tensor,
     const std::array<uint32_t, 4>& begins,
@@ -122,7 +120,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
             in_place_unpad &= begins[3] == 0 && ends[3] == padded_output_shape[3];
             if (in_place_unpad) {
                 log_info(tt::LogOp, "In-place unpad optimization via copy");
-                ttnn::copy(DefaultQueueId, input_tensor, output_tensor);
+                ttnn::copyinput_tensor, output_tensor);
                 return output_tensor;
             }
         }
@@ -132,8 +130,7 @@ ttnn::Tensor SliceWriteOperation::invoke<uint32_t, 4>(
             SliceWriteDeviceOperation{ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step)},
             {input},
             {},
-            {output_tensor},
-            queue_id)[0];
+            {output_tensor})[0];
         return output_tensor;
     }
 

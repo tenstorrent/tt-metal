@@ -7,8 +7,6 @@
 #include <utility>
 #include <variant>
 
-#include "ttnn/common/queue_id.hpp"
-
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/where_device_operation.hpp"
@@ -24,7 +22,6 @@ namespace ternary_utils {
 // y = (predicate >= 0)*value_true + (predicate < 0)*value_false
 
 Tensor where_impl(
-    QueueId queue_id,
     const Tensor& predicate,
     const auto& value_true,
     const auto& value_false,
@@ -34,7 +31,6 @@ Tensor where_impl(
     constexpr auto dtype = std::nullopt;
     const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
         return ttnn::multiply(
-            queue_id,
             condition,
             value,
             dtype,
@@ -47,9 +43,9 @@ Tensor where_impl(
     };
 
     return ttnn::add(
-        queue_id,
-        get_multiplied(ttnn::gtz(queue_id, predicate, memory_config), value_true),
-        get_multiplied(ttnn::lez(queue_id, predicate, memory_config), value_false),
+
+        get_multiplied(ttnn::gtzpredicate, memory_config), value_true),
+        get_multiplied(ttnn::lezpredicate, memory_config), value_false),
         dtype,
         memory_config,
         output,
@@ -64,7 +60,6 @@ inline bool have_same_shape(const Tensor& a, const Tensor& b) { return (a.logica
 }  // namespace ternary_utils
 
 Tensor WhereOperation::invoke(
-    QueueId queue_id,
     const Tensor& predicate,
     const std::variant<float, Tensor>& value_true,
     const std::variant<float, Tensor>& value_false,
@@ -98,7 +93,6 @@ Tensor WhereOperation::invoke(
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
                 return ttnn::prim::where(
-                    queue_id,
                     predicate,
                     t_true,
                     t_false,
@@ -115,7 +109,6 @@ Tensor WhereOperation::invoke(
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
                 return ttnn::prim::where(
-                    queue_id,
                     predicate,
                     t_true,
                     scalar_false,
@@ -132,7 +125,6 @@ Tensor WhereOperation::invoke(
                 std::optional<DataType> output_dtype = output.has_value() ? std::optional<DataType>(output->dtype())
                                                                           : std::optional<DataType>(predicate.dtype());
                 return ttnn::prim::where(
-                    queue_id,
                     predicate,
                     scalar_true,
                     t_false,
@@ -148,7 +140,6 @@ Tensor WhereOperation::invoke(
             unary::UnaryOpType op_type = unary::UnaryOpType::WHERE_TSS;
 
             return ttnn::operations::unary::Unary_chain::invoke(
-                queue_id,
                 predicate,
                 {unary::UnaryWithParam{op_type, {static_cast<float>(t_true), static_cast<float>(t_false)}}},
                 memory_config,
@@ -160,7 +151,7 @@ Tensor WhereOperation::invoke(
     return std::visit(
         [&](const auto&... values) {
             return ternary_utils::where_impl(
-                queue_id, predicate, values..., memory_config.value_or(predicate.memory_config()), std::move(output));
+                predicate, values..., memory_config.value_or(predicate.memory_config()), std::move(output));
         },
         value_true,
         value_false);

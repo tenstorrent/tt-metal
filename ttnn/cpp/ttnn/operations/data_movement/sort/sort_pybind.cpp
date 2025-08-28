@@ -73,9 +73,8 @@ void bind_sort_operation(py::module& module) {
                const bool descending,
                const bool stable,
                std::optional<std::tuple<ttnn::Tensor&, ttnn::Tensor&>> optional_output_tensors,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               QueueId queue_id) -> std::vector<ttnn::Tensor> {
-                return self(queue_id, input_tensor, dim, descending, stable, memory_config, optional_output_tensors);
+               const std::optional<ttnn::MemoryConfig>& memory_config) -> std::vector<ttnn::Tensor> {
+                return self(input_tensor, dim, descending, stable, memory_config, optional_output_tensors);
             },
             py::arg("input_tensor").noconvert(),
             py::arg("dim") = -1,
@@ -84,7 +83,7 @@ void bind_sort_operation(py::module& module) {
             py::kw_only(),
             py::arg("out") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = DefaultQueueId});
+        });
 }
 
 }  // namespace ttnn::operations::data_movement::detail
