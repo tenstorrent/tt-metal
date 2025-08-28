@@ -354,8 +354,33 @@ template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
     -> TensorAccessor<decltype(tensor_accessor::make_dspec_from_args(args))>;
 
-template <typename DSpec>
-TensorAccessor(DSpec&&, size_t, uint32_t) -> TensorAccessor<DSpec>;
+template <
+    uint32_t RankCT,
+    uint32_t NumBanksCT,
+    typename TensorShapeWrapper,
+    typename ShardShapeWrapper,
+    typename BankCoordsWrapper,
+    bool IsInterleaved,
+    bool IsDram>
+TensorAccessor(
+    tensor_accessor::DistributionSpec<
+        RankCT,
+        NumBanksCT,
+        TensorShapeWrapper,
+        ShardShapeWrapper,
+        BankCoordsWrapper,
+        IsInterleaved,
+        IsDram>,
+    size_t,
+    uint32_t)
+    -> TensorAccessor<tensor_accessor::DistributionSpec<
+        RankCT,
+        NumBanksCT,
+        TensorShapeWrapper,
+        ShardShapeWrapper,
+        BankCoordsWrapper,
+        IsInterleaved,
+        IsDram>>;
 
 namespace tensor_accessor::detail {
 template <typename... Args, uint32_t... Indexes>
