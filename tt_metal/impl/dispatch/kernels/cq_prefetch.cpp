@@ -927,15 +927,22 @@ void noc_read_64bit_any_len(uint32_t src_noc_addr, uint64_t src_addr, uint32_t d
         noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sNdL, CQ_NOC_send, CQ_NOC_WAIT>(noc_index, src_noc_addr, 0, 0, 0);
     }
     if (size > NOC_MAX_BURST_SIZE) {
+        // Set length to max burst size.
         noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_send, CQ_NOC_wait>(noc_index, 0, 0, 0, NOC_MAX_BURST_SIZE);
         while (size > NOC_MAX_BURST_SIZE) {
-            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndL, CQ_NOC_SEND, CQ_NOC_WAIT>(noc_index, 0, src_addr, dst_addr, 0);
+            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SnDl, CQ_NOC_SEND, CQ_NOC_wait>(noc_index, 0, src_addr, dst_addr, 0);
             src_addr += NOC_MAX_BURST_SIZE;
             dst_addr += NOC_MAX_BURST_SIZE;
             size -= NOC_MAX_BURST_SIZE;
+            // Do a wait before either the next iteration or the final read.
+            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndl, CQ_NOC_send, CQ_NOC_WAIT>(noc_index, 0, 0, 0, 0);
+        }
+    } else {
+        if constexpr (!set_src_noc_addr) {
+            noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_sndl, CQ_NOC_send, CQ_NOC_WAIT>(noc_index, 0, 0, 0, 0);
         }
     }
-    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SnDL, CQ_NOC_SEND, CQ_NOC_WAIT>(noc_index, 0, src_addr, dst_addr, size);
+    noc_read_with_state<DM_DEDICATED_NOC, read_cmd_buf, CQ_NOC_SnDL, CQ_NOC_SEND, CQ_NOC_wait>(noc_index, 0, src_addr, dst_addr, size);
 }
 
 uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_ptr) {
