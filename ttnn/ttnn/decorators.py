@@ -73,6 +73,8 @@ def compare_tensors_using_pcc(
 
 PRE_OPERATION_HOOKS = []
 
+set_current_command_queue_id = ttnn._ttnn.core.set_current_command_queue_id
+get_current_command_queue_id = ttnn._ttnn.core.get_current_command_queue_id
 
 @contextmanager
 def register_pre_operation_hook(hook):
@@ -122,9 +124,9 @@ def cq_id_pre_hook(operation, function_args, function_kwargs):
     # If we have a cq_id to use, save current state and switch
     if cq_id is not None:
         try:
-            old_cq_id = ttnn.get_current_command_queue_id()
+            old_cq_id = get_current_command_queue_id()
             CQ_ID_STACK.append(old_cq_id)
-            ttnn.set_current_command_queue_id(cq_id)
+            set_current_command_queue_id(cq_id)
             logger.info(
                 f"Switched command queue id from {old_cq_id} to {cq_id} for {operation.python_fully_qualified_name}"
             )
@@ -143,7 +145,7 @@ def cq_id_post_hook(operation, function_args, function_kwargs, output):
     if prev_cq_id is None:
         return None
 
-    ttnn.set_current_command_queue_id(prev_cq_id)
+    set_current_command_queue_id(prev_cq_id)
     CQ_ID_STACK.pop()
     logger.info(f"Restored command queue id to {prev_cq_id} for {operation.python_fully_qualified_name}")
 
@@ -166,15 +168,15 @@ def command_queue(cq_id):
             result2 = ttnn.other_operation(tensor, cq_id=2)  # Will use cq_id 2 (overrides context)
     """
     # Save the command queue state before entering context
-    old_cq_id = ttnn.get_current_command_queue_id()
+    old_cq_id = get_current_command_queue_id()
 
     try:
         logger.info(f"Switching command queue id from {old_cq_id} to {cq_id}")
-        ttnn.set_current_command_queue_id(cq_id)
+        set_current_command_queue_id(cq_id)
         yield
     finally:
         # Check if command queue is in expected state when exiting context
-        current_cq_id = ttnn.get_current_command_queue_id()
+        current_cq_id = get_current_command_queue_id()
         if current_cq_id != cq_id:
             logger.warning(
                 f"command_queue({cq_id}) context exiting with unexpected command queue ID: {current_cq_id}. "
@@ -184,7 +186,7 @@ def command_queue(cq_id):
 
         # Restore the original command queue state from before entering context
         logger.info(f"Restoring command queue id back to {old_cq_id}")
-        ttnn.set_current_command_queue_id(old_cq_id)
+        set_current_command_queue_id(old_cq_id)
 
 
 # Register cq_id hooks globally - enabled by default for all TTNN operations
