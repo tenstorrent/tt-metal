@@ -112,7 +112,8 @@ TEST_F(WatcherFixture, ActiveEthTestWatcherEthLinkCheck) {
     }
 
     // Close devices/context to trigger watcher check on teardown.
-    DebugToolsFixture::TearDown();  // Call parent teardown so we don't disable watcher
+    DebugToolsFixture::TearDown();  // NOLINT(bugprone-parent-virtual-call) Call parent teardown so we don't disable
+                                    // watcher
     MetalContext::instance().teardown();
     EXPECT_TRUE(FileContainsAllStrings(this->log_file_name, expected_strings));
 }
