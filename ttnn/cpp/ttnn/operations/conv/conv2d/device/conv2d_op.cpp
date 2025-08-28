@@ -44,7 +44,8 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool full_inner_dim,
-    bool enable_split_reader) {
+    bool enable_split_reader,
+    bool config_tensors_in_dram) {
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
     const auto& ashape = input_tensor_shape;
@@ -74,7 +75,8 @@ Tensor optimized_conv_new(
         enable_act_double_buffer,
         enable_weights_double_buffer,
         full_inner_dim,
-        enable_split_reader);
+        enable_split_reader,
+        config_tensors_in_dram);
     IDevice* device = a.device();
 
     optimized_conv_op.pre_op_l1_allocation_size_bytes =
@@ -219,7 +221,8 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             output_tensor,
             compute_kernel_config,
             enable_act_double_buffer,
-            enable_weights_double_buffer);
+            enable_weights_double_buffer,
+            config_tensors_in_dram);
     } else {
         // Use regular sharded implementation
         tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -257,7 +260,8 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             enable_act_double_buffer,
             enable_weights_double_buffer,
             enable_split_reader,
-            full_inner_dim);
+            full_inner_dim,
+            config_tensors_in_dram);
     }
 
     const uint32_t post_op_l1_allocation_size =
@@ -277,6 +281,7 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
         Conv2dConfig{
             .weights_dtype = input_tensor_b.dtype(),
+            .config_tensors_in_dram = this->config_tensors_in_dram,
             .shard_layout = this->memory_config.memory_layout(),
             .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
             .enable_act_double_buffer = enable_act_double_buffer,

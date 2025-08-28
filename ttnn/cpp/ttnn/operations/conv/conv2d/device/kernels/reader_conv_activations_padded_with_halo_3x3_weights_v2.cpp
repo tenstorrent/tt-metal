@@ -24,6 +24,12 @@ void kernel_main() {
     constexpr uint32_t cb_id_sharded_act = get_compile_time_arg_val(22);
     constexpr uint32_t cb_reader_indices = get_compile_time_arg_val(23);
 
+    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
+
+    uint32_t core_index = get_arg_val<uint32_t>(0);
+    load_config_tensor_if_in_dram<27, 28, 29, cb_reader_indices>(core_index);
+
     if constexpr (needs_act_block_zero_out) {
         zero_out_tiles<cb_id_act>();
     }
@@ -31,8 +37,6 @@ void kernel_main() {
     constexpr uint32_t window_outer_offset = conv_act_size_w_padded * conv_act_c_read_bytes * dilation_h;
 
     // LOOP TO FILL READER INDICES
-    volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_reader_indices));
 
     uint32_t reader_idx = 0;
 
