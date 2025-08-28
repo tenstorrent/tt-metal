@@ -42,23 +42,22 @@ uint32_t get_max_dimensions_for_architecture(proto::Architecture arch) {
     }
 }
 
-}  // namespace
-
-std::string MeshGraphDescriptor::get_validation_report() const {
-    if (error_messages_.empty()) {
+std::string get_validation_report(const std::vector<std::string>& error_messages) {
+    if (error_messages.empty()) {
         return "No validation errors found.\n";
     }
 
     std::ostringstream report;
     report << "=== MeshGraphDescriptor Validation Report ===\n\n";
     report << "Errors:\n";
-    for (const auto& error : error_messages_) {
+    for (const auto& error : error_messages) {
         report << "  - " << error << "\n";
     }
     report << "\n";
     
     return report.str();
 }
+}  // namespace
 
 MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) {
     proto::MeshGraphDescriptor temp_proto;
@@ -74,7 +73,8 @@ MeshGraphDescriptor::MeshGraphDescriptor(const std::string& text_proto) {
     set_defaults(temp_proto);
 
     // Validate the proto
-    TT_FATAL(static_validate(temp_proto), "Failed to validate MeshGraphDescriptor textproto\n{}", get_validation_report());
+    auto errors = static_validate(temp_proto);
+    TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
 
     proto_ = std::make_unique<proto::MeshGraphDescriptor>(temp_proto);
 }
@@ -117,135 +117,127 @@ void MeshGraphDescriptor::set_defaults(proto::MeshGraphDescriptor& proto) {
     }
 }
 
-bool MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& proto) {
-    bool success = true;
+std::vector<std::string> MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& proto) {
+    std::vector<std::string> all_errors;
 
-    // Clear any previous errors
-    error_messages_.clear();
-
-    // Run all validation methods
-    success &= validate_basic_structure(proto);
-
-    // Stop validation if any basic structure errors are found
-    if (!success) {
-        return success;
+    // Run validation groups with early exit checkpoints
+    {
+        auto errs = validate_basic_structure(proto);
+        all_errors.insert(all_errors.end(), errs.begin(), errs.end());
+        if (!all_errors.empty()) return all_errors;
     }
 
-    success &= validate_names(proto);
-    success &= validate_channels(proto);
-    success &= validate_architecture_consistency(proto);
-
-    // Stop validation if any architecture consistency errors are found
-    if (!success) {
-        return success;
+    {
+        auto errs = validate_names(proto);
+        all_errors.insert(all_errors.end(), errs.begin(), errs.end());
+        auto errs2 = validate_channels(proto);
+        all_errors.insert(all_errors.end(), errs2.begin(), errs2.end());
+        auto errs3 = validate_architecture_consistency(proto);
+        all_errors.insert(all_errors.end(), errs3.begin(), errs3.end());
+        if (!all_errors.empty()) return all_errors;
     }
 
-    success &= validate_mesh_topology(proto);
-    success &= validate_express_connections(proto);
-    success &= validate_graph_descriptors(proto);
-    success &= validate_graph_topology_and_connections(proto);
+    {
+        auto errs = validate_mesh_topology(proto);
+        all_errors.insert(all_errors.end(), errs.begin(), errs.end());
+        auto errs2 = validate_express_connections(proto);
+        all_errors.insert(all_errors.end(), errs2.begin(), errs2.end());
+        auto errs3 = validate_graph_descriptors(proto);
+        all_errors.insert(all_errors.end(), errs3.begin(), errs3.end());
+        auto errs4 = validate_graph_topology_and_connections(proto);
+        all_errors.insert(all_errors.end(), errs4.begin(), errs4.end());
+        if (!all_errors.empty()) return all_errors;
+    }
 
-    return success;
+    return all_errors;
 }
 
-bool MeshGraphDescriptor::validate_basic_structure(const proto::MeshGraphDescriptor& proto) {
-    bool success = true;
-
-    // There has to exist at least one mesh or graph descriptor
+std::vector<std::string> MeshGraphDescriptor::validate_basic_structure(const proto::MeshGraphDescriptor& proto) {
+    std::vector<std::string> errors;
     if (proto.mesh_descriptors_size() == 0) {
-        error_messages_.push_back("There must be at least one mesh descriptor");
-        success = false;
+        errors.push_back("There must be at least one mesh descriptor");
     }
-
-    // There has to be at least one top_level_instance
     if (!proto.has_top_level_instance()) {
-        error_messages_.push_back("Top level instance is required");
-        success = false;
+        errors.push_back("Top level instance is required");
     }
-
-    return success;
+    return errors;
 }
 
 
 
-bool MeshGraphDescriptor::validate_names(const proto::MeshGraphDescriptor& proto) {
-    bool success = true;
+std::vector<std::string> MeshGraphDescriptor::validate_names(const proto::MeshGraphDescriptor& proto) {
+    std::vector<std::string> error_messages;
 
-    unsigned int counter = 0;
+    unsigned int mesh_counter = 0;
 
     // Check that all mesh descriptors have a unique name
     std::unordered_set<std::string> mesh_names;
     for (const auto& mesh : proto.mesh_descriptors()) {
-        counter++;
+        mesh_counter++;
         if (mesh.name().empty()) {
-            error_messages_.push_back(
+            error_messages.push_back(
                 fmt::format(
                     "Mesh descriptor {} has no name",
-                    counter
+                    mesh_counter
                 )
             );
-            success = false;
             continue;
         }
-        if (mesh_names.find(mesh.name()) != mesh_names.end()) {
-            error_messages_.push_back(
+        auto [it, inserted] = mesh_names.insert(mesh.name());
+        if (!inserted) {
+            error_messages.push_back(
                 fmt::format(
                     "Mesh descriptor name is not unique (Mesh: {})", 
                     mesh.name()
                 )
             );
-            success = false;
         }
-        mesh_names.insert(mesh.name());
     }
 
-    counter = 0;
+    unsigned int graph_counter = 0;
 
     // Check that all graph descriptors have a unique name
-    std::unordered_set<std::string> names;
+    std::unordered_set<std::string> graph_names;
     for (const auto& graph : proto.graph_descriptors()) {
-        counter++;
+        graph_counter++;
         if (graph.name().empty()) {
-            error_messages_.push_back(
+            error_messages.push_back(
                 fmt::format(
                     "Graph descriptor {} has no name",
-                    counter
+                    graph_counter
                 )
             );
-            success = false;
             continue;
         }
-        if (mesh_names.find(graph.name()) != mesh_names.end()) {
-            error_messages_.push_back(
+        auto [it, inserted] = graph_names.insert(graph.name());
+        if (!inserted) {
+            error_messages.push_back(
                 fmt::format(
                     "Graph descriptor name is not unique (Graph: {})", 
                     graph.name()
                 )
             );
-            success = false;
         }
-        names.insert(graph.name());
     }
 
-    return success;
+    return error_messages;
 }
 
 
-bool MeshGraphDescriptor::validate_mesh_topology(const proto::MeshGraphDescriptor& proto) {
-    bool success = true;
+std::vector<std::string> MeshGraphDescriptor::validate_mesh_topology(const proto::MeshGraphDescriptor& proto) {
+    std::vector<std::string> error_messages;
 
     // Validate basic mesh properties (names and dimensions)
     for (const auto& mesh : proto.mesh_descriptors()) {
         // Check that all dims are positive
         for (const auto& dim : mesh.device_topology().dims()) {
             if (dim <= 0) {
-                error_messages_.push_back(
+                error_messages.push_back(
                     fmt::format(
                         "Device topology dimensions must be positive (Mesh: {})", 
                         mesh.name()
                     )
                 );
-                success = false;
                 continue;
             }
         }
@@ -253,75 +245,71 @@ bool MeshGraphDescriptor::validate_mesh_topology(const proto::MeshGraphDescripto
         // Check that device topology dimensions and types are the same size
         if (mesh.device_topology().dim_types_size() > 0) {
             if (mesh.device_topology().dims_size() != mesh.device_topology().dim_types_size()) {
-                error_messages_.push_back(
+                error_messages.push_back(
                     fmt::format(
                         "Device topology dimensions and types must be the same size (Mesh: {})", 
                         mesh.name()
                     )
                 );
-                success = false;
                 continue;
             }
         }
 
         // Check that the device and host topology dimensions are the same size
         if (mesh.device_topology().dims_size() != mesh.host_topology().dims_size()) {
-            error_messages_.push_back(
+            error_messages.push_back(
                 fmt::format(
                     "Device and host topology dimensions must be the same size (Mesh: {})", 
                     mesh.name()
                 )
             );
-            success = false;
             continue;
         }
     }
 
-    return success;
+    return error_messages;
 }
 
-bool MeshGraphDescriptor::validate_architecture_consistency(const proto::MeshGraphDescriptor& proto) {
-    bool success = true;
+std::vector<std::string> MeshGraphDescriptor::validate_architecture_consistency(const proto::MeshGraphDescriptor& proto) {
+    std::vector<std::string> error_messages;
 
     // Check all architectures are the same
     if (proto.mesh_descriptors_size() > 0) {
         proto::Architecture first_arch = proto.mesh_descriptors(0).arch();
         if (!std::all_of(proto.mesh_descriptors().begin(), proto.mesh_descriptors().end(),
                         [first_arch](const auto& mesh) { return mesh.arch() == first_arch; })) {
-            error_messages_.push_back("All mesh descriptors must have the same architecture");
-            return false;
+            error_messages.push_back("All mesh descriptors must have the same architecture");
+            return error_messages;
         }
     }
 
 // Verify that arch, device and host topology must exist in mesh descriptors
     for (const auto& mesh : proto.mesh_descriptors()) {
         if (mesh.arch() == proto::Architecture::INVALID_ARCHITECTURE) {
-            error_messages_.push_back( 
+            error_messages.push_back( 
                 fmt::format(
                     "Mesh descriptor must have a valid architecture (Mesh: {})", 
                     mesh.name()
                 )
             );
-            success = false;
             continue;
         }
 
         // Validate architecture and dimension limits
         uint32_t max_num_dims = get_max_dimensions_for_architecture(mesh.arch());
         if (max_num_dims == 0) {
-            error_messages_.push_back( 
+            error_messages.push_back( 
                 fmt::format(
                     "Invalid architecture (Mesh: {})", 
                     mesh.name()
                 )
             );
-            success = false;
             continue;
         }
 
         // Check that the number of dimensions is not greater than the maximum allowed for the architecture
         if (mesh.device_topology().dims_size() > max_num_dims) {
-            error_messages_.push_back(
+            error_messages.push_back(
                 fmt::format(
                     "Architecture devices allow a maximum of {} dimensions, but {} were provided (Mesh: {})", 
                     max_num_dims, 
@@ -329,40 +317,37 @@ bool MeshGraphDescriptor::validate_architecture_consistency(const proto::MeshGra
                     mesh.name()
                 )
             );
-            success = false;
             continue;
         }
     }
         
-    return success;
+    return error_messages;
 }
 
-bool MeshGraphDescriptor::validate_channels(const proto::MeshGraphDescriptor& proto) {
-    bool success = true;
+std::vector<std::string> MeshGraphDescriptor::validate_channels(const proto::MeshGraphDescriptor& proto) {
+    std::vector<std::string> error_messages;
 
     // Check all channel counts > 0
     for (const auto& mesh : proto.mesh_descriptors()) {
         if (mesh.channels().count() <= 0) {
-            error_messages_.push_back( 
+            error_messages.push_back( 
                 fmt::format(
                     "Channel count must be positive (Mesh: {})", 
                     mesh.name()
                 )
             );
-            success = false;
         }
     }
 
     // Check that channels in graph topology are positive
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.has_graph_topology() && graph.graph_topology().channels().count() <= 0) {
-            error_messages_.push_back( 
+            error_messages.push_back( 
                 fmt::format(
                     "Graph topology channel count must be positive (Graph: {})", 
                     graph.name()
                 )
             );
-            success = false;
         }
     }
 
@@ -371,22 +356,21 @@ bool MeshGraphDescriptor::validate_channels(const proto::MeshGraphDescriptor& pr
         // Check connection-level channels and validate connection nodes
         for (const auto& connection : graph.connections()) {
             if (connection.channels().count() <= 0) {
-                error_messages_.push_back( 
+                error_messages.push_back( 
                     fmt::format(
                         "Connection channel count must be positive (Graph: {})", 
                         graph.name()
                     )
                 );
-                success = false;
             }
         }
     }
 
-    return success;
+    return error_messages;
 }
 
-bool MeshGraphDescriptor::validate_express_connections(const proto::MeshGraphDescriptor& proto) {
-    bool success = true;
+std::vector<std::string> MeshGraphDescriptor::validate_express_connections(const proto::MeshGraphDescriptor& proto) {
+    std::vector<std::string> error_messages;
 
     // Validate express connections
     for (const auto& mesh : proto.mesh_descriptors()) {
@@ -401,116 +385,98 @@ bool MeshGraphDescriptor::validate_express_connections(const proto::MeshGraphDes
         // Check that express connections are valid and have the right number of devices
         for (const auto& express_connection : mesh.express_connections()) {
             if (express_connection.src() < 0 || express_connection.src() >= num_devices) {
-                error_messages_.push_back( 
+                error_messages.push_back( 
                     fmt::format(
                         "Express connection source is out of bounds (Mesh: {})", 
                         mesh.name()
                     )
                 );
-                success = false;
             }
             if (express_connection.dst() < 0 || express_connection.dst() >= num_devices) {
-                error_messages_.push_back( 
+                error_messages.push_back( 
                     fmt::format(
                         "Express connection destination is out of bounds (Mesh: {})", 
                         mesh.name()
                     )
                 );
-                success = false;
             }
         }
     }
 
-    return success;
+    return error_messages;
 }
 
-bool MeshGraphDescriptor::validate_graph_descriptors(const proto::MeshGraphDescriptor& proto) {
-    bool success = true;
+std::vector<std::string> MeshGraphDescriptor::validate_graph_descriptors(const proto::MeshGraphDescriptor& proto) {
+    std::vector<std::string> error_messages;
 
     // Check that there is at least one instance in the graph and validate references
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.instances_size() == 0) {
-            error_messages_.push_back( 
+            error_messages.push_back( 
                 fmt::format(
                     "Graph descriptor must have at least one instance (Graph: {})", 
                     graph.name()
                 )
             );
-            success = false;
         }
     }
 
     // Verify that type is set in graph descriptors
     for (const auto& graph : proto.graph_descriptors()) {
         if (graph.type().empty()) {
-            error_messages_.push_back( 
+            error_messages.push_back( 
                 fmt::format(
                     "Graph descriptor must have a type specified (Graph: {})", 
                     graph.name()
                 )
             );
-            success = false;
         }
     }
 
-    return success;
+    return error_messages;
 }
 
-bool MeshGraphDescriptor::validate_graph_topology_and_connections(const proto::MeshGraphDescriptor& proto) {
-    bool success = true;
+std::vector<std::string> MeshGraphDescriptor::validate_graph_topology_and_connections(const proto::MeshGraphDescriptor& proto) {
+    std::vector<std::string> error_messages;
 
     // Combine all checks into a single loop over graph_descriptors
     for (const auto& graph : proto.graph_descriptors()) {
         // Check that there is a graph topology or connections for each graph descriptor
         if (!graph.has_graph_topology() && graph.connections_size() == 0) {
-            error_messages_.push_back( 
+            error_messages.push_back( 
                 fmt::format(
                     "Graph descriptor must have either graph_topology or connections defined (Graph: {})", 
                     graph.name()
                 )
             );
-            success = false;
             continue;
         }
 
         // Check that both graph_topology and connections are not defined at the same time
         if (graph.has_graph_topology() && graph.connections_size() > 0) {
-            error_messages_.push_back( 
+            error_messages.push_back( 
                 fmt::format(
                     "Graph descriptor cannot have both graph_topology and connections defined (Graph: {})", 
                     graph.name()
                 )
             );
-            success = false;
-            continue;
-        }
-
-        if (graph.connections_size() > 0 && graph.has_graph_topology()) {
-            error_messages_.push_back( 
-                fmt::format(
-                    "Graph descriptor cannot have both connections and graph_topology defined (Graph: {})", 
-                    graph.name()
-                )
-            );
-            success = false;
             continue;
         }
 
         // Check connections have at least 2 nodes
         for (const auto& connection : graph.connections()) {
             if (connection.nodes_size() < 2) {
-                error_messages_.push_back( 
+                error_messages.push_back( 
                     fmt::format(
                         "Connection must have at least two nodes (Graph: {})", 
                         graph.name()
                     )
                 );
-                success = false;
             }
         }
     }
 
-    return success;
+    return error_messages;
 }
 
 // Dynamic checks to implement

@@ -13,8 +13,6 @@
 
 namespace tt::tt_fabric::fabric_router_tests {
 
-// (Old message verification helpers removed.)
-
 TEST(MeshGraphDescriptorTests, ParsesFromTextProtoString) {
     const std::string text_proto = R"proto(
         mesh_descriptors: {
@@ -49,15 +47,12 @@ TEST(MeshGraphDescriptorTests, InvalidProtoNoMeshDescriptors) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" id: 0 } }
     )proto";
 
-    // Capture stdout, trigger validation, then print captured output and exception message
-    try {
-        MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for no mesh descriptors";
-    } catch (const std::runtime_error& e) {
-        // Verify new messages
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("There must be at least one mesh descriptor"));
-    }
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("There must be at least one mesh descriptor"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoDimensionValidationFailures) {
@@ -76,14 +71,12 @@ TEST(MeshGraphDescriptorTests, InvalidProtoDimensionValidationFailures) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" id: 0 } }
     )proto";
 
-    try {
-        MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for multiple validation failures";
-    } catch (const std::runtime_error& e) {
-        // Early-stop behavior: only first error from names stage is reported
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Mesh descriptor 1 has no name"));
-    }
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Mesh descriptor 1 has no name"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoArchitectureDimLimit) {
@@ -99,13 +92,12 @@ TEST(MeshGraphDescriptorTests, InvalidProtoArchitectureDimLimit) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    try {
-        MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for exceeding architecture dimension limit";
-    } catch (const std::runtime_error& e) {
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Architecture devices allow a maximum of 2 dimensions, but 3 were provided (Mesh: M0)"));
-    }
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Architecture devices allow a maximum of 2 dimensions, but 3 were provided (Mesh: M0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoDeviceHostDimSizeMismatch) {
@@ -121,13 +113,12 @@ TEST(MeshGraphDescriptorTests, InvalidProtoDeviceHostDimSizeMismatch) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    try {
-        MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for device/host dimension size mismatch";
-    } catch (const std::runtime_error& e) {
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Device and host topology dimensions must be the same size (Mesh: M0)"));
-    }
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Device and host topology dimensions must be the same size (Mesh: M0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoMixedArchitectures) {
@@ -151,13 +142,12 @@ TEST(MeshGraphDescriptorTests, InvalidProtoMixedArchitectures) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    try {
-        MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for mixed architectures";
-    } catch (const std::runtime_error& e) {
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("All mesh descriptors must have the same architecture"));
-    }
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("All mesh descriptors must have the same architecture"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidProtoExpressConnectionBounds) {
@@ -175,14 +165,13 @@ TEST(MeshGraphDescriptorTests, InvalidProtoExpressConnectionBounds) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    try {
-        MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for express connection bounds";
-    } catch (const std::runtime_error& e) {
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Express connection source is out of bounds (Mesh: M0)"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Express connection destination is out of bounds (Mesh: M0)"));
-    }
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Express connection source is out of bounds (Mesh: M0)"),
+                ::testing::HasSubstr("Express connection destination is out of bounds (Mesh: M0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidGraphTopologyChannelCount) {
@@ -208,13 +197,12 @@ TEST(MeshGraphDescriptorTests, InvalidGraphTopologyChannelCount) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    try {
-        MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for negative graph topology channels";
-    } catch (const std::runtime_error& e) {
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph topology channel count must be positive (Graph: G0)"));
-    }
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Graph topology channel count must be positive (Graph: G0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, InvalidConnectionChannelCount) {
@@ -242,13 +230,12 @@ TEST(MeshGraphDescriptorTests, InvalidConnectionChannelCount) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    try {
-        MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for negative connection channels";
-    } catch (const std::runtime_error& e) {
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Connection channel count must be positive (Graph: G0)"));
-    }
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Connection channel count must be positive (Graph: G0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, GraphMustHaveAtLeastOneInstance) {
@@ -275,13 +262,12 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveAtLeastOneInstance) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    try {
-        MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for missing graph instances";
-    } catch (const std::runtime_error& e) {
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph descriptor must have at least one instance (Graph: G0)"));
-    }
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Graph descriptor must have at least one instance (Graph: G0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, GraphMustHaveTypeSpecified) {
@@ -306,13 +292,12 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveTypeSpecified) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    try {
-        MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for missing graph type";
-    } catch (const std::runtime_error& e) {
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph descriptor must have a type specified (Graph: G1)"));
-    }
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Graph descriptor must have a type specified (Graph: G1)"))));
 }
 
 TEST(MeshGraphDescriptorTests, ConnectionMustHaveAtLeastTwoNodes) {
@@ -339,13 +324,12 @@ TEST(MeshGraphDescriptorTests, ConnectionMustHaveAtLeastTwoNodes) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    try {
-        MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for too few connection nodes";
-    } catch (const std::runtime_error& e) {
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Connection must have at least two nodes (Graph: G0)"));
-    }
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Connection must have at least two nodes (Graph: G0)"))));
 }
 
 TEST(MeshGraphDescriptorTests, GraphMustHaveTopologyOrConnections) {
@@ -367,13 +351,12 @@ TEST(MeshGraphDescriptorTests, GraphMustHaveTopologyOrConnections) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    try {
-        MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for missing topology and connections";
-    } catch (const std::runtime_error& e) {
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph descriptor must have either graph_topology or connections defined (Graph: G1)"));
-    }
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::AllOf(
+                ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+                ::testing::HasSubstr("Graph descriptor must have either graph_topology or connections defined (Graph: G1)"))));
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
