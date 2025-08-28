@@ -2,11 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from io import BytesIO
 from pathlib import Path
 from typing import Optional
-import requests
-from io import BytesIO
+
 import llama_models.llama3.reference_impl.generation as llama_reference_generation
+import requests
 from llama_models.llama3.api.chat_format import ChatFormat
 from llama_models.llama3.api.datatypes import ImageMedia, UserMessage
 from llama_models.llama3.api.tokenizer import Tokenizer
@@ -15,7 +16,6 @@ from PIL import Image as PIL_Image
 from pkg_resources import resource_filename
 
 from models.tt_transformers.tt.generator import create_submeshes
-from models.tt_transformers.tt.model_config import DecodersPrecision
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
@@ -31,7 +31,8 @@ from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import hf_multimodal_encode
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import CheckpointType
+from models.tt_transformers.tt.model_config import CheckpointType, DecodersPrecision
+
 
 def get_batch_sampler(temperature, top_p, tokenizer):
     def sample(logits):
@@ -65,8 +66,8 @@ def create_multimodal_model(
     optimizations=None,
     num_layers=None,
 ):
-    from models.demos.gemma3.tt.model_config import ModelArgs
     from models.demos.gemma3.tt.gemma_e2e_model import TtGemmaModel
+    from models.demos.gemma3.tt.model_config import ModelArgs
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, optimizations=optimizations)
@@ -233,6 +234,10 @@ def test_multimodal_demo_text(
         num_layers=num_layers,
     )
 
+    import pdb
+
+    pdb.set_trace()
+
     HF_MODEL = model_args[0].checkpoint_type == CheckpointType.HuggingFace
 
     if not HF_MODEL:
@@ -266,8 +271,13 @@ def test_multimodal_demo_text(
     with open(IMG_PATH / "dog.jpg", "rb") as f:
         img = PIL_Image.open(f).convert("RGB")
 
-
-    bee_image = PIL_Image.open(BytesIO(requests.get("https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/bee.jpg").content)).convert("RGB")
+    bee_image = PIL_Image.open(
+        BytesIO(
+            requests.get(
+                "https://huggingface.co/datasets/huggingface/documentation-images/resolve/main/bee.jpg"
+            ).content
+        )
+    ).convert("RGB")
     logger.info(f"Bee image dimensions: {bee_image.size} (width x height)")
 
     # Trace capture dialogs with random images

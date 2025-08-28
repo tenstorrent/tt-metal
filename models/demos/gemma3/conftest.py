@@ -2,12 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from models.tt_transformers.tt.model_config import parse_optimizations
 import os
 
 import pytest
 
 import ttnn
+from models.demos.gemma3.tt.model_config import parse_optimizations
+
 
 # These inputs override the default inputs used by simple_text_demo.py. Check the main demo to see the default values.
 def pytest_addoption(parser):
@@ -57,12 +58,12 @@ def pytest_addoption(parser):
         help="Run stress test (same decode iteration over a large number of iterations",
     )
     parser.addoption(
-        "--enable_trace",
-        action="store",
-        default=None,
-        type=bool,
+        "--disable_trace",
+        action="store_false",
+        dest="enable_trace",
         help="Whether to enable tracing",
     )
+
 
 @pytest.fixture
 def device_params(request, galaxy_type):
