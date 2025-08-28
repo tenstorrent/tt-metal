@@ -163,8 +163,8 @@ private:
     std::unordered_map<ChipId, std::vector<uint16_t>> dram_bank_to_noc_xy_;
     std::unordered_map<ChipId, std::vector<uint16_t>> l1_bank_to_noc_xy_;
 
-    std::unordered_map<chip_id_t, std::vector<uint16_t>> logical_col_to_translated_col_;
-    std::unordered_map<chip_id_t, std::vector<uint16_t>> logical_row_to_translated_row_;
+    std::unordered_map<chip_id_t, std::vector<uint8_t>> logical_col_to_translated_col_;
+    std::unordered_map<chip_id_t, std::vector<uint8_t>> logical_row_to_translated_row_;
 
     llrt::RunTimeOptions rtoptions_;
     std::unique_ptr<Cluster> cluster_;
