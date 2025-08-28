@@ -26,7 +26,6 @@ struct MultiInterleavedConfig {
     uint32_t page_size_bytes = 0;
     DataFormat l1_data_format = DataFormat::Invalid;
     CoreRangeSet cores = CoreRangeSet();
-    // bool is_dram = true;  // just always do dram
     bool read_kernel = true;
     bool write_kernel = true;
 };
@@ -67,7 +66,6 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterlea
     assert(test_config.read_kernel || test_config.write_kernel);  // At least one kernel must run
 
     // Input
-    // vector<uint32_t> packed_input = create_arange_vector_of_bfloat16(total_size_bytes, false);
     vector<uint32_t> packed_input = generate_packed_uniform_random_vector<uint32_t, bfloat16>(
         -100.0f, 100.0f, total_size_bytes / bfloat16::SIZEOF, chrono::system_clock::now().time_since_epoch().count());
 
@@ -120,7 +118,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterlea
             test_config.cores,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
-                .noc = NOC::RISCV_0_default,
+                .noc = NOC::RISCV_0_default,  // NOC0 should be used when reading from DRAM into Tensix core L1
                 .compile_args = reader_compile_args});
 
         for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
@@ -137,7 +135,7 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterlea
             test_config.cores,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
-                .noc = NOC::RISCV_1_default,
+                .noc = NOC::RISCV_1_default,  // NOC1 should be used when writing from Tensix core L1 into DRAM
                 .compile_args = writer_compile_args});
 
         for (size_t i = 0; i < test_config.cores.num_cores(); ++i) {
@@ -145,9 +143,6 @@ bool run_dm(shared_ptr<distributed::MeshDevice> mesh_device, const MultiInterlea
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel, core_list[i], writer_run_time_args);
         }
     }
-
-    // log_info(tt::LogTest, "Input buffer addr: {}, Output buffer addr: {}", input_buffer_address,
-    // output_buffer_address);
 
     // Assign unique id
     log_info(tt::LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
