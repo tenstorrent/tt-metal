@@ -101,9 +101,9 @@ TEST_F(DeviceFixture, TensixTestNamedCompileTimeArgs) {
         std::vector<uint32_t> results;
         detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
 
-        ASSERT_EQ(results[0], compile_time_args[0]) << "'buffer_size' should match indexed 1024";
-        ASSERT_EQ(results[1], compile_time_args[2]) << "'num_tiles' should match indexed 64";
-        ASSERT_EQ(results[2], compile_time_args[1]) << "'enable_debug' should match indexed 1";
-        ASSERT_EQ(results[3], compile_time_args[3]) << "'stride_value' should match indexed 8";
+        ASSERT_EQ(results[0], compile_time_args[0]) << "'buffer_size' should be 1024";
+        ASSERT_EQ(results[1], compile_time_args[2]) << "'num_tiles' should be 64";
+        ASSERT_EQ(results[2], compile_time_args[1]) << "'enable_debug' should be 1";
+        ASSERT_EQ(results[3], compile_time_args[3]) << "'stride_value' should be 8";
     }
 }

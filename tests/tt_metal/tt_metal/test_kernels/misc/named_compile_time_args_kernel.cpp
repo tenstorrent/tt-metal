@@ -5,10 +5,10 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    constexpr uint32_t buffer_size = get_compile_time_arg_val_by_name("buffer_size");
-    constexpr uint32_t num_tiles = get_compile_time_arg_val_by_name("num_tiles");
-    constexpr uint32_t enable_debug = get_compile_time_arg_val_by_name("enable_debug");
-    constexpr uint32_t stride_value = get_compile_time_arg_val_by_name("stride_value");
+    constexpr uint32_t buffer_size = get_named_compile_time_arg_val("buffer_size");
+    constexpr uint32_t num_tiles = get_named_compile_time_arg_val("num_tiles");
+    constexpr uint32_t enable_debug = get_named_compile_time_arg_val("enable_debug");
+    constexpr uint32_t stride_value = get_named_compile_time_arg_val("stride_value");
 
     volatile uint32_t tt_l1_ptr* l1_ptr = (volatile uint32_t tt_l1_ptr*)WRITE_ADDRESS;
 
