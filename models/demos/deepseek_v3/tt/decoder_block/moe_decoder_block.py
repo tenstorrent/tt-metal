@@ -130,7 +130,6 @@ class MoEDecoderBlock(DecoderBlockBase):
                 None if is_padding else MoE.create_state(hf_config, mesh_device, ccl) for is_padding in is_padding_layer
             ],
             "shared_expert": SharedExpert.create_state(hf_config, mesh_device, ccl),
-            "apply_dp": {},
             "revert_dp": {
                 "multi_device_global_semaphore": ccl.get_gather_sem(0),
             },
