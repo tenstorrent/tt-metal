@@ -125,10 +125,22 @@ bool MeshGraphDescriptor::static_validate(const proto::MeshGraphDescriptor& prot
 
     // Run all validation methods
     success &= validate_basic_structure(proto);
+
+    // Stop validation if any basic structure errors are found
+    if (!success) {
+        return success;
+    }
+
     success &= validate_names(proto);
-    success &= validate_mesh_topology(proto);
-    success &= validate_architecture_consistency(proto);
     success &= validate_channels(proto);
+    success &= validate_architecture_consistency(proto);
+
+    // Stop validation if any architecture consistency errors are found
+    if (!success) {
+        return success;
+    }
+
+    success &= validate_mesh_topology(proto);
     success &= validate_express_connections(proto);
     success &= validate_graph_descriptors(proto);
     success &= validate_graph_topology_and_connections(proto);
@@ -175,8 +187,7 @@ bool MeshGraphDescriptor::validate_names(const proto::MeshGraphDescriptor& proto
             success = false;
             continue;
         }
-        auto [it, inserted] = mesh_names.insert(mesh.name());
-        if (!inserted) {
+        if (mesh_names.find(mesh.name()) != mesh_names.end()) {
             error_messages_.push_back(
                 fmt::format(
                     "Mesh descriptor name is not unique (Mesh: {})", 
@@ -185,6 +196,7 @@ bool MeshGraphDescriptor::validate_names(const proto::MeshGraphDescriptor& proto
             );
             success = false;
         }
+        mesh_names.insert(mesh.name());
     }
 
     counter = 0;
@@ -281,7 +293,7 @@ bool MeshGraphDescriptor::validate_architecture_consistency(const proto::MeshGra
         }
     }
 
-    // Verify that arch, device and host topology must exist in mesh descriptors
+// Verify that arch, device and host topology must exist in mesh descriptors
     for (const auto& mesh : proto.mesh_descriptors()) {
         if (mesh.arch() == proto::Architecture::INVALID_ARCHITECTURE) {
             error_messages_.push_back( 
@@ -343,7 +355,7 @@ bool MeshGraphDescriptor::validate_channels(const proto::MeshGraphDescriptor& pr
 
     // Check that channels in graph topology are positive
     for (const auto& graph : proto.graph_descriptors()) {
-        if (graph.graph_topology().channels().count() <= 0) {
+        if (graph.has_graph_topology() && graph.graph_topology().channels().count() <= 0) {
             error_messages_.push_back( 
                 fmt::format(
                     "Graph topology channel count must be positive (Graph: {})", 
@@ -501,7 +513,7 @@ bool MeshGraphDescriptor::validate_graph_topology_and_connections(const proto::M
     return success;
 }
 
-// Dynamic checks to implement in seperate PR
+// Dynamic checks to implement
 // Check that all instances have been defined somewhere
 // Check that all instances are of the same type
 // Validate that connection nodes reference valid instances in this graph

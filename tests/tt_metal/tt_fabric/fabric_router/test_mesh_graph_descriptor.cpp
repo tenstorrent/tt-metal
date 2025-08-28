@@ -40,6 +40,7 @@ TEST(MeshGraphDescriptorTests, ParsesFromTextProtoString) {
 TEST(MeshGraphDescriptorTests, ParsesFromTextProtoFile) {
     const std::filesystem::path text_proto_file_path =
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/mgd2_syntax_check_mesh_graph_descriptor.textproto";
+    // Sample file should parse successfully; unknown fields are allowed.
     EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto_file_path));
 }
 
@@ -75,112 +76,302 @@ TEST(MeshGraphDescriptorTests, InvalidProtoDimensionValidationFailures) {
         top_level_instance: { mesh: { mesh_descriptor: "M0" id: 0 } }
     )proto";
 
-    // Capture stdout, trigger validation, then print captured output and exception message
     try {
         MeshGraphDescriptor desc(text_proto);
         FAIL() << "Expected std::runtime_error for multiple validation failures";
     } catch (const std::runtime_error& e) {
-        // Verify new messages
+        // Early-stop behavior: only first error from names stage is reported
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Mesh descriptor 1 has no name"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Device and host topology dimensions must be the same size"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Architecture devices allow a maximum of 2 dimensions, but 3 were provided"));
     }
 }
 
-TEST(MeshGraphDescriptorTests, InvalidProtoMeshDescriptorValidation) {
+TEST(MeshGraphDescriptorTests, InvalidProtoArchitectureDimLimit) {
     std::string text_proto = R"proto(
         mesh_descriptors: {
           name: "M0"
           arch: WORMHOLE_B0
-          device_topology: { dims: [ 1, 3 ] }  # 3 devices total (0,1,2)
+          device_topology: { dims: [ 1, 4, 3 ] }
           channels: { count: 1 }
-          host_topology: { dims: [ 1, 3 ] }
-          express_connections: { src: 5 dst: 1 }   # src out of bounds
-          express_connections: { src: 1 dst: 5 }   # dst out of bounds
-        }
-
-        mesh_descriptors: {
-          name: "M0"
-          arch: WORMHOLE_B0
-          device_topology: { dims: [ -11, 3 ] }  # 3 devices total (0,1,2)
-          channels: { count: 1 }
-        }
-
-        mesh_descriptors: {
-          name: "M1"
-          express_connections: { src: -1 dst: 1 }  # negative src
-          express_connections: { src: 1 dst: -1 }  # negative dst
+          host_topology: { dims: [ 1, 4, 3 ] }
         }
 
         top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    // Capture stdout, trigger validation, then print captured output and exception message
     try {
         MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for multiple express connection validation failures";
+        FAIL() << "Expected std::runtime_error for exceeding architecture dimension limit";
     } catch (const std::runtime_error& e) {
-        // Verify new messages (subset)
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Mesh descriptor name is not unique (Mesh: M0)"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Device topology dimensions must be positive (Mesh: M0)"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Architecture devices allow a maximum of 2 dimensions, but 3 were provided (Mesh: M0)"));
+    }
+}
+
+TEST(MeshGraphDescriptorTests, InvalidProtoDeviceHostDimSizeMismatch) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 4 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1 ] }
+        }
+
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    try {
+        MeshGraphDescriptor desc(text_proto);
+        FAIL() << "Expected std::runtime_error for device/host dimension size mismatch";
+    } catch (const std::runtime_error& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Device and host topology dimensions must be the same size (Mesh: M0)"));
+    }
+}
+
+TEST(MeshGraphDescriptorTests, InvalidProtoMixedArchitectures) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 2 ] }
+        }
+
+        mesh_descriptors: {
+          name: "M1"
+          arch: BLACKHOLE
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 2 ] }
+        }
+
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    try {
+        MeshGraphDescriptor desc(text_proto);
+        FAIL() << "Expected std::runtime_error for mixed architectures";
+    } catch (const std::runtime_error& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
         EXPECT_THAT(e.what(), ::testing::HasSubstr("All mesh descriptors must have the same architecture"));
+    }
+}
+
+TEST(MeshGraphDescriptorTests, InvalidProtoExpressConnectionBounds) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 3 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 3 ] }
+          express_connections: { src: 5 dst: 1 }
+          express_connections: { src: 1 dst: 5 }
+        }
+
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    try {
+        MeshGraphDescriptor desc(text_proto);
+        FAIL() << "Expected std::runtime_error for express connection bounds";
+    } catch (const std::runtime_error& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Express connection source is out of bounds (Mesh: M0)"));
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Express connection destination is out of bounds (Mesh: M0)"));
     }
 }
 
-TEST(MeshGraphDescriptorTests, InvalidProtoGraphDescriptorValidation) {
+TEST(MeshGraphDescriptorTests, InvalidGraphTopologyChannelCount) {
     std::string text_proto = R"proto(
-        graph_descriptors: {
-            name: "G0"
-            connections: {
-                nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-                nodes: { mesh: { mesh_descriptor: "M1" mesh_id: 0 } }
-                channels: { count: -1 }
-                directional: false
-            }
-            connections: {
-                nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-                channels: { count: 4 }
-                directional: false
-            }
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 2 ] }
         }
 
         graph_descriptors: {
             name: "G0"
+            type: "fabric"
             instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-            instances: { mesh: { mesh_descriptor: "M1" mesh_id: 0 } }
             graph_topology: {
                 layout_type: ALL_TO_ALL
                 channels: { count: -1 }
             }
         }
 
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    try {
+        MeshGraphDescriptor desc(text_proto);
+        FAIL() << "Expected std::runtime_error for negative graph topology channels";
+    } catch (const std::runtime_error& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph topology channel count must be positive (Graph: G0)"));
+    }
+}
+
+TEST(MeshGraphDescriptorTests, InvalidConnectionChannelCount) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 2 ] }
+        }
+
+        graph_descriptors: {
+            name: "G0"
+            type: "fabric"
+            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            connections: {
+                nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+                nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+                channels: { count: -1 }
+                directional: false
+            }
+        }
+
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    try {
+        MeshGraphDescriptor desc(text_proto);
+        FAIL() << "Expected std::runtime_error for negative connection channels";
+    } catch (const std::runtime_error& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Connection channel count must be positive (Graph: G0)"));
+    }
+}
+
+TEST(MeshGraphDescriptorTests, GraphMustHaveAtLeastOneInstance) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 2 ] }
+        }
+
+        graph_descriptors: {
+            name: "G0"
+            type: "fabric"
+            connections: {
+                nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+                nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+                channels: { count: 1 }
+                directional: false
+            }
+        }
+
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    try {
+        MeshGraphDescriptor desc(text_proto);
+        FAIL() << "Expected std::runtime_error for missing graph instances";
+    } catch (const std::runtime_error& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph descriptor must have at least one instance (Graph: G0)"));
+    }
+}
+
+TEST(MeshGraphDescriptorTests, GraphMustHaveTypeSpecified) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 2 ] }
+        }
+
         graph_descriptors: {
             name: "G1"
             instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
-            instances: { mesh: { mesh_descriptor: "M1" mesh_id: 0 } }
+            graph_topology: {
+                layout_type: ALL_TO_ALL
+                channels: { count: 1 }
+            }
         }
 
-        top_level_instance: { graph: { graph_descriptor: "G0" graph_id: 0 } }
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
     )proto";
 
-    // Capture stdout, trigger validation, then print captured output and exception message
     try {
         MeshGraphDescriptor desc(text_proto);
-        FAIL() << "Expected std::runtime_error for multiple validation failures";
+        FAIL() << "Expected std::runtime_error for missing graph type";
     } catch (const std::runtime_error& e) {
-        // Verify new messages (subset)
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("There must be at least one mesh descriptor"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph topology channel count must be positive (Graph: G0)"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Connection channel count must be positive (Graph: G0)"));
-        EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph descriptor must have at least one instance (Graph: G0)"));
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph descriptor must have a type specified (Graph: G1)"));
+    }
+}
+
+TEST(MeshGraphDescriptorTests, ConnectionMustHaveAtLeastTwoNodes) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 2 ] }
+        }
+
+        graph_descriptors: {
+            name: "G0"
+            type: "fabric"
+            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+            connections: {
+                nodes: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+                channels: { count: 1 }
+                directional: false
+            }
+        }
+
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    try {
+        MeshGraphDescriptor desc(text_proto);
+        FAIL() << "Expected std::runtime_error for too few connection nodes";
+    } catch (const std::runtime_error& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Connection must have at least two nodes (Graph: G0)"));
+    }
+}
+
+TEST(MeshGraphDescriptorTests, GraphMustHaveTopologyOrConnections) {
+    std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 1, 2 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 1, 2 ] }
+        }
+
+        graph_descriptors: {
+            name: "G1"
+            type: "fabric"
+            instances: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+        }
+
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    try {
+        MeshGraphDescriptor desc(text_proto);
+        FAIL() << "Expected std::runtime_error for missing topology and connections";
+    } catch (const std::runtime_error& e) {
+        EXPECT_THAT(e.what(), ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"));
         EXPECT_THAT(e.what(), ::testing::HasSubstr("Graph descriptor must have either graph_topology or connections defined (Graph: G1)"));
     }
 }
