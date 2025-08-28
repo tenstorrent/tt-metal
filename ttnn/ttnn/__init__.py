@@ -277,7 +277,7 @@ from ttnn.core import (
     load_memory_config,
     dump_stack_trace_on_segfault,
     num_cores_to_corerangeset,
-    num_cores_to_corerangeset_in_subcoregrids
+    num_cores_to_corerangeset_in_subcoregrids,
 )
 
 import ttnn.reflection
