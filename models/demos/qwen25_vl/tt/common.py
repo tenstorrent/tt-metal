@@ -113,6 +113,7 @@ def multimodal_rope_from_hf(
     padded_inputs = torch.nn.functional.pad(
         inputs.input_ids, (0, max_seq_len - inputs.input_ids.shape[-1]), value=pad_token_id
     )  # [INFO] padding with 0 was done by HF but it makes better sense to pad with the pad_token_id
+    logger.info(f"padded_inputs: {padded_inputs.shape}")
 
     # Create a mask that is all 1s for the full max_seq_len, ensuring RoPE calculations cover all positions.
     # The original inputs.attention_mask might have 0s for padding within its original length,
@@ -120,6 +121,7 @@ def multimodal_rope_from_hf(
     padded_attention_mask = torch.ones_like(
         padded_inputs, dtype=inputs.attention_mask.dtype, device=inputs.attention_mask.device
     )
+    logger.info(f"padded_attention_mask: {padded_attention_mask.shape}")
 
     # Qwen2_5_VLForConditionalGeneration.forward:
     position_ids, rope_deltas = reference_model.model.get_rope_index(
