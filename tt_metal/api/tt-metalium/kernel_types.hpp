@@ -40,14 +40,14 @@ struct DataMovementConfig {
     std::map<std::string, std::string> defines = {};
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
-    std::unordered_map<std::string, uint32_t> named_compile_args = {};
+    std::unordered_map<std::string, uint32_t> named_compile_time_args = {};
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
     ReaderDataMovementConfig(
         std::vector<uint32_t> compile_args = {},
         std::map<std::string, std::string> defines = {},
-        std::unordered_map<std::string, uint32_t> named_compile_args = {},
+        std::unordered_map<std::string, uint32_t> named_compile_time_args = {},
         KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
 };
 
@@ -55,7 +55,7 @@ struct WriterDataMovementConfig : public DataMovementConfig {
     WriterDataMovementConfig(
         std::vector<uint32_t> compile_args = {},
         std::map<std::string, std::string> defines = {},
-        std::unordered_map<std::string, uint32_t> named_compile_args = {},
+        std::unordered_map<std::string, uint32_t> named_compile_time_args = {},
         KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
 };
 
@@ -73,7 +73,7 @@ struct ComputeConfig {
     std::map<std::string, std::string> defines = {};
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
-    std::unordered_map<std::string, uint32_t> named_compile_args = {};
+    std::unordered_map<std::string, uint32_t> named_compile_time_args = {};
 };
 
 struct EthernetConfig {
@@ -87,7 +87,7 @@ struct EthernetConfig {
     std::map<std::string, std::string> defines = {};
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
-    std::unordered_map<std::string, uint32_t> named_compile_args = {};
+    std::unordered_map<std::string, uint32_t> named_compile_time_args = {};
 };
 
 }  // namespace tt::tt_metal

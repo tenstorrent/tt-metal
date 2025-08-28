@@ -14,7 +14,7 @@ namespace tt::tt_metal {
 ReaderDataMovementConfig::ReaderDataMovementConfig(
     std::vector<uint32_t> compile_args,
     std::map<std::string, std::string> defines,
-    std::unordered_map<std::string, uint32_t> named_compile_args,
+    std::unordered_map<std::string, uint32_t> named_compile_time_args,
     KernelBuildOptLevel opt_level) :
     DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_1,
@@ -23,12 +23,12 @@ ReaderDataMovementConfig::ReaderDataMovementConfig(
         .compile_args = std::move(compile_args),
         .defines = std::move(defines),
         .opt_level = opt_level,
-        .named_compile_args = std::move(named_compile_args)} {}
+        .named_compile_time_args = std::move(named_compile_time_args)} {}
 
 WriterDataMovementConfig::WriterDataMovementConfig(
     std::vector<uint32_t> compile_args,
     std::map<std::string, std::string> defines,
-    std::unordered_map<std::string, uint32_t> named_compile_args,
+    std::unordered_map<std::string, uint32_t> named_compile_time_args,
     KernelBuildOptLevel opt_level) :
     DataMovementConfig{
         .processor = DataMovementProcessor::RISCV_0,
@@ -37,6 +37,6 @@ WriterDataMovementConfig::WriterDataMovementConfig(
         .compile_args = std::move(compile_args),
         .defines = std::move(defines),
         .opt_level = opt_level,
-        .named_compile_args = std::move(named_compile_args)} {}
+        .named_compile_time_args = std::move(named_compile_time_args)} {}
 
 }  // namespace tt::tt_metal

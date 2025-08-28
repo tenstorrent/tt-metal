@@ -77,30 +77,26 @@ int main() {
         program,
         OVERRIDE_KERNEL_PREFIX "NoC_tile_transfer/kernels/dataflow/reader0.cpp",
         core0,
-        tt::tt_metal::ReaderDataMovementConfig{
-            reader_compile_time_args, {}, {}, tt::tt_metal::KernelBuildOptLevel::O2});
+        tt::tt_metal::ReaderDataMovementConfig{reader_compile_time_args});
     KernelHandle core0_writer_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "NoC_tile_transfer/kernels/dataflow/writer0.cpp",
         core0,
-        tt::tt_metal::WriterDataMovementConfig{
-            {src0_cb_index, src1_cb_index}, {}, {}, tt::tt_metal::KernelBuildOptLevel::O2});
+        tt::tt_metal::WriterDataMovementConfig{{src0_cb_index, src1_cb_index}});
 
     // Core 1 kernels
     KernelHandle core1_reader_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "NoC_tile_transfer/kernels/dataflow/reader1.cpp",
         core1,
-        tt::tt_metal::ReaderDataMovementConfig{
-            {src0_cb_index, src1_cb_index}, {}, {}, tt::tt_metal::KernelBuildOptLevel::O2});
+        tt::tt_metal::ReaderDataMovementConfig{{src0_cb_index, src1_cb_index}});
     std::vector<uint32_t> writer_compile_time_args = {src1_cb_index};
     TensorAccessorArgs(*dst_dram_buffer).append_to(writer_compile_time_args);
     KernelHandle core1_writer_kernel_id = CreateKernel(
         program,
         OVERRIDE_KERNEL_PREFIX "NoC_tile_transfer/kernels/dataflow/writer1.cpp",
         core1,
-        tt::tt_metal::WriterDataMovementConfig{
-            writer_compile_time_args, {}, {}, tt::tt_metal::KernelBuildOptLevel::O2});
+        tt::tt_metal::WriterDataMovementConfig{writer_compile_time_args});
 
     // Runtime args setup
     SetRuntimeArgs(program, core0_reader_kernel_id, core0, {src_dram_buffer->address()});
