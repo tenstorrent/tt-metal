@@ -36,6 +36,39 @@ using namespace tt::constants;
 
 namespace ttnn {
 
+namespace detail {
+
+uint32_t all_gather_async_core_count(
+    uint32_t num_workers_per_direction,
+    uint32_t num_directions_per_link,
+    uint32_t num_mux_cores_per_direction_per_link) {
+    return (num_workers_per_direction + num_mux_cores_per_direction_per_link) * num_directions_per_link;
+}
+
+uint32_t default_workers(
+    const MeshDevice& mesh_device,
+    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
+    uint32_t num_links,
+    uint32_t ring_size,
+    uint32_t num_directions_per_link,
+    uint32_t num_mux_cores_per_direction_per_link) {
+    auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    uint32_t num_cores = subdevice_core_range_set.num_cores();
+    constexpr std::array<uint32_t, 4> candidate_worker_counts = {4, 2, 1};
+    for (auto worker_count : candidate_worker_counts) {
+        uint32_t core_count =
+            all_gather_async_core_count(worker_count, num_directions_per_link, num_mux_cores_per_direction_per_link);
+        if (num_cores >= core_count) {
+            return worker_count;
+        }
+    }
+    TT_THROW(
+        "Not enough cores available on the subdevice or device for the requested match the number of links {}",
+        num_links);
+}
+}  // namespace detail
+
 using namespace ccl;
 
 void fabric_mux_connection_ct_args(
@@ -120,23 +153,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default(
         num_buffers_per_channel);
 }
 
-uint32_t default_workers(
-    uint32_t num_links,
-    uint32_t ring_size,
-    const MeshDevice& mesh_device,
-    const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {
-    auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    constexpr std::array<uint32_t, 4> candidate_worker_counts = {4, 2, 1};
-    for (auto worker_count : candidate_worker_counts) {
-        uint32_t core_count = (worker_count + 2) * num_links;
-        if (subdevice_core_range_set.size() % worker_count == 0) {
-            return worker_count;
-        }
-    }
-    TT_THROW("Not enough cores available on the subdevice or device to match the number of links {}", num_links);
-}
-
 tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_helper(
     tt::tt_metal::Program& program,
     const Tensor& input_tensor,
@@ -168,8 +184,21 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
     TT_FATAL(mesh_device != nullptr, "Mesh device not found");
 
     // op hyperparams
-    uint32_t num_workers_per_direction =
-        num_workers_per_direction_opt.value_or(default_workers(num_links, ring_size, *mesh_device, sub_device_id));
+    uint32_t num_directions_per_link = 2;
+    uint32_t num_mux_cores_per_direction_per_link = 1;
+    // Get worker cores
+    // 2 senders (reader + writer) per direction (forward, backward) per link
+    uint32_t num_workers_per_direction = num_workers_per_direction_opt.value_or(detail::default_workers(
+        *mesh_device,
+        sub_device_id,
+        num_links,
+        ring_size,
+        num_directions_per_link,
+        num_mux_cores_per_direction_per_link));
+    uint32_t num_cores_per_link = detail::all_gather_async_core_count(
+        num_workers_per_direction, num_directions_per_link, num_mux_cores_per_direction_per_link);
+
+    log_trace(tt::LogOp, "DEBUG: num_workers_per_direction: {}", num_workers_per_direction);
     uint32_t num_buffers_full_size_channels = num_buffers_per_channel.value_or(1);
 
     [[maybe_unused]] bool is_first_chip = ring_index == 0;
@@ -213,14 +242,6 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
             topology, sender_device, forward_device, backward_device, ring_size - 1, ring_size - 1);
     TT_FATAL(
         !((topology == ccl::Topology::Linear) && fuse_op), "linear is not support when using fused for all-gather");
-
-    // Get worker cores
-    // 2 senders (reader + writer) per direction (forward, backward) per link
-    uint32_t num_directions_per_link = 2;
-    uint32_t num_mux_cores_per_direction_per_link = 1;
-
-    uint32_t num_cores_per_link =
-        num_directions_per_link * (num_mux_cores_per_direction_per_link + num_workers_per_direction);
 
     const auto [all_core_range, all_cores] =
         choose_worker_cores(num_links, num_cores_per_link, mesh_device, sub_device_id, core_grid_offset);
@@ -397,6 +418,7 @@ tt::tt_metal::operation::ProgramWithCallbacks all_gather_async_minimal_default_h
                 uint32_t chunks_per_sync_val = chunks_per_sync.value_or(std::min(
                     std::max((input_tile_id_end - input_tile_id_start) / num_tiles_to_write_per_packet, (uint32_t)1),
                     HEURISTIC_MAX_CHUNKS_PER_SYNC));
+                log_trace(tt::LogOp, "DEBUG: chunks_per_sync_val: {}", chunks_per_sync_val);
 
                 uint32_t self_write_done_semaphore;
                 if (fuse_op) {
