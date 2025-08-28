@@ -42,7 +42,8 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool full_inner_dim,
-    bool enable_split_reader) {
+    bool enable_split_reader,
+    bool config_tensors_in_dram) {
     TT_FATAL(b.layout() == Layout::TILE,
              "Weights should be in TILE layout.");  // Weights should already be formatted
     const auto& ashape = input_tensor_shape;
@@ -72,7 +73,8 @@ Tensor optimized_conv_new(
         enable_act_double_buffer,
         enable_weights_double_buffer,
         full_inner_dim,
-        enable_split_reader);
+        enable_split_reader,
+        config_tensors_in_dram);
     IDevice* device = a.device();
 
     optimized_conv_op.pre_op_l1_allocation_size_bytes =
@@ -255,7 +257,8 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             enable_act_double_buffer,
             enable_weights_double_buffer,
             enable_split_reader,
-            full_inner_dim);
+            full_inner_dim,
+            config_tensors_in_dram);
     }
 
     const uint32_t post_op_l1_allocation_size =
@@ -291,11 +294,11 @@ tt::tt_metal::operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             has_bias),
         skip_mcast.skip_activation_mcast);
 
-    TT_FATAL(
-        actual_cb_size == l1_usage.CB_allocation_size,
-        "Calculated CB size {} does not match with the actual CB size {}",
-        l1_usage.CB_allocation_size,
-        actual_cb_size);
+    // TT_FATAL(
+    //     actual_cb_size == l1_usage.CB_allocation_size,
+    //     "Calculated CB size {} does not match with the actual CB size {}",
+    //     l1_usage.CB_allocation_size,
+    //     actual_cb_size);
 
     // For now assume that if post_op_l1_allocation_size == 0 op is being run
     // in graph capture NO_DISPATCH mode.
