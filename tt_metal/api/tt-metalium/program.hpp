@@ -134,7 +134,6 @@ public:
     void set_program_binary_status(chip_id_t device_id, ProgramBinaryStatus status);
 
     // We are removing these...
-    void generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
     void finalize_offsets(IDevice* device);
     bool is_finalized() const;
 

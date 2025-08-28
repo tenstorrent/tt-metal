@@ -13,12 +13,12 @@
 #include "tt-metalium/circular_buffer_config.hpp"
 #include "tt-metalium/command_queue.hpp"
 #include "tt-metalium/core_coord.hpp"
-#include "dev_msgs.h"                          // DISPATCH_CLASS_MAX
-#include "tt-metalium/hal_types.hpp"           // HalProgrammableCoreType
-#include "tt-metalium/kernel.hpp"              // Kernel
-#include "tt-metalium/kernel_types.hpp"        // KernelHandle
-#include "tt-metalium/program.hpp"             // KernelGroup
-#include "program_device_map.hpp"              // ProgramTransferInfo
+#include "dev_msgs.h"                    // DISPATCH_CLASS_MAX
+#include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
+#include "tt-metalium/kernel.hpp"        // Kernel
+#include "tt-metalium/kernel_types.hpp"  // KernelHandle
+#include "tt-metalium/program.hpp"       // KernelGroup
+#include "program_device_map.hpp"        // ProgramTransferInfo
 #include "tt-metalium/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt_metal.hpp"
@@ -275,6 +275,8 @@ public:
 
     bool kernel_binary_always_stored_in_ringbuffer();
 
+    void generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache);
+
 private:
     CommandQueue* last_used_command_queue_for_testing = nullptr;
 
@@ -307,8 +309,8 @@ private:
         std::vector<std::pair<uint64_t, uint64_t>> l1_regions;
 
         // Returns address for next circular buffer
-        // Circular buffers are placed sequentially on a core so the next available address gets appended to the last
-        // L1 region
+        // Circular buffers are placed sequentially on a core so the next available address gets appended to the
+        // last L1 region
         uint64_t get_cb_region_end() const { return this->l1_regions.empty() ? 0 : this->l1_regions.back().second; }
 
         // If address is the end of the last L1 region, the last region is extended by size bytes,

@@ -441,7 +441,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
     // buffer state at runtime.
     auto program_sizeB = program.impl().kernel_bins_sizeB;
     bool use_prefetcher_cache = program_sizeB and program_sizeB <= this->prefetcher_cache_sizeB_;
-    program.generate_dispatch_commands(device_, use_prefetcher_cache);
+    program.impl().generate_dispatch_commands(device_, use_prefetcher_cache);
     program.impl().set_last_used_command_queue_for_testing(this);
 
     if (this->manager_.get_bypass_mode()) {
