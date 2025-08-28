@@ -83,8 +83,9 @@ void bind_prepare_grid_sample_grid(py::module& module) {
         py::kw_only(),
         py::arg("padding_mode") = "zeros",
         py::arg("output_dtype") = std::nullopt,
+        py::arg("batch_factor") = std::nullopt,
         R"doc(
-        prepare_grid_sample_grid(grid: ttnn.Tensor, input_shape: List[int], *, padding_mode: str = "zeros", output_dtype: Optional[ttnn.DataType] = None) -> ttnn.Tensor
+        prepare_grid_sample_grid(grid: ttnn.Tensor, input_shape: List[int], *, padding_mode: str = "zeros", output_dtype: Optional[ttnn.DataType] = None, batch_factor: Optional[int] = None) -> ttnn.Tensor
 
         Precomputes grid sample data for optimized kernel execution.
 

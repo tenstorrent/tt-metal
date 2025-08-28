@@ -43,8 +43,21 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t input_height = input_shape[1];
     const uint32_t input_width = input_shape[2];
 
-    const uint32_t output_height = grid_shape[1];
-    const uint32_t output_width = grid_shape[2];
+    const uint32_t grid_height = grid_shape[1];
+    const uint32_t grid_width = grid_shape[2];
+
+    // Calculate number of grid points batched together
+    const uint32_t grid_last_dim = grid_tensor.logical_shape()[-1];
+    uint32_t num_grid_points_per_grid_stick;
+    if (use_precomputed_grid) {
+        num_grid_points_per_grid_stick = grid_last_dim / 6;  // Each grid point uses 6 values
+    } else {
+        num_grid_points_per_grid_stick = grid_last_dim / 2;  // Each grid point uses 2 values (x, y)
+    }
+
+    // Output dimensions: height is unbatched (grid_height * num_grid_points_per_grid_stick)
+    const uint32_t output_height = grid_height * num_grid_points_per_grid_stick;
+    const uint32_t output_width = grid_width;
 
     // Calculate stick sizes (full rows in last dimension)
     const uint32_t grid_buffer_alignment = grid_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM
@@ -64,8 +77,11 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     const uint32_t output_stick_nbytes = output_shape[-1] * output_tensor.element_size();
     const uint32_t aligned_output_stick_nbytes = tt::round_up(output_stick_nbytes, dst_buffer_alignment);
 
-    // Calculate number of output sticks (total rows to process)
-    uint32_t output_nsticks = grid_tensor.physical_volume() / grid_shape[-1];
+    // Calculate number of grid sticks (total grid sticks to process)
+    // Each grid stick contains num_grid_points_per_grid_stick batched coordinates and produces
+    // num_grid_points_per_grid_stick output sticks
+    uint32_t grid_nsticks = grid_tensor.physical_volume() / grid_tensor.padded_shape()[-1];
+    uint32_t output_nsticks = grid_nsticks * num_grid_points_per_grid_stick;
 
     // Get device grid for multicore
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
@@ -73,9 +89,10 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t total_cores = num_cores_x * num_cores_y;
 
-    // Work distribution - distribute output sticks across cores
+    // Work distribution - distribute grid sticks across cores
+    // Each core processes grid_sticks_per_core grid sticks, each containing num_grid_points_per_grid_stick coordinates
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, output_nsticks);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, grid_nsticks);
 
     uint32_t next_cb_index = tt::CBIndex::c_0;
 
@@ -116,7 +133,8 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
         (std::uint32_t)aligned_grid_stick_nbytes,   // grid stick size
         (std::uint32_t)input_height,
         (std::uint32_t)input_width,
-        (std::uint32_t)(output_height * output_width),  // output_hw_size at index 13
+        (std::uint32_t)(grid_height * grid_width),      // original_grid_hw_size (for batch calculation)
+        (std::uint32_t)num_grid_points_per_grid_stick,  // number of grid points batched per stick
     };
 
     tt::tt_metal::TensorAccessorArgs(*input_tensor.buffer()).append_to(reader_compile_time_args);
@@ -142,20 +160,21 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     // Kernel for core group 1
     if (core_group_1.num_cores() > 0) {
         std::vector<uint32_t> compute_compile_time_args_1 = {
-            in_ntiles_c,                  // 0: Input tiles per channel
-            reduction_size,               // 1: Reduction size (4 for bilinear)
-            split_reader,                 // 2: Split reader flag
-            num_sticks_per_core_group_1,  // 3: Work per core for group 1
-            channels_per_shard,           // 4: Channels per shard
-            in_nblocks_c,                 // 5: Channel blocks
-            max_rows_for_reduction,       // 6: Max rows
-            input_cb_index,               // 7: Input CB
-            dummy_cb_id,                  // 8: Input CB 1 (unused)
-            scalar_cb_index,              // 9: Scalar CB
-            dummy_cb_id,                  // 10: Scalar CB 1 (unused)
-            output_cb_index,              // 11: Output CB
-            one_scalar_per_core,          // 12: Scalar mode
-            in_ntiles_c                   // 13: Tiles per channel (for CB space reservation)
+            in_ntiles_c,     // 0: Input tiles per channel
+            reduction_size,  // 1: Reduction size (4 for bilinear)
+            split_reader,    // 2: Split reader flag
+            num_sticks_per_core_group_1 *
+                num_grid_points_per_grid_stick,  // 3: Work per core for group 1 (output sticks)
+            channels_per_shard,                  // 4: Channels per shard
+            in_nblocks_c,                        // 5: Channel blocks
+            max_rows_for_reduction,              // 6: Max rows
+            input_cb_index,                      // 7: Input CB
+            dummy_cb_id,                         // 8: Input CB 1 (unused)
+            scalar_cb_index,                     // 9: Scalar CB
+            dummy_cb_id,                         // 10: Scalar CB 1 (unused)
+            output_cb_index,                     // 11: Output CB
+            one_scalar_per_core,                 // 12: Scalar mode
+            in_ntiles_c                          // 13: Tiles per channel (for CB space reservation)
         };
 
         compute_kernel_group_1 = tt::tt_metal::CreateKernel(
@@ -173,20 +192,21 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
     // Kernel for core group 2 (if it exists)
     if (core_group_2.num_cores() > 0) {
         std::vector<uint32_t> compute_compile_time_args_2 = {
-            in_ntiles_c,                  // 0: Input tiles per channel
-            reduction_size,               // 1: Reduction size (4 for bilinear)
-            split_reader,                 // 2: Split reader flag
-            num_sticks_per_core_group_2,  // 3: Work per core for group 2
-            channels_per_shard,           // 4: Channels per shard
-            in_nblocks_c,                 // 5: Channel blocks
-            max_rows_for_reduction,       // 6: Max rows
-            input_cb_index,               // 7: Input CB
-            dummy_cb_id,                  // 8: Input CB 1 (unused)
-            scalar_cb_index,              // 9: Scalar CB
-            dummy_cb_id,                  // 10: Scalar CB 1 (unused)
-            output_cb_index,              // 11: Output CB
-            one_scalar_per_core,          // 12: Scalar mode
-            in_ntiles_c                   // 13: Tiles per channel (for CB space reservation)
+            in_ntiles_c,     // 0: Input tiles per channel
+            reduction_size,  // 1: Reduction size (4 for bilinear)
+            split_reader,    // 2: Split reader flag
+            num_sticks_per_core_group_2 *
+                num_grid_points_per_grid_stick,  // 3: Work per core for group 2 (output sticks)
+            channels_per_shard,                  // 4: Channels per shard
+            in_nblocks_c,                        // 5: Channel blocks
+            max_rows_for_reduction,              // 6: Max rows
+            input_cb_index,                      // 7: Input CB
+            dummy_cb_id,                         // 8: Input CB 1 (unused)
+            scalar_cb_index,                     // 9: Scalar CB
+            dummy_cb_id,                         // 10: Scalar CB 1 (unused)
+            output_cb_index,                     // 11: Output CB
+            one_scalar_per_core,                 // 12: Scalar mode
+            in_ntiles_c                          // 13: Tiles per channel (for CB space reservation)
         };
 
         compute_kernel_group_2 = tt::tt_metal::CreateKernel(
@@ -239,35 +259,43 @@ tt::tt_metal::operation::ProgramWithCallbacks grid_sample_program_factory(
 
     std::vector<uint32_t> writer_rt_arguments{
         output_tensor.buffer()->address(),
-        0,  // set in loop, num of sticks per core
-        0   // set in loop, start_stick_id
+        0,                               // set in loop, num of output sticks per core
+        0,                               // set in loop, start output stick id
+        grid_height,                     // original grid height (H_grid)
+        grid_width,                      // original grid width (W_grid)
+        num_grid_points_per_grid_stick,  // batch factor
+        0                                // set in loop, start grid stick id
     };
 
-    for (uint32_t i = 0, sticks_processed = 0; i < num_cores; i++) {
+    for (uint32_t i = 0, grid_sticks_processed = 0, output_sticks_processed = 0; i < num_cores; i++) {
         const CoreCoord core = {i / num_cores_y, i % num_cores_y};
-        uint32_t sticks_per_core = 0;
+        uint32_t grid_sticks_per_core = 0;
         tt::tt_metal::KernelHandle compute_kernel_for_core = 0;
 
         if (core_group_1.contains(core)) {
-            sticks_per_core = num_sticks_per_core_group_1;
+            grid_sticks_per_core = num_sticks_per_core_group_1;
         } else if (core_group_2.contains(core)) {
-            sticks_per_core = num_sticks_per_core_group_2;
+            grid_sticks_per_core = num_sticks_per_core_group_2;
         } else {
             TT_ASSERT(false, "Core not in specified core ranges");
         }
 
-        reader_rt_arguments[2] = sticks_per_core;   // num sticks for this core
-        reader_rt_arguments[3] = sticks_processed;  // start stick id
+        uint32_t output_sticks_per_core = grid_sticks_per_core * num_grid_points_per_grid_stick;
+
+        reader_rt_arguments[2] = grid_sticks_per_core;   // num grid sticks for this core
+        reader_rt_arguments[3] = grid_sticks_processed;  // start grid stick id
 
         // Compute runtime arguments - pool kernel expects no runtime args (all compile-time)
 
-        writer_rt_arguments[1] = sticks_per_core;   // num sticks for this core
-        writer_rt_arguments[2] = sticks_processed;  // start stick id
+        writer_rt_arguments[1] = output_sticks_per_core;   // num output sticks for this core
+        writer_rt_arguments[2] = output_sticks_processed;  // start output stick id
+        writer_rt_arguments[6] = grid_sticks_processed;    // start grid stick id
 
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_arguments);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_arguments);
 
-        sticks_processed += sticks_per_core;
+        grid_sticks_processed += grid_sticks_per_core;
+        output_sticks_processed += output_sticks_per_core;
     }
 
     // Runtime arguments callback following upsample pattern

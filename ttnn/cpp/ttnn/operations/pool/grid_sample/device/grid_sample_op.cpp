@@ -25,13 +25,19 @@ void GridSample::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor.logical_shape().rank() == 4, "Input tensor must be 4D (N, C, H, W)");
     TT_FATAL(grid_tensor.logical_shape().rank() == 4, "Grid tensor must be 4D (N, H_out, W_out, 2)");
 
+    const uint32_t grid_last_dim = grid_tensor.logical_shape()[-1];
     if (use_precomputed_grid_) {
         TT_FATAL(
-            grid_tensor.logical_shape()[-1] == 6,
-            "Grid tensor last dimension must be 6 (h_nw, w_nw, weight_nw, weight_ne, weight_sw, weight_se)");
+            grid_last_dim % 6 == 0 && grid_last_dim >= 6,
+            "For precomputed grid: Grid tensor last dimension must be a multiple of 6 (h_nw, w_nw, weight_nw, "
+            "weight_ne, weight_sw, weight_se per grid point), got {}",
+            grid_last_dim);
     } else {
         TT_FATAL(
-            grid_tensor.logical_shape()[-1] == 2, "Grid tensor last dimension must be 2 (x, y relative coordinates)");
+            grid_last_dim % 2 == 0 && grid_last_dim >= 2,
+            "For regular grid: Grid tensor last dimension must be a multiple of 2 (x, y relative coordinates per grid "
+            "point), got {}",
+            grid_last_dim);
     }
 
     TT_FATAL(
@@ -79,10 +85,23 @@ std::vector<TensorSpec> GridSample::compute_output_specs(const std::vector<Tenso
     // Extract dimensions
     uint32_t N = input_shape[0];
     uint32_t C = input_shape[-1];
-    uint32_t H_out = grid_shape[1];
-    uint32_t W_out = grid_shape[2];
+    uint32_t H_grid = grid_shape[1];
+    uint32_t W_grid = grid_shape[2];
 
-    // Define output shape: (N, C, H_out, W_out)
+    // Calculate number of grid points batched together
+    const uint32_t grid_last_dim = grid_shape[-1];
+    uint32_t num_grid_points_per_stick;
+    if (use_precomputed_grid_) {
+        num_grid_points_per_stick = grid_last_dim / 6;  // Each grid point uses 6 values
+    } else {
+        num_grid_points_per_stick = grid_last_dim / 2;  // Each grid point uses 2 values (x, y)
+    }
+
+    // Output dimensions: height is unbatched, width stays the same
+    uint32_t H_out = H_grid * num_grid_points_per_stick;
+    uint32_t W_out = W_grid;
+
+    // Define output shape: (N, H_out, W_out, C) - channel-last format
     const ttnn::Shape output_shape({N, H_out, W_out, C});
 
     // Output has same data type as input
