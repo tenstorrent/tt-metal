@@ -66,6 +66,10 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
     "c_shape, t_shape, f_shape",
     [
         ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1024, 1024)),  # A, Brow, C
+        ((1, 1, 1024, 1024), (1, 1, 1024, 1024), (1, 1, 1, 1024)),  # A, B, Crow
+        ((1, 1, 1024, 1024), (1, 1, 1, 1024), (1, 1, 1, 1024)),  # A, Brow, Crow
+        ((1, 1, 1024, 1024), (1, 1024), (1024, 1024)),  # A, Brow, C
+        ((1024), (1), (1024)),
         # Bcast cases for dim -2
         ((1, 1, 1024, 1024), (1, 1, 1024, 1), (1, 1, 1024, 1024)),  # A, Bcol, C
         ((1, 1, 1024, 1), (1, 1, 1024, 1024), (1, 1, 1024, 1024)),  # Acol, B, C
@@ -94,8 +98,6 @@ def test_ttnn_where_bcast(c_shape, t_shape, f_shape, condition, device):
     ttnn_F = ttnn.from_torch(F, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_result = ttnn.where(ttnn_C, ttnn_T, ttnn_F)
     result = ttnn.to_torch(ttnn_result)
-    print(result)
-    print(golden)
 
     assert torch_equal_nan(result, golden)
 
