@@ -200,8 +200,8 @@ std::vector<CBInfo> get_cb_info(
                 pconfig.per_core_out_matrix_height_ntile,
                 input_tile_size,
                 weights_tile_size,
-                weights_shape[2] / (kernel_size[0] * kernel_size[1]),
-                weights_shape[3],
+                conv_input_shard_shape[1],
+                per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH,
                 kernel_size[1],
                 tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE,
                 input_datatype)) {
