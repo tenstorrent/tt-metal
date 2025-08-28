@@ -103,7 +103,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     };
 
     auto local_buffer = distributed::MeshBuffer::create(replicated_config_1, local_config_2, mesh_device.get());
-    program.impl().validate_circular_buffer_region(mesh_device.get());
+    EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size / 4);
     program.allocate_circular_buffers(mesh_device.get());
     program.impl().validate_circular_buffer_region(mesh_device.get());
