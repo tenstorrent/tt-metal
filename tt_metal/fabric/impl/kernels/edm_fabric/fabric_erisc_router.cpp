@@ -787,8 +787,8 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
         }
     };
 
-    // Runtime version for runtime edm_index (same name, different signature)
-    auto get_downstream_interface = [&](size_t edm_index) -> auto& {
+    // Runtime version for runtime edm_index
+    auto get_downstream_interface_runtime = [&](size_t edm_index) -> auto& {
         if constexpr (enable_deadlock_avoidance) {
             if (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
                 return downstream_edm_interface_vc1;
@@ -809,7 +809,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
             packet_start,
             payload_size_bytes,
             cached_routing_fields,
-            get_downstream_interface(edm_index),
+            get_downstream_interface_runtime(edm_index),
             transaction_id);
     } else {
         if (dest_chip_id == routing_table->my_device_id || mcast_active) {
@@ -902,7 +902,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
                 packet_start,
                 payload_size_bytes,
                 cached_routing_fields,
-                get_downstream_interface(edm_index),
+                get_downstream_interface_runtime(edm_index),
                 transaction_id);
         }
     }
@@ -931,6 +931,19 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) void receiver_forward_pack
     auto get_downstream_interface = [&]<size_t edm_index>() -> auto& {
         if constexpr (enable_deadlock_avoidance) {
             if constexpr (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
+                return downstream_edm_interface_vc1;
+            } else {
+                return downstream_edm_interfaces_vc0[edm_index];
+            }
+        } else {
+            return downstream_edm_interfaces_vc0[edm_index];
+        }
+    };
+
+    // Runtime version for runtime edm_index
+    auto get_downstream_interface_runtime = [&](size_t edm_index) -> auto& {
+        if constexpr (enable_deadlock_avoidance) {
+            if (edm_index == NUM_USED_RECEIVER_CHANNELS - 1) {
                 return downstream_edm_interface_vc1;
             } else {
                 return downstream_edm_interfaces_vc0[edm_index];
