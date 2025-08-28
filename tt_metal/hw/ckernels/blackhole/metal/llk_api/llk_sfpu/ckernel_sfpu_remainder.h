@@ -8,7 +8,7 @@
 #include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
 #include "ckernel_sfpu_recip.h"
-
+#include "llk_defs.h"
 using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
