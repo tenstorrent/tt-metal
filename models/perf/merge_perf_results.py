@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+from pathlib import Path
 from models.perf.perf_utils import check_perf_results, merge_perf_files, today
 
 expected_cols = [
