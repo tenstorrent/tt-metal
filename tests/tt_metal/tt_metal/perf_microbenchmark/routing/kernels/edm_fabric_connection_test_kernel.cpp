@@ -27,12 +27,6 @@ static FORCE_INLINE void setup_packet_header(
     }
 }
 
-static inline uint64_t get_timestamp() {
-    uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
-    uint32_t timestamp_high = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
-    return (((uint64_t)timestamp_high) << 32) | timestamp_low;
-}
-
 void kernel_main() {
     using namespace tt::tt_fabric;
     size_t arg_idx = 0;

@@ -402,15 +402,21 @@ constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_se
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
     take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
         std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
-            to_sender_0_pkts_acked_id, to_sender_1_pkts_acked_id, to_sender_2_pkts_acked_id,
-            to_sender_3_pkts_acked_id, to_sender_4_pkts_acked_id});
+            to_sender_0_pkts_acked_id,
+            to_sender_1_pkts_acked_id,
+            to_sender_2_pkts_acked_id,
+            to_sender_3_pkts_acked_id,
+            to_sender_4_pkts_acked_id});
 
 // data section
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_completed_streams =
     take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
         std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
-            to_sender_0_pkts_completed_id, to_sender_1_pkts_completed_id, to_sender_2_pkts_completed_id,
-            to_sender_3_pkts_completed_id, to_sender_4_pkts_completed_id});
+            to_sender_0_pkts_completed_id,
+            to_sender_1_pkts_completed_id,
+            to_sender_2_pkts_completed_id,
+            to_sender_3_pkts_completed_id,
+            to_sender_4_pkts_completed_id});
 
 // Miscellaneous configuration
 

@@ -29,26 +29,26 @@ void kernel_main() {
     constexpr uint32_t num_links = get_compile_time_arg_val(9);
 
     constexpr bool fuse_gamma = get_compile_time_arg_val(10) == 1;
-    constexpr bool gamma_is_dram = get_compile_time_arg_val(11) == 1;
-    constexpr uint32_t block_w = get_compile_time_arg_val(12);
+    constexpr uint32_t block_w = get_compile_time_arg_val(11);
 
     // Circular Buffer CTs
-    constexpr uint32_t cb_out_resharded = get_compile_time_arg_val(13);
-    constexpr uint32_t cb_out = get_compile_time_arg_val(14);
-    constexpr uint32_t eps_cb_id = get_compile_time_arg_val(15);
-    constexpr uint32_t post_cb_in_4 = get_compile_time_arg_val(16);
-    constexpr uint32_t cb_gamma = get_compile_time_arg_val(17);
+    constexpr uint32_t cb_out_resharded = get_compile_time_arg_val(12);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(13);
+    constexpr uint32_t eps_cb_id = get_compile_time_arg_val(14);
+    constexpr uint32_t post_cb_in_4 = get_compile_time_arg_val(15);
+    constexpr uint32_t cb_gamma = get_compile_time_arg_val(16);
 
     // Data type CTs
-    constexpr uint32_t stick_size = get_compile_time_arg_val(18);
-    constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(19) == 1;
+    constexpr uint32_t stick_size = get_compile_time_arg_val(17);
+    constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(18) == 1;
 
     // Reshard writer
-    constexpr uint32_t worker_core_stride_w_bytes = get_compile_time_arg_val(20);
-    constexpr uint32_t storage_core_stride_w_bytes = get_compile_time_arg_val(21);
-    constexpr uint32_t stats_set_semaphore_id = get_compile_time_arg_val(22);
-    constexpr uint32_t signaling_cb = get_compile_time_arg_val(23);
-    constexpr uint32_t num_blocks = get_compile_time_arg_val(24);
+    constexpr uint32_t worker_core_stride_w_bytes = get_compile_time_arg_val(19);
+    constexpr uint32_t storage_core_stride_w_bytes = get_compile_time_arg_val(20);
+    constexpr uint32_t stats_set_semaphore_id = get_compile_time_arg_val(21);
+    constexpr uint32_t signaling_cb = get_compile_time_arg_val(22);
+    constexpr uint32_t num_blocks = get_compile_time_arg_val(23);
+    constexpr auto gamma_args = TensorAccessorArgs<24>();
 
     uint32_t stats_set_semaphore_addr = get_semaphore(stats_set_semaphore_id);
     size_t arg_idx = 0;
@@ -190,7 +190,7 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-        const auto gamma = get_interleaved_addr_gen<gamma_is_dram, stick_size>(gamma_addr);
+        const auto gamma = TensorAccessor(gamma_args, gamma_addr, stick_size);
 
         constexpr uint32_t bytes_in_faceline = FLOAT32_DTYPE_GAMMA ? 64 : 32;
         constexpr uint32_t bytes_in_two_facelines = bytes_in_faceline * 2;

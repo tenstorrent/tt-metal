@@ -601,8 +601,6 @@ public:
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
         downstream_edm_vcs_buffer_base_address = {};
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
-        downstream_edm_vcs_semaphore_address = {};
-    std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
         downstream_edm_vcs_worker_registration_address = {};
     std::array<std::optional<size_t>, FabricEriscDatamoverConfig::max_downstream_edms>
         downstream_edm_vcs_worker_location_info_address = {};
@@ -624,7 +622,8 @@ public:
 private:
     // Shared helper for setting up VC connections
     template <typename BuilderType>
-    void setup_downstream_vc_connection(BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id);
+    void setup_downstream_vc_connection(
+        BuilderType& downstream_builder, uint32_t vc_idx, uint32_t channel_id, bool is_vc1);
 };
 
 }  // namespace tt::tt_fabric

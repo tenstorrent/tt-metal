@@ -5,13 +5,14 @@
 from typing import List, Optional, Tuple, Union
 import ttnn
 import torch
-import torch.nn as nn
 import numpy as np
 from loguru import logger
 import ttnn.device
 
+from models.common.lightweightmodule import LightweightModule
 
-class TtEulerDiscreteScheduler(nn.Module):
+
+class TtEulerDiscreteScheduler(LightweightModule):
     def __init__(
         self,
         device: ttnn.device.Device,
