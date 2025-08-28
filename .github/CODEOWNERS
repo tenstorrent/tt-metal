@@ -300,7 +300,7 @@ docs/source/tt-metalium/tt_metal/apis/kernel_apis/data_movement/ @pgkeller @abhu
 
 # misc
 dockerfile/upstream_test_images/ @tenstorrent/metalium-developers-infra
-contrib/packaging @tenstorrent/devrel @tenstorrent/metalium-developers-infra
+contrib/packaging @tenstorrent/devrel @warthog9 @tenstorrent/metalium-developers-infra
 
 # tt-train
 tt-train/** @dmakoviichuk-tt @rfurko-tt @ayerofieiev-tt
