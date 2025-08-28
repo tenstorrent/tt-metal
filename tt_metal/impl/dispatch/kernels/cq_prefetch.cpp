@@ -25,6 +25,8 @@
 #include "noc/noc_parameters.h"  // PCIE_ALIGNMENT
 
 constexpr uint32_t CQ_PREFETCH_CMD_BARE_MIN_SIZE = PCIE_ALIGNMENT;  // for NOC PCIe alignemnt
+static_assert(sizeof(CQPrefetchCmd) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
+static_assert(sizeof(CQPrefetchCmdLarge) <= CQ_PREFETCH_CMD_BARE_MIN_SIZE);
 struct CQPrefetchHToPrefetchDHeader_s {
     uint32_t length;
     uint8_t raw_copy;     // If true, copy the data directly to the downstream.
@@ -922,7 +924,7 @@ uint32_t process_relay_linear_cmd(uint32_t cmd_ptr, uint32_t& downstream_data_pt
     // This ensures that a previous cmd using the scratch buf has finished
     noc_async_writes_flushed();
 
-    volatile CQPrefetchCmd tt_l1_ptr* cmd = (volatile CQPrefetchCmd tt_l1_ptr*)cmd_ptr;
+    volatile CQPrefetchCmdLarge tt_l1_ptr* cmd = (volatile CQPrefetchCmdLarge tt_l1_ptr*)cmd_ptr;
     uint32_t noc_xy_addr = cmd->relay_linear.noc_xy_addr;
     uint32_t read_addr = cmd->relay_linear.addr;
     uint32_t length = cmd->relay_linear.length;

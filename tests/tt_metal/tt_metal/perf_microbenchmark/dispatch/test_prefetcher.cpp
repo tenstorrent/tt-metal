@@ -254,6 +254,20 @@ void add_bare_prefetcher_cmd(vector<uint32_t>& cmds, CQPrefetchCmd& cmd, bool pa
     }
 }
 
+void add_bare_prefetcher_cmd(vector<uint32_t>& cmds, CQPrefetchCmdLarge& cmd, bool pad = false) {
+    uint32_t* ptr = (uint32_t*)&cmd;
+    for (int i = 0; i < sizeof(CQPrefetchCmdLarge) / sizeof(uint32_t); i++) {
+        cmds.push_back(*ptr++);
+    }
+
+    if (pad) {
+        // Pad debug cmd to always be the alignment size
+        for (uint32_t i = 0; i < (CQ_PREFETCH_CMD_BARE_MIN_SIZE - sizeof(CQPrefetchCmdLarge)) / sizeof(uint32_t); i++) {
+            cmds.push_back(std::rand());
+        }
+    }
+}
+
 void add_prefetcher_packed_paged_read_cmd(
     vector<uint32_t>& cmds, vector<CQPrefetchRelayPagedPackedSubCmd>& sub_cmds, uint32_t length) {
     CQPrefetchCmd cmd{};
@@ -321,7 +335,7 @@ void add_prefetcher_linear_read_cmd(IDevice* device,
                                     uint32_t length) {
     CoreCoord phys_worker_core = device->worker_core_from_logical_core(worker_core);
 
-    CQPrefetchCmd cmd{};
+    CQPrefetchCmdLarge cmd{};
     cmd.base.cmd_id = CQ_PREFETCH_CMD_RELAY_LINEAR;
 
     cmd.relay_linear.pad1 = 0;

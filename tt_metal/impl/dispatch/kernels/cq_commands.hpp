@@ -182,10 +182,10 @@ struct CQPrefetchRelayRingbufferSubCmd {
     uint32_t length;
 } __attribute__((packed));
 
+// 16 byte commands.
 struct CQPrefetchCmd {
     CQPrefetchBaseCmd base;
     union {
-        CQPrefetchRelayLinearCmd relay_linear;
         CQPrefetchRelayLinearHCmd relay_linear_h;
         CQPrefetchRelayPagedCmd relay_paged;
         CQPrefetchRelayPagedPackedCmd relay_paged_packed;
@@ -195,6 +195,15 @@ struct CQPrefetchCmd {
         CQPrefetchPagedToRingbufferCmd paged_to_ringbuffer;
         CQPrefetchSetRingbufferOffsetCmd set_ringbuffer_offset;
         CQPrefetchRelayRingbufferCmd relay_ringbuffer;
+    } __attribute__((packed));
+};
+
+// 32 byte commands.
+struct CQPrefetchCmdLarge {
+    CQPrefetchBaseCmd base;
+    union {
+        CQPrefetchRelayLinearCmd relay_linear;
+        uint8_t padding[32-sizeof(CQPrefetchBaseCmd)];
     } __attribute__((packed));
 };
 
@@ -398,4 +407,5 @@ struct CQDispatchCmd {
 static_assert(sizeof(CQPrefetchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
 static_assert(sizeof(CQDispatchBaseCmd) == sizeof(uint8_t));  // if this fails, padding above needs to be adjusted
 static_assert((sizeof(CQPrefetchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
+static_assert((sizeof(CQPrefetchCmdLarge) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);
 static_assert((sizeof(CQDispatchCmd) & (CQ_DISPATCH_CMD_SIZE - 1)) == 0);

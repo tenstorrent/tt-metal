@@ -228,13 +228,15 @@ uint32_t dump_prefetch_cmd(CQPrefetchCmd* cmd, uint32_t cmd_addr, std::ofstream&
     if (cmd_id < CQ_PREFETCH_CMD_MAX_COUNT) {
         iq_file << fmt::format("{:#010x}: {}", cmd_addr, cmd_id);
         switch (cmd_id) {
-            case CQ_PREFETCH_CMD_RELAY_LINEAR:
+            case CQ_PREFETCH_CMD_RELAY_LINEAR: {
+                CQPrefetchCmdLarge* cmd_large = (CQPrefetchCmdLarge*)cmd;
                 iq_file << fmt::format(
                     " (noc_xy_addr={:#010x}, addr={:#010x}, length={:#010x})",
-                    val(cmd->relay_linear.noc_xy_addr),
-                    val(cmd->relay_linear.addr),
-                    val(cmd->relay_linear.length));
+                    val(cmd_large->relay_linear.noc_xy_addr),
+                    val(cmd_large->relay_linear.addr),
+                    val(cmd_large->relay_linear.length));
                 break;
+                }
             case CQ_PREFETCH_CMD_RELAY_PAGED:
                 iq_file << fmt::format(
                     " (start_page={:#02x}, is_dram_and_length_adjust={:#x}, base_addr={:#010x}, page_size={:#010x}, "
