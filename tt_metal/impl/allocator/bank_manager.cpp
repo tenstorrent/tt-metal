@@ -130,13 +130,25 @@ BankManager::StateDependencies::StateDependencies(
 }
 uint32_t BankManager::StateDependencies::num_states() const { return static_cast<uint32_t>(adjacency.size()); }
 
-void BankManager::init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset, uint32_t state) {
-    allocators_[state] = std::make_unique<allocator::FreeListOpt>(
-        size_bytes, offset, alignment_bytes, alignment_bytes, allocator::FreeListOpt::SearchPolicy::FIRST);
-    if (allocator_offsets_.size() < dependencies_.num_states()) {
-        allocator_offsets_.resize(dependencies_.num_states());
+void BankManager::init_allocators_across_states(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset) {
+    const uint32_t n = dependencies_.num_states();
+    allocators_.resize(n);
+    allocated_buffers_.resize(n);
+    overlays_.resize(n);
+    allocator_offsets_.resize(n);
+
+    // Build reverse dependency list: for each state s, which states depend on s
+    for (const auto& kv : dependencies_.adjacency) {
+        const uint32_t from = kv.first.value;
+        for (const auto dep : kv.second) {
+            dependents_[dep.value].push_back(from);
+        }
     }
-    allocator_offsets_[state] = offset;
+    for (uint32_t state = 0; state < n; ++state) {
+        allocators_[state] = std::make_unique<allocator::FreeListOpt>(
+            size_bytes, offset, alignment_bytes, alignment_bytes, allocator::FreeListOpt::SearchPolicy::FIRST);
+        allocator_offsets_[state] = offset;
+    }
 }
 
 void validate_num_banks(uint32_t num_banks, const BufferType& buffer_type, bool disable_interleaved) {
@@ -166,37 +178,19 @@ BankManager::BankManager(
     DeviceAddr alloc_offset,
     bool disable_interleaved,
     const StateDependencies& dependencies) :
-    dependencies_(dependencies) {
-    const uint32_t n = dependencies_.num_states();
-    allocators_.resize(n);
-    allocated_buffers_.resize(n);
-    overlays_.resize(n);
-    allocator_offsets_.resize(n);
-
-    // Build reverse dependency list: for each state s, which states depend on s
-    for (const auto& kv : dependencies_.adjacency) {
-        const uint32_t from = kv.first.value;
-        for (const auto dep : kv.second) {
-            dependents_[dep.value].push_back(from);
-        }
+    buffer_type_(buffer_type), alignment_bytes_(alignment_bytes), dependencies_(dependencies) {
+    unsigned int bank_id = 0;
+    for (const auto bank_offset : bank_offsets) {
+        bank_id_to_bank_offset_.insert({bank_id, bank_offset});
+        bank_id++;
     }
+    interleaved_address_limit_ = 0;
+    validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
-    for (uint32_t s = 0; s < n; ++s) {
-        buffer_type_ = buffer_type;
-        alignment_bytes_ = alignment_bytes;
-        unsigned int bank_id = 0;
-        for (const auto bank_offset : bank_offsets) {
-            bank_id_to_bank_offset_.insert({bank_id, bank_offset});
-            bank_id++;
-        }
-        interleaved_address_limit_ = 0;
-        validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
-        this->init_allocator(
-            size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset, s);
-    }
+    // Initialize allocators across states; sets up state-dependent members
+    this->init_allocators_across_states(
+        size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
 }
-
-// Removed num_states-only overload
 
 BankManager::BankManager(
     const BufferType& buffer_type,
@@ -207,33 +201,17 @@ BankManager::BankManager(
     DeviceAddr alloc_offset,
     bool disable_interleaved,
     const StateDependencies& dependencies) :
+    buffer_type_(buffer_type),
+    bank_id_to_bank_offset_(bank_id_to_bank_offset),
+    interleaved_address_limit_(interleaved_address_limit),
+    alignment_bytes_(alignment_bytes),
     dependencies_(dependencies) {
-    const uint32_t n = dependencies_.num_states();
-    allocators_.resize(n);
-    allocated_buffers_.resize(n);
-    overlays_.resize(n);
-    allocator_offsets_.resize(n);
+    validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
-    // Build reverse dependency list
-    for (const auto& kv : dependencies_.adjacency) {
-        const uint32_t from = kv.first.value;
-        for (const auto dep : kv.second) {
-            dependents_[dep.value].push_back(from);
-        }
-    }
-
-    for (uint32_t s = 0; s < n; ++s) {
-        buffer_type_ = buffer_type;
-        bank_id_to_bank_offset_ = bank_id_to_bank_offset;
-        interleaved_address_limit_ = interleaved_address_limit;
-        alignment_bytes_ = alignment_bytes;
-        validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
-        this->init_allocator(
-            size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset, s);
-    }
+    // Initialize allocators across states; sets up state-dependent members
+    this->init_allocators_across_states(
+        size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
 }
-
-// Removed num_states-only overload
 
 uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size(); }
 

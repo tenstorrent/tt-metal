@@ -107,7 +107,7 @@ public:
     void reset_size(StateDependencies::StateId state = StateDependencies::StateId{0});
 
 private:
-    // State-independent
+    // State-independent members
     // Type of buffers allocated in the banks (same across states)
     BufferType buffer_type_{0};
     // This is to store offsets for any banks that share a core or node (dram in wh/storage core), so we can view all
@@ -117,7 +117,7 @@ private:
     DeviceAddr interleaved_address_limit_{};
     uint32_t alignment_bytes_{};
 
-    // State-dependent
+    // State-dependent members
     // Dependencies between states (also encodes number of states)
     StateDependencies dependencies_{};
     // Reverse edges: for each state, which states depend on it
@@ -139,9 +139,12 @@ private:
     };
     std::vector<Overlay> overlays_{};
 
-    void deallocate_buffer_(DeviceAddr address, StateDependencies::StateId state);
-    void init_allocator(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset, uint32_t state);
+    // State-independent methods
     void validate_bank_id(uint32_t bank_id) const;
+    void init_allocators_across_states(DeviceAddr size_bytes, uint32_t alignment_bytes, DeviceAddr offset);
+
+    // State-dependent methods
+    void deallocate_buffer_(DeviceAddr address, StateDependencies::StateId state);
     void assert_valid_state(StateDependencies::StateId state) const;
 
     static DeviceAddr align_up(DeviceAddr addr, DeviceAddr alignment) {
