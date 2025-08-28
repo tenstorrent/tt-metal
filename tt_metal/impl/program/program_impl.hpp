@@ -197,7 +197,6 @@ public:
     std::vector<CoreRange> circular_buffers_unique_coreranges() const;
     std::vector<std::reference_wrapper<const Semaphore>> semaphores_on_core(
         const CoreCoord& core, CoreType core_type) const;
-    std::size_t num_semaphores() const;
     void init_semaphores(
         const IDevice& device, const CoreCoord& logical_core, uint32_t programmable_core_type_index) const;
     // XXXXX TODO: this should return a const reference
