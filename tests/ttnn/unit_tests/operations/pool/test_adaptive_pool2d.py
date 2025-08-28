@@ -35,12 +35,17 @@ def tensor_map():
     "dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
+@pytest.mark.parametrize(
+    "pool_type",
+    ["max", "avg"],
+)
 def test_adaptive_avg_pool2d(
     device,
     tensor_map,
     input_shape,
     output_size,
     dtype,
+    pool_type,
 ):
     run_adaptive_pool2d(
         device=device,
@@ -48,5 +53,5 @@ def test_adaptive_avg_pool2d(
         input_shape=input_shape,
         output_size=output_size,
         dtype=dtype,
-        pool_type="avg",
+        pool_type=pool_type,
     )
