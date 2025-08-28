@@ -81,8 +81,7 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
                    .paged_attention = false},
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {cur_pos_tensor, std::nullopt, attn_mask, attention_sink},
-               {},
-               ttnn::DefaultQueueId)
+               {})
         .at(0);
 }
 
@@ -133,8 +132,7 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
                    .paged_attention = true},
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {cur_pos_tensor, page_table_tensor, attn_mask, attention_sink},
-               {},
-               ttnn::DefaultQueueId)
+               {})
         .at(0);
 }
 
@@ -190,8 +188,7 @@ ttnn::Tensor ExecuteFlashMultiLatentAttentionDecode::invoke(
                    .head_dim_v = head_dim_v},
                {input_tensor_q, input_tensor_k},
                {cur_pos_tensor, std::nullopt, attn_mask, attention_sink},
-               {},
-               ttnn::DefaultQueueId)
+               {})
         .at(0);
 }
 
@@ -244,8 +241,7 @@ ttnn::Tensor ExecutePagedFlashMultiLatentAttentionDecode::invoke(
                    .head_dim_v = head_dim_v},
                {input_tensor_q, input_tensor_k},
                {cur_pos_tensor, page_table_tensor, attn_mask, attention_sink},
-               {},
-               ttnn::DefaultQueueId)
+               {})
         .at(0);
 }
 

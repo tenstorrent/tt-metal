@@ -54,9 +54,10 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
-    const MemoryConfig& memory_config,
+    const MemoryConfig& memory_config) {
     auto temp_tensor = tensor;
     auto intermediate_out_memory_config = memory_config;
+
     if (tensor.memory_config().is_sharded()) {
         MemoryConfig temp_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
         temp_tensor = ttnn::sharded_to_interleaved(tensor, temp_memory_config, std::nullopt);
@@ -86,7 +87,7 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
     const ttnn::Shape& padded_shape,
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
-    const MemoryConfig& memory_config,
+    const MemoryConfig& memory_config) {
     //This function turns a RM 2D->MD into an equivalent 2D->2D conversion and then turns the 2D output back to MD using a 0 cost view
     TT_FATAL((logical_shape.rank() != 0), "Can't do reshape to rank 0 tensor");
     //Collapse into the second last dimension

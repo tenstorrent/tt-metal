@@ -42,8 +42,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
                    .use_mla = false},
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {attn_mask},
-               {},
-               ttnn::DefaultQueueId)
+               {})
         .at(0);
 }
 
@@ -75,8 +74,7 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
                    .use_mla = false},
                {input_tensor_q, input_tensor_k, input_tensor_v},
                {std::nullopt, page_table_tensor},  // No attention mask - handled internally based on chunk_start_idx
-               {},
-               ttnn::DefaultQueueId)
+               {})
         .at(0);
 }
 
@@ -107,8 +105,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
             .compute_kernel_config = kernel_config_val},
         {input_tensor_q, input_tensor_k, input_tensor_v, joint_tensor_q, joint_tensor_k, joint_tensor_v},
         {},
-        {},
-        ttnn::DefaultQueueId);
+        {});
 
     return {results.at(0), results.at(1)};
 }
@@ -196,8 +193,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
             ccl_core_grid_offset},
         input_tensors,
         {},
-        {},
-        ttnn::DefaultQueueId);
+        {});
 
     return {results.at(0), results.at(1), results.at(2)};
 }
@@ -231,8 +227,7 @@ ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
                    .head_dim_v = head_dim_v},
                {input_tensor_q, input_tensor_k},
                {attn_mask},
-               {},
-               ttnn::DefaultQueueId)
+               {})
         .at(0);
 }
 
@@ -265,8 +260,7 @@ ttnn::Tensor ExecuteChunkedFlashMLAPrefill::invoke(
                    .head_dim_v = head_dim_v},
                {input_tensor_q, input_tensor_k},
                {std::nullopt, page_table_tensor},  // No attention mask - handled internally based on chunk_start_idx
-               {},
-               ttnn::DefaultQueueId)
+               {})
         .at(0);
 }
 

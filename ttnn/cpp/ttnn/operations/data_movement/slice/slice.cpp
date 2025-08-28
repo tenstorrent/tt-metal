@@ -176,19 +176,6 @@ ttnn::Tensor SliceOperation::invoke(
     return ret_adjustment(res);
 }
 
-template <typename T>
-ttnn::Tensor SliceOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const T> begins,
-    tt::stl::Span<const T> ends,
-    tt::stl::Span<const T> step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value) {
-    return SliceOperation::invoke<T>(
-        input_tensor, begins, ends, step, memory_config_arg, optional_output_tensor, pad_value);
-}
-
 template <typename T, std::size_t N>
 ttnn::Tensor SliceOperation::invoke(
     const ttnn::Tensor& input_tensor,
@@ -264,39 +251,12 @@ ttnn::Tensor SliceOperation::invoke(
         pad_value);
 }
 
-template <typename T>
-ttnn::Tensor SliceOperation::invoke(
+// Template instantiations for SliceOperation::invoke
+template ttnn::Tensor SliceOperation::invoke<int32_t>(
     const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& output_tensor_start,
-    const ttnn::Tensor& output_tensor_end,
-    const std::optional<ttnn::SmallVector<T>>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value) {
-    return SliceOperation::invoke<T>(
-        input_tensor,
-        output_tensor_start,
-        output_tensor_end,
-        step,
-        memory_config_arg,
-        optional_output_tensor,
-        pad_value);
-}
-
-template ttnn::Tensor SliceOperation::invoke<int>(
-    const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const int> begins,
-    tt::stl::Span<const int> ends,
-    tt::stl::Span<const int> step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
-
-template ttnn::Tensor SliceOperation::invoke<int>(
-    const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const int> begins,
-    tt::stl::Span<const int> ends,
-    tt::stl::Span<const int> step,
+    tt::stl::Span<const int32_t> begins,
+    tt::stl::Span<const int32_t> ends,
+    tt::stl::Span<const int32_t> step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
@@ -306,87 +266,6 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t>(
     tt::stl::Span<const uint32_t> begins,
     tt::stl::Span<const uint32_t> ends,
     tt::stl::Span<const uint32_t> step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
-
-template ttnn::Tensor SliceOperation::invoke<uint32_t>(
-    const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const uint32_t> begins,
-    tt::stl::Span<const uint32_t> ends,
-    tt::stl::Span<const uint32_t> step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
-
-template ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
-    const ttnn::Tensor& input_tensor,
-    const std::array<uint32_t, 4>& output_tensor_start,
-    const std::array<uint32_t, 4>& output_tensor_end,
-    const std::array<uint32_t, 4>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
-
-template ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
-    const ttnn::Tensor& input_tensor,
-    const std::array<uint32_t, 4>& output_tensor_start,
-    const std::array<uint32_t, 4>& output_tensor_end,
-    const std::array<uint32_t, 4>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
-
-template ttnn::Tensor SliceOperation::invoke<uint32_t, 3>(
-    const ttnn::Tensor& input_tensor,
-    const std::array<uint32_t, 3>& output_tensor_start,
-    const std::array<uint32_t, 3>& output_tensor_end,
-    const std::array<uint32_t, 3>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
-
-template ttnn::Tensor SliceOperation::invoke<uint32_t, 3>(
-    const ttnn::Tensor& input_tensor,
-    const std::array<uint32_t, 3>& output_tensor_start,
-    const std::array<uint32_t, 3>& output_tensor_end,
-    const std::array<uint32_t, 3>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
-
-template ttnn::Tensor SliceOperation::invoke<uint32_t, 1>(
-    const ttnn::Tensor& input_tensor,
-    const std::array<uint32_t, 1>& output_tensor_start,
-    const std::array<uint32_t, 1>& output_tensor_end,
-    const std::array<uint32_t, 1>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
-
-template ttnn::Tensor SliceOperation::invoke<uint32_t, 1>(
-    const ttnn::Tensor& input_tensor,
-    const std::array<uint32_t, 1>& output_tensor_start,
-    const std::array<uint32_t, 1>& output_tensor_end,
-    const std::array<uint32_t, 1>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
-
-template ttnn::Tensor SliceOperation::invoke<uint32_t>(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& output_tensor_start,
-    const ttnn::Tensor& output_tensor_end,
-    const std::optional<ttnn::SmallVector<uint32_t>>& step,
-    const std::optional<MemoryConfig>& memory_config_arg,
-    const std::optional<Tensor>& optional_output_tensor,
-    const std::optional<float>& pad_value);
-
-template ttnn::Tensor SliceOperation::invoke<uint32_t>(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Tensor& output_tensor_start,
-    const ttnn::Tensor& output_tensor_end,
-    const std::optional<ttnn::SmallVector<uint32_t>>& step,
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);

@@ -14,6 +14,7 @@
 #include "ttnn-pybind/decorators.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/compute_throttle_utils.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::core {
