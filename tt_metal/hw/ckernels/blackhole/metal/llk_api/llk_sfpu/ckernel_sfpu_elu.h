@@ -5,18 +5,18 @@
 #pragma once
 
 #include "ckernel_sfpu_elu.h"
-
+#include "llk_defs.h"
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_elu(uint slope) {
-    _calculate_elu_<APPROXIMATION_MODE, ITERATIONS>(slope);
+    _calculate_elu_<APPROX_MODE, ITERATIONS>(slope);
 }
 
-template <bool APPROXIMATION_MODE>
+template <ApproximationMode APPROX_MODE>
 void elu_init() {
-    _init_elu_<APPROXIMATION_MODE>();
+    _init_elu_<APPROX_MODE>();
 }
 
 }  // namespace sfpu
