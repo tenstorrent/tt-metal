@@ -300,7 +300,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
         tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(a.dtype())),
         tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(b.dtype())),
         shard_shape[1],
-        output_channels,
+        p_config.per_core_out_matrix_width_ntile * tt::constants::TILE_WIDTH,
         filter_w,
         device->arch() == tt::ARCH::BLACKHOLE,
         a.dtype());
