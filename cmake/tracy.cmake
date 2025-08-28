@@ -7,8 +7,8 @@ option(ENABLE_TRACY_TIMER_FALLBACK "Enable Tracy timer fallback" OFF)
 if(ENABLE_TRACY)
     set(TRACY_ENABLE ON)
 else()
-    #set(TRACY_ENABLE OFF)
-    set(ENABLE_TRACY_TIMER_FALLBACK OFF)
+    set(TRACY_ENABLE OFF)
+    set(ENABLE_TRACY_TIMER_FALLBACK ON)
 endif()
 
 set(DEFAULT_COMPONENT_NAME ${CMAKE_INSTALL_DEFAULT_COMPONENT_NAME})
@@ -32,7 +32,7 @@ set_target_properties(
 target_compile_definitions(
     TracyClient
     PUBLIC
-        TRACY_ENABLE
+        "$<$<BOOL:${ENABLE_TRACY}>:TRACY_ENABLE>"
         "$<$<BOOL:${ENABLE_TRACY_TIMER_FALLBACK}>:TRACY_TIMER_FALLBACK>"
 )
 target_compile_options(
