@@ -4,8 +4,12 @@ package tt.fsd.proto;
 
 // Factory System Descriptor (FSD) message
 message FactorySystemDescriptor {
-    message Hostnames {
-      repeated string hostname = 1;
+    message Host {
+        string hostname = 1;
+        string hall = 2;
+        string aisle = 3;
+        int32 rack = 4;
+        int32 shelf_u = 5;
     }
 
     message BoardLocationType {
@@ -33,7 +37,8 @@ message FactorySystemDescriptor {
     message EthConnections {
         repeated Connection connection = 1;
     }
-    Hostnames hostnames = 1;
+    repeated Host hosts = 1;
     BoardTypes board_types = 2;
-    EthConnections eth_connections = 3;
+    EthConnections eth_connections =3;
+
 }
