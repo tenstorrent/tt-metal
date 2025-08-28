@@ -58,6 +58,11 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (output.physical_volume() == 0) {
+        return {.program = std::move(program), .override_runtime_arguments_callback = std::nullopt};
+    }
+
     CoreRange core({0, 0}, {0, 0});
 
     // This should allocate a DRAM buffer on the device
@@ -234,6 +239,11 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interleaved(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (output.physical_volume() == 0) {
+        return {.program = std::move(program), .override_runtime_arguments_callback = std::nullopt};
+    }
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
@@ -505,6 +515,11 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (output.physical_volume() == 0) {
+        return {.program = std::move(program), .override_runtime_arguments_callback = std::nullopt};
+    }
+
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
@@ -700,6 +715,11 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
+
+    // Handle empty tensors - no tiling needed for tensors with no data
+    if (output.physical_volume() == 0) {
+        return {.program = std::move(program), .override_runtime_arguments_callback = std::nullopt};
+    }
 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
