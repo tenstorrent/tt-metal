@@ -216,14 +216,14 @@ namespace tt::tt_metal::inspector {
         source += f'''::kj::Promise<void> RpcServer::{method.name}({context_name} context) {{
     try {{
         if (!{method.name}_callback) {{
-            log_warning(tt::LogInspector, "No callback set for {method.name}");
+            log_error(tt::LogInspector, "No callback set for {method.name}");
             return ::kj::READY_NOW;
         }}
         {callback_call}
         return ::kj::READY_NOW;
     }} catch (const std::exception& e) {{
-        log_error(tt::LogInspector, "Failed to execute {method.name}: {{}}", e.what());
-        return ::kj::READY_NOW;
+        log_warning(tt::LogInspector, "Failed to execute {method.name}: {{}}", e.what());
+        return kj::Promise<void>(KJ_EXCEPTION(FAILED, e.what()));
     }}
 }}
 

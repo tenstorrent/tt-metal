@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "data.hpp"
+#include <stdexcept>
 #include "impl/debug/inspector/rpc_server_controller.hpp"
 #include "impl/debug/inspector/logger.hpp"
 #include "impl/context/metal_context.hpp"
@@ -146,18 +147,16 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
     auto kernel_id = params.getWatcherKernelId();
     auto program_id_it = kernel_id_to_program_id.find(kernel_id);
     if (program_id_it == kernel_id_to_program_id.end()) {
-        // TODO: Handle kernel not found
-        return;
+        throw std::runtime_error("Kernel not found");
     }
     auto program_id = program_id_it->second;
     auto program_data = programs_data.find(program_id);
     if (program_data == programs_data.end()) {
-        // TODO: Handle program not found
-        return;
+        throw std::runtime_error("Program not found");
     }
     auto kernel_data_it = program_data->second.kernels.find(kernel_id);
     if (kernel_data_it == program_data->second.kernels.end()) {
-        // TODO: Handle kernel not found
+        throw std::runtime_error("Kernel not found inside the program");
     }
     auto& kernel_data = kernel_data_it->second;
     auto kernel = results.initKernel();
