@@ -248,7 +248,7 @@ def run_conv(
         conv_config.act_block_w_div = config_override["act_block_w_div"]
 
     if requires_device_placement and not use_dram:
-        slice_config = ttnn.Conv2dSliceConfig(slice_type=ttnn.Conv2dSliceConfig.SliceType.L1)
+        slice_config = ttnn.Conv2dL1FullSliceConfig
     else:
         slice_config = None
     [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
