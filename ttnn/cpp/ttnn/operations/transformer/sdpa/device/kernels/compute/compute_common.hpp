@@ -18,6 +18,10 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/reduce.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "ckernel_debug.h"
+
+#include "debug/dprint.h"
+#include "debug/dprint_tensix.h"
 
 template <uint32_t num_tiles>
 void max_block_inplace(uint32_t in0, uint32_t in1) {
@@ -125,7 +129,7 @@ void sub_exp_block_bcast_cols_inplace(uint32_t in1_cb, uint32_t reduce_cb) {
             tile_regs_acquire();
             for (uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, in0_index, i, j);
-                exp_tile<true, true>(j);
+                exp_tile<true, true>(j, (int)VectorMode::RC_custom);
                 in0_index++;
             }
             tile_regs_commit();
