@@ -124,7 +124,7 @@ jobs:
             -e GTEST_OUTPUT=xml:generated/test_reports/
             -e GITHUB_ACTIONS=true
             -e HF_HOME=/mnt/MLPerf/huggingface
-            -e HF_DATASETS_CACHE~/.cache/huggingface/datasets
+            -e HF_DATASETS_CACHE=~/.cache/huggingface/datasets
           install_wheel: true
           run_args: |
             if [[ "${{ matrix.model-group.name }}" == "other" ]]; then
