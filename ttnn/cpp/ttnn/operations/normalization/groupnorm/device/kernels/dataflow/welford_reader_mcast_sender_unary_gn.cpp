@@ -7,6 +7,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "welford_combine.h"
 #include "debug/dprint.h"
+#include "debug/dprint_pages.h"
 
 void kernel_main() {
     // clang-format off
@@ -272,237 +273,226 @@ void kernel_main() {
         cb_ex_external_tiles_required++;
     }
 
-        index_b_offset = 0;
-        for (uint32_t b = 0; b < num_batches; ++b) {
-            index_g_offset = 0;
-            row_offset = num_cols_per_group;
-            DPRINT << "Batch: " << b << " out of " << num_batches << ENDL();
+    index_b_offset = 0;
+    for (uint32_t b = 0; b < num_batches; ++b) {
+        index_g_offset = 0;
+        row_offset = num_cols_per_group;
+        DPRINT << "Batch: " << b << " out of " << num_batches << ENDL();
 
-            for (uint32_t m = 0; m < num_groups; ++m) {
-                DPRINT << "Group: " << m << " out of " << num_groups << ENDL();
-            //The following loop is for the 3 passes of input tensor required for GroupNorm
-            //First Pass: Calculates average value
-            //Second Pass: Calculates the Variance value
-            //Third Pass: Calculates final value
-            //Definition: num_read_of_input = 3
-                for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
-                    uint32_t out_block_start_id_offset = 0;
-                    uint32_t cb_ex_external_bytes_written = 0;
+        for (uint32_t m = 0; m < num_groups; ++m) {
+            DPRINT << "Group: " << m << " out of " << num_groups << ENDL();
+        //The following loop is for the 3 passes of input tensor required for GroupNorm
+        //First Pass: Calculates average value
+        //Second Pass: Calculates the Variance value
+        //Third Pass: Calculates final value
+        //Definition: num_read_of_input = 3
+            for (uint32_t cur_read_iteration = 0; cur_read_iteration < num_reads_of_input; ++cur_read_iteration) {
+                uint32_t out_block_start_id_offset = 0;
+                uint32_t cb_ex_external_bytes_written = 0;
 
-                    for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
-                        uint32_t out_block_h_actual;
-                        if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
-                            out_block_h_actual = out_block_h_last;
-                        } else {
-                            out_block_h_actual = out_block_h_normal;
-                        }
-
-#if !defined(READER_REPACK) or !defined(TILIZE_IN)
-                        if (cur_read_iteration != 1) {
-                            const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
-                            const DataFormat src0_data_format = get_dataformat(cb_in0);
-                            const InterleavedAddrGenFast<src0_is_dram> src_a = {
-                                .bank_base_address = src_addr,
-                                .page_size = src0_tile_bytes,
-                                .data_format = src0_data_format};
-                            uint32_t l1_write_addr;
-                            l1_write_addr = get_write_ptr(cb_in0);
-                            cb_reserve_back(cb_in0, out_block_hw_normal);
-                            for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
-                                for (uint32_t nt = 0; nt < block_w; nt++) {
-                                    noc_async_read_tile(
-                                        start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
-                                            index_b_offset + index_g_offset,
-                                        src_a,
-                                        l1_write_addr);
-                                    l1_write_addr += src0_tile_bytes;
-                                    noc_async_read_barrier();
-                                }
-                            }
-                            cb_push_back(cb_in0, out_block_hw_normal);
-                            DPRINT << "input sent for iteration: " << cur_read_iteration << " out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
-                        }
-#endif
-                        if (cur_read_iteration == 2) {
-                            const InterleavedAddrGenFast<out_is_dram> dst_a = {
-                                .bank_base_address = out_addr,
-                                .page_size = single_tile_size_bytes,
-                                .data_format = out_data_format};
-
-                            // add or copy with previous output results
-                            uint32_t block_w_curr =
-                                index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
-
-                            const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out);
-                            uint32_t l1_write_addr;
-                            l1_write_addr = get_write_ptr(cb_reread_out);
-                            cb_reserve_back(cb_reread_out, out_block_hw_normal);
-
-                            for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
-                                for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                                    noc_async_read_tile(
-                                        out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
-                                            index_b_offset + index_g_offset,
-                                        dst_a,
-                                        l1_write_addr);
-                                    l1_write_addr += dst_tile_bytes;
-                                    noc_async_read_barrier();
-                                }
-                            }
-                            cb_push_back(cb_reread_out, out_block_hw_normal);
-                        }
-                        out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
+                for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
+                    uint32_t out_block_h_actual;
+                    if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
+                        out_block_h_actual = out_block_h_last;
+                    } else {
+                        out_block_h_actual = out_block_h_normal;
                     }
 
-                    if (cur_read_iteration == 0) {
-                        cb_reserve_back(cb_ex_global, 2);
-
-                        cb_wait_front(cb_ex_partial, 2);
-
-                        auto mean_ptr = get_read_ptr(cb_ex_partial);
-                        auto var_ptr = mean_ptr + single_tile_size_bytes;
-                        // Read mean and variance arrays from cb_ex_partial, then combine using Welford
-                        // Assume mean_ptr and var_ptr are uint32_t L1 addresses; cast to float* for access
-                        float* means = reinterpret_cast<float*>(mean_ptr);
-                        float* vars = reinterpret_cast<float*>(var_ptr);
-                        WelfordStats result = combine_welford(32, means, vars, 1);
-                        float mean = result.mean;
-                        float var = result.variance;
-
-                        // Write this to cb_ex_global
-                        auto result_ptr = get_write_ptr(cb_ex_global);
-                        float* result_fptr = reinterpret_cast<float*>(result_ptr);
-                        result_fptr[0] = mean;
-                        result_fptr[1] = var;
-
-                        cb_pop_front(cb_ex_partial, 2);
-
-                        if constexpr (num_mcast_cores > 1) {
-                            // Wait until all other cores have signaled that their partial data is ready
-                            noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
-                            noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
-
-                            // TODO: Read partial data from all other cores into this core's cb_ex_global
-
-                            // Signal to receiver that their partial data has been received
-                            noc_semaphore_set_multicast(
-                                reduce_sender_semaphore_addr,
-                                reduce_sender_semaphore_noc_addr,
-                                num_mcast_cores_mid_group,
-                                false);
-                            if (has_mcast_first_group) {
-                                noc_semaphore_set_multicast(
-                                    reduce_sender_semaphore_addr,
-                                    reduce_sender_first_group_semaphore_noc_addr,
-                                    num_mcast_cores_first_group,
-                                    false);
-                            }
-                            if (has_mcast_last_group) {
-                                noc_semaphore_set_multicast(
-                                    reduce_sender_semaphore_addr,
-                                    reduce_sender_last_group_semaphore_noc_addr,
-                                    num_mcast_cores_last_group,
-                                    false);
+#if !defined(READER_REPACK) or !defined(TILIZE_IN)
+                    if (cur_read_iteration != 1) {
+                        const uint32_t src0_tile_bytes = get_tile_size(cb_in0);
+                        const DataFormat src0_data_format = get_dataformat(cb_in0);
+                        const InterleavedAddrGenFast<src0_is_dram> src_a = {
+                            .bank_base_address = src_addr,
+                            .page_size = src0_tile_bytes,
+                            .data_format = src0_data_format};
+                        uint32_t l1_write_addr;
+                        l1_write_addr = get_write_ptr(cb_in0);
+                        cb_reserve_back(cb_in0, out_block_hw_normal);
+                        for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
+                            for (uint32_t nt = 0; nt < block_w; nt++) {
+                                noc_async_read_tile(
+                                    start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
+                                        index_b_offset + index_g_offset,
+                                    src_a,
+                                    l1_write_addr);
+                                l1_write_addr += src0_tile_bytes;
+                                noc_async_read_barrier();
                             }
                         }
+                        cb_push_back(cb_in0, out_block_hw_normal);
+                        DPRINT << "input sent for iteration: " << cur_read_iteration << " out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
+                    }
+#endif
+                    if (cur_read_iteration == 2) {
+                        const InterleavedAddrGenFast<out_is_dram> dst_a = {
+                            .bank_base_address = out_addr,
+                            .page_size = single_tile_size_bytes,
+                            .data_format = out_data_format};
 
-                        auto mean_ptr_global = get_read_ptr(cb_ex_global);
-                        auto var_ptr_global = mean_ptr_global + single_tile_size_bytes;
-                        // Read mean and variance arrays from cb_ex_global, then combine using Welford
-                        // Assume mean_ptr and var_ptr are uint32_t L1 addresses; cast to float* for access
-                        float* means_global = reinterpret_cast<float*>(mean_ptr_global);
-                        float* vars_global = reinterpret_cast<float*>(var_ptr_global);
-                        WelfordStats result_global = combine_welford(num_mcast_cores, means_global, vars_global, 1);
-                        float mean_global = result_global.mean;
-                        float var_global = result_global.variance;
+                        // add or copy with previous output results
+                        uint32_t block_w_curr =
+                            index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
-                        // Write this to cb_ex_global
-                        auto result_ptr_global = get_write_ptr(cb_ex_global);
-                        float* result_fptr_global = reinterpret_cast<float*>(result_ptr_global);
-                        result_fptr_global[0] = mean_global;
-                        result_fptr_global[1] = var_global;
+                        const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out);
+                        uint32_t l1_write_addr;
+                        l1_write_addr = get_write_ptr(cb_reread_out);
+                        cb_reserve_back(cb_reread_out, out_block_hw_normal);
 
-                        if constexpr (num_mcast_cores > 1) {
-                            // mcast to other cores
-                            uint32_t l1_read_addr_ex = get_write_ptr(cb_ex_global);
+                        for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
+                            for (uint32_t nt = 0; nt < block_w_curr; nt++) {
+                                noc_async_read_tile(
+                                    out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
+                                        index_b_offset + index_g_offset,
+                                    dst_a,
+                                    l1_write_addr);
+                                l1_write_addr += dst_tile_bytes;
+                                noc_async_read_barrier();
+                            }
+                        }
+                        cb_push_back(cb_reread_out, out_block_hw_normal);
+                    }
+                    out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
+                }
+
+                if (cur_read_iteration == 0) {
+                    cb_reserve_back(cb_ex_global, 2);
+                    cb_wait_front(cb_ex_partial, 2);
+
+                    // Read mean and variance arrays from cb_ex_partial, then combine using Welford
+                    auto local_read_ptr = get_read_ptr(cb_ex_partial);
+                    auto p_local_means = reinterpret_cast<volatile uint16_t*>(local_read_ptr);
+                    auto p_local_vars = p_local_means + TILE_WIDTH * TILE_HEIGHT;
+
+                    // TODO: Make transpose work to avoid having to do this manually here
+                    // Doing this for two faces,  face 0 is the first 16 values, face 2 is the last 16 values
+                    for (uint32_t face_h = 0; face_h < 2; ++face_h) {
+                        auto face_mean_addr = p_local_means + face_h * (single_tile_size_bytes >> 2);
+                        auto face_var_addr = p_local_vars + face_h * (single_tile_size_bytes >> 2);
+                        // Copy 16 values from face_addr to p_local_means and p_local_vars
+                        for (uint32_t i = 0; i < 16; i++) {
+                            p_local_means[(face_h << 4) + i] = face_mean_addr[i << 4];
+                            p_local_vars[(face_h << 4) + i] = face_var_addr[i << 4];
+                        }
+                    }
+
+                    auto local_result = combine_welford<32, 1, 1>(p_local_means, p_local_vars);
+                    DPRINT << "local mean: " << local_result.mean << " local var: " << local_result.variance << " local count: " << local_result.count << ENDL();
+
+                    // Write this to cb_ex_global
+                    auto global_means_ptr = get_write_ptr(cb_ex_global);
+                    auto p_global_means = reinterpret_cast<volatile uint16_t*>(global_means_ptr);
+                    auto global_vars_ptr = global_means_ptr + single_tile_size_bytes;
+                    auto p_global_vars = reinterpret_cast<volatile uint16_t*>(global_vars_ptr);
+                    p_global_means[0] = local_result.mean;
+                    p_global_vars[0] = local_result.variance;
+
+                    cb_pop_front(cb_ex_partial, 2);
+
+                    tt::data_movement::common::print_bf16_pages(global_means_ptr, 16, 4 * 16);
+
+                    if constexpr (num_mcast_cores > 1) {
+                        // Wait until all other cores have signaled that their partial data is ready
+                        noc_semaphore_wait(reduce_receiver_semaphore_addr_ptr, num_mcast_cores - 1);
+                        noc_semaphore_set(reduce_receiver_semaphore_addr_ptr, 0);
+
+                        // TODO: Read partial data from all other cores into this core's cb_ex_global
+                        for (uint32_t i = 1; i < num_mcast_cores; i++) {
+                            noc_async_read_one_packet(multicast_data_noc | global_means_ptr, global_means_ptr + i * 32, 32);
+                            noc_async_read_one_packet(multicast_data_noc | global_vars_ptr, global_vars_ptr + i * 32, 32);
+                        }
+                        noc_async_read_barrier();
+                    }
+
+                    // Read mean and variance arrays from cb_ex_global, then combine using Welford
+                    auto global_result = combine_welford<num_mcast_cores, 32, 16>(p_global_means, p_global_vars);
+                    DPRINT << "global mean: " << global_result.mean << " global var: " << global_result.variance << ENDL();
+
+                    // Write this to cb_ex_global
+                    p_global_means[0] = global_result.mean;
+                    p_global_vars[0] = global_result.variance;
+
+                    if constexpr (num_mcast_cores > 1) {
+                        // mcast to other cores
+                        uint32_t l1_read_addr_ex = get_write_ptr(cb_ex_global);
+                        noc_async_write_multicast(
+                            l1_read_addr_ex,
+                            multicast_data_noc | l1_read_addr_ex,
+                            num_bytes_read,
+                            num_mcast_cores_mid_group,
+                            true);
+                        noc_semaphore_set_multicast(
+                            reduce_sender_semaphore_addr,
+                            reduce_sender_semaphore_noc_addr,
+                            num_mcast_cores_mid_group,
+                            false);
+
+                        if (has_mcast_first_group) {
                             noc_async_write_multicast(
                                 l1_read_addr_ex,
-                                multicast_data_noc | l1_read_addr_ex,
+                                multicast_first_group_data_noc | l1_read_addr_ex,
                                 num_bytes_read,
-                                num_mcast_cores_mid_group,
+                                num_mcast_cores_first_group,
                                 true);
                             noc_semaphore_set_multicast(
                                 reduce_sender_semaphore_addr,
-                                reduce_sender_semaphore_noc_addr,
-                                num_mcast_cores_mid_group,
+                                reduce_sender_first_group_semaphore_noc_addr,
+                                num_mcast_cores_first_group,
                                 false);
-
-                            if (has_mcast_first_group) {
-                                noc_async_write_multicast(
-                                    l1_read_addr_ex,
-                                    multicast_first_group_data_noc | l1_read_addr_ex,
-                                    num_bytes_read,
-                                    num_mcast_cores_first_group,
-                                    true);
-                                noc_semaphore_set_multicast(
-                                    reduce_sender_semaphore_addr,
-                                    reduce_sender_first_group_semaphore_noc_addr,
-                                    num_mcast_cores_first_group,
-                                    false);
-                            }
-
-                            if (has_mcast_last_group) {
-                                noc_async_write_multicast(
-                                    l1_read_addr_ex,
-                                    multicast_last_group_data_noc | l1_read_addr_ex,
-                                    num_bytes_read,
-                                    num_mcast_cores_last_group,
-                                    true);
-                                noc_semaphore_set_multicast(
-                                    reduce_sender_semaphore_addr,
-                                    reduce_sender_last_group_semaphore_noc_addr,
-                                    num_mcast_cores_last_group,
-                                    false);
-                            }
-                            noc_async_write_barrier();
                         }
 
-                        cb_push_back(cb_ex_global, 2);
+                        if (has_mcast_last_group) {
+                            noc_async_write_multicast(
+                                l1_read_addr_ex,
+                                multicast_last_group_data_noc | l1_read_addr_ex,
+                                num_bytes_read,
+                                num_mcast_cores_last_group,
+                                true);
+                            noc_semaphore_set_multicast(
+                                reduce_sender_semaphore_addr,
+                                reduce_sender_last_group_semaphore_noc_addr,
+                                num_mcast_cores_last_group,
+                                false);
+                        }
+                        noc_async_write_barrier();
                     }
-                }
-                if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
-                    if (row_offset == TILE_WIDTH) {
-                        index_g_offset += block_w;
-                        row_offset = num_cols_per_group;
 
-                    } else {
-                        index_g_offset += block_w_minus_one;
-                        row_offset += num_cols_per_group;
-                    }
-                } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
-                    if (row_offset == TILE_WIDTH) {
-                        index_g_offset += block_w_minus_one;
-                        row_offset = num_cols_per_group;
-
-                    } else if (row_offset > TILE_WIDTH) {
-                        index_g_offset += block_w_minus_one;
-                        row_offset = row_offset + group_row_offset;
-
-                    } else {
-                        row_offset += num_cols_per_group;
-                    }
-                } else {
-                    if (row_offset > TILE_WIDTH) {
-                        index_g_offset += block_w_minus_one;
-                        row_offset = row_offset - tile_w_minux_group_size;
-                    } else {
-                        row_offset += num_cols_per_group;
-                        index_g_offset += block_w_minus_two;
-                    }
+                    cb_push_back(cb_ex_global, 2);
                 }
             }
-            index_b_offset += num_tiles_per_batch;
+            if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
+                if (row_offset == TILE_WIDTH) {
+                    index_g_offset += block_w;
+                    row_offset = num_cols_per_group;
+
+                } else {
+                    index_g_offset += block_w_minus_one;
+                    row_offset += num_cols_per_group;
+                }
+            } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
+                if (row_offset == TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = num_cols_per_group;
+
+                } else if (row_offset > TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = row_offset + group_row_offset;
+
+                } else {
+                    row_offset += num_cols_per_group;
+                }
+            } else {
+                if (row_offset > TILE_WIDTH) {
+                    index_g_offset += block_w_minus_one;
+                    row_offset = row_offset - tile_w_minux_group_size;
+                } else {
+                    row_offset += num_cols_per_group;
+                    index_g_offset += block_w_minus_two;
+                }
+            }
         }
+        index_b_offset += num_tiles_per_batch;
+    }
 
 #if defined(READER_REPACK) and defined(UNTILIZE_OUT)
     uint32_t l1_write_addr_repack = get_write_ptr(cb_out0);
