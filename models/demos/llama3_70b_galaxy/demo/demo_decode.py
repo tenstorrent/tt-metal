@@ -119,8 +119,6 @@ def run_llama3_demo(
     start_pos,
     enable_prefetcher_performance_mode=True,
     galaxy_type="4U",
-    is_cur_pos_sharded=True,
-    is_page_table_sharded=True,
 ):
     # Creat batch output file
     benchmark_data = BenchmarkData()
@@ -218,43 +216,13 @@ def run_llama3_demo(
             model_args.batch_size_per_device_group,
             paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
         )
-
-        # OPTIMIZATION: We repeat the page table on each core in L1
-        if is_page_table_sharded:
-            # We repeat each batch by num_cores_to_shard times then concat them back together
-            # This tensor is sharded along the height first across devices (/4) then within device (/50) on dim 0
-            page_table_chunks = page_table.split(8, dim=0)
-            repeated_page_table_chunks = [
-                chunk.repeat(model_args.sub_core_grids.num_cores(), 1) for chunk in page_table_chunks
-            ]
-            page_table = torch.cat(repeated_page_table_chunks, dim=0)
-            page_table_shard_spec = ttnn.ShardSpec(
-                model_args.sub_core_grids,
-                (
-                    model_args.batch_size_per_device_group,
-                    paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
-                ),
-                ttnn.ShardOrientation.ROW_MAJOR,
-            )
-            page_table_memory_config = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, page_table_shard_spec
-            )
-            page_table_tt = ttnn.from_torch(
-                page_table,
-                device=mesh_device,
-                dtype=ttnn.uint16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
-                memory_config=page_table_memory_config,
-            )
-        else:
-            page_table_tt = ttnn.from_torch(
-                page_table,
-                device=mesh_device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
-            )
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+        )
         logger.info("Page table tensor done")
 
     # Load TTNN Llama-3.1 model
@@ -305,45 +273,28 @@ def run_llama3_demo(
 
     user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
-    # Defining core grids
     logger.info("Starting decode...")
-
-    # Create initial current position tensors
+    # Initial positions
     decoding_pos = [start_pos] * batch_size
     current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
 
-    # OPTIMIZATION: sharding the current position tensor on each core
-    if is_cur_pos_sharded:
-        # Each core will have a copy of the current position tensor in L1
-        current_pos_sram = torch.tensor(
-            [[decoding_pos[b] for b in range(batch_size)]] * model_args.sub_core_grids.num_cores()
-        )
-        cur_pos_shard_spec = ttnn.ShardSpec(
-            model_args.sub_core_grids, (1, batch_size // mesh_device.shape[1]), ttnn.ShardOrientation.ROW_MAJOR
-        )
-        cur_pos_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, cur_pos_shard_spec
-        )
     current_pos_tensor = ttnn.from_torch(
-        current_pos_sram if is_cur_pos_sharded else current_pos,
+        current_pos,
+        device=mesh_device,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 1 if is_cur_pos_sharded else 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
+
     logger.info("Current pos tensor done")
+
     # Get cos/sin matrices for the current position of each user
     rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
     logger.info("Rot mats done")
-
-    # Move the cur pos tensor to device
-    if is_cur_pos_sharded:
-        current_pos_tensor = current_pos_tensor.to(mesh_device, cur_pos_memory_config)
-    else:
-        current_pos_tensor = current_pos_tensor.to(mesh_device)
 
     # Prepare the encoded prompts for the decode input
     tt_out_tok = ttnn.from_torch(
@@ -353,6 +304,12 @@ def run_llama3_demo(
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
     )
 
     # Compile
@@ -382,7 +339,7 @@ def run_llama3_demo(
     if not stress_test:
         ttnn.plus_one(
             current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
         ttnn.plus_one(
             rot_mat_idxs,
@@ -418,7 +375,7 @@ def run_llama3_demo(
     if not stress_test:
         ttnn.plus_one(
             current_pos_tensor,
-            sub_core_grids=model_args.sub_core_grids,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
         ttnn.plus_one(
             rot_mat_idxs,
@@ -430,11 +387,11 @@ def run_llama3_demo(
 
     # Reset the decoding position for the proper run of the model
     current_pos_reset = ttnn.from_torch(
-        current_pos_sram if is_cur_pos_sharded else current_pos,
+        current_pos,
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 1 if is_cur_pos_sharded else 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
             mesh_shape=model_args.cluster_shape,
         ),
     )
@@ -648,7 +605,7 @@ def run_llama3_demo(
 #
 # optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
 @pytest.mark.parametrize(
-    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos, is_cur_pos_sharded, is_page_table_sharded",
+    "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
         (  # full demo, batch 32
             "instruct",
@@ -664,8 +621,6 @@ def run_llama3_demo(
             {"top_k": 32, "top_p": 0.9, "temperature": 0.7, "seed": 42},  # sampling_params
             False,  # stress_test
             0,  # start_pos
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
         ),
         (  # quick 1L demo
             "random",
@@ -681,8 +636,6 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             0,  # start_pos
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
         ),
         (  # Stress test: 4*128k generation length
             "instruct",
@@ -698,8 +651,6 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.0, "temperature": 1.0, "seed": 42},  # sampling_params
             True,  # stress_test
             0,  # start_pos
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
         ),
         (  # mini stress test
             "instruct",
@@ -715,8 +666,6 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
         ),
         (  # 10 layers for devive perf measurements
             "instruct",
@@ -732,8 +681,6 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             False,  # stress_test
             127,  # start_pos
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
         ),
         (  # ND hang test
             "instruct",
@@ -749,8 +696,6 @@ def run_llama3_demo(
             {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
             True,  # stress_test
             0,  # start_pos
-            True,  # is_cur_pos_sharded
-            True,  # is_page_table_sharded
         ),
     ],
     ids=[
@@ -782,7 +727,7 @@ def run_llama3_demo(
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "trace_region_size": 23887872,
-            "worker_l1_size": 1345000,
+            "worker_l1_size": 1344544,
             "fabric_config": True,
         }
     ],
@@ -808,8 +753,6 @@ def test_llama_demo(
     reset_seeds,
     request,
     galaxy_type,
-    is_cur_pos_sharded,
-    is_page_table_sharded,
 ):
     if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
@@ -850,6 +793,4 @@ def test_llama_demo(
         start_pos=start_pos,
         enable_prefetcher_performance_mode=enable_pf_perf_mode,
         galaxy_type=galaxy_type,
-        is_cur_pos_sharded=is_cur_pos_sharded,
-        is_page_table_sharded=is_page_table_sharded,
     )

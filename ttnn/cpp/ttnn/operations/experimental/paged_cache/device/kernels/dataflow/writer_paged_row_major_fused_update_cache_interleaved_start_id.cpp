@@ -43,9 +43,6 @@ void kernel_main() {
 
     constexpr uint32_t St = get_compile_time_arg_val(17);
     uint32_t semaphore_addr = get_semaphore(get_compile_time_arg_val(18));  // semaphore for receiver
-    constexpr uint32_t batch_size = get_compile_time_arg_val(19);
-    constexpr uint32_t page_table_stick_size = get_compile_time_arg_val(20);
-    constexpr uint32_t page_table_is_dram = get_compile_time_arg_val(21);
 
     uint32_t untilized_input_cb_id = untilized_input1_cb_id;
     if (!is_input1) {
@@ -77,25 +74,13 @@ void kernel_main() {
             skip_update = true;
         } else {
             if constexpr (is_paged_cache) {
-                uint32_t num_pages_to_read = page_table_is_dram ? 1 : batch_size;
-                cb_wait_front(page_table_cb_id, num_pages_to_read);
+                cb_wait_front(page_table_cb_id, 1);
                 uint32_t page_table_cb_rd_ptr = get_read_ptr(page_table_cb_id);
-                if constexpr (!page_table_is_dram) {
-                    page_table_cb_rd_ptr += my_batch_idx * page_table_stick_size;
-                }
-                // DRAM uses uint32 entries; L1-sharded page table uses uint16 entries
-                volatile tt_l1_ptr uint32_t* page_table_ptr_u32 = nullptr;
-                volatile tt_l1_ptr uint16_t* page_table_ptr_u16 = nullptr;
-                if constexpr (page_table_is_dram) {
-                    page_table_ptr_u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_rd_ptr);
-                } else {
-                    page_table_ptr_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(page_table_cb_rd_ptr);
-                }
+                volatile tt_l1_ptr uint32_t* page_table_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page_table_cb_rd_ptr);
 
                 const uint32_t virtual_block_id = update_idx / block_size;
-                const uint32_t physical_block_id = (page_table_is_dram)
-                                                       ? page_table_ptr_u32[virtual_block_id]
-                                                       : static_cast<uint32_t>(page_table_ptr_u16[virtual_block_id]);
+                const uint32_t physical_block_id = page_table_ptr[virtual_block_id];
                 const uint32_t block_start_id = physical_block_id * num_heads * block_size_t * Wt;
                 const uint32_t block_row_tile = (update_idx % block_size) / TILE_HEIGHT;
                 const uint32_t block_offset = block_row_tile * Wt;
