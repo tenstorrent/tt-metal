@@ -21,7 +21,7 @@ using CoreCoord = tt_xy_pair;
 
 using namespace tt::constants;
 
-std::vector<uint32_t> _get_prime_factors(uint32_t n) {
+std::vector<uint32_t> get_prime_factors(uint32_t n) {
     uint32_t i = 2;
 
     std::vector<uint32_t> prime_factors;
@@ -40,7 +40,7 @@ std::vector<uint32_t> _get_prime_factors(uint32_t n) {
     return prime_factors;
 }
 
-std::vector<uint32_t> _get_possible_products(std::vector<uint32_t> factors) {
+std::vector<uint32_t> get_possible_products(std::vector<uint32_t> factors) {
     if (factors.size() == 0) {
         return {1};
     }
@@ -68,7 +68,7 @@ std::vector<uint32_t> _get_possible_products(std::vector<uint32_t> factors) {
     return products;
 }
 
-uint32_t _get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
+uint32_t get_maximum_block_dim(int32_t block_dim, int32_t in0_block_w) {
     int32_t other_dim = (400 - 2 * in0_block_w * block_dim) / (2 * in0_block_w + block_dim);
     if (other_dim > 0) {
         return other_dim;
@@ -121,8 +121,8 @@ constexpr std::array<std::tuple<uint32_t, uint32_t>, 20> SUBBLOCK_HW_CHOICES = {
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
     uint32_t Mt, uint32_t Nt, uint32_t num_cores_y, uint32_t num_cores_x, uint32_t in0_block_w) {
-    auto Nt_fac = _get_prime_factors(Nt);
-    auto Mt_fac = _get_prime_factors(Mt);
+    auto Nt_fac = get_prime_factors(Nt);
+    auto Mt_fac = get_prime_factors(Mt);
     uint32_t Npc_min = 1;
     uint32_t Mpc_min = 1;
 
@@ -143,15 +143,15 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
         }
     }
 
-    if (Npc_min > _get_maximum_block_dim(Mpc_min, in0_block_w)) {
+    if (Npc_min > get_maximum_block_dim(Mpc_min, in0_block_w)) {
         return {0, 0, 0, 0};
     }
 
     uint32_t Mpc = Mpc_min;
     uint32_t Npc = Npc_min;
     if (Mpc_min > 1) {
-        auto Npc_choices = _get_possible_products(Nt_fac);
-        auto Npc_max = _get_maximum_block_dim(Mpc_min, in0_block_w);
+        auto Npc_choices = get_possible_products(Nt_fac);
+        auto Npc_max = get_maximum_block_dim(Mpc_min, in0_block_w);
         for (auto& ele : Npc_choices) {
             if (ele * Npc_min <= Npc_max) {
                 Npc = ele * Npc_min;
@@ -174,8 +174,8 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
     }
 
     else if (Npc_min > 1) {
-        auto Mpc_choices = _get_possible_products(Mt_fac);
-        auto Mpc_max = _get_maximum_block_dim(Npc_min, in0_block_w);
+        auto Mpc_choices = get_possible_products(Mt_fac);
+        auto Mpc_max = get_maximum_block_dim(Npc_min, in0_block_w);
         for (auto& ele : Mpc_choices) {
             if (ele * Mpc_min <= Mpc_max) {
                 Mpc = ele * Mpc_min;
@@ -198,10 +198,10 @@ std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> get_large_matmul_params(
     }
 
     else {
-        auto Mpc_choices = _get_possible_products(Mt_fac);
-        auto Npc_choices = _get_possible_products(Nt_fac);
+        auto Mpc_choices = get_possible_products(Mt_fac);
+        auto Npc_choices = get_possible_products(Nt_fac);
         for (auto& Npc : Npc_choices) {
-            auto Mpc_max = _get_maximum_block_dim(Npc, in0_block_w);
+            auto Mpc_max = get_maximum_block_dim(Npc, in0_block_w);
             for (auto& ele : Mpc_choices) {
                 if (ele <= Mpc_max) {
                     Mpc = ele;
