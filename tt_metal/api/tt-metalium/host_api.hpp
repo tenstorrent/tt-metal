@@ -955,6 +955,26 @@ bool EventQuery(const std::shared_ptr<Event>& event);
 void Synchronize(
     IDevice* device, std::optional<uint8_t> cq_id = std::nullopt, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
+// clang-format off
+/**
+ * Set the current command queue id to be used for synchronization.
+ * Return value: void
+ * | Argument     | Description                                                                       | Type                          | Valid Range                        | Required |
+ * |--------------|-----------------------------------------------------------------------------------|-------------------------------|------------------------------------|----------|
+ * | cq_id        | The command queue id to set as current.                                           | uint8_t                       |                                    | Yes      |
+ */
+// clang-format on
+// todo: consider if returning a guard on this level is better vs if guard belongs to the layer above
+void SetCurrentCommandQueueId(uint8_t cq_id);
+
+// clang-format off
+/**
+ * Get the current command queue id.
+ * Return value: uint8_t
+ */
+// clang-format on
+uint8_t GetCurrentCommandQueueId();
+
 }  // namespace tt_metal
 
 }  // namespace tt

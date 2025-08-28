@@ -98,6 +98,99 @@ def register_pre_operation_hook(hook):
 
 POST_OPERATION_HOOKS = []
 
+# Stack to track cq_id contexts and restoration info
+# Below hook and context manager allows user to do:
+# with ttnn.command_queue(5):
+#    ttnn.operation1(tensor)           # No cq_id → uses current global cq_id (5)
+#    ttnn.operation2(tensor, cq_id=3)  # Has cq_id → uses 3, then restores to 5
+#    ttnn.operation3(tensor)           # No cq_id → uses current global cq_id (5)
+
+CQ_ID_STACK = []
+
+
+def cq_id_pre_hook(operation, function_args, function_kwargs):
+    """Pre-operation hook to handle cq_id parameter by temporarily changing command queue"""
+    cq_id = None
+
+    # Check for cq_id from operation kwargs (highest priority)
+    if "cq_id" in function_kwargs and function_kwargs["cq_id"] is not None:
+        cq_id = function_kwargs["cq_id"]
+        # Remove cq_id from kwargs so underlying operation doesn't see it
+        function_kwargs.pop("cq_id")
+        logger.info(f"Using cq_id {function_kwargs['cq_id']} from operation kwargs")
+
+    # If we have a cq_id to use, save current state and switch
+    if cq_id is not None:
+        try:
+            old_cq_id = ttnn.get_current_command_queue_id()
+            CQ_ID_STACK.append(old_cq_id)
+            ttnn.set_current_command_queue_id(cq_id)
+            logger.info(
+                f"Switched command queue id from {old_cq_id} to {cq_id} for {operation.python_fully_qualified_name}"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to handle cq_id in {operation.python_fully_qualified_name}: {e}")
+
+    return None
+
+
+def cq_id_post_hook(operation, function_args, function_kwargs, output):
+    """Post-operation hook to restore original command queue after operation completes"""
+    if not CQ_ID_STACK:
+        return None
+
+    prev_cq_id = CQ_ID_STACK[-1]
+    if prev_cq_id is None:
+        return None
+
+    ttnn.set_current_command_queue_id(prev_cq_id)
+    CQ_ID_STACK.pop()
+    logger.info(f"Restored command queue id to {prev_cq_id} for {operation.python_fully_qualified_name}")
+
+    return None
+
+
+@contextmanager
+def command_queue(cq_id):
+    """Context manager to set a default command queue for all TTNN operations within this context.
+
+    Operations within this context will use the specified cq_id unless they explicitly
+    provide their own cq_id parameter, which takes precedence.
+
+    Args:
+        cq_id: The command queue ID to use for operations in this context
+
+    Example:
+        with ttnn.command_queue(1):
+            result = ttnn.some_operation(tensor)  # Will use cq_id 1
+            result2 = ttnn.other_operation(tensor, cq_id=2)  # Will use cq_id 2 (overrides context)
+    """
+    # Save the command queue state before entering context
+    old_cq_id = ttnn.get_current_command_queue_id()
+
+    try:
+        logger.info(f"Switching command queue id from {old_cq_id} to {cq_id}")
+        ttnn.set_current_command_queue_id(cq_id)
+        yield
+    finally:
+        # Check if command queue is in expected state when exiting context
+        current_cq_id = ttnn.get_current_command_queue_id()
+        if current_cq_id != cq_id:
+            logger.warning(
+                f"command_queue({cq_id}) context exiting with unexpected command queue ID: {current_cq_id}. "
+                f"This might indicate an operation didn't properly restore the command queue state. "
+                f"Restoring to expected value {cq_id}."
+            )
+
+        # Restore the original command queue state from before entering context
+        logger.info(f"Restoring command queue id back to {old_cq_id}")
+        ttnn.set_current_command_queue_id(old_cq_id)
+
+
+# Register cq_id hooks globally - enabled by default for all TTNN operations
+PRE_OPERATION_HOOKS.append(cq_id_pre_hook)
+POST_OPERATION_HOOKS.append(cq_id_post_hook)
+
 
 @contextmanager
 def register_post_operation_hook(hook):
