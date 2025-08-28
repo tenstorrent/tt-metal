@@ -197,6 +197,7 @@ def run_all_gather_impl(
 @pytest.mark.parametrize(
     "num_devices, ag_output_shape, dim, layout, ag_input_dtype, is_training_shape",
     [
+        (8, [1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
         (8, [1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
         (8, [1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
         (8, [8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False),
@@ -211,6 +212,7 @@ def run_all_gather_impl(
         (8, [1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True),
     ],
     ids=[
+        "dit_shape",  # this one triggers the default chunks_per_sync
         "sd35_spatial",
         "sd35_prompt",
         "gather_dim_0",
