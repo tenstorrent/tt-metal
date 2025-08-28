@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-
+#include "llk_defs.h"
 using namespace sfpi;
 
 namespace ckernel {
@@ -22,7 +22,7 @@ namespace sfpu {
            t4) *                                                                                                  \
           t4) *                                                                                                   \
      t4)
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void calculate_i0() {
 #pragma GCC unroll 0
 

@@ -8,10 +8,10 @@
 #include "ckernel_addrmod.h"
 #include "ckernel_defs.h"
 #include "sfpi.h"
-
+#include "llk_defs.h"
 namespace ckernel::sfpu {
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+template <ApproximationMode APPROX_MODE, int ITERATIONS = 8>
 inline void mul_int32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
 
     constexpr uint dst_tile_size = 64;

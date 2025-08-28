@@ -6,7 +6,9 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "llk_defs.h"
 #include "sfpu/ckernel_sfpu_polyval.h"
+using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
@@ -175,7 +177,7 @@ sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log
 }
 
 template <
-    bool APPROXIMATION_MODE,
+    ApproximationMode APPROX_MODE,
     bool FAST_APPROX,
     bool HAS_BASE_SCALING,
     bool is_fp32_dest_acc_en,
@@ -195,7 +197,7 @@ inline void calculate_log(uint log_base_scale_factor) {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
+template <ApproximationMode APPROX_MODE, bool FAST_APPROX, bool is_fp32_dest_acc_en>
 inline void log_init() {
     if constexpr (!is_fp32_dest_acc_en) {
         sfpi::vConstFloatPrgm0 = 0.693147182464599609375;  // ln(2)
@@ -203,7 +205,7 @@ inline void log_init() {
         sfpi::vConstFloatPrgm2 = 3.767500400543213;
     } else {
         // _init_sfpu_reciprocal_ sets vConstFloatPrgm0 to 2.0f
-        _init_sfpu_reciprocal_</*approximation_mode*/ false>();
+        _init_sfpu_reciprocal_</*approximation_mode*/ ApproximationMode::Precise>();
         // But we can use 2 other programmable constants:
         sfpi::vConstFloatPrgm1 = 1.4142135381698608f;   // sqrt(2)
         sfpi::vConstFloatPrgm2 = 0.69314718246459961f;  // log(2)
