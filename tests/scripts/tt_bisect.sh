@@ -109,12 +109,13 @@ while [[ "$found" == "false" ]]; do
       timeout_rc=0
       break
     else
-      echo "Test logs:"
-      cat "$output_file"
       timeout_rc=$?
       echo "Test failed (code $timeout_rc), retrying…"
       attempt=$((attempt+1))
     fi
+
+    echo "Test logs attempt $attempt:"
+    cat "$output_file"
   done
   echo "Exit code: $timeout_rc"
   echo "::endgroup::"
