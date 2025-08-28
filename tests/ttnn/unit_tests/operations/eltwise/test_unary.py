@@ -462,42 +462,54 @@ def test_pow(device, h, w, scalar):
     run_unary_test_with_float(device, h, w, scalar, ttnn.pow, pcc=0.999)
 
 
-@pytest.mark.parametrize("lower_limit", [0, 1.0, 2])
+@pytest.mark.parametrize("lower_limit", [0, 1.0, 2, -5.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_relu_min(device, h, w, lower_limit):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_relu_min(device, h, w, lower_limit, dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    if dtype == ttnn.bfloat16:
+        torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    elif dtype == ttnn.int32:
+        torch_input_tensor = torch.randint(
+            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, (h, w), dtype=torch.int32
+        )
+        lower_limit = int(lower_limit)
+
     golden_function = ttnn.get_golden_function(ttnn.relu_min)
     torch_output_tensor = golden_function(torch_input_tensor, lower_limit=lower_limit)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.relu_min(input_tensor, lower_limit)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
-@pytest.mark.parametrize("upper_limit", [0, 1.0, 2])
+@pytest.mark.parametrize("upper_limit", [0, 1.0, 2, -5.5])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
-def test_relu_max(device, h, w, upper_limit):
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
+def test_relu_max(device, h, w, upper_limit, dtype):
     torch.manual_seed(0)
 
-    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    if dtype == ttnn.bfloat16:
+        torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    elif dtype == ttnn.int32:
+        torch_input_tensor = torch.randint(
+            torch.iinfo(torch.int32).min, torch.iinfo(torch.int32).max, (h, w), dtype=torch.int32
+        )
+        upper_limit = int(upper_limit)
+
     golden_function = ttnn.get_golden_function(ttnn.relu_max)
     torch_output_tensor = golden_function(torch_input_tensor, upper_limit=upper_limit)
 
-    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
     output_tensor = ttnn.relu_max(input_tensor, upper_limit)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor)
+    assert torch.equal(torch_output_tensor, output_tensor)
 
 
 @pytest.mark.parametrize("scalar", [1.5, 2.0])
