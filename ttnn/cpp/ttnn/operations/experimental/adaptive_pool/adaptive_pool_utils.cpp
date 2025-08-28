@@ -5,9 +5,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
-#include <limits>
-#include <tt-logger/tt-logger.hpp>
 
 namespace ttnn {
 namespace operations::experimental::adaptive_pool {
@@ -38,15 +35,6 @@ std::vector<AdaptiveRegion> calculate_pytorch_regions(
                  .kernel_w = end_w - start_w});
         }
     }
-
-    log_info(
-        tt::LogOp,
-        "[PyTorch Exact Regions] Generated {} regions for {}x{} -> {}x{}",
-        regions.size(),
-        input_h,
-        input_w,
-        output_h,
-        output_w);
 
     return regions;
 }
@@ -98,18 +86,6 @@ HybridAdaptiveConfig calculate_pattern_based_hybrid_config(
     config.h_variance = h_variance;
     config.w_variance = w_variance;
 
-    log_info(
-        tt::LogOp,
-        "[PATTERN HYBRID] Analyzing {}x{} -> {}x{}: h_kernels=[{}...], w_kernels=[{}...], variance={}x{}",
-        input_h,
-        input_w,
-        output_h,
-        output_w,
-        h_kernels.empty() ? 0 : h_kernels[0],
-        w_kernels.empty() ? 0 : w_kernels[0],
-        h_variance,
-        w_variance);
-
     // Step 2: Calculate basic uniform parameters to test if they work
     uint32_t base_stride_h = input_h / output_h;
     uint32_t base_stride_w = input_w / output_w;
@@ -121,19 +97,6 @@ HybridAdaptiveConfig calculate_pattern_based_hybrid_config(
     uint32_t expected_out_w = (input_w - base_kernel_w) / base_stride_w + 1;
     bool uniform_works = (expected_out_h == output_h) && (expected_out_w == output_w);
 
-    log_info(
-        tt::LogOp,
-        "[PATTERN HYBRID] Base uniform: kernel={}x{}, stride={}x{}, output={}x{} (expected {}x{}) -> {}",
-        base_kernel_h,
-        base_kernel_w,
-        base_stride_h,
-        base_stride_w,
-        expected_out_h,
-        expected_out_w,
-        output_h,
-        output_w,
-        uniform_works ? "WORKS" : "NEEDS_FIX");
-
     // Step 4: Determine strategy based on variance and uniform feasibility
     if (uniform_works && h_variance == 0 && w_variance == 0) {
         // Perfect case - uniform works and no variance
@@ -144,9 +107,6 @@ HybridAdaptiveConfig calculate_pattern_based_hybrid_config(
         config.dilation = {1, 1};
         config.coverage_improvement_percent = 0.0;
         config.memory_overhead_percent = 0.0;
-
-        log_info(tt::LogOp, "[PATTERN HYBRID] PURE_UNIFORM selected - base approach works perfectly");
-
     } else if (h_variance <= 1 && w_variance <= 1) {
         // Low variance cases - apply pattern-specific optimizations
         config.strategy = AdaptivePoolStrategy::COMBINED_OPTIMAL;
@@ -182,15 +142,6 @@ HybridAdaptiveConfig calculate_pattern_based_hybrid_config(
                 // For [13,14,14,14,13] pattern, we want stride to work with kernel=14
                 // The working formula: stride_w = middle_kernel - 1 = 14 - 1 = 13
                 optimized_stride_w = middle_w - 1;
-
-                log_info(
-                    tt::LogOp,
-                    "[PATTERN HYBRID] Detected edge-smaller width pattern: [{},{},{},{},...] -> pad_w=2, stride_w={}",
-                    w_kernels.size() > 0 ? w_kernels[0] : 0,
-                    w_kernels.size() > 1 ? w_kernels[1] : 0,
-                    w_kernels.size() > 2 ? w_kernels[2] : 0,
-                    w_kernels.size() > 3 ? w_kernels[3] : 0,
-                    optimized_stride_w);
             }
         }
 
@@ -203,10 +154,6 @@ HybridAdaptiveConfig calculate_pattern_based_hybrid_config(
             if (first_h == last_h && first_h == middle_h - 1) {
                 pad_h = 2;
                 optimized_stride_h = middle_h - 1;
-                log_info(
-                    tt::LogOp,
-                    "[PATTERN HYBRID] Detected edge-smaller height pattern -> pad_h=2, stride_h={}",
-                    optimized_stride_h);
             }
         }
 
@@ -223,20 +170,6 @@ HybridAdaptiveConfig calculate_pattern_based_hybrid_config(
 
         config.coverage_improvement_percent = (pad_h > 0 || pad_w > 0) ? 25.0 : 0.0;
         config.memory_overhead_percent = (pad_h + pad_w) * 100.0 / (input_h + input_w);
-
-        log_info(
-            tt::LogOp,
-            "[PATTERN HYBRID] COMBINED_OPTIMAL selected - kernel={}x{}, stride={}x{} (optimized), "
-            "padding=[{},{},{},{}]",
-            target_kernel_h,
-            target_kernel_w,
-            optimized_stride_h,
-            optimized_stride_w,
-            config.padding[0],
-            config.padding[1],
-            config.padding[2],
-            config.padding[3]);
-
     } else {
         // Medium variance - use balanced but conservative approach
         config.strategy = AdaptivePoolStrategy::COMBINED_OPTIMAL;
@@ -254,8 +187,6 @@ HybridAdaptiveConfig calculate_pattern_based_hybrid_config(
 
         config.coverage_improvement_percent = 5.0;
         config.memory_overhead_percent = 0.0;
-
-        log_info(tt::LogOp, "[SAFE HYBRID] COMBINED_OPTIMAL selected (conservative)");
     }
 
     // Step 4: Always verify that our parameters produce correct output dimensions
@@ -265,15 +196,6 @@ HybridAdaptiveConfig calculate_pattern_based_hybrid_config(
     uint32_t final_out_w = (padded_w - config.kernel_size[1]) / config.stride[1] + 1;
 
     if (final_out_h != output_h || final_out_w != output_w) {
-        log_warning(
-            tt::LogOp,
-            "[PATTERN HYBRID] Final validation failed! Expected {}x{} but calculated {}x{}, using general legacy "
-            "approach",
-            output_h,
-            output_w,
-            final_out_h,
-            final_out_w);
-
         // Fallback to simple safe approach when validation fails
         config.strategy = AdaptivePoolStrategy::PADDING_DOMINANT;
         config.kernel_size = {base_kernel_h, base_kernel_w};
@@ -287,21 +209,6 @@ HybridAdaptiveConfig calculate_pattern_based_hybrid_config(
     // Step 5: Calculate final variance metrics
     config.h_variance_after = h_variance;
     config.w_variance_after = w_variance;
-
-    log_info(
-        tt::LogOp,
-        "[PATTERN HYBRID] FINAL: strategy={}, kernel={}x{}, stride={}x{}, pad=[{},{},{},{}], dilation={}x{}",
-        static_cast<int>(config.strategy),
-        config.kernel_size[0],
-        config.kernel_size[1],
-        config.stride[0],
-        config.stride[1],
-        config.padding[0],
-        config.padding[1],
-        config.padding[2],
-        config.padding[3],
-        config.dilation[0],
-        config.dilation[1]);
 
     return config;
 }

@@ -24,7 +24,9 @@ struct AdaptiveAvgPool2DOp {
         std::array<uint32_t, 2> output_size,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
-        bool in_place_halo = false);
+        bool in_place_halo = false,
+        bool deallocate_input = false,
+        bool reallocate_output = true);
 };
 
 struct AdaptiveMaxPool2DOp {
@@ -38,7 +40,9 @@ struct AdaptiveMaxPool2DOp {
         std::array<uint32_t, 2> output_size,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt,
         std::optional<const TensorMemoryLayout> applied_shard_scheme = std::nullopt,
-        bool in_place_halo = false);
+        bool in_place_halo = false,
+        bool deallocate_input = false,
+        bool reallocate_output = true);
 };
 
 }  // namespace adaptive_pool

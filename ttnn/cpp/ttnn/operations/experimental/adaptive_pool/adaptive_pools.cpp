@@ -35,71 +35,14 @@ Tensor AdaptiveAvgPool2DOp::invoke(
     std::array<uint32_t, 2> output_size,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    bool in_place_halo) {
-    log_debug(
-        tt::LogOp,
-        "[Experimental AdaptiveAvgPool2D] ENTRY: input_tensor.dtype={}, input_tensor.layout={}",
-        static_cast<int>(input_tensor.dtype()),
-        static_cast<int>(input_tensor.layout()));
-    log_debug(
-        tt::LogOp,
-        "[Experimental AdaptiveAvgPool2D] PARAMS: batch={}, input_h={}, input_w={}, channels={}, output_size=[{}, {}]",
-        batch_size,
-        input_h,
-        input_w,
-        channels,
-        output_size[0],
-        output_size[1]);
-
+    bool in_place_halo,
+    bool deallocate_input,
+    bool reallocate_output) {
     uint32_t output_h = output_size[0];
     uint32_t output_w = output_size[1];
 
-    // PATTERN-BASED HYBRID: Analyze kernel patterns and apply padding/dilation as needed
-    log_info(
-        tt::LogOp, "[Experimental AdaptiveAvgPool2D] Using PATTERN-BASED HYBRID approach - prioritizing correctness");
-
     auto hybrid_config = calculate_pattern_based_hybrid_config(input_h, input_w, output_h, output_w);
     auto params = convert_hybrid_to_legacy(hybrid_config, input_h, input_w);
-
-    // PATTERN-BASED HYBRID RESULTS
-    log_info(tt::LogOp, "[Experimental AdaptiveAvgPool2D] === PATTERN-BASED HYBRID RESULTS ===");
-    log_info(
-        tt::LogOp,
-        "[Experimental AdaptiveAvgPool2D] Strategy: {} | Coverage improvement: {:.1f}%",
-        static_cast<int>(hybrid_config.strategy),
-        hybrid_config.coverage_improvement_percent);
-    log_info(
-        tt::LogOp,
-        "[Experimental AdaptiveAvgPool2D] Variance: {}×{} -> {}×{}",
-        hybrid_config.h_variance,
-        hybrid_config.w_variance,
-        hybrid_config.h_variance_after,
-        hybrid_config.w_variance_after);
-    log_info(
-        tt::LogOp,
-        "[Experimental AdaptiveAvgPool2D] Kernel: {}×{} | Stride: {}×{}",
-        params.kernel_size[0],
-        params.kernel_size[1],
-        params.stride[0],
-        params.stride[1]);
-    log_info(
-        tt::LogOp,
-        "[Experimental AdaptiveAvgPool2D] Padding: [{},{},{},{}] | Dilation: {}×{}",
-        params.padding[0],
-        params.padding[1],
-        params.padding[2],
-        params.padding[3],
-        hybrid_config.dilation[0],
-        hybrid_config.dilation[1]);
-    if (params.memory_overhead_percent > 0.0) {
-        log_info(
-            tt::LogOp,
-            "[Experimental AdaptiveAvgPool2D] Memory overhead: {:.1f}% | Beneficial: {}",
-            params.memory_overhead_percent,
-            hybrid_config.is_beneficial() ? "YES" : "NO");
-    }
-
-    log_debug(tt::LogOp, "[Experimental AdaptiveAvgPool2D] CALLING pool2d_invoke with PATTERN-BASED HYBRID parameters");
 
     return ttnn::operations::pool::AvgPool2DOp::invoke(
         queue_id,
@@ -117,8 +60,8 @@ Tensor AdaptiveAvgPool2DOp::invoke(
         memory_config,
         applied_shard_scheme,
         in_place_halo,
-        false,  // deallocate_input = false
-        true);  // reallocate_halo_output = true
+        deallocate_input,
+        reallocate_output);
 }
 
 Tensor AdaptiveMaxPool2DOp::invoke(
@@ -131,71 +74,14 @@ Tensor AdaptiveMaxPool2DOp::invoke(
     std::array<uint32_t, 2> output_size,
     const std::optional<const MemoryConfig>& memory_config,
     const std::optional<const TensorMemoryLayout> applied_shard_scheme,
-    bool in_place_halo) {
-    log_debug(
-        tt::LogOp,
-        "[Experimental AdaptiveMaxPool2D] ENTRY: input_tensor.dtype={}, input_tensor.layout={}",
-        static_cast<int>(input_tensor.dtype()),
-        static_cast<int>(input_tensor.layout()));
-    log_debug(
-        tt::LogOp,
-        "[Experimental AdaptiveMaxPool2D] PARAMS: batch={}, input_h={}, input_w={}, channels={}, output_size=[{}, {}]",
-        batch_size,
-        input_h,
-        input_w,
-        channels,
-        output_size[0],
-        output_size[1]);
-
+    bool in_place_halo,
+    bool deallocate_input,
+    bool reallocate_output) {
     uint32_t output_h = output_size[0];
     uint32_t output_w = output_size[1];
 
-    // PATTERN-BASED HYBRID: Same approach as AvgPool
-    log_info(
-        tt::LogOp, "[Experimental AdaptiveMaxPool2D] Using PATTERN-BASED HYBRID approach - prioritizing correctness");
-
     auto hybrid_config = calculate_pattern_based_hybrid_config(input_h, input_w, output_h, output_w);
     auto params = convert_hybrid_to_legacy(hybrid_config, input_h, input_w);
-
-    // PATTERN-BASED HYBRID RESULTS
-    log_info(tt::LogOp, "[Experimental AdaptiveMaxPool2D] === PATTERN-BASED HYBRID RESULTS ===");
-    log_info(
-        tt::LogOp,
-        "[Experimental AdaptiveMaxPool2D] Strategy: {} | Coverage improvement: {:.1f}%",
-        static_cast<int>(hybrid_config.strategy),
-        hybrid_config.coverage_improvement_percent);
-    log_info(
-        tt::LogOp,
-        "[Experimental AdaptiveMaxPool2D] Variance: {}×{} -> {}×{}",
-        hybrid_config.h_variance,
-        hybrid_config.w_variance,
-        hybrid_config.h_variance_after,
-        hybrid_config.w_variance_after);
-    log_info(
-        tt::LogOp,
-        "[Experimental AdaptiveMaxPool2D] Kernel: {}×{} | Stride: {}×{}",
-        params.kernel_size[0],
-        params.kernel_size[1],
-        params.stride[0],
-        params.stride[1]);
-    log_info(
-        tt::LogOp,
-        "[Experimental AdaptiveMaxPool2D] Padding: [{},{},{},{}] | Dilation: {}×{}",
-        params.padding[0],
-        params.padding[1],
-        params.padding[2],
-        params.padding[3],
-        hybrid_config.dilation[0],
-        hybrid_config.dilation[1]);
-    if (params.memory_overhead_percent > 0.0) {
-        log_info(
-            tt::LogOp,
-            "[Experimental AdaptiveMaxPool2D] Memory overhead: {:.1f}% | Beneficial: {}",
-            params.memory_overhead_percent,
-            hybrid_config.is_beneficial() ? "YES" : "NO");
-    }
-
-    log_debug(tt::LogOp, "[Experimental AdaptiveMaxPool2D] CALLING pool2d_invoke with PATTERN-BASED HYBRID parameters");
 
     return ttnn::operations::pool::MaxPool2DOp::invoke(
         queue_id,
@@ -212,8 +98,8 @@ Tensor AdaptiveMaxPool2DOp::invoke(
         memory_config,
         applied_shard_scheme,
         in_place_halo,
-        false,  // deallocate_input = false
-        true);  // reallocate_halo_output = true
+        deallocate_input,
+        reallocate_output);
 }
 
 }  // namespace operations::experimental::adaptive_pool
