@@ -203,7 +203,12 @@ def get_hostname():
 
 
 def get_username():
-    return os.environ["USER"]
+    """Get the username - GitHub Actions actor for CI, local USER for development"""
+    # In GitHub Actions, use the actor who triggered the workflow
+    if os.getenv("GITHUB_ACTOR"):
+        return os.environ["GITHUB_ACTOR"]
+    # Fall back to local USER environment variable for development
+    return os.environ.get("USER", "unknown")
 
 
 def git_hash():
@@ -214,9 +219,14 @@ def git_hash():
 
 
 def get_git_author():
-    """Get the git author name"""
+    """Get the git author name from the latest commit"""
     try:
-        return subprocess.check_output(["git", "config", "user.name"]).decode("ascii").strip()
+        # Get the author of the latest commit on the current branch
+        return (
+            subprocess.check_output(["git", "log", "-1", "--pretty=format:%an"], stderr=subprocess.DEVNULL)
+            .decode("ascii")
+            .strip()
+        )
     except Exception as e:
         return "Unknown"
 
@@ -263,33 +273,41 @@ def run(test_module, input_queue, output_queue, config: SweepsConfig):
     except AssertionError as e:
         output_queue.put([False, "DEVICE EXCEPTION: " + str(e), None, None])
         return
+
     try:
-        while True:
-            test_vector = input_queue.get(block=True, timeout=1)
-            test_vector = deserialize_vector_structured(test_vector)
-            try:
-                results = test_module.run(**test_vector, device=device)
-                if type(results) == list:
-                    status, message = results[0]
-                    e2e_perf = results[1] / 1000000  # Nanoseconds to milliseconds
-                else:
-                    status, message = results
+        try:
+            while True:
+                test_vector = input_queue.get(block=True, timeout=1)
+                test_vector = deserialize_vector_structured(test_vector)
+                try:
+                    results = test_module.run(**test_vector, device=device)
+                    if type(results) == list:
+                        status, message = results[0]
+                        e2e_perf = results[1] / 1000000  # Nanoseconds to milliseconds
+                    else:
+                        status, message = results
+                        e2e_perf = None
+                except Exception as e:
+                    status, message = False, str(e)
                     e2e_perf = None
-            except Exception as e:
-                status, message = False, str(e)
-                e2e_perf = None
-            if config.measure_device_perf:
-                perf_result = gather_single_test_perf(device, status)
-                message = get_updated_message(message, perf_result)
-                output_queue.put([status, message, e2e_perf, perf_result])
-            else:
-                output_queue.put([status, message, e2e_perf, None])
-    except Empty as e:
+                if config.measure_device_perf:
+                    perf_result = gather_single_test_perf(device, status)
+                    message = get_updated_message(message, perf_result)
+                    output_queue.put([status, message, e2e_perf, perf_result])
+                else:
+                    output_queue.put([status, message, e2e_perf, None])
+        except Empty as e:
+            # Queue timeout - normal completion when no more test vectors
+            pass
+    finally:
+        # Always close the device when exiting the run function
         try:
             # Run teardown in mesh_device_fixture
             next(device_generator)
         except StopIteration:
             logger.info(f"Closed device configuration, {device_name}.")
+        except Exception as e:
+            logger.warning(f"Error during device cleanup: {e}")
 
 
 def execute_suite(test_module, test_vectors, pbar_manager, suite_name, module_name, header_info, config: SweepsConfig):
@@ -525,7 +543,17 @@ def run_sweeps(
     try:
         for module_name in module_names:
             test_module = importlib.import_module("sweeps." + module_name)
-            suites = vector_source.get_available_suites(module_name)
+            if config.suite_name:
+                # Filter to only the specified suite
+                all_suites = vector_source.get_available_suites(module_name)
+                if config.suite_name not in all_suites:
+                    logger.warning(
+                        f"Suite '{config.suite_name}' not found in module '{module_name}'. Available suites: {all_suites}"
+                    )
+                    continue  # or exit with error
+                suites = [config.suite_name]
+            else:
+                suites = vector_source.get_available_suites(module_name)
 
             for suite in suites:
                 suite_start_time = dt.datetime.now()
