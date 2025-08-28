@@ -263,7 +263,7 @@ output_tensor = ttnn.gelu(ttnn_tensor)
 
 ## 5. MeshDevice and Collective Communication Library (CCL)
 
-The Collective Communication Library (CCL) provides a set of operations for efficient device-to-device communication in a MeshDevice. See the [CCL Developer Guide](../EthernetMultichip/CclDeveloperGuide.md) for more comprehensive coverage. These operations are used as building blocks for implementing tensor-parallel and other distributed computing strategies.
+The Collective Communication Library (CCL) provides a set of operations for efficient device-to-device communication in a MeshDevice. These operations are used as building blocks for implementing tensor-parallel and other distributed computing strategies.
 
 ### 5.1 CCL Operations
 
@@ -273,8 +273,6 @@ CCL supports several collective operations, including:
 2. Reduce-Scatter (Ring)
 3. All-Reduce (planned)
 4. Send/Receive (planned)
-
-Our library of supported operations can be found [here](../EthernetMultichip/CclDeveloperGuide.md#op-list-op-list).
 
 ### 5.2 All-Gather
 

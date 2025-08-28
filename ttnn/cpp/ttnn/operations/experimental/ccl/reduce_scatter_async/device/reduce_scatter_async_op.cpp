@@ -172,7 +172,7 @@ operation::ProgramWithCallbacks ReduceScatterAsync::create_program_at(
     }
 
     auto target_device =
-        input_tensors[0].mesh_device() ? input_tensors[0].mesh_device()->get_device(coord) : input_tensors[0].device();
+        input_tensors[0].device() ? input_tensors[0].device()->get_device(coord) : input_tensors[0].device();
 
     ttnn::ccl::SenderReceiverConfig config =
         ttnn::ccl::get_device_sender_receiver_config(target_device, devices, this->topology);
@@ -234,6 +234,11 @@ operation::Hash ReduceScatterAsync::compute_program_hash(const std::vector<Tenso
         this->ring_size,
         this->topology,
         this->cluster_axis,
+        this->sub_device_id.has_value(),
+        this->sub_device_id.has_value()
+            ? input_tensors[0].device()->worker_cores(
+                  tt::tt_metal::HalProgrammableCoreType::TENSIX, this->sub_device_id.value())
+            : CoreRangeSet(CoreRange({0, 0}, {0, 0})),
         input_shape,
         input_memory_layout,
         input_dtype,

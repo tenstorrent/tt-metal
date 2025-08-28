@@ -13,6 +13,32 @@
 #include "assert.hpp"
 #include "tracy/Tracy.hpp"
 
+namespace {
+uint16_t fp32_to_bf16_bits_round_to_nearest_even(float val) {
+    if (std::isnan(val)) {
+        // NaN is represented when all exponent bits are 1 and mantissa is non-zero.
+        // 0x7FC0  = 0 (sign) 11111111 (exponent) 1000000 (mantissa)
+        return UINT16_C(0x7FC0);
+    } else {
+        uint32_t U32 = std::bit_cast<uint32_t>(val);
+        // Rounding bias = 0111 1111 1111 1111 (0x7FFF) if last bit of mantissa ((U32 >> 16) & 1)
+        // is 0, otherwise 1000 0000 0000 0000 (0x8000).
+        // This ensures that we round to the nearest even number.
+        uint32_t rounding_bias = ((U32 >> 16) & 1) + UINT32_C(0x7FFF);
+        return static_cast<uint16_t>((U32 + rounding_bias) >> 16);
+    }
+}
+
+}  // namespace
+
+bfloat16::bfloat16(float float_num) { uint16_data = fp32_to_bf16_bits_round_to_nearest_even(float_num); }
+
+bfloat16::bfloat16(uint32_t uint32_data) { uint16_data = (uint16_t)uint32_data; }
+
+bfloat16::bfloat16(uint16_t uint16_data_) { uint16_data = uint16_data_; }
+
+bfloat16::bfloat16(int int_data) { uint16_data = (uint16_t)int_data; }
+
 std::ostream& operator<<(std::ostream& os, const bfloat16& bfp16) {
     os << bfp16.to_uint16();
     return os;

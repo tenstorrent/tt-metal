@@ -1,5 +1,5 @@
 ARG UBUNTU_VERSION=22.04
-FROM public.ecr.aws/ubuntu/ubuntu:${UBUNTU_VERSION} AS base
+FROM mirror.gcr.io/ubuntu:${UBUNTU_VERSION} AS base
 # Re-declare ARG make it available in the build stage
 ARG UBUNTU_VERSION
 
