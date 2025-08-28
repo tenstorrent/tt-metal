@@ -6,6 +6,7 @@ import math
 
 import ttnn
 from models.experimental.yolo_common.yolo_utils import concat, determine_num_cores, get_core_grid_from_num_cores
+from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
 
 
 def interleaved_to_sharded(x):
@@ -51,6 +52,8 @@ class TtYOLOv9cConv2D:
         deallocate_activation=False,
         conv_transpose=False,
         enable_autopad=False,
+        core_count=None,
+        override_sharding_config=False,
     ):
         self.is_detect = is_detect
         self.is_dfl = is_dfl
@@ -68,23 +71,34 @@ class TtYOLOv9cConv2D:
         self.output_padding = conv.output_padding if conv_transpose else None
         self.enable_autopad = enable_autopad
         self.activation_dtype = activation_dtype
+        self.core_count = core_count
+        self.override_sharding_config = override_sharding_config
 
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
             fp32_dest_acc_en=False,
             packer_l1_acc=False,
-            math_approx_mode=False,
+            math_approx_mode=True,
         )
         self.conv_config = ttnn.Conv2dConfig(
             weights_dtype=weights_dtype,
             shard_layout=shard_layout,
             deallocate_activation=self.deallocate_activation,
-            enable_act_double_buffer=False,
-            enable_split_reader=False,
+            enable_act_double_buffer=True,
+            enable_split_reader=True,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
             activation=activation,
         )
+        if self.core_count is not None:
+            shard_grid = get_shard_grid_from_num_cores(self.core_count, device)
+
+            self.conv_config.core_grid = shard_grid
+            self.conv_config.override_sharding_config = True
+
+        if self.override_sharding_config:
+            self.override_sharding_config = True
+
         if config_override is None and conv.in_channels == 3:
             config_override = {"act_block_h": 64}
         if config_override and "act_block_h" in config_override:
@@ -286,6 +300,7 @@ class TtnnADown:
             conv_pth=conv_pt.cv1.conv,
             activation="silu",
             use_1d_systolic_array=use_1d_systolic_array,
+            core_count=64,
         )
         self.cv2 = TtYOLOv9cConv2D(
             device=device,
@@ -559,8 +574,16 @@ class TtnnDetect:
         ya = ttnn.reshape(ya, (ya.shape[0], 4, 16, ya.shape[2]))
         ya = ttnn.permute(ya, (0, 2, 1, 3))
 
-        ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
-        ya = ttnn.softmax(ya, dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
+        ya = ttnn.softmax(
+            ya, dim=1, compute_kernel_config=compute_kernel_config
+        )  # memory_config=ttnn.L1_MEMORY_CONFIG)
         ya = ttnn.permute(ya, (0, 2, 3, 1))
 
         c = self.dfl(ya)
@@ -568,15 +591,15 @@ class TtnnDetect:
         if c.is_sharded():
             c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
+        # c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
 
         c = ttnn.permute(c, (0, 3, 1, 2))
         c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
         c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
         c1, c2 = c[:, :2, :], c[:, 2:4, :]
 
-        c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
-        c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
+        # c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
+        # c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
 
         c1 = self.anchors - c1
         c2 = self.anchors + c2
@@ -593,7 +616,7 @@ class TtnnDetect:
         z = ttnn.multiply(z, self.strides, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         yb = ttnn.permute(yb, (0, 2, 1))
-        yb = ttnn.to_layout(yb, ttnn.TILE_LAYOUT)
+        # yb = ttnn.to_layout(yb, ttnn.TILE_LAYOUT)
         yb = ttnn.sigmoid(yb)
 
         out = concat(1, False, z, yb)
@@ -704,6 +727,7 @@ class YoloV9:
             activation="silu",
             config_override={"act_block_h": 32},
             deallocate_activation=True,
+            core_count=64,
         )  # 0
         self.conv2 = TtYOLOv9cConv2D(
             device=device,
