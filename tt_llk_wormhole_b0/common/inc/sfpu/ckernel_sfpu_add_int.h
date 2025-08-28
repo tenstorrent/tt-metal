@@ -17,7 +17,7 @@ namespace sfpu
 {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION_MODE, bool SIGN_MAGNITUDE_FORMAT>
-inline void _add_int_(const uint dst_offset)
+inline void _add_int_(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out)
 {
     static_assert(is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
 
@@ -28,16 +28,20 @@ inline void _add_int_(const uint dst_offset)
     // Operand A is input1 (int32/uint16/uint32)
     // Operand B is input2 (int32/uint16/uint32)
     // Output is int32/uint16/uint32
+
+    // size of each tile in Dest is 64 rows
+    constexpr uint dst_tile_size = 64;
+
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++)
     {
         // operand A
-        TTI_SFPLOAD(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, 0);
+        TT_SFPLOAD(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
         // operand B
-        TT_SFPLOAD(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, dst_offset * 64);
+        TT_SFPLOAD(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
         TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
         // LREG_0 -> dest
-        TTI_SFPSTORE(0, sfpload_instr_mod, ADDR_MOD_3, 0);
+        TT_SFPSTORE(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_out * dst_tile_size);
         sfpi::dst_reg++;
     }
 }
