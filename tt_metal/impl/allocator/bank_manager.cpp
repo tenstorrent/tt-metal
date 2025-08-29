@@ -22,60 +22,113 @@ namespace tt {
 
 namespace tt_metal {
 
-// --- BankManager::Overlay impl ---
-void BankManager::Overlay::add(DeviceAddr start, DeviceAddr end) {
+// --- BankManager::IntervalSet impl ---
+void BankManager::IntervalSet::add(DeviceAddr start, DeviceAddr end) {
     if (start >= end) {
         return;
     }
-    delta[start] += 1;
-    delta[end] -= 1;
-    if (delta[start] == 0) {
-        delta.erase(start);
-    }
-    if (delta[end] == 0) {
-        delta.erase(end);
-    }
-}
-
-void BankManager::Overlay::remove(DeviceAddr start, DeviceAddr end) {
-    if (start >= end) {
-        return;
-    }
-    delta[start] -= 1;
-    delta[end] += 1;
-    if (delta[start] == 0) {
-        delta.erase(start);
-    }
-    if (delta[end] == 0) {
-        delta.erase(end);
-    }
-}
-
-std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::Overlay::occupied() const {
-    std::vector<std::pair<DeviceAddr, DeviceAddr>> res;
-    int64_t acc = 0;
-    bool in_seg = false;
-    DeviceAddr seg_start = 0;
-    for (const auto& kv : delta) {
-        DeviceAddr x = kv.first;
-        int64_t next = acc + kv.second;
-        if (acc <= 0 && next > 0) {
-            seg_start = x;
-            in_seg = true;
-        } else if (acc > 0 && next <= 0) {
-            if (in_seg && seg_start < x) {
-                res.emplace_back(seg_start, x);
-            }
-            in_seg = false;
+    // insert and merge
+    auto& v = ranges;
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> out;
+    out.reserve(v.size() + 1);
+    bool inserted = false;
+    for (const auto& r : v) {
+        if (r.second < start) {
+            out.push_back(r);
+            continue;
         }
-        acc = next;
+        if (end < r.first) {
+            if (!inserted) {
+                out.emplace_back(start, end);
+                inserted = true;
+            }
+            out.push_back(r);
+            continue;
+        }
+        // overlap: grow [start,end]
+        start = std::min(start, r.first);
+        end = std::max(end, r.second);
+    }
+    if (!inserted) {
+        out.emplace_back(start, end);
+    }
+    v.swap(out);
+}
+
+void BankManager::IntervalSet::remove(DeviceAddr start, DeviceAddr end) {
+    if (start >= end) {
+        return;
+    }
+    auto& v = ranges;
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> out;
+    out.reserve(v.size());
+    for (const auto& r : v) {
+        if (r.second <= start || r.first >= end) {
+            out.push_back(r);
+            continue;
+        }
+        if (r.first < start) {
+            out.emplace_back(r.first, start);
+        }
+        if (end < r.second) {
+            out.emplace_back(end, r.second);
+        }
+    }
+    v.swap(out);
+}
+
+static std::vector<std::pair<DeviceAddr, DeviceAddr>> merge_two(
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& a, const std::vector<std::pair<DeviceAddr, DeviceAddr>>& b) {
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> res;
+    res.reserve(a.size() + b.size());
+    size_t i = 0, j = 0;
+    auto emit = [&](DeviceAddr s, DeviceAddr e) {
+        if (s < e) {
+            res.emplace_back(s, e);
+        }
+    };
+    DeviceAddr s = 0, e = 0;
+    bool has = false;
+    auto push = [&](std::pair<DeviceAddr, DeviceAddr> r) {
+        if (!has) {
+            s = r.first;
+            e = r.second;
+            has = true;
+            return;
+        }
+        if (r.first <= e) {
+            e = std::max(e, r.second);
+        } else {
+            emit(s, e);
+            s = r.first;
+            e = r.second;
+        }
+    };
+    while (i < a.size() || j < b.size()) {
+        if (j == b.size() || (i < a.size() && a[i].first <= b[j].first)) {
+            push(a[i++]);
+        } else {
+            push(b[j++]);
+        }
+    }
+    if (has) {
+        emit(s, e);
     }
     return res;
 }
 
-std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::Overlay::subtract(
-    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& free_ranges) const {
-    auto occ = occupied();
+std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::union_all_sources(
+    const std::unordered_map<uint32_t, IntervalSet>& by_source) {
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> acc;
+    for (const auto& kv : by_source) {
+        acc = merge_two(acc, kv.second.ranges);
+    }
+    return acc;
+}
+
+std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::subtract_ranges(
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& free_ranges,
+    const std::vector<std::pair<DeviceAddr, DeviceAddr>>& occupied) {
     std::vector<std::pair<DeviceAddr, DeviceAddr>> out;
     size_t j = 0;
     for (const auto& fr : free_ranges) {
@@ -83,13 +136,13 @@ std::vector<std::pair<DeviceAddr, DeviceAddr>> BankManager::Overlay::subtract(
         if (fs >= fe) {
             continue;
         }
-        while (j < occ.size() && occ[j].second <= fs) {
+        while (j < occupied.size() && occupied[j].second <= fs) {
             j++;
         }
         DeviceAddr cur = fs;
         size_t jj = j;
-        while (jj < occ.size() && occ[jj].first < fe) {
-            DeviceAddr os = occ[jj].first, oe = occ[jj].second;
+        while (jj < occupied.size() && occupied[jj].first < fe) {
+            DeviceAddr os = occupied[jj].first, oe = occupied[jj].second;
             if (os > cur) {
                 out.emplace_back(cur, std::min(fe, os));
             }
@@ -134,7 +187,8 @@ void BankManager::init_allocators_across_states(DeviceAddr size_bytes, uint32_t 
     const uint32_t n = dependencies_.num_states();
     allocators_.resize(n);
     allocated_buffers_.resize(n);
-    overlays_.resize(n);
+    reservations_by_source_.resize(n);
+    reservations_by_source_.resize(n);
     allocator_offsets_.resize(n);
 
     // Build reverse dependency list: for each state s, which states depend on s
@@ -289,7 +343,8 @@ uint64_t BankManager::allocate_buffer(
             free_abs.emplace_back(s, e);
         }
     }
-    auto allowed = overlays_[state.value].subtract(free_abs);
+    auto occ = union_all_sources(reservations_by_source_[state.value]);
+    auto allowed = subtract_ranges(free_abs, occ);
 
     // Choose a start according to bottom_up
     std::optional<DeviceAddr> chosen;
@@ -333,7 +388,7 @@ uint64_t BankManager::allocate_buffer(
     auto dep_it = dependents_.find(state.value);
     if (dep_it != dependents_.end()) {
         for (auto y : dep_it->second) {
-            overlays_[y].add(address.value(), address.value() + size_per_bank);
+            reservations_by_source_[y][state.value].add(address.value(), address.value() + size_per_bank);
         }
     }
 
@@ -348,7 +403,7 @@ void BankManager::deallocate_buffer_(DeviceAddr address, BankManager::StateDepen
         auto dep_it = dependents_.find(state.value);
         if (dep_it != dependents_.end()) {
             for (auto y : dep_it->second) {
-                overlays_[y].remove(address, address + size_per_bank);
+                reservations_by_source_[y][state.value].remove(address, address + size_per_bank);
             }
         }
         allocated_buffers_[state.value].erase(it);

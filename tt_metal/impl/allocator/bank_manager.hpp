@@ -14,7 +14,6 @@
 #include <unordered_set>
 #include <vector>
 #include <algorithm>
-#include <map>
 #include <tt_stl/small_vector.hpp>
 
 #include "algorithms/allocator_algorithm.hpp"
@@ -128,16 +127,14 @@ private:
     std::vector<std::unique_ptr<allocator::Algorithm>> allocators_{};
     // Remember allocator offsets per state
     std::vector<DeviceAddr> allocator_offsets_{};
-    // Foreign occupancy overlay per state, represented as difference map
-    struct Overlay {
-        std::map<DeviceAddr, int64_t> delta;
+    // Per-source reservations: for each state, map of source_state -> disjoint interval set
+    struct IntervalSet {
+        // Stored as sorted, disjoint intervals [start, end)
+        std::vector<std::pair<DeviceAddr, DeviceAddr>> ranges;
         void add(DeviceAddr start, DeviceAddr end);
         void remove(DeviceAddr start, DeviceAddr end);
-        std::vector<std::pair<DeviceAddr, DeviceAddr>> occupied() const;
-        std::vector<std::pair<DeviceAddr, DeviceAddr>> subtract(
-            const std::vector<std::pair<DeviceAddr, DeviceAddr>>& free_ranges) const;
     };
-    std::vector<Overlay> overlays_{};
+    std::vector<std::unordered_map<uint32_t, IntervalSet>> reservations_by_source_{};
 
     // State-independent methods
     void validate_bank_id(uint32_t bank_id) const;
@@ -146,6 +143,13 @@ private:
     // State-dependent methods
     void deallocate_buffer_(DeviceAddr address, StateDependencies::StateId state);
     void assert_valid_state(StateDependencies::StateId state) const;
+
+    // Helpers to compute union of all source reservations for a state and subtract from free ranges
+    static std::vector<std::pair<DeviceAddr, DeviceAddr>> union_all_sources(
+        const std::unordered_map<uint32_t, IntervalSet>& by_source);
+    static std::vector<std::pair<DeviceAddr, DeviceAddr>> subtract_ranges(
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& free_ranges,
+        const std::vector<std::pair<DeviceAddr, DeviceAddr>>& occupied);
 
     static DeviceAddr align_up(DeviceAddr addr, DeviceAddr alignment) {
         if (alignment == 0) {
