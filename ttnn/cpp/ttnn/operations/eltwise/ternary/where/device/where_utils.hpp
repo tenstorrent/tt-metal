@@ -28,7 +28,6 @@ enum class KernelName {
     ComputeNoBcastTTS,
     ComputeNoBcastTSS,
     ComputeColBcastTTT,
-    ComputeRowBcastTTT,
 };
 
 struct WhereKernelConfig {
