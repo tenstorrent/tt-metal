@@ -10,6 +10,7 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/data_types.hpp>
 #include "debug_tools_fixture.hpp"
@@ -39,21 +40,26 @@ const std::string golden_output =
     R"(DPRINT server timed out on Device ?, worker core (x=?,y=?), riscv 4, waiting on a RAISE signal: 1
 )";
 
-void RunTest(DPrintFixture* fixture, IDevice* device) {
+void RunTest(DPrintMeshFixture* fixture, std::shared_ptr<distributed::MeshDevice> mesh_device) {
     // Set up program
+    distributed::MeshWorkload workload;
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     Program program = Program();
+    distributed::AddProgramToMeshWorkload(workload, std::move(program), device_range);
+    auto& program_ = workload.get_programs().at(device_range);
 
     // Run a kernel that just waits on a signal that never comes (BRISC only).
     constexpr CoreCoord core = {0, 0}; // Print on first core only
     CreateKernel(
-        program,
+        program_,
         "tests/tt_metal/tt_metal/test_kernels/misc/print_hang.cpp",
         core,
         DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
     // Run the program, we expect it to throw on waiting for CQ to finish
 try {
-    fixture->RunProgram(device, program);
+    fixture->RunProgram(mesh_device, workload);
 } catch (std::runtime_error& e) {
     const std::string expected = "Command Queue could not finish: device hang due to unanswered DPRINT WAIT.";
     const std::string error = std::string(e.what());
@@ -62,17 +68,12 @@ try {
 }
 
     // Check the print log against golden output.
-    EXPECT_TRUE(
-        FilesMatchesString(
-            DPrintFixture::dprint_file_name,
-            golden_output
-        )
-    );
+EXPECT_TRUE(FilesMatchesString(DPrintMeshFixture::dprint_file_name, golden_output));
 }
 }
 }
 
-TEST_F(DPrintFixture, TensixTestPrintHanging) {
+TEST_F(DPrintMeshFixture, TensixTestPrintHanging) {
     // Skip this test for slow dipatch for now. Due to how llrt currently sits below device, it's
     // tricky to check print server status from the finish loop for slow dispatch. Once issue #4363
     // is resolved, we should add a check for print server handing in slow dispatch as well.
