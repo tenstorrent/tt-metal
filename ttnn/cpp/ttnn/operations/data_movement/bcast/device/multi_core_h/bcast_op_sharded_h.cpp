@@ -209,6 +209,7 @@ operation::ProgramWithCallbacks bcast_sharded_h(
                 Wt = shard_spec.shape[1] / TILE_WIDTH;
                 Ht = shard_spec.shape[0] / TILE_HEIGHT;
                 break;
+            default: TT_THROW("Unsupported memory layout");
         }
 
         uint32_t Ht_per_core = 0, ncores_y = ncores / ncores_x;
