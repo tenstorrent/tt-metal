@@ -74,18 +74,19 @@ class TtGemmaModel(Transformer):
         )
         # self.embed_scale = self.args.dim**0.5
         tokens_embd = self.embd(tokens)
-
-        vision_output = self.compute_vision_token(kwargs.get("pixel_values", None))
         tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
-        comp_vision_output = ttnn.to_torch(
-            vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-        )[: vision_output.shape[0], :]
 
-        image_features = comp_vision_output.squeeze(0)
-        special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
-        special_image_mask = special_image_mask.expand_as(tokens_embd)
-        image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
-        tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
+        if "pixel_values" in kwargs and kwargs.get("pixel_values", None) is not None:
+            vision_output = self.compute_vision_token(kwargs.get("pixel_values", None))
+            comp_vision_output = ttnn.to_torch(
+                vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            )[: vision_output.shape[0], :]
+
+            image_features = comp_vision_output.squeeze(0)
+            special_image_mask = (pt_tokens == self.args.image_token_index).unsqueeze(-1)
+            special_image_mask = special_image_mask.expand_as(tokens_embd)
+            image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
+            tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
 
         tokens_embd = self.args.prepare_residual_tensor_prefill(
             tokens_embd,
