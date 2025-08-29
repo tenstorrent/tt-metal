@@ -10,6 +10,7 @@
 // use the Factory to create views and/or memory-owning objects for
 // different structs.
 #pragma once
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include "llrt/struct_view_driver.hpp"

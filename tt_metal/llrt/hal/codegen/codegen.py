@@ -6,6 +6,7 @@
 
 import contextlib
 import re
+import sys
 from dataclasses import dataclass
 from typing import List, Dict, TextIO
 
@@ -107,7 +108,7 @@ class CodeGen:
         print(f"error:{self.input_file.name}:{self.lineno}:")
         print(f"{self.lineno:4d} |", line)
         print("Failed to parse the above line: ", reason)
-        raise ValueError("Failed to parse input file")
+        sys.exit(1)
 
     def parse(self):
         while line := self.getline():
@@ -174,7 +175,13 @@ class CodeGen:
         return Struct(name, fields, arrays.labels, structs.labels)
 
     def generate_interface_header(self):
-        print("#pragma once\n" "#include <cstddef>\n" "#include <cstdint>\n" f'#include "{self.driver_include_path}"')
+        print(
+            "#pragma once\n"
+            "#include <array>\n"
+            "#include <cstddef>\n"
+            "#include <cstdint>\n"
+            f'#include "{self.driver_include_path}"'
+        )
         for include in self.includes:
             print(include)
         if self.interface_ns:
