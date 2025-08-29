@@ -27,6 +27,7 @@
 #include "control_plane.hpp"
 #include "core_coord.hpp"
 #include "compressed_routing_table.hpp"
+#include "compressed_routing_path.hpp"
 #include "hostdevcommon/fabric_common.h"
 #include "distributed_context.hpp"
 #include "fabric_types.hpp"
@@ -2256,161 +2257,19 @@ void ControlPlane::populate_fabric_connection_info(
     }
 }
 
-static const uint8_t MAX_CHIPS_LOWLAT_1D = 16;
-static const uint8_t SINGLE_ROUTE_SIZE_1D = 4; // 4 bytes
-
-// Calculate routing information from src_chip_id to all other chips and store in fixed 64-byte blocks
-void ControlPlane::calculate_chip_to_all_routing_fields_1D(
-    uint16_t src_chip_id, uint8_t num_chips) const {
-    uint8_t route_info[MAX_CHIPS_LOWLAT_1D * SINGLE_ROUTE_SIZE_1D] = {}; // 64
-    const uint32_t FIELD_WIDTH = 2;
-    const uint32_t WRITE_ONLY = 0b01;
-    const uint32_t FORWARD_ONLY = 0b10;
-    const uint32_t FWD_ONLY_FIELD = 0xAAAAAAAA;
-    const uint32_t WR_ONLY_FIELD = 0x55555555;
-
-    for (uint8_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
-        uint32_t routing_field_value = 0;
-
-        if (src_chip_id == dst_chip_id) {
-            routing_field_value = 0; // noop to self
-        } else {
-            uint8_t distance_in_hops;
-            if (src_chip_id < dst_chip_id) {
-                distance_in_hops = dst_chip_id - src_chip_id;
-            } else {
-                distance_in_hops = src_chip_id - dst_chip_id;
-            }
-
-            // Use the same pattern as LowLatencyPacketHeader::calculate_chip_unicast_routing_fields_value
-            // Forward for (distance_in_hops - 1) hops, then write on the final hop
-            routing_field_value = (FWD_ONLY_FIELD & 
-                ((1 << (distance_in_hops - 1) * FIELD_WIDTH) - 1)) |
-                (WRITE_ONLY << (distance_in_hops - 1) * FIELD_WIDTH);
-        }
-
-        // Store the 4-byte routing field value directly as uint32_t
-        uint32_t field_offset = dst_chip_id * SINGLE_ROUTE_SIZE_1D;
-        uint32_t* route_ptr = reinterpret_cast<uint32_t*>(&route_info[field_offset]);
-        *route_ptr = routing_field_value;
-    }
-    // TODO: copy route_info
-}
-
 void ControlPlane::write_all_to_all_routing_fields_1D(uint8_t num_chips) const {
+    compressed_routing_path_t<1> routing_path;
     for (uint8_t src_chip_id = 0; src_chip_id < num_chips; ++src_chip_id) {
-        ControlPlane::calculate_chip_to_all_routing_fields_1D(src_chip_id, num_chips);
+        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips);
+        // TODO copy
     }
-}
-
-static const uint16_t MAX_CHIPS_LOWLAT_2D = 64;  // Maximum 64 chips for 2D mesh (8x8)
-static const uint16_t SINGLE_ROUTE_SIZE_2D = 16; // 16 bytes per route_buffer
-// Note: Theoretical minimum for 8x8 mesh is 7 bytes (14 hops × 4 bits = 56 bits ≈ 7 bytes)
-// but using 16 bytes for alignment and compatibility with LowLatencyMeshPacketHeader
-// (uses 32 bytes, but using 1 byte for each 4 bit command)
-
-// Calculate routing information from src_chip_id to all other chips in 2D mesh and store in route_buffer format
-void ControlPlane::calculate_chip_to_all_routing_fields_2D(
-    uint16_t src_chip_id, uint16_t num_chips, uint16_t ew_dim) const {
-    uint8_t route_info[MAX_CHIPS_LOWLAT_2D * SINGLE_ROUTE_SIZE_2D] = {}; // 64 * 16 = 1024
-    const uint8_t NOOP = 0b0000;
-    const uint8_t FORWARD_EAST = 0b0001;
-    const uint8_t FORWARD_WEST = 0b0010;
-    const uint8_t FORWARD_NORTH = 0b0100;
-    const uint8_t FORWARD_SOUTH = 0b1000;
-    const uint8_t WRITE_AND_FORWARD_EAST = 0b0001;
-    const uint8_t WRITE_AND_FORWARD_WEST = 0b0010;
-    const uint8_t WRITE_AND_FORWARD_NORTH = 0b0100;
-    const uint8_t WRITE_AND_FORWARD_SOUTH = 0b1000;
-
-    for (uint16_t dst_chip_id = 0; dst_chip_id < num_chips; ++dst_chip_id) {
-        uint16_t src_col = src_chip_id / ew_dim;
-        uint16_t src_row = src_chip_id % ew_dim;
-        uint16_t dst_col = dst_chip_id / ew_dim;
-        uint16_t dst_row = dst_chip_id % ew_dim;
-
-        uint16_t ns_hops = 0;
-        uint16_t ew_hops = 0;
-        eth_chan_directions first_direction;
-        eth_chan_directions second_direction;
-        if (src_col == dst_col) {
-            // Same column - only east/west routing needed
-            if (src_row < dst_row) {
-                first_direction = eth_chan_directions::EAST;
-                second_direction = eth_chan_directions::EAST;
-                ew_hops = dst_row - src_row;
-            } else {
-                first_direction = eth_chan_directions::WEST;
-                second_direction = eth_chan_directions::WEST;
-                ew_hops = src_row - dst_row;
-            }
-        } else {
-            // Different columns - need north/south routing first, then east/west
-            if (dst_col > src_col) {
-                first_direction = eth_chan_directions::SOUTH;
-                ns_hops = dst_col - src_col;
-            } else {
-                first_direction = eth_chan_directions::NORTH;
-                ns_hops = src_col - dst_col;
-            }
-
-            // Calculate east/west hops after turning
-            if (src_row < dst_row) {
-                second_direction = eth_chan_directions::EAST;
-                ew_hops = dst_row - src_row;
-            } else {
-                second_direction = eth_chan_directions::WEST;
-                ew_hops = src_row - dst_row;
-            }
-
-            // Adjust routing if east/west hops are needed
-            if (ew_hops > 0) {
-                ns_hops--;
-                ew_hops++;
-            }
-        }
-
-        uint32_t field_offset = dst_chip_id * SINGLE_ROUTE_SIZE_2D;
-        uint8_t* route_buffer = &route_info[field_offset];
-
-        uint16_t hop_index = 0;
-        // First phase: north/south routing (if needed)
-        if (ns_hops > 0) {
-            for (uint16_t i = 0; i < ns_hops; ++i) {
-                if (i == ns_hops - 1 && ew_hops == 0) {
-                    // Last hop and no east/west routing needed - write only
-                    route_buffer[hop_index++] = (first_direction == eth_chan_directions::NORTH) ?
-                        WRITE_AND_FORWARD_NORTH : WRITE_AND_FORWARD_SOUTH;
-                } else {
-                    // Forward only
-                    route_buffer[hop_index++] = (first_direction == eth_chan_directions::NORTH) ?
-                        FORWARD_NORTH : FORWARD_SOUTH;
-                }
-            }
-        }
-
-        // Second phase: east/west routing (if needed)
-        if (ew_hops > 0) {
-            for (uint16_t i = 0; i < ew_hops; ++i) {
-                if (i == ew_hops - 1) {
-                    // Last hop - write only
-                    route_buffer[hop_index++] = (second_direction == eth_chan_directions::EAST) ?
-                        WRITE_AND_FORWARD_EAST : WRITE_AND_FORWARD_WEST;
-                } else {
-                    // Forward only
-                    route_buffer[hop_index++] = (second_direction == eth_chan_directions::EAST) ?
-                        FORWARD_EAST : FORWARD_WEST;
-                }
-            }
-        }
-        // remaining entries are NOOP
-    }
-    // TODO: Copy route_info
 }
 
 void ControlPlane::write_all_to_all_routing_fields_2D(uint16_t num_chips, uint16_t ew_dim) const {
+    compressed_routing_path_t<2> routing_path;
     for (uint16_t src_chip_id = 0; src_chip_id < num_chips; ++src_chip_id) {
-        ControlPlane::calculate_chip_to_all_routing_fields_2D(src_chip_id, num_chips, ew_dim);
+        routing_path.calculate_chip_to_all_routing_fields(src_chip_id, num_chips, ew_dim);
+        // TODO copy
     }
 }
 

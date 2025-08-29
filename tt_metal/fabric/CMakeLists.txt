@@ -41,6 +41,7 @@ target_sources(
         fabric_mux_config.cpp
         fabric_tensix_builder.cpp
         compressed_routing_table.cpp
+        compressed_routing_path.cpp
         serialization/intermesh_link_table.cpp
         serialization/physical_desc.cpp
         erisc_datamover_builder_helper.cpp
