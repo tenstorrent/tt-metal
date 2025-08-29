@@ -77,7 +77,7 @@ jobs:
               pytest tests/nightly/single_card/tt_transformers -k ${{ matrix.model }}
             elif [[ "${{ matrix.model }}" == *"qwen25_vl"* ]]; then
               pytest tests/nightly/single_card/qwen25_vl -k ${{ matrix.model }}
-            elif [[ "${{ matrix.model }}" == *"gemma3"* ]]; then
+            elif [[ "${{ matrix.model }}" == *"gemma-3"* ]]; then
               pytest tests/nightly/single_card/gemma3 -k ${{ matrix.model }}
             else
               pytest tests/nightly/single_card/${{ matrix.model }}
