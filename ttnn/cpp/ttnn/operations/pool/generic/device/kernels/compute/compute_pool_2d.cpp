@@ -172,10 +172,13 @@ void MAIN {
             tile_regs_commit();
             tile_regs_wait();
             if constexpr (!return_indices) {
+                // for non-return index version we only have 1 output tensor therefore we can let pack_untilize_dest
+                // overflow by always packing num_faces_in_output_tile even for the last tile which may have less
                 if (last_c_block) {
-                    pack_untilize_dest<partial_iter_output_tiles>(out_cb_id, 1, 0, num_out_sticks, output_faces);
+                    pack_untilize_dest<partial_iter_output_tiles>(
+                        out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                 } else {
-                    pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, output_faces);
+                    pack_untilize_dest<max_tiles_per_iter>(out_cb_id, 1, 0, num_out_sticks, num_faces_in_output_tile);
                 }
             } else {
                 if constexpr (pack_untilize_reinit) {
