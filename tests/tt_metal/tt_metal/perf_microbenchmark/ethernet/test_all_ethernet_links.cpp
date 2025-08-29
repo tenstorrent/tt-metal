@@ -17,6 +17,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/control_plane.hpp>
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -139,6 +140,9 @@ public:
         this->devices.reserve(device_map.size());
         for (auto& [id, device] : device_map) {
             this->devices.push_back(device);
+        }
+        for (auto& device : this->devices) {
+            log_info(tt::LogTest, "Device {} open", device->get_devices()[0]->id());
         }
 
         this->initialize_sender_receiver_pairs(params);
@@ -317,10 +321,14 @@ private:
     bool device_open_;
 };
 
-std::vector<tt_metal::distributed::MeshWorkload> build(
-    const ConnectedDevicesHelper& device_helper, const TestParams& params) {
-    std::vector<tt_metal::distributed::MeshWorkload> mesh_workloads(device_helper.num_devices);
+std::vector<tt_metal::Program> build(const ConnectedDevicesHelper& device_helper, const TestParams& params) {
     std::vector<tt_metal::Program> programs(device_helper.num_devices);
+    // Create a mapping from chip ID to vector index
+    std::map<chip_id_t, size_t> chip_to_index;
+    for (size_t i = 0; i < device_helper.devices.size(); i++) {
+        chip_to_index[device_helper.devices[i]->get_devices()[0]->id()] = i;
+        log_info(tt::LogTest, "Device {} index {}", device_helper.devices[i]->get_devices()[0]->id(), i);
+    }
 
     uint32_t measurement_type = (uint32_t)(params.test_latency ? MeasurementType::Latency : MeasurementType::Bandwidth);
     uint32_t benchmark_type_val = enchantum::to_underlying(params.benchmark_type);
@@ -346,8 +354,8 @@ std::vector<tt_metal::distributed::MeshWorkload> build(
     eth_sender_rt_args.push_back(0);
 
     for (const auto& link : device_helper.unique_links) {
-        auto& sender_program = programs.at(link.sender.chip);
-        auto& receiver_program = programs.at(link.receiver.chip);
+        auto& sender_program = programs.at(chip_to_index[link.sender.chip]);
+        auto& receiver_program = programs.at(chip_to_index[link.receiver.chip]);
 
         auto sender_device = find_device_with_id(device_helper.devices, link.sender.chip);
         auto receiver_device = find_device_with_id(device_helper.devices, link.receiver.chip);
@@ -396,16 +404,18 @@ std::vector<tt_metal::distributed::MeshWorkload> build(
             receiver_program, receiver_kernel, CoreCoord(link.receiver.x, link.receiver.y), eth_receiver_rt_args);
     }
 
-    for (int i = 0; i < device_helper.num_devices; i++) {
-        auto& mesh_workload = mesh_workloads.at(i);
-        auto& program = programs.at(i);
-        tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload,
-            std::move(program),
-            tt_metal::distributed::MeshCoordinateRange(
-                tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)));
+    // Compile all programs
+    for (size_t i = 0; i < device_helper.devices.size(); i++) {
+        auto& device = device_helper.devices[i];
+        try {
+            tt_metal::detail::CompileProgram(device.get(), programs[i]);
+        } catch (std::exception& e) {
+            log_error(tt::LogTest, "Failed to compile program on device {}: {}", i, e.what());
+            throw e;
+        }
     }
-    return mesh_workloads;
+
+    return programs;
 }
 
 void validation(
@@ -583,13 +593,20 @@ void dump_eth_link_stats(
 }
 
 void run(
-    const ConnectedDevicesHelper& device_helper,
-    std::vector<tt_metal::distributed::MeshWorkload>& mesh_workloads,
-    const TestParams& params) {
+    const ConnectedDevicesHelper& device_helper, std::vector<tt_metal::Program>& programs, const TestParams& params) {
     // Collect stats per iteration
     std::map<tt_cxy_pair, std::vector<LinkStats>> sender_stats;
     std::map<tt_cxy_pair, std::vector<LinkStats>> receiver_stats;
 
+    // Create MeshWorkloads from programs for this iteration
+    std::vector<tt_metal::distributed::MeshWorkload> mesh_workloads(device_helper.num_devices);
+    for (size_t i = 0; i < device_helper.num_devices; i++) {
+        tt_metal::distributed::AddProgramToMeshWorkload(
+            mesh_workloads[i],
+            std::move(programs[i]),
+            tt_metal::distributed::MeshCoordinateRange(
+                tt_metal::distributed::MeshCoordinate(0, 0), tt_metal::distributed::MeshCoordinate(0, 0)));
+    }
     bool slow_dispath_mode = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
     for (uint32_t iteration = 0; iteration < params.num_iterations; iteration++) {
         dump_eth_link_stats(
@@ -611,12 +628,10 @@ void run(
             for (size_t i = 0; i < device_helper.devices.size(); i++) {
                 auto& device = device_helper.devices[i];
                 auto& mesh_workload = mesh_workloads.at(i);
-                // Use distributed::EnqueueMeshWorkload instead of EnqueueProgram
                 tt_metal::distributed::EnqueueMeshWorkload(device->mesh_command_queue(), mesh_workload, false);
             }
             log_info(tt::LogTest, "Iteration {} Calling Finish", iteration);
             for (auto& device : device_helper.devices) {
-                // Use distributed::Finish instead of Finish
                 tt_metal::distributed::Finish(device->mesh_command_queue());
             }
         }
@@ -625,8 +640,9 @@ void run(
 
     for (const auto& link : device_helper.unique_links) {
         // Only read profiler results from sender
-        tt_metal::detail::ReadDeviceProfilerResults(
-            find_device_with_id(device_helper.devices, link.sender.chip)->get_devices()[0]);
+        tt_metal::ReadMeshDeviceProfilerResults(*find_device_with_id(device_helper.devices, link.sender.chip));
+        // tt_metal::detail::ReadDeviceProfilerResults(
+        //     find_device_with_id(device_helper.devices, link.sender.chip)->get_devices()[0]);
 
         switch (params.benchmark_type) {
             case BenchmarkType::EthOnlyUniDir:
@@ -705,8 +721,8 @@ int main(int argc, char** argv) {
             packet_size,
             num_buffer_slots);
 
-        auto mesh_workloads = build(device_helper, params);
-        run(device_helper, mesh_workloads, params);
+        auto programs = build(device_helper, params);
+        run(device_helper, programs, params);
 
     } catch (std::exception& e) {
         log_error(tt::LogTest, "Caught exception: {}", e.what());
