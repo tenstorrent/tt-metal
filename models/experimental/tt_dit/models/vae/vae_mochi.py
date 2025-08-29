@@ -171,10 +171,10 @@ class ResBlock:
             60 * 106: 8,
             120 * 212: 10,
             240 * 424: 40,
-            480 * 848: 135,
+            480 * 848: 140,
         }
 
-        grid_size_x = 4 if torch_ref.channels == 128 else mesh_device.core_grid.x
+        grid_size_x = mesh_device.core_grid.x
         grid_size_y = (
             min(32 // mesh_device.get_num_devices(), mesh_device.core_grid.y)
             if torch_ref.channels == 768
