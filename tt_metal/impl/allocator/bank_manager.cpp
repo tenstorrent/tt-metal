@@ -187,6 +187,16 @@ BankManager::StateDependencies::StateDependencies(
 
         // Build dependency list: for each state s, which states does s depend on
         for (const auto& kv : dependencies_map) {
+            // Ensure uniqueness of dependency values per state
+            std::unordered_set<uint32_t> seen_values;
+            for (const auto dep_state : kv.second) {
+                const bool inserted = seen_values.insert(dep_state.value).second;
+                TT_FATAL(
+                    inserted,
+                    "Duplicate dependency for state {}: {} appears more than once!",
+                    kv.first.value,
+                    dep_state.value);
+            }
             dependencies[kv.first.value] = kv.second;
         }
         // Build dependents list: for each state s, which states depend on s

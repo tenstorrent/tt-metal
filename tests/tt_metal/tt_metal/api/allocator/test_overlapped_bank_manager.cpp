@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include "gmock/gmock.h"
 #include <cstddef>
 #include <cstdint>
 #include <tt-metalium/allocator.hpp>
@@ -43,6 +44,16 @@ TEST(StateDependencies, DefaultStateDependencies) {
     BankManager::StateDependencies state_dependencies;
     EXPECT_EQ(state_dependencies.dependencies, BankManager::StateDependencies::AdjacencyList{{}});
     EXPECT_EQ(state_dependencies.dependents, BankManager::StateDependencies::AdjacencyList{{}});
+}
+
+TEST(StateDependencies, DuplicateDependencies) {
+    const std::unordered_map<StateId, ttsl::SmallVector<StateId>> dependencies_map = {
+        {StateId{0}, ttsl::SmallVector<StateId>{StateId{1}, StateId{1}}}};
+
+    EXPECT_THAT(
+        [&]() { BankManager::StateDependencies state_dependencies{dependencies_map}; },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Duplicate dependency for state 0: 1 appears more than once!")));
 }
 
 class StateDependenciesParamTest : public ::testing::TestWithParam<StateDependenciesParam> {};
