@@ -134,14 +134,23 @@ class Conv:
             return_weights_and_bias=True,
         )
 
-        output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
-
-        output_tensor = ttnn.reshape(
-            output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
-        )
-        output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
         if self.fused_op:
+            output_tensor = ttnn.sharded_to_interleaved(output_tensor, ttnn.L1_MEMORY_CONFIG)
+
+            output_tensor = ttnn.reshape(
+                output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
+            )
+            output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
             output_tensor = ttnn.to_layout(output_tensor, layout=ttnn.TILE_LAYOUT)
+
+            bn_config = ttnn.init_device_compute_kernel_config(
+                self.device.arch(),
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
+
             bn = ttnn.batch_norm(
                 output_tensor,
                 running_mean=self.bn_running_mean,
@@ -149,6 +158,7 @@ class Conv:
                 weight=self.bn_weight,
                 bias=self.bn_bias,
                 training=False,
+                compute_kernel_config=bn_config,
             )
             output_tensor = ttnn.relu(bn, memory_config=ttnn.L1_MEMORY_CONFIG)
 
