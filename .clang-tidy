@@ -10,6 +10,7 @@ Checks: >
   -altera-unroll-loops,
   -android-cloexec-fopen,
   -boost-*,
+  -bugprone-branch-clone,
   -bugprone-chained-comparison,
   -bugprone-crtp-constructor-accessibility,
   -bugprone-easily-swappable-parameters,
