@@ -75,32 +75,15 @@ class TtLlamaImageFeedForward(LightweightModule):
         pc_1 = self.model_config["IMAGE_MLP_FC_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
         pc_2 = self.model_config["IMAGE_MLP_PROJ_PROGCFG"](seq_len, MAX_MM_SEQ_LEN)
 
-        # Check if config wants to disable both core_grid and program_config
-        disable_optimizations = getattr(self.args, 'disable_mlp_optimizations', False)
-        default_core_grid = getattr(self.args, 'default_core_grid', ttnn.CoreGrid(y=8, x=8))
-        
-        if disable_optimizations:
-            # Disable both core_grid and program_config for stability (e.g., gemma)
-            core_grid_1 = None
-            core_grid_2 = None
-            prog_config_1 = None
-            prog_config_2 = None
-        else:
-            # Original llama behavior
-            core_grid_1 = default_core_grid if not pc_1 else None
-            core_grid_2 = default_core_grid if not pc_2 else None
-            prog_config_1 = pc_1
-            prog_config_2 = pc_2
-
-        # These use HiFi4; configurable core_grid and program_config behavior
+        # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
         c_fc_out = ttnn.linear(
             x_in,
             self.c_fc_weight,
             bias=self.c_fc_bias,
-            compute_kernel_config=self.args.compute_kernel_config_hifi4,
-            core_grid=core_grid_1,
+            compute_kernel_config=self.args.compute_kernel_config_hifi2,
+            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat16,
-            program_config=prog_config_1,
+            program_config=pc_1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             activation="gelu",  # NOTE: activation must be passed to linear here, not in program config! Bad output otherwise
         )
@@ -108,10 +91,10 @@ class TtLlamaImageFeedForward(LightweightModule):
         c_proj_out = ttnn.linear(
             c_fc_out,
             self.c_proj_weight,
-            compute_kernel_config=self.args.compute_kernel_config_hifi4,
-            core_grid=core_grid_2,
+            compute_kernel_config=self.args.compute_kernel_config_hifi2,
+            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
             dtype=ttnn.bfloat16,
-            program_config=prog_config_2,
+            program_config=pc_2,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
