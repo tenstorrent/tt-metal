@@ -89,9 +89,12 @@ TEST_F(MeshDeviceFixture, TensixTestNamedCompileTimeArgs) {
 
         const std::map<std::string, std::string> defines = {{"WRITE_ADDRESS", std::to_string(write_addr)}};
 
-        const std::vector<uint32_t> compile_time_args = {1024, 1, 64, 8};
+        const std::vector<uint32_t> compile_time_args = {12, 456, 1024, 3};
         const std::unordered_map<std::string, uint32_t> named_compile_time_args = {
-            {"num_tiles", 64}, {"enable_debug", 1}, {"stride_value", 8}, {"buffer_size", 1024}};
+            {"buffer_size", 1024},
+            {"", 3},
+            {"!@#$%^&*()", 12},
+            {"very_long_parameter_name_that_someone_could_potentially_use_to_try_to_break_the_kernel", 456}};
 
         CreateKernel(
             program_,
@@ -108,9 +111,10 @@ TEST_F(MeshDeviceFixture, TensixTestNamedCompileTimeArgs) {
         std::vector<uint32_t> results;
         detail::ReadFromDeviceL1(device, core, write_addr, 4 * sizeof(uint32_t), results);
 
-        ASSERT_EQ(results[0], compile_time_args[0]) << "'buffer_size' should be 1024";
-        ASSERT_EQ(results[1], compile_time_args[2]) << "'num_tiles' should be 64";
-        ASSERT_EQ(results[2], compile_time_args[1]) << "'enable_debug' should be 1";
-        ASSERT_EQ(results[3], compile_time_args[3]) << "'stride_value' should be 8";
+        ASSERT_EQ(results[0], compile_time_args[0]) << "'!@#$%^&*()' should be 12";
+        ASSERT_EQ(results[1], compile_time_args[1])
+            << "'very_long_parameter_name_that_someone_could_potentially_use_to_try_to_break_the_kernel' should be 456";
+        ASSERT_EQ(results[2], compile_time_args[2]) << "'buffer_size' should be 1024";
+        ASSERT_EQ(results[3], compile_time_args[3]) << "\"\" should be 3";
     }
 }
