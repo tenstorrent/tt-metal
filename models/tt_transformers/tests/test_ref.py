@@ -69,7 +69,7 @@ def test_attention_inference(
     }
 
     ref_model = model_args.reference_attention()
-    ref_model.load_state_dict(partial_state_dict, fuse_qkv=model_args.fuse_qkv)
+    ref_model.load_state_dict(partial_state_dict)
 
     from transformers import AutoModelForCausalLM
 

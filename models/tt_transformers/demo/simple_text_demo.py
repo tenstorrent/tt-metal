@@ -603,6 +603,8 @@ def test_demo_text(
     hf_dir = os.getenv("HF_MODEL", "")
     if "phi-3-mini-128k-instruct" in hf_dir.lower():
         max_context_supported = 32 * 1024 * num_devices
+        # This condition is present since Phi3 mini has a limit of context length 32k for N150
+        # It makes sure neither the total_page_cache nor the max_seq_length exceeds this limit.
         if (max_context_supported < max_seq_len) or (
             max_context_supported < page_params["page_block_size"] * page_params["page_max_num_blocks_per_dp"]
         ):

@@ -2645,7 +2645,11 @@ class HfAttentionWrapper:
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
-    def load_state_dict(self, state_dict, fuse_qkv=False):
+    def load_state_dict(self, state_dict):
+        try:  # Checking for fused qkv layer
+            fuse_qkv = hasattr(self.attention, "qkv_proj")
+        except:
+            fuse_qkv = False
         return self.attention.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv))
 
     @property
@@ -2719,7 +2723,12 @@ class HfDecoderWrapper:
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
-    def load_state_dict(self, state_dict, fuse_qkv=False, fuse_mlp=False):
+    def load_state_dict(self, state_dict):
+        try:  # Checking for fused qkv and mlp layers
+            fuse_qkv = hasattr(self.decoder.self_attn, "qkv_proj")
+            fuse_mlp = hasattr(self.decoder.mlp, "gate_up_proj")
+        except:
+            fuse_qkv, fuse_mlp = False, False
         return self.decoder.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
 
 
@@ -2749,7 +2758,12 @@ class HfModelWrapper:
     def __call__(self, *args, **kwargs):
         return self.forward(*args, **kwargs)
 
-    def load_state_dict(self, state_dict, fuse_qkv=False, fuse_mlp=False):
+    def load_state_dict(self, state_dict):
+        try:  # Checking for fused qkv and mlp layers
+            fuse_qkv = hasattr(self.model.model.layers[0].self_attn, "qkv_proj")
+            fuse_mlp = hasattr(self.model.model.layers[0].mlp, "gate_up_proj")
+        except:
+            fuse_qkv, fuse_mlp = False, False
         return self.model.load_state_dict(convert_meta_to_hf(state_dict, self.head_dim, fuse_qkv, fuse_mlp))
 
     def eval(self):
