@@ -1760,12 +1760,18 @@ class ModelArgs:
     def load_state_dict(self):
         if self.dummy_weights:
             if self.checkpoint_type == CheckpointType.HuggingFace:
-                from transformers import AutoConfig, AutoModelForCausalLM
+                from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq
 
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+                if hasattr(config, "text_config"):
+                    config.text_config.num_layers = self.n_layers
+                    config.text_config.num_hidden_layers = self.n_layers
+                else:
+                    config.num_layers = self.n_layers
+                    config.num_hidden_layers = self.n_layers
+
+                model_cls = AutoModelForVision2Seq if self.is_vision() else AutoModelForCausalLM
+                model = model_cls.from_config(config)
                 state_dict = model.state_dict()
             else:
                 reference_model = Transformer(self)
@@ -1779,11 +1785,7 @@ class ModelArgs:
             if self.from_hf_url:
                 from transformers import AutoModelForCausalLM, AutoModelForVision2Seq
 
-                if self.is_vision():
-                    model_cls = AutoModelForVision2Seq
-                else:
-                    model_cls = AutoModelForCausalLM
-
+                model_cls = AutoModelForVision2Seq if self.is_vision() else AutoModelForCausalLM
                 model = model_cls.from_pretrained(
                     self.CKPT_DIR,
                     torch_dtype="auto",
@@ -2255,8 +2257,6 @@ class ModelArgs:
                 except ValueError as e:
                     logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
                     logger.warning(f"Falling back to base model encoding with no chat template")
-            if hasattr(self.tokenizer, "tokenizer"):
-                return self.tokenizer.tokenizer.encode(prompt_text, add_special_tokens=False)
             return self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
     def reference_lm_head(self):
@@ -2282,18 +2282,22 @@ class ModelArgs:
         else:
             from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq
 
+            model_cls = AutoModelForVision2Seq if self.is_multimodal else AutoModelForCausalLM
+
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(
                     self.LOCAL_HF_PARAMS[self.model_name], local_files_only=os.getenv("CI") == "true"
                 )
-                config.num_layers = self.n_layers
-                config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+                if hasattr(config, "text_config"):
+                    config.text_config.num_layers = self.n_layers
+                    config.text_config.num_hidden_layers = self.n_layers
+                else:
+                    config.num_layers = self.n_layers
+                    config.num_hidden_layers = self.n_layers
+                model = model_cls.from_config(config)
             else:
-                model_cls = AutoModelForVision2Seq if self.is_multimodal else AutoModelForCausalLM
-
                 if self.cache_hf_flag and self.cached_hf_model is None:
                     model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
                     self.cached_hf_model = model
@@ -2303,11 +2307,11 @@ class ModelArgs:
                     # No caching - load fresh each time
                     model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
 
-                # HACK: Assume that we want the language model layers only
-                if hasattr(model, "language_model"):
-                    model.model = model.language_model
-                    # We keep language_model because transformers don't let us change or delete it
-                model.model.layers = model.model.layers[: self.n_layers]
+            # HACK: Assume that we want the language model layers only
+            if hasattr(model, "language_model"):
+                model.model = model.language_model
+                # We keep language_model because transformers don't let us change or delete it
+            model.model.layers = model.model.layers[: self.n_layers]
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
                 return wrapper
@@ -2344,14 +2348,14 @@ class ModelArgs:
         if self.checkpoint_type == CheckpointType.HuggingFace:
             from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq
 
+            model_cls = AutoModelForVision2Seq if self.is_multimodal else AutoModelForCausalLM
+
             if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
                 config.num_layers = self.n_layers
                 config.num_hidden_layers = self.n_layers
-                model = AutoModelForCausalLM.from_config(config)
+                model = model_cls.from_config(config)
             else:
-                model_cls = AutoModelForVision2Seq if self.is_multimodal else AutoModelForCausalLM
-
                 if self.cached_hf_model is None:
                     model = model_cls.from_pretrained(self.CKPT_DIR, local_files_only=os.getenv("CI") == "true")
                     self.cached_hf_model = model

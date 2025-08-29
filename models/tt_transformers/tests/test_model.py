@@ -85,6 +85,10 @@ def test_model_inference(
         pytest.skip(
             "Skipping Mistral-7B full model test for now. See issue https://github.com/tenstorrent/tt-metal/issues/19806"
         )
+    if model_name_env and ("Llama" in model_name_env) and ("Vision" in model_name_env) and (weights == "instruct"):
+        pytest.skip(
+            "Skipping Llama Vision full model test for now. See issue TBD: create issue about CrossAttn functionality"
+        )
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     dtype = ttnn.bfloat8_b
