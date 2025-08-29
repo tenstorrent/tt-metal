@@ -264,12 +264,6 @@ void MAIN {
             uint32_t curr_xy_coord = 0;
             uint32_t curr_xy_limit = 0;
 
-            // for h in ht
-            //     for w in wt
-            //         // get to a unique tile in the group
-            //         // transpose the tile -> put it in dst0
-            //         // Call welford's algorithm
-            //         // welford(0, 1, 2, h * c + w * 32, (h + 1) * c, 0)
             for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
                 DPRINT << "out_block_index: " << out_block_index << " out of " << num_out_blocks_padded << ENDL();
                 uint32_t out_block_h_actual, out_block_hw_actual;
