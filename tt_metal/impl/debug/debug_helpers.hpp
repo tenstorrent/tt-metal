@@ -95,14 +95,14 @@ inline int GetNumRiscs(chip_id_t device_id, const CoreDescriptor& core) {
             tt::tt_metal::MetalContext::instance().get_control_plane().get_active_ethernet_cores(device_id);
         CoreCoord logical_eth(core.coord.x, core.coord.y);
         if (logical_active_eths.contains(logical_eth)) {
-            return tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            return tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
                 tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
         } else {
-            return tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+            return tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
                 tt::tt_metal::HalProgrammableCoreType::IDLE_ETH);
         }
     } else {
-        return tt::tt_metal::MetalContext::instance().hal().get_processor_classes_count(
+        return tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
             tt::tt_metal::HalProgrammableCoreType::TENSIX);
     }
 }
