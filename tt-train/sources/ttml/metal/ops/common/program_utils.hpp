@@ -46,7 +46,7 @@ inline tt::tt_metal::KernelHandle create_reader_kernel(
     const std::map<std::string, std::string>& defines,
     const std::string& kernel_path) {
     return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
+        program, kernel_path, core_ranges, tt::tt_metal::ReaderDataMovementConfig(compile_time_args, {}, defines));
 }
 
 inline tt::tt_metal::KernelHandle create_writer_kernel(
@@ -56,7 +56,7 @@ inline tt::tt_metal::KernelHandle create_writer_kernel(
     const std::map<std::string, std::string>& defines,
     const std::string& kernel_path) {
     return tt::tt_metal::CreateKernel(
-        program, kernel_path, core_ranges, tt::tt_metal::WriterDataMovementConfig(compile_time_args, defines));
+        program, kernel_path, core_ranges, tt::tt_metal::WriterDataMovementConfig(compile_time_args, {}, defines));
 }
 
 inline tt::tt_metal::KernelHandle create_compute_kernel(

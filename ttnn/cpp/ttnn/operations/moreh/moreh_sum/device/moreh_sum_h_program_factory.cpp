@@ -133,7 +133,7 @@ MorehSumOperation::MorehSumHFactory::cached_program_t MorehSumOperation::MorehSu
         program,
         "ttnn/cpp/ttnn/operations/moreh/moreh_sum/device/moreh_sum_h_impl_kernels/reader_moreh_sum_h.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_defines));
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     tt::tt_metal::KernelHandle writer_kernel_id;

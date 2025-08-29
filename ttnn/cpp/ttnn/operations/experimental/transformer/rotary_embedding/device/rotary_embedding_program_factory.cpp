@@ -268,14 +268,14 @@ operation::ProgramWithCallbacks rotary_embedding_multi_core(
                    : "ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding/device/kernels/dataflow/"
                      "reader_rotary_embedding_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_kernel_defines));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, reader_kernel_defines));
 
     tt_metal::KernelHandle unary_writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations//experimental/transformer/rotary_embedding/device/kernels/dataflow/"
         "writer_rotary_embedding_interleaved_start_id.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args, writer_kernel_defines));
+        tt_metal::WriterDataMovementConfig(writer_compile_time_args, {}, writer_kernel_defines));
 
     std::vector<uint32_t> compute_kernel_args = {
         (std::uint32_t)input_cb_index,

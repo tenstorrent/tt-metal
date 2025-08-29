@@ -752,7 +752,7 @@ static operation::ProgramWithCallbacks slice_write_tiled_sharded_input_multi_cor
         "ttnn/cpp/ttnn/operations/experimental/slice_write/device/kernels/dataflow/"
         "slice_write_writer_interleaved.cpp",
         input_cores,
-        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec, writer_defines));
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args_vec, {}, writer_defines));
 
     const auto iter_cores = corerange_to_cores(input_cores, std::nullopt, rm_orientation);
 

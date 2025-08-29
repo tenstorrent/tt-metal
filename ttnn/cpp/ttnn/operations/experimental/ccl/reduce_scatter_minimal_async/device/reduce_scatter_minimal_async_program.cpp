@@ -466,7 +466,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
                     "ring_reduce_scatter_minimal_async_reader.cpp",
                     {core},
-                    tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
+                    tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, {}, reader_compute_defines));
                 reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
 
                 std::vector<uint32_t> reader_rt_args = {
@@ -555,7 +555,7 @@ tt::tt_metal::operation::ProgramWithCallbacks ring_reduce_scatter_minimal_async_
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
                     "ring_reduce_scatter_minimal_async_writer.cpp",
                     {core},
-                    tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
+                    tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, {}, writer_compute_defines));
                 writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
 
                 std::vector<uint32_t> writer_rt_args = {
@@ -1024,7 +1024,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
                     "line_reduce_scatter_minimal_async_reader.cpp",
                     {core},
-                    tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, reader_compute_defines));
+                    tt::tt_metal::ReaderDataMovementConfig(sender_reader_compile_args, {}, reader_compute_defines));
                 reader_kernel_ids.push_back(worker_sender_reader_kernel_id);
                 std::vector<uint32_t> reader_rt_args = {
                     input_tensor.buffer()->address(),         // input_tensor_address
@@ -1112,7 +1112,7 @@ tt::tt_metal::operation::ProgramWithCallbacks line_reduce_scatter_minimal_async_
                     "ttnn/cpp/ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/kernels/"
                     "line_reduce_scatter_minimal_async_writer.cpp",
                     {core},
-                    tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, writer_compute_defines));
+                    tt::tt_metal::WriterDataMovementConfig(sender_writer_compile_args, {}, writer_compute_defines));
                 writer_kernel_ids.push_back(worker_sender_writer_kernel_id);
                 std::vector<uint32_t> writer_rt_args = {
                     intermediate_tensor.buffer()->address(),  // intermediate_tensor_address

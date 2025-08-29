@@ -84,7 +84,7 @@ operation::ProgramWithCallbacks non_zero_indices_single_core(
         "ttnn/cpp/ttnn/operations/data_movement/non_zero_indices/device/kernels/dataflow/"
         "non_zero_indices_sc_reader.cpp",
         core,
-        tt::tt_metal::ReaderDataMovementConfig(compile_time_args, defines));
+        tt::tt_metal::ReaderDataMovementConfig(compile_time_args, {}, defines));
 
     tt::tt_metal::SetRuntimeArgs(program, kernel_id, core, run_time_args);
 

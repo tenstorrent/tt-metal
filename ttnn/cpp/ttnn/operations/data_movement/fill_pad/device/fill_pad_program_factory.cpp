@@ -105,7 +105,7 @@ tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& 
         "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(
-            writer_compile_time_args, compute_defines));  // writer only for in-place operation
+            writer_compile_time_args, {}, compute_defines));  // writer only for in-place operation
 
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
     std::vector<uint32_t> writer_runtime_args = {

@@ -108,7 +108,7 @@ TypecastShardedProgramFactory::cached_program_t TypecastShardedProgramFactory::c
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
         all_cores,
-        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, kernel_defines));
+        tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, {}, kernel_defines));
 
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         1,                  // per_core_block_cnt
