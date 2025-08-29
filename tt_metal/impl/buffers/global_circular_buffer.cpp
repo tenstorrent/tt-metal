@@ -136,7 +136,7 @@ void GlobalCircularBuffer::setup_cb_buffers(BufferType buffer_type, uint32_t max
         distributed::EnqueueWriteMeshBuffer(
             mesh_buffer->device()->mesh_command_queue(), mesh_buffer, cb_config_host_buffer, false);
     } else {
-        if (device_->using_slow_dispatch()) {
+        if (!tt::tt_metal::MetalContext::instance().rtoptions().get_fast_dispatch()) {
             detail::WriteToBuffer(*cb_config_buffer_.get_buffer(), cb_config_host_buffer);
             tt::tt_metal::MetalContext::instance().get_cluster().l1_barrier(device_->id());
         } else {

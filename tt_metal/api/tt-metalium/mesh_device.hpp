@@ -208,9 +208,6 @@ public:
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
 
-    bool using_slow_dispatch() const override;
-    bool using_fast_dispatch() const override;
-
     // Initialization APIs
     bool initialize(
         uint8_t num_hw_cqs,
