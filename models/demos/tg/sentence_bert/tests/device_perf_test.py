@@ -46,6 +46,7 @@ def test_perf_device_bare_metal_sentence_bert_tg(batch_size, expected_perf, test
     num_iterations = 1
     margin = 0.05
     expected_perf = expected_perf if is_wormhole_b0() else 0
+    expected_inference_time = 1 / (expected_perf * (1 - margin))
 
     command = f"pytest models/demos/sentence_bert/tests/pcc/{pcc_file}.py::{function_name}"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
@@ -59,11 +60,8 @@ def test_perf_device_bare_metal_sentence_bert_tg(batch_size, expected_perf, test
     logger.info(f"{expected_results}")
 
     # Calculate performance metrics for the standard perf report
-    inference_time = post_processed_results.get(inference_time_key, 0)
-    if inference_time > 0:
-        throughput = batch_size / inference_time
-    else:
-        throughput = 0
+    inference_perf = post_processed_results.get(inference_time_key, 0)
+    inference_time = 1 / inference_perf
 
     today = time.strftime("%Y_%m_%d")
 
@@ -74,7 +72,7 @@ def test_perf_device_bare_metal_sentence_bert_tg(batch_size, expected_perf, test
         inference_and_compile_time=inference_time,  # Use inference time as placeholder
         inference_time=inference_time,
         expected_compile_time=60,  # Placeholder value
-        expected_inference_time=expected_perf,
+        expected_inference_time=expected_inference_time,
         comments=test.replace("/", "_"),
         inference_time_cpu=None,
     )

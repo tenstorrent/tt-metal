@@ -73,7 +73,7 @@ jobs:
             arch: wormhole_b0,
             model-type: "sentence_bert",
             save-perf-data: false,
-            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type sentence_bert_model --dispatch-mode ""',
+            cmd: './tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type tg_sentence_bert_model_perf_tg_device --dispatch-mode ""',
             timeout: 30,
             owner_id: U088413NP0Q, # Ashai Reddy
           }
