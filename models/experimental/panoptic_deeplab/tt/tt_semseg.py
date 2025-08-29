@@ -239,7 +239,46 @@ class TtDeepLabV3PlusHead(nn.Module):
 
             # ttnn.upsample requires ROW_MAJOR_LAYOUT.
             y_upsampled = ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
-            y_upsampled = ttnn.upsample(y_upsampled, scale_factor=(scale_h, scale_w), mode="bilinear")
+            # Get original dimensions before flattening
+            orig_batch, orig_height, orig_width, orig_channels = y_upsampled.shape
+
+            # Channel slicing for upsample operation - always slice by 2 (except first iteration)
+            # Check if this is the first iteration (i == 0 means first fusion stage)
+            if i == 0:
+                # First iteration - no slicing, use original upsample pattern
+                y_upsampled = ttnn.upsample(y_upsampled, scale_factor=(scale_h, scale_w), mode="bilinear")
+            else:
+                # All other iterations - always slice by 2
+                split_factor = 2
+                channels_per_slice = orig_channels // split_factor
+
+                print(f"Using channel slicing for upsample: {orig_channels} channels split into {split_factor} slices")
+                sliced_results = []
+
+                for slice_idx in range(split_factor):
+                    start_ch = slice_idx * channels_per_slice
+                    end_ch = (slice_idx + 1) * channels_per_slice
+
+                    # Slice the tensor along channel dimension (NHWC format, channel is dim 3)
+                    y_slice = ttnn.slice(
+                        y_upsampled, [0, 0, 0, start_ch], [orig_batch, orig_height, orig_width, end_ch]
+                    )
+
+                    # Upsample the slice using original pattern
+                    y_slice_upsampled = ttnn.upsample(y_slice, scale_factor=(scale_h, scale_w), mode="bilinear")
+                    y_slice_upsampled = ttnn.to_memory_config(y_slice_upsampled, ttnn.DRAM_MEMORY_CONFIG)
+
+                    sliced_results.append(y_slice_upsampled)
+
+                    # Clean up intermediate tensors
+                    y_slice.deallocate()
+
+                # Concatenate all upsampled slices along channel dimension
+                y_upsampled = ttnn.concat(sliced_results, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+                # Clean up slice result tensors
+                for slice_result in sliced_results:
+                    slice_result.deallocate()
             y_upsampled = ttnn.to_memory_config(y_upsampled, ttnn.DRAM_MEMORY_CONFIG)
             y_upsampled = ttnn.to_layout(y_upsampled, ttnn.TILE_LAYOUT)
 
