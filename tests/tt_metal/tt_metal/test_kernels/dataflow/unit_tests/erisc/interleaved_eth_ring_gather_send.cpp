@@ -26,8 +26,10 @@ void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(4) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(5) == 1;
 
-    const InterleavedAddrGen<src_is_dram> s = {.bank_base_address = src_addr, .page_size = page_size};
-    const InterleavedAddrGen<dst_is_dram> d = {.bank_base_address = dst_addr, .page_size = page_size};
+    constexpr auto src_args = TensorAccessorArgs<6>();
+    constexpr auto dst_args = TensorAccessorArgs<src_args.next_compile_time_args_offset()>();
+    const auto s = TensorAccessor(src_args, src_addr, page_size);
+    const auto d = TensorAccessor(dst_args, dst_addr, page_size);
 
     volatile tt_l1_ptr uint32_t* sender_semaphore_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_addr);
     uint64_t receiver_semaphore_noc_addr = get_noc_addr(receiver_noc_x, receiver_noc_y, sem_addr);
