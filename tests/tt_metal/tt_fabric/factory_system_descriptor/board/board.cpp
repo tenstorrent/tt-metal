@@ -26,7 +26,7 @@ Board::Board(
         for (const auto& [port_id, asic_channels] : port_mapping) {
             // TODO: Could probably optimize this
             for (const auto& asic_channel : asic_channels) {
-                asic_indices_.insert(asic_channel.asic_index);
+                asic_indices_.insert(asic_channel.asic_location);
                 asic_to_port_map_[asic_channel] = Port{port_type, port_id};
             }
             available_ports.push_back(port_id);
@@ -111,22 +111,22 @@ private:
         // QSFP ports
         auto& qsfp_ports = ports[PortType::QSFP];
         qsfp_ports = {
-            {1, {{1, 6}, {1, 7}}},  // ASIC 1, channels 6,7
-            {2, {{1, 0}, {1, 1}}},  // ASIC 1, channels 0,1
+            {1, {{0, 6}, {0, 7}}},  // ASIC 0, channels 6,7
+            {2, {{0, 0}, {0, 1}}},  // ASIC 0, channels 0,1
         };
 
         // WARP100 ports
         auto& warp100_ports = ports[PortType::WARP100];
         warp100_ports = {
-            {1, {{1, 14}, {1, 15}}},  // ASIC 1, channels 14,15
-            {2, {{2, 6}, {2, 7}}},    // ASIC 2, channels 6,7
+            {1, {{0, 14}, {0, 15}}},  // ASIC 0, channels 14,15
+            {2, {{1, 6}, {1, 7}}},    // ASIC 1, channels 6,7
         };
 
         // TRACE ports
         auto& trace_ports = ports[PortType::TRACE];
         trace_ports = {
-            {1, {{1, 8}, {1, 9}}},  // ASIC 1, channels 8,9
-            {2, {{2, 0}, {2, 1}}},  // ASIC 2, channels 0,1
+            {1, {{0, 8}, {0, 9}}},  // ASIC 0, channels 8,9
+            {2, {{1, 0}, {1, 1}}},  // ASIC 1, channels 0,1
         };
 
         return ports;
@@ -239,15 +239,15 @@ private:
         // WARP400 ports
         auto& warp400_ports = ports[PortType::WARP400];
         warp400_ports = {
-            {1, {{1, 3}, {1, 6}, {2, 7}, {2, 9}}},  // ASIC 1: channels 3,6; ASIC 2: channels 7,9
-            {2, {{1, 2}, {1, 4}, {2, 5}, {2, 4}}},  // ASIC 1: channels 2,4; ASIC 2: channels 5,4
+            {1, {{1, 3}, {1, 6}, {0, 7}, {0, 9}}},  // ASIC 1: channels 3,6; ASIC 0: channels 7,9
+            {2, {{1, 2}, {1, 4}, {0, 5}, {0, 4}}},  // ASIC 1: channels 2,4; ASIC 0: channels 5,4
         };
 
         // TRACE ports
         auto& trace_ports = ports[PortType::TRACE];
         trace_ports = {
             {1, {{1, 8}, {1, 9}}},  // ASIC 1, channels 8,9
-            {2, {{2, 3}, {2, 2}}},  // ASIC 2, channels 3,2
+            {2, {{0, 3}, {0, 2}}},  // ASIC 0, channels 3,2
         };
 
         return ports;
@@ -272,10 +272,10 @@ private:
         // QSFP ports
         auto& qsfp_ports = ports[PortType::QSFP];
         qsfp_ports = {
-            {1, {{1, 9}, {1, 11}}},  // ASIC 1, channels 9,11
-            {2, {{1, 8}, {1, 10}}},  // ASIC 1, channels 8,10
-            {3, {{1, 5}, {1, 7}}},   // ASIC 1, channels 5,7
-            {4, {{1, 4}, {1, 6}}},   // ASIC 1, channels 4,6
+            {1, {{0, 9}, {0, 11}}},  // ASIC 0, channels 9,11
+            {2, {{0, 8}, {0, 10}}},  // ASIC 0, channels 8,10
+            {3, {{0, 5}, {0, 7}}},   // ASIC 0, channels 5,7
+            {4, {{0, 4}, {0, 6}}},   // ASIC 0, channels 4,6
         };
 
         return ports;
@@ -299,15 +299,14 @@ private:
         // QSFP ports
         auto& qsfp_ports = ports[PortType::QSFP];
         qsfp_ports = {
-            {1, {{1, 6}, {1, 7}}},  // ASIC 1, channels 6,7
-            {2, {{1, 0}, {1, 1}}},  // ASIC 1, channels 0,1
+            {1, {{0, 6}, {0, 7}}},  // ASIC 0, channels 6,7
+            {2, {{0, 0}, {0, 1}}},  // ASIC 0, channels 0,1
         };
 
         // WARP100 ports
         auto& warp100_ports = ports[PortType::WARP100];
         warp100_ports = {
-            {1, {{1, 14}, {1, 15}}},  // ASIC 1, channels 14,15
-            {2, {{2, 6}, {2, 7}}},    // ASIC 2, channels 6,7
+            {1, {{0, 14}, {0, 15}}},  // ASIC 0, channels 14,15
         };
 
         return ports;
@@ -442,6 +441,6 @@ Board create_board(const std::string& board_name) {
 // Hash function implementation for AsicChannel
 namespace std {
 std::size_t hash<tt::tt_fabric::AsicChannel>::operator()(const tt::tt_fabric::AsicChannel& asic_channel) const {
-    return tt::stl::hash::hash_objects_with_default_seed(asic_channel.asic_index, asic_channel.channel_id);
+    return tt::stl::hash::hash_objects_with_default_seed(asic_channel.asic_location, asic_channel.channel_id);
 }
 }  // namespace std
