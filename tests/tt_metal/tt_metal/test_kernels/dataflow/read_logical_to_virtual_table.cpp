@@ -15,11 +15,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* table_address_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_address);
 
     for (uint16_t i = 0; i < num_logical_cols; i++) {
-        *table_address_ptr = logical_col_to_translated_col[i];
+        *table_address_ptr = logical_col_to_virtual_col[i];
         table_address_ptr += 1;
     }
     for (uint16_t i = 0; i < num_logical_rows; i++) {
-        *table_address_ptr = logical_row_to_translated_row[i];
+        *table_address_ptr = logical_row_to_virtual_row[i];
         table_address_ptr += 1;
     }
 }
