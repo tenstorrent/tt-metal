@@ -120,18 +120,17 @@ while [[ "$found" == "false" ]]; do
   fresh_clean
 
   build_rc=0
-  # Configure + build in-tree; avoid 'install' to prevent shadowing
   ./build_metal.sh \
     --build-dir build \
     --build-type Release \
     --toolchain-path cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake \
     --build-all \
-    --enable-ccache \
-    --configure-only || build_rc=$?
+    --enable-ccache || build_rc=$?
 
-  if [ $build_rc -eq 0 ]; then
-    cmake --build build -j || build_rc=$?
-  fi
+  # Find all ttnn*.so files
+  echo "Searching for ttnn*.so files:"
+  find . -type f -name '*ttnn*.so'
+
   echo "::endgroup::"
 
   if [ $build_rc -ne 0 ]; then
