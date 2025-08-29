@@ -6,6 +6,7 @@ import torch
 
 import ttnn
 from models.demos.yolov7.tt.common import TtYOLOv7Conv2D as Conv
+from models.demos.yolov7.tt.common import TtYOLOv7Matmul as Matmul
 from models.demos.yolov7.tt.common import sharded_concat
 from models.experimental.yolo_common.yolo_utils import concat, determine_num_cores, get_core_grid_from_num_cores
 
@@ -309,59 +310,108 @@ class ttnn_yolov7:
             deallocate_activation=True,
             enable_split_reader=True,
             enable_act_double_buffer=True,
-            num_cores_nhw=64,
+            # num_cores_nhw=64,
         )
-        self.conv5 = Conv(
+        self.conv5 = Matmul(
             [1, 160, 160, 128],
-            (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["4"],
-            num_cores_nhw=64,
+            input_dtype=ttnn.bfloat8_b,
+            weight_dtype=ttnn.bfloat16,
+            bias_dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat8_b,
+            pad_input=0,
+            per_core_M=13,
+            per_core_N=2,
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            out_block_h=13,
+            out_block_w=2,
+            shard_grid_cores=((0, 0, 7, 6), (0, 7, 5, 7)),
+            input_shard_shape=(416, 128),
+            output_shard_shape=(416, 64),
+            math_approx_mode=False,
         )
-        self.conv6 = Conv(
+
+        self.conv6 = Matmul(
             [1, 160, 160, 128],
-            (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["5"],
-            num_cores_nhw=64,
+            input_dtype=ttnn.bfloat8_b,
+            weight_dtype=ttnn.bfloat16,
+            bias_dtype=ttnn.bfloat16,
+            output_dtype=ttnn.bfloat8_b,
+            pad_input=0,
+            per_core_M=13,
+            per_core_N=2,
+            in0_block_w=4,
+            out_subblock_h=1,
+            out_subblock_w=2,
+            out_block_h=13,
+            out_block_w=2,
+            shard_grid_cores=((0, 0, 7, 6), (0, 7, 5, 7)),
+            input_shard_shape=(416, 128),
+            output_shard_shape=(416, 64),
+            math_approx_mode=False,
         )
+
         self.conv7 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["6"],
-            num_cores_nhw=64,
+            # num_cores_nhw=64,
         )
         self.conv8 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["7"],
-            num_cores_nhw=64,
+            # num_cores_nhw=64,
         )
         self.conv9 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["8"],
-            num_cores_nhw=64,
+            # num_cores_nhw=64,
         )
         self.conv10 = Conv(
             [1, 160, 160, 64],
             (3, 3, 1, 1, 1, 1, 1, 1),
             parameters["9"],
-            num_cores_nhw=64,
+            # num_cores_nhw=64,
         )
 
-        self.conv11 = Conv(
+        self.conv11 = Matmul(
             [1, 160, 160, 256],
-            (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["11"],
+            input_dtype=ttnn.bfloat8_b,
+            weight_dtype=ttnn.bfloat8_b,
+            bias_dtype=ttnn.bfloat8_b,
+            output_dtype=ttnn.bfloat8_b,
+            pad_input=0,
+            per_core_M=13,
+            per_core_N=8,
+            in0_block_w=8,
+            out_subblock_h=1,
+            out_subblock_w=8,
+            out_block_h=13,
+            out_block_w=8,
+            shard_grid_cores=((0, 0, 7, 6), (0, 7, 5, 7)),
+            input_shard_shape=(416, 256),
+            output_shard_shape=(416, 256),
+            math_approx_mode=False,
         )
         self.conv12 = Conv(
             [1, 80, 80, 256],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["13"],
+            weights_dtype=ttnn.bfloat8_b,
+            math_approx_mode=True,
         )
         self.conv13 = Conv(
             [1, 160, 160, 256],
             (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["14"],
+            weights_dtype=ttnn.bfloat8_b,
+            math_approx_mode=True,
         )
         self.conv14 = Conv(
             [1, 160, 160, 128],
@@ -400,11 +450,13 @@ class ttnn_yolov7:
             parameters["22"],
         )
 
-        self.conv21 = Conv(
+        self.conv21 = Matmul(
             [1, 80, 80, 512],
-            (1, 1, 1, 1, 0, 0, 1, 1),
             parameters["24"],
+            shard_grid_cores=((0, 0, 7, 5), (0, 6, 1, 6)),
+            math_approx_mode=True,
         )
+
         self.conv22 = Conv(
             [1, 40, 40, 512],
             (1, 1, 1, 1, 0, 0, 1, 1),
@@ -772,6 +824,17 @@ class ttnn_yolov7:
         conv4 = self.conv4(self.device, conv3)
 
         conv5 = self.conv5(self.device, conv4)
+        # conv5_temp = self.conv5_temp(self.device, conv4)
+
+        # conv5_flattened = ttnn.to_torch(conv5).flatten()
+        # conv5_tempflattened = ttnn.to_torch(conv5_temp).flatten()
+        # # compare the two conv5 results, find the indices where they differ
+        # diff_indices = torch.nonzero(torch.abs(conv5_flattened - conv5_tempflattened) > 1e-2).squeeze()
+        # print(f"Discrepancies found at indices: {diff_indices}")
+        # print(f"conv5 values at these indices: {conv5_flattened[diff_indices]}")
+        # print(f"conv5_temp values at these indices: {conv5_tempflattened[diff_indices]}")
+
+        # return
 
         conv6 = self.conv6(self.device, conv4)
         ttnn.deallocate(conv4)
@@ -841,6 +904,7 @@ class ttnn_yolov7:
         conv20 = sharded_concat([conv20, conv18, conv16, conv15])
 
         conv21 = self.conv21(self.device, conv20)
+
         ttnn.deallocate(conv15)
         ttnn.deallocate(conv16)
         ttnn.deallocate(conv18)

@@ -29,6 +29,7 @@ class TtYOLOv7Conv2D:
         math_approx_mode=False,
         input_channels_alignment=32,
         use_1d_systolic_array=True,
+        weights_dtype=ttnn.bfloat16,
     ) -> None:
         self.weights = parameters["weight"]
         self.bias = parameters["bias"]
@@ -54,10 +55,11 @@ class TtYOLOv7Conv2D:
         self.is_reshape = is_reshape
         self.enable_split_reader = enable_split_reader
         self.enable_act_double_buffer = enable_act_double_buffer
+        self.weights_dtype = weights_dtype
 
     def __call__(self, device, input_tensor):
         conv_config = ttnn.Conv2dConfig(
-            weights_dtype=ttnn.bfloat16 if self.use_1d_systolic_array else ttnn.bfloat8_b,
+            weights_dtype=self.weights_dtype,
             activation=self.activation,
             shard_layout=self.shard_layout,
             reshard_if_not_optimal=True if self.use_1d_systolic_array else False,
@@ -109,6 +111,207 @@ class TtYOLOv7Conv2D:
                 output_tensor, (input_tensor.shape[0], _out_height, _out_width, output_tensor.shape[-1])
             )
             output_tensor = ttnn.permute(output_tensor, (0, 3, 1, 2))
+        return output_tensor
+
+
+class TtYOLOv7Matmul:
+    def __init__(
+        self,
+        input_params,
+        parameters,
+        activation="silu",
+        input_dtype=ttnn.bfloat8_b,
+        weight_dtype=ttnn.bfloat8_b,
+        bias_dtype=ttnn.bfloat8_b,
+        output_dtype=ttnn.bfloat8_b,
+        pad_input=0,
+        # Matmul configuration parameters
+        compute_grid_size=(8, 8),
+        per_core_M=4,
+        per_core_N=16,
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        out_block_h=4,
+        out_block_w=16,
+        # Shard configuration
+        shard_grid_cores=((0, 0, 7, 7)),  # ((start_x, start_y, end_x, end_y), ...)
+        input_shard_shape=(128, 512),
+        output_shard_shape=(128, 512),
+        # Compute configuration
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+        fuse_batch=True,
+        mcast_in0=False,
+        tile_size=32,
+    ):
+        self.weights = parameters["weight"]
+        self.bias = parameters["bias"]
+        self.input_params = input_params
+        self.out_features = self.weights.shape[0]
+        self.activation = activation
+        self.pad_input = pad_input
+
+        # Data types
+        self.input_dtype = input_dtype
+        self.weight_dtype = weight_dtype
+        self.bias_dtype = bias_dtype
+        self.output_dtype = output_dtype
+
+        # Matmul configuration
+        self.compute_grid_size = compute_grid_size
+        self.per_core_M = per_core_M
+        self.per_core_N = per_core_N
+        self.in0_block_w = in0_block_w
+        self.out_subblock_h = out_subblock_h
+        self.out_subblock_w = out_subblock_w
+        self.out_block_h = out_block_h
+        self.out_block_w = out_block_w
+
+        # Shard configuration
+        self.shard_grid_cores = shard_grid_cores
+        self.input_shard_shape = input_shard_shape
+        self.output_shard_shape = output_shard_shape
+
+        # Compute configuration
+        self.math_fidelity = math_fidelity
+        self.math_approx_mode = math_approx_mode
+        self.fp32_dest_acc_en = fp32_dest_acc_en
+        self.packer_l1_acc = packer_l1_acc
+        self.fuse_batch = fuse_batch
+        self.mcast_in0 = mcast_in0
+        self.tile_size = tile_size
+
+        # Pre-process weights and bias once during initialization
+        self._weights_processed = False
+        self._bias_processed = False
+
+    def _get_activation_function(self):
+        """Get the activation function based on activation string."""
+        activation_map = {
+            "silu": ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+            "relu": ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+            "gelu": ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU),
+        }
+        return activation_map.get(self.activation.lower())
+
+    def _create_shard_grid(self):
+        """Create shard grid from core ranges."""
+        core_ranges = []
+
+        if isinstance(self.shard_grid_cores, tuple) and len(self.shard_grid_cores) == 4:
+            self.shard_grid_cores = [self.shard_grid_cores]
+
+        for core_range in self.shard_grid_cores:
+            start_x, start_y, end_x, end_y = core_range
+            core_ranges.append(ttnn.CoreRange(ttnn.CoreCoord(start_x, start_y), ttnn.CoreCoord(end_x, end_y)))
+        return ttnn.CoreRangeSet(set(core_ranges))
+
+    def _prepare_weights_and_bias(self, device):
+        """Prepare weights and bias tensors for computation."""
+        if not self._weights_processed:
+            # Convert weights to tiled layout
+            print(self.weights.shape)
+            self.weights = ttnn.convert_conv_weight_tensor_to_tiled_layout(
+                self.weights,
+                self.weights.shape[1] // self.tile_size,
+                self.weights.shape[0] // self.tile_size,
+                output_dtype=ttnn.bfloat16,
+            )
+            self.weights = ttnn.to_dtype(self.weights, self.weight_dtype)
+            self.weights = ttnn.to_device(self.weights, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            print(self.weights.shape)
+            self._weights_processed = True
+
+        if not self._bias_processed:
+            # Convert bias to tiled layout
+            self.bias = ttnn.to_layout(self.bias, ttnn.TILE_LAYOUT)
+            self.bias = ttnn.to_dtype(self.bias, self.bias_dtype)
+            self.bias = ttnn.to_device(self.bias, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            self._bias_processed = True
+
+    def _create_compute_config(self, device):
+        """Create compute kernel configuration."""
+        return ttnn.init_device_compute_kernel_config(
+            device.arch(),
+            math_fidelity=self.math_fidelity,
+            math_approx_mode=self.math_approx_mode,
+            fp32_dest_acc_en=self.fp32_dest_acc_en,
+            packer_l1_acc=self.packer_l1_acc,
+        )
+
+    def _create_matmul_config(self):
+        """Create matmul program configuration."""
+        fused_activation = self._get_activation_function()
+
+        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=self.compute_grid_size,
+            in0_block_w=self.in0_block_w,
+            out_subblock_h=self.out_subblock_h,
+            out_subblock_w=self.out_subblock_w,
+            out_block_h=self.out_block_h,
+            out_block_w=self.out_block_w,
+            per_core_M=self.per_core_M,
+            per_core_N=self.per_core_N,
+            fuse_batch=self.fuse_batch,
+            fused_activation=fused_activation,
+            mcast_in0=self.mcast_in0,
+            num_global_cb_receivers=0,
+        )
+
+    def _create_memory_config(self, shard_shape=None):
+        """Create memory configuration for sharding."""
+        shard_grid = self._create_shard_grid()
+        shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    def _pad_input_tensor(self, input_tensor, device):
+        """Pad input tensor if required."""
+
+        if self.pad_input > 0:
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+            pad_width = ((0, 0), (0, 0), (0, self.pad_input), (0, 0))
+            input_tensor = ttnn.pad(input_tensor, pad_width, value=0.0)
+            input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
+        return input_tensor
+
+    def __call__(self, device, input_tensor):
+        # Prepare weights and bias (only done once)
+        self._prepare_weights_and_bias(device)
+        print(input_tensor.shape)
+
+        # Create configurations
+        compute_config = self._create_compute_config(device)
+        matmul_config = self._create_matmul_config()
+        input_memory_config = self._create_memory_config(self.input_shard_shape)
+        output_memory_config = self._create_memory_config(self.output_shard_shape)
+
+        # Apply memory configuration to input tensor
+        input_tensor = ttnn.to_memory_config(input_tensor, input_memory_config)
+        print(input_tensor.shape, input_tensor.memory_config(), input_tensor.layout)
+        # Pad input tensor if needed
+        input_tensor = self._pad_input_tensor(input_tensor, device)
+        print(input_tensor.shape)
+
+        # Perform linear operation
+        output_tensor = ttnn.linear(
+            input_tensor,
+            self.weights,
+            bias=self.bias,
+            program_config=matmul_config,
+            memory_config=output_memory_config,
+            dtype=self.output_dtype,
+            compute_kernel_config=compute_config,
+            # transpose_b=True,
+        )
+
+        print(output_tensor.shape)
+
+        output_tensor = output_tensor[:, :, : -self.pad_input, :] if self.pad_input > 0 else output_tensor
+        print(output_tensor.shape)
+
         return output_tensor
 
 
