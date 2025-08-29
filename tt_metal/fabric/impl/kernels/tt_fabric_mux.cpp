@@ -6,10 +6,11 @@
 #include "dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h"
-#include "tt_metal/api/tt-metalium/fabric_edm_packet_header.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
+#include "fabric/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_stream_regs.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/compile_time_arg_tmp.hpp"
 
 #include <cstddef>
 #include <array>
@@ -44,6 +45,16 @@ using FabricMuxToEdmSender = WorkerToFabricEdmSenderImpl<false, NUM_EDM_BUFFERS>
 }  // namespace tt::tt_fabric
 
 template <uint8_t NUM_BUFFERS>
+void wait_for_static_connection_to_ready(
+    tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>& worker_interface) {
+    while (!connect_is_requested(*worker_interface.connection_live_semaphore)) {
+        invalidate_l1_cache();
+    }
+
+    worker_interface.cache_producer_noc_addr();
+}
+
+template <uint8_t NUM_BUFFERS>
 void setup_channel(
     tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>* channel_ptr,
     tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>* worker_interface_ptr,
@@ -54,7 +65,8 @@ void setup_channel(
     size_t& connection_info_address,
     size_t& connection_handshake_address,
     size_t& sender_flow_control_address,
-    StreamId my_channel_free_slots_stream_id) {
+    StreamId my_channel_free_slots_stream_id,
+    bool is_persistent_channel) {
     new (channel_ptr) tt::tt_fabric::FabricMuxChannelBuffer<NUM_BUFFERS>(
         channel_base_address, buffer_size_bytes, sizeof(PACKET_HEADER_TYPE), channel_id);
     channel_base_address += NUM_BUFFERS * buffer_size_bytes;
@@ -62,7 +74,6 @@ void setup_channel(
 
     auto connection_worker_info_ptr =
         reinterpret_cast<volatile tt::tt_fabric::FabricMuxChannelClientLocationInfo*>(connection_info_address);
-    connection_worker_info_ptr->edm_read_counter = 0;
     connection_info_address += sizeof(tt::tt_fabric::FabricMuxChannelClientLocationInfo);
 
     new (worker_interface_ptr) tt::tt_fabric::FabricMuxChannelWorkerInterface<NUM_BUFFERS>(
@@ -70,7 +81,7 @@ void setup_channel(
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(sender_flow_control_address),
         reinterpret_cast<volatile tt_l1_ptr uint32_t* const>(connection_handshake_address),
         0 /* unused, sender_sync_noc_cmd_buf */,
-        tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
+        is_persistent_channel ? NUM_BUFFERS : tt::tt_fabric::MUX_TO_WORKER_INTERFACE_STARTING_READ_COUNTER_VALUE);  //
     sender_flow_control_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
     connection_handshake_address += sizeof(uint32_t) + NOC_ALIGN_PADDING_BYTES;
 
@@ -84,6 +95,7 @@ void forward_data(
     tt::tt_fabric::FabricMuxToEdmSender& fabric_connection,
     bool& channel_connection_established,
     StreamId my_channel_free_slots_stream_id,
+    bool is_persistent_channel,
 
     // Note that while `channel_id` is unused and can be deleted, there was a severe performance impact when that
     // was tried. Time has not been spent yet to root cause but the current suspicion is some pathalogical codegen
@@ -104,7 +116,10 @@ void forward_data(
         worker_interface.local_write_counter.increment();
         worker_interface.local_read_counter.increment();
 
-        if (channel_connection_established) {
+        if (is_persistent_channel) {
+            constexpr bool enable_deadlock_avoidance = true;  // not used
+            worker_interface.template update_persistent_connection_copy_of_free_slots<enable_deadlock_avoidance>(1);
+        } else if (channel_connection_established) {
             worker_interface.notify_worker_of_read_counter_update();
         }
 
@@ -112,8 +127,10 @@ void forward_data(
         increment_local_update_ptr_val(my_channel_free_slots_stream_id.get(), 1);
     }
 
-    tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
-        worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
+    if (!is_persistent_channel) {
+        tt::tt_fabric::check_worker_connections<tt::tt_fabric::USE_DYNAMIC_CREDIT_ADDR>(
+            worker_interface, channel_connection_established, my_channel_free_slots_stream_id.get());
+    }
 }
 
 void kernel_main() {
@@ -145,6 +162,17 @@ void kernel_main() {
             header_only_channel_worker_interfaces;
     std::array<bool, NUM_HEADER_ONLY_CHANNELS> header_only_channel_connection_established;
 
+    // Stream IDs
+    constexpr size_t CHANNEL_STREAM_IDS_START_IDX = 17;
+    constexpr size_t NUM_TOTAL_CHANNELS = NUM_FULL_SIZE_CHANNELS + NUM_HEADER_ONLY_CHANNELS;
+    constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> channel_stream_ids =
+        fill_array_with_next_n_args<uint32_t, CHANNEL_STREAM_IDS_START_IDX, NUM_TOTAL_CHANNELS>();
+
+    // Persistent channel flags
+    constexpr size_t IS_PERSISTENT_CHANNELS_START_IDX = CHANNEL_STREAM_IDS_START_IDX + NUM_TOTAL_CHANNELS;
+    constexpr std::array<uint32_t, NUM_TOTAL_CHANNELS> is_persistent_channels =
+        fill_array_with_next_n_args<uint32_t, IS_PERSISTENT_CHANNELS_START_IDX, NUM_TOTAL_CHANNELS>();
+
     size_t channel_base_address = channels_base_l1_address;
     size_t connection_info_address = connection_info_base_address;
     size_t connection_handshake_address = connection_handshake_base_address;
@@ -161,7 +189,8 @@ void kernel_main() {
             connection_info_address,
             connection_handshake_address,
             sender_flow_control_address,
-            StreamId{i});
+            StreamId{channel_stream_ids[i]},
+            is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]);
     }
 
     for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
@@ -175,7 +204,8 @@ void kernel_main() {
             connection_info_address,
             connection_handshake_address,
             sender_flow_control_address,
-            StreamId{i + NUM_FULL_SIZE_CHANNELS});
+            StreamId{channel_stream_ids[i + NUM_FULL_SIZE_CHANNELS]},
+            is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]);
     }
 
     volatile auto termination_signal_ptr =
@@ -190,6 +220,19 @@ void kernel_main() {
 
     constexpr bool use_worker_allocated_credit_address = CORE_TYPE == ProgrammableCoreType::IDLE_ETH;
     fabric_connection.open<use_worker_allocated_credit_address>();
+
+    for (uint8_t i = 0; i < NUM_FULL_SIZE_CHANNELS; i++) {
+        if (is_persistent_channels[i]) {
+            wait_for_static_connection_to_ready<NUM_BUFFERS_FULL_SIZE_CHANNEL>(full_size_channel_worker_interfaces[i]);
+        }
+    }
+
+    for (uint8_t i = 0; i < NUM_HEADER_ONLY_CHANNELS; i++) {
+        if (is_persistent_channels[i + NUM_FULL_SIZE_CHANNELS]) {
+            wait_for_static_connection_to_ready<NUM_BUFFERS_HEADER_ONLY_CHANNEL>(
+                header_only_channel_worker_interfaces[i]);
+        }
+    }
 
     status_ptr[0] = tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC;
 
@@ -221,7 +264,8 @@ void kernel_main() {
                         full_size_channel_worker_interfaces[channel_id],
                         fabric_connection,
                         full_size_channel_connection_established[channel_id],
-                        StreamId{channel_id},
+                        StreamId{channel_stream_ids[channel_id]},
+                        is_persistent_channels[channel_id],
                         channel_id);
                 }
             }
@@ -232,7 +276,8 @@ void kernel_main() {
                     header_only_channel_worker_interfaces[channel_id],
                     fabric_connection,
                     header_only_channel_connection_established[channel_id],
-                    StreamId{channel_id + NUM_FULL_SIZE_CHANNELS},
+                    StreamId{channel_stream_ids[channel_id + NUM_FULL_SIZE_CHANNELS]},
+                    is_persistent_channels[channel_id + NUM_FULL_SIZE_CHANNELS],
                     channel_id + NUM_FULL_SIZE_CHANNELS);
             }
         }

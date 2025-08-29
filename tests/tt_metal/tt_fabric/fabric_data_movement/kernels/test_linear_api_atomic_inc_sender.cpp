@@ -5,10 +5,9 @@
 #include "tt_metal/fabric/hw/inc/linear/api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "test_linear_common.hpp"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
@@ -43,7 +42,7 @@ void kernel_main() {
 
     if constexpr (with_state) {
         set_state<num_send_dir, is_chip_multicast, noc_send_type>(
-            route_id, hop_info, static_cast<uint16_t>(packet_payload_size_bytes));
+            connections, route_id, hop_info, static_cast<uint16_t>(packet_payload_size_bytes));
     }
 
     for (uint32_t i = 0; i < num_packets; i++) {

@@ -205,6 +205,9 @@ std::map<std::string, std::string> get_defines_fp32(
             if (input_a_dtype == DataType::INT32 && input_b_dtype == DataType::INT32) {
                 new_defines.insert({"SUB_INT_INIT", fmt::format("sub_int_tile_init();")});
                 op_name = "sub_int32_tile";
+            } else if (input_a_dtype == DataType::UINT32 && input_b_dtype == DataType::UINT32) {
+                new_defines.insert({"SUB_INT_INIT", fmt::format("sub_int_tile_init();")});
+                op_name = "sub_uint32_tile";
             } else if (input_a_dtype == DataType::UINT16 && input_b_dtype == DataType::UINT16) {
                 new_defines.insert({"SUB_INT_INIT", fmt::format("sub_int_tile_init();")});
                 op_name = "sub_uint16_tile";
@@ -439,7 +442,7 @@ std::map<std::string, std::string> get_defines_fp32(
             TT_FATAL(false, "Undefined op type for binary sfpu operation {}", op_type);
     }
 
-    new_defines.insert({"BINARY_SFPU_OP", fmt::format("{}({}, {});", op_name, idst1, idst2)});
+    new_defines.insert({"BINARY_SFPU_OP", fmt::format("{}({}, {}, {});", op_name, idst1, idst2, idst1)});
 
     if (fused_activations.has_value()) {
         if (op_type == BinaryOpType::ADD and fused_activations.value().size() == 1 and

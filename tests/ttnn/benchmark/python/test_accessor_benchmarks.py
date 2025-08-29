@@ -48,6 +48,11 @@ ARGS_CONFIGS = [
     "1111101",  # Everything dynamic
 ]
 
+# For benchmarks that only support all-static configuration
+STATIC_ONLY_ARGS_CONFIGS = [
+    "0000001",  # Everything static
+]
+
 
 def get_individual_test_names(gtest_filter):
     """
@@ -91,7 +96,10 @@ def get_individual_test_names(gtest_filter):
     return test_names
 
 
-def impl_test(gtest_filter, res_dir):
+def impl_test(gtest_filter, res_dir, args_configs=None):
+    if args_configs is None:
+        args_configs = ARGS_CONFIGS
+
     ENV = os.environ.copy()
     ENV["TT_METAL_DEVICE_PROFILER"] = "1"
     BASE = Path(ENV["TT_METAL_HOME"])
@@ -114,7 +122,7 @@ def impl_test(gtest_filter, res_dir):
     setup = device_post_proc_config.default_setup()
     zone_names = []
     timerAnalysis = {}
-    for args_config in ARGS_CONFIGS:
+    for args_config in args_configs:
         zone_name = f"SHARDED_ACCESSOR_{args_config}"
         timerAnalysis[zone_name] = {
             "across": "core",
@@ -141,6 +149,11 @@ def impl_test(gtest_filter, res_dir):
             logger.info(f"Zone: {zone_name}: Average: {st['Average']} (cycles)")
 
 
+def impl_test_static_only(gtest_filter, res_dir):
+    """Implementation for tests that only run with all-static configuration."""
+    impl_test(gtest_filter, res_dir, STATIC_ONLY_ARGS_CONFIGS)
+
+
 def test_get_noc_addr_page_id():
     impl_test("AccessorTests/AccessorBenchmarks.GetNocAddr/*", res_dir="accessor_get_noc_addr_benchmarks")
 
@@ -153,3 +166,15 @@ def test_get_noc_addr_page_coord():
 
 def test_constructor():
     impl_test("AccessorTests/AccessorBenchmarks.Constructor/*", res_dir="accessor_constructor_benchmarks")
+
+
+def test_manual_pages_iteration():
+    impl_test_static_only(
+        "AccessorTests/AccessorBenchmarks.ManualPagesIteration/*", res_dir="accessor_manual_pages_iteration_benchmarks"
+    )
+
+
+def test_pages_iterator():
+    impl_test_static_only(
+        "AccessorTests/AccessorBenchmarks.PagesIterator/*", res_dir="accessor_pages_iterator_benchmarks"
+    )

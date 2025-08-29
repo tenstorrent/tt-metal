@@ -10,6 +10,7 @@
 #include "dspec.h"
 #include "helpers.h"
 #include "shard_pages_address_iterator.h"
+#include "pages_address_iterator.h"
 #include "compile_time_args.h"
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -46,9 +47,9 @@ uint64_t get_dram_bank_base_offset(uint32_t bank_id, uint8_t noc) {
  *
  * @tparam DSpec        DistributionSpec type.
  */
-template <typename _DSpec>
+template <typename DSpecT>
 struct TensorAccessor {
-    using DSpec = _DSpec;
+    using DSpec = DSpecT;
     static constexpr bool is_dram = DSpec::is_dram;
 
 private:
@@ -222,6 +223,11 @@ public:
         return tensor_accessor::ShardPages<TensorAccessor>(*this, shard_id, start_page_offset, noc);
     }
 
+    // Returns a proxy for pages iterator (iterates over all pages in the tensor)
+    tensor_accessor::Pages<TensorAccessor> pages(uint32_t start_page_id = 0, uint8_t noc = noc_index) const {
+        return tensor_accessor::Pages<TensorAccessor>(*this, start_page_id, noc);
+    }
+
 private:
     // NOC APIs
     FORCE_INLINE
@@ -267,6 +273,7 @@ public:
     const uint32_t page_size = 0;
 
     friend class tensor_accessor::ShardPagesAddressIterator<TensorAccessor>;
+    friend class tensor_accessor::PagesAddressIterator<TensorAccessor>;
 };
 
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
@@ -333,6 +340,14 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
             "TensorAccessor::shard_pages is not supported by the interleaved tensor accessor");
         return {};
     }
+
+    // Returns a proxy for pages iterator (iterates over all pages in the tensor)
+    tensor_accessor::Pages<TensorAccessor> pages(uint32_t start_page_id = 0, uint8_t noc = noc_index) const {
+        static_assert(
+            tensor_accessor::detail::always_false_v<TensorAccessor>,
+            "TensorAccessor::pages is not supported by the interleaved tensor accessor");
+        return {};
+    }
 };
 #endif
 
@@ -394,15 +409,17 @@ public:
 
     template <typename Accessor>
     AbstractTensorAccessorWrapper(const Accessor& accessor) : accessor_ptr(&accessor) {
-        get_noc_addr_fn = [](const void* accessor, uint32_t page_idx) {
-            return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx);
+        get_noc_addr_fn = [](const void* accessor, uint32_t page_idx, uint32_t offset, uint8_t noc) {
+            return static_cast<const Accessor*>(accessor)->get_noc_addr(page_idx, offset, noc);
         };
     }
 
-    uint64_t get_noc_addr(uint32_t page_idx) const { return get_noc_addr_fn(accessor_ptr, page_idx); }
+    uint64_t get_noc_addr(uint32_t page_idx, uint32_t offset = 0, uint8_t noc = noc_index) const {
+        return get_noc_addr_fn(accessor_ptr, page_idx, offset, noc);
+    }
 
 private:
-    using GetNocAddrFn = uint64_t (*)(const void*, uint32_t);
+    using GetNocAddrFn = uint64_t (*)(const void*, uint32_t, uint32_t, uint8_t);
 
     const void* accessor_ptr = nullptr;
     GetNocAddrFn get_noc_addr_fn = nullptr;
