@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -28,6 +28,6 @@ ALWI void welford(
 /**
  * Uses a copy of the ternery_sfpu_init
  */
-// EXPERIMENTAL
 ALWI void welford_init() { MATH((llk_math_welfords_sfpu_init())); }
+
 }  // namespace ckernel
